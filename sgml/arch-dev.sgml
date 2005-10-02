@@ -1,0 +1,546 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/arch-dev.sgml,v 1.8 2005/01/28 08:11:19 guillaume Exp $
+-->
+
+ <chapter id="overview">
+  <title>Présentation des mécanismes internes de PostgreSQL</title>
+
+  <note>
+   <title>Auteur</title>
+   <para>
+    Ce chapitre vient originellement de <xref linkend="SIM98">, la thèse de
+    Stefan Simkovics préparée à l'université de technologie de Vienne sous la
+    direction du Dr. Georg Gottlob et de son assistante Katrin Seyr.
+   </para>
+  </note>
+
+  <para>
+   Ce chapitre présente la structure interne du serveur
+   <productname>PostgreSQL</productname>. Après avoir lu les sections suivantes,
+   vous devriez avoir une idée sur la façon dont une requête est exécutée. Ce
+   chapitre n'a pas pour but de donner une description détaillée des opérations
+   internes de <productname>PostgreSQL</productname> car un tel document
+   serait énorme. À la place, ce chapitre a pour but d'aider le lecteur à
+   comprendre la suite générale des opérations arrivant au niveau serveur à
+   partir du moment où une requête est reçue jusqu'au moment où les résultats
+   sont renvoyés au client.
+  </para>
+
+  <sect1 id="query-path">
+   <title>Chemin d'une requête</title>
+
+   <para>
+    Ici, nous allons donner un rapide aperçu des étapes qu'une requête doit
+    franchir pour obtenir un résultat.
+   </para>
+
+   <procedure>
+    <step>
+     <para>
+      Une connexion doit être établie à partir d'une application au serveur
+      <productname>PostgreSQL</productname>. L'application transmet une requête
+      au serveur et attend de recevoir les résultats renvoyés par le serveur.
+     </para>
+    </step>
+
+    <step>
+     <para>
+      L'<firstterm>étape de l'analyse</firstterm> vérifie la requête transmise
+      par l'application au niveau de la syntaxe et crée un <firstterm>arbre
+      représentant la requête</firstterm>.
+     </para>
+    </step>
+
+    <step>
+     <para>
+      Le <firstterm>système de réécriture</firstterm> prend l'arbre représentant
+      la requête et cherche les <firstterm>règles</firstterm> (stockées dans les
+      <firstterm>catalogues système</firstterm>) à appliquer à l'arbre de la
+      requête. Il exécute les transformations données dans les <firstterm>corps
+      des règles</firstterm>. Une application du système de réécriture est la
+      réalisation des <firstterm>vues</firstterm>.
+     </para>
+
+     <para>
+      À chaque fois qu'une requête comprenant une vue (c'est-à-dire une
+      <firstterm>table virtuelle</firstterm>) est exécutée, le système de
+      réécriture modifie la requête de l'utilisateur par la
+      <firstterm>définition de la vue</firstterm>, c'est-à-dire une requête qui
+      accède aux <firstterm>tables de base</firstterm>.
+     </para>
+    </step>
+
+    <step>
+     <para>
+      Le <firstterm>planificateur/optimiseur</firstterm> prend l'arbre
+      (réécrit) de la requête et crée un <firstterm>plan
+      d'exécution</firstterm> qui sera l'entrée de
+      l'<firstterm>exécuteur</firstterm>.
+     </para>
+
+     <para>
+      Il le fait tout d'abord en créant tous les <firstterm>chemins</firstterm>
+      possibles menant au même résultat. Par exemple, s'il existe un index sur
+      une relation à parcourir, il existe deux chemins pour le parcours. Une
+      possibilité est un parcours simple séquentiel et l'autre possibilité est
+      d'utiliser l'index. Ensuite, le coût pour l'exécution de chaque plan est
+      estimé et le plan le moins coûteux est choisi et renvoyé.
+     </para>
+    </step>
+
+    <step>
+     <para>
+      L'exécuteur passe récursivement dans l'<firstterm>arbre constitué par le
+      plan</firstterm> et retrouve les lignes suivant la façon
+      représentée par le plan. L'exécuteur fait usage du <firstterm>système de
+      stockage</firstterm> lors du parcours des relations, exécute les
+      <firstterm>tris</firstterm> et <firstterm>jointures</firstterm>, évalue
+      les <firstterm>qualifications</firstterm> et finalement renvoie les
+      lignes en question.
+     </para>
+    </step>
+   </procedure>
+
+   <para>
+    Dans les sections suivantes, nous allons parler de chacun des éléments
+    discutés ci-dessus avec plus de détails pour donner une meilleure
+    compréhension des structures de données et de contrôle internes de
+    <productname>PostgreSQL</productname>.
+   </para>
+  </sect1>
+
+  <sect1 id="connect-estab">
+   <title>Moyens pour établir des connexions</title>
+
+   <para>
+    <productname>PostgreSQL</productname> est implémenté suivant un modèle
+    client/serveur à chaque <quote>processus par utilisateur</>. Dans ce modèle, il
+    existe un <firstterm>processus client</firstterm> connecté à un seul
+    <firstterm>processus serveur</firstterm>. Comme nous ne savons pas par avance
+    combien de connexions seront établies, nous devons utiliser un
+    <firstterm>processus maître</firstterm> qui lancera un processus serveur à
+    chaque fois qu'une connexion sera demandée. Ce processus maître s'appelle
+    <literal>postmaster</literal> et écoute sur le port TCP/IP spécifié pour des
+    connexions entrantes. À chaque fois qu'une demande pour une connexion est
+    détectée, le processus <literal>postmaster</literal> lance un nouveau
+    processus fils appelé <literal>postgres</literal>. Les tâches du serveur
+    (processus <literal>postgres</literal>) communiquent entre elles en
+    utilisant des <firstterm>sémaphores</firstterm> et de la <firstterm>mémoire
+    partagée</firstterm> pour s'assurer de l'intégrité des données lors d'un
+    accès simultané aux données.
+   </para>
+
+   <para>
+    Le processus client peut être tout programme comprenant le protocole
+    <productname>PostgreSQL</productname> décrit dans le
+    <xref linkend="protocol">. Beaucoup de clients sont basés sur la
+    bibliothèque C <application>libpq</>, mais plusieurs implémentations
+    indépendantes existent, telle que le pilote Java <application>JDBC</>.
+   </para>
+
+   <para>
+    Une fois la connexion établie, le processus client peut envoyer une requête
+    au serveur (<firstterm>backend</firstterm>). La requête est transmise en
+    texte simple, c'est-à-dire qu'aucune analyse n'a besoin d'être réalisée au
+    niveau de l'<firstterm>interface</firstterm> (client). Le serveur analyse
+    la requête, crée un <firstterm>plan d'exécution</firstterm>, exécute le
+    plan et renvoie les lignes trouvées au client par la connexion établie.
+   </para>
+  </sect1>
+
+  <sect1 id="parser-stage">
+   <title>Étape d'analyse</title>
+
+   <para>
+    L'<firstterm>étape d'analyse</firstterm> consiste en deux parties&nbsp;:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       L'<firstterm>analyseur</firstterm> défini dans
+       <filename>gram.y</filename> et <filename>scan.l</filename> est construit
+       en utilisant les outils Unix <application>yacc</application> et
+       <application>lex</application>.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Le <firstterm>processus de transformation</firstterm> fait des
+       modifications et des ajouts aux structures de données renvoyées par
+       l'analyseur.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <sect2>
+    <title>Analyseur</title>
+
+    <para>
+     L'analyseur doit vérifier la syntaxe valide de la chaîne de la requête
+     (arrivant comme un texte ASCII). Si la syntaxe est correcte, un
+     <firstterm>arbre d'analyse</firstterm> est construit et renvoyé, sinon
+     une erreur est retournée. Les analyseur et vérificateur syntaxiques sont
+     implémentés en utilisant les outils bien connus que sont
+     <application>lex</application> et <application>yacc</application>.
+    </para>
+
+    <para>
+     L'<firstterm>analyseur lexical</firstterm> est défini dans le fichier
+     <filename>scan.l</filename> et est responsable de la reconnaissance des
+     <firstterm>identificateurs</firstterm>, des <firstterm>mots clés
+     SQL</firstterm>, etc. Pour chaque mot clé ou identificateur trouvé, un
+     <firstterm>jeton</firstterm> est généré et renvoyé à l'analyseur.
+    </para>
+
+    <para>
+     L'analyseur est défini dans le fichier <filename>gram.y</filename> et
+     consiste en un ensemble de <firstterm>règles de grammaire</firstterm> et
+     en des <firstterm>actions</firstterm> à exécuter lorsque qu'une règle est
+     découverte. Le code des actions (qui est en langage C) est utilisé pour
+     construire l'arbre d'analyse.
+    </para>
+
+    <para>
+     Le fichier <filename>scan.l</filename> est transformé en fichier source C
+     <filename>scan.c</filename> en utilisant le programme
+     <application>lex</application> et <filename>gram.y</filename> est
+     transformé en <filename>gram.c</filename> en utilisant
+     <application>yacc</application>. Après avoir réalisé ces transformations,
+     un compilateur C normal peut être utilisé pour créer l'analyseur. Ne jamais
+     faire de changement aux fichiers C générés car ils seront écrasés la
+     prochaine fois que <application>lex</application> ou
+     <application>yacc</application> seront appelés.
+
+     <note>
+      <para>
+       Les transformations et compilations mentionnées sont normalement
+       réalisées automatiquement en utilisant les
+       <firstterm>makefiles</firstterm> distribués avec les sources de
+       <productname>PostgreSQL</productname>.
+      </para>
+     </note>
+    </para>
+
+    <para>
+     Une description détaillée de <application>yacc</application> ou des règles
+     de grammaire données dans <filename>gram.y</filename> serait en dehors du
+     champ de ce document. Il existe de nombreux livres et documentations en
+     relation avec <application>lex</application> et
+     <application>yacc</application>. Vous devez être familier avec
+     <application>yacc</application> avant de commencer à étudier la grammaire
+     donnée dans <filename>gram.y</filename>, sinon vous ne comprendrez rien à
+     ce qui s'y passe.
+    </para>
+
+   </sect2>
+
+   <sect2>
+     <title>Processus de transformation</title>
+
+    <para>
+     L'étape d'analyse crée un arbre d'analyse utilisant seulement les règles
+     fixes de la structure syntaxique de SQL. Il ne fait aucune recherche dans
+     les catalogues système, donc il n'y a aucune possibilité de comprendre
+     la sémantique détaillée des opérations demandées. Après que l'analyseur
+     ait fini, le <firstterm>processus de transformation</firstterm> prend
+     l'arbre résultant de l'analyseur en entrée et réalise l'interprétation
+     sémantique nécessaire pour connaître les tables, fonctions et opérateurs
+     référencés par la requête. La structure de données construite pour
+     représenter cette information est appelé l'<firstterm>arbre de la
+     requête</>.
+    </para>
+
+    <para>
+     La raison de la séparation de l'analyse brute et de l'analyse sémantique
+     est que les recherches des catalogues système peuvent seulement se faire
+     à l'intérieur d'une transaction, et nous ne voulons pas commencer une
+     transaction immédiatement après avoir reçu une requête. L'analyse brute
+     est suffisante pour identifier les commandes de contrôle des transactions
+     (<command>BEGIN</>, <command>ROLLBACK</>, etc) et elles peuvent être
+     correctement exécutées sans plus d'analyse. Une fois que nous savons que
+     nous gérons une vraie requête (telle que <command>SELECT</> ou
+     <command>UPDATE</>), nous pouvons commencer une transaction si nous n'y
+     sommes pas déjà. C'est seulement maintenant que le processus de
+     transformation peut être appelé.
+    </para>
+
+    <para>
+     La plupart du temps, l'arbre d'une requête créée par le processus de
+     transformation est structurellement similaire à l'arbre d'analyse brute
+     mais il existe beaucoup de différences dans le détail. Par exemple, un
+     n&oelig;ud <structname>FuncCall</> dans l'arbre d'analyse représente
+     quelque chose qui ressemble syntaxiquement à l'appel d'une fonction. Il
+     peut être transformé soit en n&oelig;ud <structname>FuncExpr</> soit en
+     n&oelig;ud <structname>Aggref</> suivant que le nom référencé est une
+     fonction ordinaire ou une fonction d'agrégat. De même, des informations sur
+     les types de données réels des colonnes et des résultats sont ajoutées à
+     l'arbre de la requête.
+    </para>
+   </sect2>
+  </sect1>
+
+  <sect1 id="rule-system">
+   <title>Système de règles de <productname>PostgreSQL</productname></title>
+
+   <para>
+    <productname>PostgreSQL</productname> supporte un puissant
+    <firstterm>système de règles</firstterm> pour la spécification des
+    <firstterm>vues</firstterm> et des <firstterm>mises à jour de
+    vues</firstterm> ambigües. À l'origine, le système de règles de
+    <productname>PostgreSQL</productname> consistait en deux implémentations&nbsp;:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       Le premier a fonctionné en utilisant le <firstterm>niveau des
+       lignes</firstterm> et était implémenté profondément dans
+       l'<firstterm>exécuteur</firstterm>. Le système de règles était appelé
+       à chaque fois qu'il fallait accéder à une ligne individuelle. Cette
+       implémentation était supprimée en 1995 quand la dernière version
+       officielle du projet <productname>Berkeley Postgres</productname> a été
+       transformé en <productname>Postgres95</productname>. 
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       La deuxième implémentation du système de règles est une technique appelée
+       la <firstterm>réécriture de requêtes</firstterm>. Le <firstterm>système
+       de réécriture</firstterm> est un module qui existe entre
+       l'<firstterm>étape d'analyse</firstterm> et le
+       <firstterm>planificateur/optimiseur</firstterm>. Cette technique est
+       toujours implémentée.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <para>
+    Le système de réécriture de requêtes est vue plus en détails dans le
+    <xref linkend="rules">, donc il n'est pas nécessaire d'en parler ici.
+    Nous indiquerons seulement qu'à la fois l'entrée et la sortie du système
+    sont des arbres de requêtes, c'est-à-dire qu'il n'y a pas de changement
+    dans la représentation ou le niveau du détail sémantique des arbres. La
+    réécriture peut être imaginée comme une forme d'expansion de macro.
+   </para>
+
+  </sect1>
+
+  <sect1 id="planner-optimizer">
+   <title>Planificateur/Optimiseur</title>
+
+   <para>
+    La tâche du <firstterm>planificateur/optimiseur</firstterm> est de créer un
+    plan d'exécution optimal. Une requête SQL donnée (et donc, l'arbre d'une
+    requête) peut vraiment être exécuté de multiples façons, chacune arrivant au
+    même résultat. Si ce calcul est possible, l'optimiseur de la requête
+    examinera chacun des plans d'exécution possibles, pour finir par
+    sélectionner le plan d'exécution le plus rapide.
+   </para>
+
+   <note>
+    <para>
+     Dans certaines situations, examiner chaque moyen d'exécuter une requête
+     prendrait beaucoup de temps et de mémoire. En particulier, cela arrive lors
+     de l'exécution de requêtes impliquant un grand nombre d'opérations de
+     jointure. Pour déterminer un plan de requête raisonable (et non optimal)
+     dans un temps raisonnable, <productname>PostgreSQL</productname> utilise
+     un <xref linkend="geqo" endterm="geqo-title">.
+    </para>
+   </note>
+
+   <para>
+    Lorsque le chemin le moins coûteux est déterminé, un <firstterm>arbre
+    plan</> est construit pour être donné à l'exécuteur. Ceci représente le
+    plan d'exécution désiré avec suffisamment de détails pour que l'exécuteur
+    puisse le lancer.
+   </para>
+
+   <sect2>
+    <title>Générer les plans possibles</title>
+
+    <para>
+     Le planificateur/optimiseur décide quels plans devraient être générés
+     suivant le type d'index définis sur les relations apparaissant dans une
+     requête. Il y a toujours la possibilité d'exécuter un parcours séquentiel
+     d'une relation, donc un plan utilisant seulement des parcours séquentiels
+     est toujours créé. Supposons qu'un index soit défini sur une relation
+     (par exemple un index B-tree) et qu'une requête contienne le filtre
+     <literal>relation.attribut OPR constante</literal>. Si
+     <literal>relation.attribut</literal> se trouve correspondre à la clé de
+     l'index B-tree et que <literal>OPR</literal> soit un des opérateurs listés
+     dans la <firstterm>classe d'opérateurs</> de l'index, un autre plan est
+     créé en utilisant l'index B-tree pour parcourir la relation. S'il existe
+     plusieurs index et que les restrictions de la requête font correspondre
+     une clé d'un index, d'autres plans devront être considérés.
+    </para>
+
+    <para>
+     Après que tous les plans probables aient été trouvés pour parcourir les
+     relations simples, des plans pour les relations jointes sont créés. Le
+     planificateur/optimiseur préfère considérer les jointures entre deux
+     relations pour lesquelles il existe une clause de jointure correspondante
+     dans la qualification <literal>WHERE</literal> (c'est-à-dire pour lequel
+     une restriction comme <literal>where rel1.attr1=rel2.attr2</literal>
+     existe). Des paires de jointures sans clause de jointure sont considérées
+     seulement quand il n'existe pas d'autre choix, c'est-à-dire lorsqu'une
+     relation particulière n'a pas de clauses jointes disponibles sans autre
+     relation. Tous les plans possibles sont générés pour chaque paire de
+     jointure considérée par le planificateur/optimiseur. Les trois stratégies
+     possibles de jointure sont&nbsp;:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+	<firstterm>jointure en boucle imbriquée</firstterm> (NdT&nbsp;: nested loop
+        join)&nbsp;: la relation droite est parcourue une fois pour chaque ligne
+        trouvée dans la relation gauche. Cette stratégie est facile à
+        implémenter mais peut être très consomnatrice en temps. (Néanmoins, si
+        la relation droite peut être parcourue suivant un parcours indexé, ceci
+        peut être une bonne stratégie. Il est possible d'utiliser des valeurs
+        provenant de la ligne actuelle de la relation gauche comme clés pour
+        un parcours indexé à droite.)
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+	<firstterm>jointure tri et assemblement</firstterm> (NdT&nbsp;: merge sort
+        join)&nbsp;: Chaque relation est triée sur les attributs de la jointure avant
+        que la jointure ne commence. Puis, les deux relations sont assemblées en
+        prenant en compte que les deux relations sont triées sur les attributs
+        de jointure. Ce type de jointure est plus attractif parce que chaque
+        relation doit être parcourue seulement une fois.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+	<firstterm>jointure de découpage</firstterm> (hash join)&nbsp;: la
+	relation droite est tout d'abord parcourue et chargée dans une table de
+	découpage en utilisant ses attributs de jointure comme clés de
+	découpage. Ensuite, la relation gauche est parcourue et les valeurs
+	appropriées de chaque ligne trouvée sont utilisées comme clés de
+	découpage pour localiser les lignes correspondantes dans la table.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+
+    <para>
+     L'arbre de plan terminé consiste en des parcours séquentiels ou indexés des
+     relations de base, plus les n&oelig;uds des jointures en boucle, jointures
+     tri et rassemblement, et jointures de découpage si nécessaire, plus toutes
+     les étapes auxiliaires nécessaires, tels que les n&oelig;uds de tri ou les
+     n&oelig;uds de calcul des fonctions d'agrégat. La plupart des types de
+     n&oelig;ud de plans ont la capacité supplémentaire de faire une
+     <firstterm>sélection</> (annulant les lignes qui ne correspondent pas à une
+     condition booléenne spécifiée) et une <firstterm>projection</> (calcul d'un
+     ensemble de colonnes dérivées basé sur des valeurs de colonnes données,
+     c'est-à-dire l'évaluation des expressions scalaires si nécessaire). Une des
+     responsabilités du planificateur est d'attacher les conditions de
+     sélection à partir de la clause <literal>WHERE</literal> et du calcul des
+     expressions de calculs requises aux n&oelig;uds les plus appropriés de
+     l'arbre de plan.
+    </para>
+   </sect2>
+  </sect1>
+
+  <sect1 id="executor">
+   <title>Exécuteur</title>
+
+   <para>
+    L'<firstterm>exécuteur</firstterm> prend le plan envoyé par le
+    planificateur/optimiseur et l'exécute récursivement pour extraire
+    l'ensemble requis de lignes. Ceci est essentiellement un mécanisme de
+    pipeline en demande-envoi. Chaque fois qu'un n&oelig;ud du plan est appelé,
+    il doit apporter une ligne supplémentaire ou indiquer qu'il a fini d'envoyer
+    des lignes.
+   </para>
+
+   <para>
+    Pour donner un exemple concret, supposez que le n&oelig;ud supérieur soit un
+    n&oelig;ud <literal>MergeJoin</literal>. Avant qu'une fusion puisse être
+    faite, deux lignes doivent être récupérées (une pour chaque sous-plan).
+    Donc, l'exécuteur s'appelle récursivement pour exécuter les sous-plans (il
+    commence avec le sous-plan attaché à l'<literal>arbre gauche</literal>).
+    Le nouveau n&oelig;ud supérieur (le n&oelig;ud supérieur du sous-plan
+    gauche) est, disons, un n&oelig;ud <literal>Sort</literal> (NdT&nbsp;: Tri)
+    et une récursion est une nouvelle fois nécessaire pour obtenir une ligne en
+    entrée. Le n&oelig;ud fils de <literal>Sort</literal> pourrait être un
+    n&oelig;ud <literal>SeqScan</>, représentant la lecture réelle d'une table.
+    L'exécution de ce n&oelig;ud fait que l'exécuteur récupère une ligne à
+    partir de la table et la renvoie au n&oelig;ud appelant. Le n&oelig;ud
+    <literal>Sort</literal> appelera de façon répétée son fils pour obtenir
+    toutes les lignes à trier. Quand l'entrée est terminée (indiqué par le
+    n&oelig;ud fils renvoyant un NULL au lieu d'une ligne), le code de
+    <literal>Sort</literal> est enfin capable de renvoyer sa première ligne en
+    sortie, c'est-à-dire le premier suivant l'ordre de tri. Il conserve les
+    lignes restantes de façon à les renvoyer dans le bon ordre en réponse à des
+    demandes ultérieures.
+   </para>
+
+   <para>
+    Le n&oelig;ud <literal>MergeJoin</literal> demande de la même façon la
+    première ligne à partir du sous-plan droit. Ensuite, il compare les deux
+    lignes pour savoir si elles peuvent être jointes&nbsp;; si c'est le cas, il
+    renvoie la ligne de jointure à son appelant. Au prochain appel, ou
+    immédiatement s'il ne peut pas joindre la paire actuelle d'entrées, il
+    avance sur la prochaine ligne d'une des deux tables (suivant le résultat de
+    la comparaison), et vérifie de nouveau la correspondance. Éventuellement, un
+    sous-plan est terminé et le n&oelig;ud <literal>MergeJoin</literal> renvoie
+    NULL pour indiquer qu'il n'y a plus de lignes jointes à former.
+   </para>
+
+   <para>
+    Les requêtes complexes peuvent nécessiter un grand nombre de niveaux de
+    n&oelig;uds pour les plans, mais l'approche générale est la même&nbsp;:
+    chaque n&oelig;ud est exécuté et renvoie sa prochaine ligne en sortie à
+    chaque fois qu'il est appelé. Chaque n&oelig;ud est responsable aussi de
+    l'application de toute expression de sélection ou projection qui lui ont été
+    confiées par le planificateur.
+   </para>
+
+   <para>
+    Le mécanisme de l'exécuteur est utilisé pour évaluer les quatre types de
+    requêtes de base en SQL&nbsp;: <command>SELECT</>, <command>INSERT</>,
+    <command>UPDATE</> et <command>DELETE</>. Pour <command>SELECT</>, le code
+    de l'exécuteur au niveau supérieur a seulement besoin d'envoyer chaque ligne
+    retournée par l'arbre plan de la requête vers le client. Pour
+    <command>INSERT</>, chaque ligne renvoyée est insérée dans la table cible
+    spécifiée par le <command>INSERT</>. (Une simple commande
+    <command>INSERT ... VALUES</> crée un arbre plan trivial consistant en un
+    seul n&oelig;ud, <literal>Result</>, calculant une seule ligne de résultat.
+    Mais <command>INSERT ... SELECT</> pourrait demander la pleine puissance du
+    mécanisme de l'exécuteur.) Pour <command>UPDATE</>, le planificateur
+    s'arrange pour que chaque ligne calculée inclue toutes les valeurs mises à
+    jour des colonnes, plus le <firstterm>TID</> (tuple ID ou l'identifiant de
+    la ligne) de la ligne de la cible originale&nbsp;; l'exécuteur de haut
+    niveau utilise cette information pour créer une nouvelle ligne mise à jour
+    et pour marquer la suppression de l'ancienne ligne. Pour
+    <command>DELETE</>, la seule colonne renvoyée par le plan est le TID, et
+    l'exécuteur de haut niveau utilise simplement le TID pour visiter les
+    lignes cible et les marquer comme supprimées.
+   </para>
+
+  </sect1>
+
+ </chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

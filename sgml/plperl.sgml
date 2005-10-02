@@ -1,0 +1,324 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/plperl.sgml,v 1.6 2005/01/30 22:59:24 guillaume Exp $
+-->
+
+ <chapter id="plperl">
+  <title>PL/Perl - Le langage de procédures Perl</title>
+
+  <indexterm zone="plperl">
+   <primary>PL/Perl</primary>
+  </indexterm>
+
+  <indexterm zone="plperl">
+   <primary>Perl</primary>
+  </indexterm>
+
+  <para>
+   PL/Perl est langage de procédures chargeable qui vous permet d'écrire des
+   fonctions <productname>PostgreSQL</productname> dans le langage de
+   programmation <ulink url="http://www.perl.com">Perl</ulink>.
+  </para>
+
+  <para>
+   Pour installer PL/Perl dans une base de données spécifique, utilisez la
+   commande <literal>createlang plperl <replaceable>nombase</></literal>.
+  </para>
+
+  <tip>
+   <para>
+    Si un langage est installé dans <literal>template1</>, toutes les
+    bases de données créées ultérieurement disposeront automatiquement de ce
+    langage.
+   </para>
+  </tip>
+
+  <note>
+   <para>
+    Les utilisateurs des paquetages sources doivent explicitement autoriser la
+    construction de PL/Perl pendant le processus d'installation. (Se référer aux
+    instructions d'installation pour plus d'informations.) Les utilisateurs des
+    paquetages binaires peuvent trouver PL/Perl dans un sous-paquetage séparé.
+   </para>
+  </note>
+
+ <sect1 id="plperl-funcs">
+  <title>Fonctions et arguments PL/Perl</title>
+
+  <para>
+   Pour créer une fonction dans le langage PL/Perl, utilisez la syntaxe
+   standard&nbsp;:
+<programlisting>
+CREATE FUNCTION <replaceable>nomfonction</replaceable>
+(<replaceable>types-arguments</replaceable>) RETURNS
+<replaceable>type-retour</replaceable> AS '
+    # Corps de la fonction PL/Perl
+' LANGUAGE plperl;
+</programlisting>
+   Le corps de la fonction est du code Perl normal.
+  </para>
+
+  <para>
+   Les arguments et les résultats sont manipulés comme dans n'importe quel
+   routine Perl&nbsp;: les arguments sont passés au tableau
+   <varname>@_</varname> et une valeur de retour
+   est indiquée par <literal>return</> ou par la dernière expression
+   évaluée dans la fonction.
+  </para>
+
+  <para>
+   Par exemple, une fonction retournant le plus grand de deux entiers
+   peut être définie comme suit&nbsp;:
+
+<programlisting>
+CREATE FUNCTION perl_max (integer, integer) RETURNS integer AS '
+    if ($_[0] > $_[1]) { return $_[0]; }
+    return $_[1];
+' LANGUAGE plperl;
+</programlisting>
+  </para>
+
+  <para>
+   Si une valeur nulle en SQL<indexterm><primary>null value</><secondary
+   sortas="PL/Perl">en PL/Perl</></indexterm> est passée à une fonction,
+   cet argument apparaîtra comme <quote>undefined</> en Perl. La
+   fonction définie ci-dessus ne se comportera pas correctement avec des
+   arguments nuls (en fait, tout se passera comme s'ils avaient été des zéros). Nous aurions pu
+   ajouter <literal>STRICT</> à la définition de la fonction pour forcer
+   <productname>PostgreSQL</productname> à faire quelque chose de plus raisonnable :
+   si une valeur nulle est passée en argument, la fonction ne sera pas du tout appellée,
+   mais retournera automatiquement un résultat nul. D'une autre façon,
+   nous aurions pu vérifier dans le corps de la fonction la présence d'arguments nuls. Par
+   exemple, supposons que nous voulions que <function>perl_max</function> avec un argument nul
+   et un autre non nul retourne une valeur non nulle plutôt qu'une valeur nulle, on aurait écrit :
+
+<programlisting>
+CREATE FUNCTION perl_max (integer, integer) RETURNS integer AS '
+    my ($a,$b) = @_;
+    if (! defined $a) {
+        if (! defined $b) { return undef; }
+        return $b;
+    }
+    if (! defined $b) { return $a; }
+    if ($a > $b) { return $a; }
+    return $b;
+' LANGUAGE plperl;
+</programlisting>
+  </para>
+
+  <para>
+   Comme le montre l'exemple ci-dessus, passer une valeur NULL en SQL
+   à une fonction en PL/Perl retourne une valeur non définie. Et ceci,
+   que la fonction soit déclarée stricte ou non.
+  </para>
+
+  <para>
+   Les arguments de type composé sont passés à la fonction en tant que références
+   d'un tableau de découpage, les clés du tableau de découpage étant les noms
+   des attributs du type composé. Voici un exemple&nbsp;:
+
+<programlisting>
+CREATE TABLE employe (
+    nom text,
+    basesalaire integer,
+    bonus integer
+);
+
+CREATE FUNCTION empcomp(employe) RETURNS integer AS '
+    my ($emp) = @_;
+    return $emp->{''basesalaire''} + $emp->{''bonus''};
+' LANGUAGE plperl;
+
+SELECT nom, empcomp(employe) FROM employee;
+</programlisting>
+  </para>
+
+  <para>
+   Actuellement, il n'y a pas la possibilité de retourner
+   des valeurs de type composé.
+  </para>
+
+  <tip>
+   <para>
+    Parce que le corps de la fonction est passé en tant que litéral de chaîne
+    SQL à <command>CREATE FUNCTION</command>, vous devez échapper les
+    guillemets simples et les barres obliques inverses à l'intérieur de votre
+    code Perl, généralement en les doublant comme c'est montré dans l'exemple
+    ci-dessus. Une autre approche possible consiste à éviter d'écrire les
+    guillemets simples en utilisant les opérateurs de citation étendu
+(<literal>q[]</literal>,
+    <literal>qq[]</literal>, <literal>qw[]</literal>).
+   </para>
+  </tip>
+ </sect1>
+
+ <sect1 id="plperl-data">
+  <title>Données en PL/Perl</title>
+
+  <para>
+   Les valeurs des arguments fournis au code d'une fonction PL/Perl sont
+   simplement les arguments d'entrée convertis en une chaîne de caractères (simplement
+   comme s'ils avaient été affichés par une commande <literal>SELECT</literal>).
+   Réciproquement, la commande <literal>return</> acceptera n'importe quelle chaîne
+   dont le format d'entrée est conforme pour les types de retour déclarés de la
+   fonction. Ainsi, le développeur PL/Perl peut manipuler les données comme si
+   elles étaient simplement du texte.
+  </para>
+ </sect1>
+
+ <sect1 id="plperl-database">
+  <title>Accès à la base de données depuis PL/Perl</title>
+
+  <para>
+   L'accès à la base de données à l'intérieur de vos fonctions écrites en Perl peut se faire à partir
+   du module expérimental <ulink
+   url="http://www.cpan.org/modules/by-module/DBD/APILOS/"><literal>DBD::PgSPI</literal></ulink>
+   (aussi disponible sur un miroir du <ulink url="http://www.cpan.org/SITES.html"><acronym>CPAN</></ulink>).
+   Ce module rend accessible un descripteur de base de données conforme à
+   <acronym>DBI</> nommé
+   <varname>$pg_dbh</varname> qui peut-être utilisé pour exécuter des requêtes en utilisant
+   la syntaxe habituelle de <acronym>DBI</>.<indexterm><primary>DBI</></indexterm>
+  </para>
+
+  <para>
+   Actuellement, PL/Perl fournit une seule commande Perl supplémentaire&nbsp;:
+
+   <variablelist>
+    <varlistentry>
+     <indexterm>
+      <primary>elog</primary>
+      <secondary>en PL/Perl</secondary>
+     </indexterm>
+
+     <term><function>elog</> <replaceable>level</replaceable>, <replaceable>msg</replaceable></term>
+     <listitem>
+      <para>
+       Produit un message de trace ou d'erreur. Les niveaux possibles sont
+       <literal>DEBUG</>, <literal>LOG</>, <literal>INFO</>,
+       <literal>NOTICE</>, <literal>WARNING</> et <literal>ERROR</>.
+       <literal>ERROR</> lève une condition d'erreur&nbsp;: la suite de
+       l'exécution de la fonction est abandonnée et la transaction en cours
+       annulée.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+ </sect1>
+
+ <sect1 id="plperl-trusted">
+  <title>Niveaux de confiance de PL/Perl</title>
+
+  <indexterm zone="plperl-trusted">
+   <primary>trusted</primary>
+   <secondary>PL/Perl</secondary>
+  </indexterm>
+
+  <para>
+   Normalement, PL/Perl est installé en tant que langage de programmation de
+   <quote>confiance</>, de nom <literal>plperl</>. Durant cette installation,
+   certaines commandes Perl sont désactivées pour préserver la sécurité. En
+   général, les commandes qui interagissent avec l'environnement sont
+   restreintes. Cela inclut les commandes sur les descripteurs de fichiers,
+   <literal>require</literal> et <literal>use</literal> (pour les modules
+   externes). Il n'est pas possible d'accéder aux fonctions et variables
+   internes du processus du serveur de base de données ou d'obtenir un accès au
+   niveau du système d'exploitation avec les droits du processus serveur, tel
+   qu'une fonction C peut le faire. Ainsi, n'importe quel utilisateur sans
+   droits sur la base de données est autorisé à utiliser ce langage.
+  </para>
+
+  <para>
+   Voici l'exemple d'une fonction qui ne fonctionnera pas car les commandes système
+   ne sont pas autorisées pour des raisons de sécurité&nbsp;:
+<programlisting>
+CREATE FUNCTION badfunc() RETURNS integer AS '
+    open(TEMP, ">/tmp/mauvaisfichier");
+    print TEMP "Je t'ai eu !\n";
+    return 1;
+' LANGUAGE plperl;
+</programlisting>
+   La création de cette fonction va réussir, mais pas son exécution.
+  </para>
+
+  <para>
+   Il est parfois souhaitable d'écrire des fonctions Perl qui ne sont pas
+   restreintes. Par exemple, on peut souhaiter vouloir envoyer des courriers
+   électroniques. Pour supporter ce cas de figure, PL/Perl peut aussi être
+   installé comme un langage <quote>douteux</> (habituellemnt nommé
+   <application>PL/PerlU</application>
+   <indexterm><primary>PL/PerlU</></indexterm>).
+   Dans ce cas, la totalité du langage Perl est accessible. Si la commande
+   <command>createlang</command> est utilisée pour installer le langage, le nom
+   du langage <literal>plperlu</literal> sélectionnera la version douteuse de
+   PL/Perl.
+  </para>
+
+  <para>
+   Les auteurs des fonctions <application>PL/PerlU</> doivent faire attention au
+   fait que celles-ci ne puissent être utilisées pour faire quelque chose de non
+   désiré, car cela donnera la possibilité d'agir comme si l'on possédait les
+   privilèges d'administrateur de la base de données. Il est à noter que le
+   système de base de données ne permet qu'aux super-utilisateurs de créer des
+   fonctions dans un langage douteux.
+  </para>
+
+  <para>
+   Si la fonction ci-dessus a été créée par un super-utilisateur en utilisant le
+   langage <literal>plperlu</>, l'exécution de celle-ci réussira.
+  </para>
+ </sect1>
+
+ <sect1 id="plperl-missing">
+  <title>Fonctionnalités absentes</title>
+
+  <para>
+   Les fonctionnalités suivantes ne sont actuellement pas implémentées dans PL/Perl, mais peuvent faire
+   l'objet de contributions généreuses de votre part.
+
+   <itemizedlist>
+    <listitem>
+     <para>
+      Les fonctions PL/Perl ne peuvent pas s'appeller entre elles (parce
+      qu'elles sont considérées comme des sous-routines anonymes au sein de
+      Perl). Actuellement, il ne leur est pas possible de partager des variables
+      globales entre elles.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      PL/Perl ne peut pas être utilisé pour écrire des
+      déclencheurs.<indexterm><primary>déclencheur</><secondary>en
+      PL/Perl</></indexterm>
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <application>DBD::PgSPI</applicatioN> ou une application équivalente
+      devra être intégrée dans la distribution
+      <productname>PostgreSQL</productname> standard.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+ </sect1>
+
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

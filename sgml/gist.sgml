@@ -1,0 +1,275 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/gist.sgml,v 1.4 2005/01/13 08:15:42 guillaume Exp $
+-->
+
+<chapter Id="GiST">
+<title>Index GiST</title>
+
+<sect1 id="intro">
+ <title>Introduction</title>
+
+ <para>
+   <acronym>GiST</acronym> est un acronyme pour <foreignphrase>Generalized
+   Search Tree</foreignphrase>, arbre de recherche généralisé. C'est une
+   méthode d'accès à une structure de type arbre de manière balancée, qui agit
+   comme un modèle de base dans lequel il est possible d'implémenter des schémas
+   d'indexage arbitraire. B+-trees, R-trees et de nombreux autres schémas
+   d'indexage peuvent être implémentés avec <acronym>GiST</acronym>.
+ </para>
+
+ <para>
+  Un avantage de <acronym>GiST</acronym> est qu'il autorise le développement
+  de types de données personnalisés avec les méthodes d'accès appropriées, par
+  un expert dans le domaine des types de données, plutôt que par un expert des
+  bases de données.
+ </para>
+
+  <para>
+    Les quelques informations ici sont récupérées du <ulink
+    url="http://gist.cs.berkeley.edu/">site web du projet d'indexage GiST de
+    l'université de Californie</ulink> et de la thèse de Marcel Kornacker, 
+    <ulink url="http://citeseer.nj.nec.com/448594.html">Méthodes d'accès pour
+    les systèmes de bases de données de la prochaine génération</ulink>.
+    L'implémentation <acronym>GiST</acronym> de
+    <productname>PostgreSQL</productname> est principalement maintenu
+    par Teodor Sigaev et Oleg Bartunov. Leur site web, <ulink
+    url="http://www.sai.msu.su/~megera/postgres/gist/"></>, dispose de plus
+    d'informations.
+  </para>
+
+</sect1>
+
+<sect1 id="extensibility">
+ <title>Extensibilité</title>
+
+ <para>
+   Traditionnellement, implémenter une nouvelle méthode d'accès à un index
+   signifie un gros travail complexe. Il était nécessaire de comprendre les
+   fonctionnements internes de la base de données, tels que le gestionnaire de
+   verrous ou le WAL. L'interface <acronym>GiST</acronym> a un haut niveau
+   d'abstraction, demandant à l'implémenteur de la méthode d'accès de
+   n'implémenter que la sémantique du type de données en cours d'accès. La
+   couche <acronym>GiST</acronym> elle-même prend garde aux accès concurrents,
+   aux traces et à la recherche dans la structure en arbre.
+ </para>
+ 
+ <para>
+   L'extensibilité ne devrait pas être confondue avec l'extensibilité des
+   autres arbres de recherche standards en termes de données qu'ils gèrent. Par
+   exemple, <productname>PostgreSQL</productname> supporte les B+-trees
+   et R-trees extensibles. Ceci signifie que vous pouvez utiliser
+   <productname>PostgreSQL</productname> pour construire un B+-tree ou un R-tree
+   sur tout type de données que vous souhaitez. Mais, les B+-trees supportent
+   seulement les prédicats sur une séquence (<literal>&lt;</literal>,
+   <literal>=</literal>, <literal>&gt;</literal>) et les R-trees supportent
+   seulement les requêtes sur les séquences n-D (contient, est contenu,
+   équivaut).
+ </para>
+ 
+ <para>
+   Donc, si vous indexez, disons, une collection d'images avec un B+-tree
+   <productname>PostgreSQL</productname>, vous pouvez seulement lancer des 
+   requêtes telles que <quote>est-ce que imagex est égale à imagey</quote>,
+   <quote>est-ce que imagex est plus petite que imagey</quote> et <quote>est-ce
+   que imagex est plus grande que imagey</quote>&nbsp;? Suivant votre façon de
+   définir le <quote>égal à</quote>, le <quote>inférieur à</quote> ou le
+   <quote>supérieur à</quote> dans ce contexte, cela peut être utile.
+   Néanmoins, en utilisant un index basé sur <acronym>GiST</acronym>, vous
+   pouvez créer des moyens de poser des questions spécifiques au domaine,
+   peut-être <quote>trouver toutes les images de chevaux</quote> ou
+   <quote>trouver toutes les images sur-exposées</quote>.
+ </para>
+
+ <para>
+   Tout ce qui est nécessaire pour obtenir une méthode d'accès
+   <acronym>GiST</acronym> fonctionnelle est d'implémenter sept méthodes
+   définies par l'utilisateur, qui définissent le comportement des clés dans
+   l'arbre. Bien sûr, ces méthodes doivent être particulièrement élaborées
+   pour supporter des requêtes avancées mais pour toutes les requêtes standards
+   (B+-trees, R-trees, etc.) elles sont relativement simples. En bref,
+   <acronym>GiST</acronym> combine l'extensibilité avec la généralité, la
+   ré-utilisation de code et une interface propre.
+  </para>
+
+</sect1>
+
+<sect1 id="implementation">
+ <title>Implémentation</title>
+ 
+ <para>
+   Il existe sept méthodes qu'une classe d'opérateur index doit fournir pour
+   <acronym>GiST</acronym>&nbsp;:
+ </para>
+
+ <variablelist>
+    <varlistentry>
+     <term>consistent</term>
+     <listitem>
+      <para>
+       Suivant un prédicat <literal>p</literal> sur une page de l'arbre et une
+       requête utilisateur, <literal>q</literal>, cette méthode doit renvoyer
+       false s'il est certain qu'à la fois <literal>p</literal> et
+       <literal>q</literal> ne peuvent pas être vrais pour un élément de
+       données spécifié.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>union</term>
+     <listitem>
+      <para>
+       Cette méthode consolide les informations de l'arbre. Suivant une liste
+       d'entrées, cette fonction génère un nouveau prédicat qui est vrai pour
+       toutes les entrées.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>compress</term>
+     <listitem>
+      <para>
+       Convertit l'élément de données en un format convenable pour l'emplacement
+       physique dans une page d'index.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>decompress</term>
+     <listitem>
+      <para>
+       L'inverse de la fonction <function>compress</function>. Convertit la
+       représentation de l'élément données en un format manipulable par la base
+       de données.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>penalty</term>
+     <listitem>
+      <para>
+       Renvoit une valeur indiquant le <quote>coût</quote> d'une insertion
+       d'une nouvelle entrée dans une branche particulière de l'arbre. Les
+       éléments seront insérés en bas du chemin de la plus petite pénalité
+       <function>penalty</function> de l'arbre.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>picksplit</term>
+     <listitem>
+      <para>
+       Quand une séparation de page est nécessaire, cette fonction décide des
+       entrées qui resteront sur l'ancienne page et de celles qui seront
+       déplacées sur la nouvelle.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>same</term>
+     <listitem>
+      <para>
+       Renvoit true si deux entrées sont identiques, false autrement.
+      </para>
+     </listitem>
+    </varlistentry>
+
+  </variablelist>
+
+</sect1>
+
+<sect1 id="limitations">
+ <title>Limitations</title>
+
+ <para>
+  L'implémentation actuelle de <acronym>GiST</acronym> à l'intérieur de
+  <productname>PostgreSQL</productname> a quelques grosses limitations&nbsp;:
+  l'accès de <acronym>GiST</acronym> n'est pas concurrent&nbsp;; l'interface de
+  <acronym>GiST</acronym> ne permet pas le développement de certains types de
+  données, tels que les arbres numériques (voir les papiers d'Aoki)&nbsp;; et
+  il n'existe pas encore de support pour les WAL de mises à jour dans les
+  index <acronym>GiST</acronym>.
+ </para>
+
+ <para>
+  Les solutions aux problèmes de concurrence apparaissent dans la thèse de
+  Marcel Kornacker&nbsp;; néanmoins, ces idées n'ont pas encore été mises en
+  pratiques dans l'implémentation de <productname>PostgreSQL</productname>.
+ </para>
+
+ <para>
+  Le manque de WAL est un simple soucis de programmation mais comme cela n'a pas
+  encore été fait, un crash pourrait rendre un index <acronym>GiST</acronym>
+  inconsistant, forçant le lancement d'un REINDEX.
+ </para>
+
+</sect1>
+
+<sect1 id="examples">
+ <title>Exemples</title>
+
+ <para>
+  Pour voir les exemples d'implémentations de méthodes d'indexage utilisant
+  <acronym>GiST</acronym>, examinez les modules contrib suivants&nbsp;:
+ </para>
+ 
+ <variablelist>
+  <varlistentry>
+   <term>btree_gist</term>
+   <listitem>
+    <para>B-Tree</para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry>
+   <term>cube</term>
+   <listitem>
+    <para>Indexage de cube multi-dimensionnel</para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry>
+   <term>intarray</term>
+   <listitem>
+    <para>RD-Tree pour un tableau à une dimension de valeurs int4</para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry>
+   <term>ltree</term>
+   <listitem>
+    <para>Indexage des structures de type arbre</para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry>
+   <term>rtree_gist</term>
+   <listitem>
+    <para>R-Tree</para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry>
+   <term>seg</term>
+   <listitem>
+    <para>Stockage et accès indexé pour les <quote>nombres
+flottants</quote></para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry>
+   <term>tsearch and tsearch2</term>
+   <listitem>
+    <para>Indexage de texte complet</para>
+   </listitem>
+  </varlistentry>
+ </variablelist>
+
+</sect1>
+
+</chapter>

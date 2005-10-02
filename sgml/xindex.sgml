@@ -1,0 +1,697 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/xindex.sgml,v 1.7 2005/02/10 07:36:39 guillaume Exp $
+-->
+
+<sect1 id="xindex">
+ <title>Interfacer des extensions d'index</title>
+
+  <para>
+    Les procédures décrites jusqu'à maintenant permettent de définir de nouveaux
+    types, de nouvelles fonctions et de nouveaux opérateurs. Néanmoins, nous ne
+    pouvons pas encore définir un index sur une colonne d'un nouveau type de
+    données. Pour cela, nous devons définir une <firstterm>classe d'opérateur</>
+    pour le nouveau type de données. Plus loin dans cette section, nous
+    illustrerons ce concept avec un exemple&nbsp;: une nouvelle classe
+    d'opérateur pour la méthode d'indexage B-tree qui enregistre et trie des
+    nombres complexes dans l'ordre ascendant des valeurs absolues.
+  </para>
+  <note>
+   <para>
+    Avant <productname>PostgreSQL</productname> version 7.3, il était nécessaire
+    de faire manuellement quelques ajouts aux catalogues système
+    <classname>pg_amop</>, <classname>pg_amproc</> et <classname>pg_opclass</>
+    afin de créer une classe d'opérateur définie par l'utilisateur. Cette
+    approche est maintenant obsolète, au bénéfice de la commande <command>CREATE
+    OPERATOR CLASS</>, qui est beaucoup plus simple et permet d'éviter les
+    erreurs lors de la création nécessaire des entrées de ces catalogues.
+   </para>
+  </note>
+
+ <sect2 id="xindex-im">
+  <title>Méthodes d'indexage et classes d'opérateurs</title>
+
+  <para>
+   La table <classname>pg_am</classname> contient une ligne pour chaque méthode
+   d'indexage (connue en interne comme méthode d'accès). Le support pour l'accès
+   normal aux tables est implémenté dans <productname>PostgreSQL</productname>
+   mais toutes les méthodes d'index sont décrites dans
+   <classname>pg_am</classname>. Il est possible d'ajouter une nouvelle méthode
+   d'indexage en définissant les routines d'interface nécessaires et en créant
+   ensuite une ligne dans la table <classname>pg_am</classname> --- mais ceci
+   est bien au-delà du sujet de ce chapitre.
+  </para>
+
+  <para>
+   Les routines pour une méthode d'indexage n'ont pas à connaître directement
+   des types de données sur lesquels opère la méthode d'indexage. Au lieu de
+   cela, une <firstterm>classe d'opérateur</> identifie l'ensemble d'opérations
+   que la méthode d'indexage doit utiliser pour fonctionner avec un type
+   particulier de données. Les classes d'opérateurs sont ainsi dénommées parce
+   qu'une de leur tâche est de spécifier l'ensemble des opérateurs de la clause
+   <literal>WHERE</> utilisables avec un index (c'est-à-dire, qui peuvent être
+   requalifiés en balayage d'index). Une classe d'opérateur peut également
+   spécifier des <firstterm>procédures d'appui</>, nécessaires pour les
+   opérations internes de la méthode d'indexage mais sans correspondance
+   directe avec un quelconque opérateur de clause <literal>WHERE</> pouvant être
+   utilisé avec l'index.
+  </para>
+
+  <para>
+   Il est possible de définir de multiples classes d'opérateurs pour le même
+   type de données et la même méthode d'indexage. Ainsi, de multiples ensembles
+   de sémantiques d'indexation peuvent être définis pour un seul type de
+   données. Par exemple, un index B-tree exige qu'un tri ordonné soit défini
+   pour chaque type de données auquel il peut s'appliquer. Il peut être utile
+   pour un type de donnée de nombre complexe de disposer d'une classe
+   d'opérateur B-tree qui trie les données selon la valeur absolue complexe, une
+   autre selon la partie réelle, etc. Typiquement, une des classes d'opérateur
+   sera considérée comme plus utile et sera marquée comme l'opérateur par défaut
+   pour ce type de données et cette méthode d'indexage.
+  </para>
+
+  <para>
+   Le même nom de classe d'opérateur peut être utilisé pour plusieurs méthodes
+   d'indexage différentes (par exemple, les méthodes d'index B-tree et hash ont
+   toutes les deux des classes d'opérateur nommées <literal>oid_ops</literal>)
+   mais chacune de ces classes est une entité indépendante et doit être définie
+   séparément.
+  </para>
+ </sect2>
+
+ <sect2 id="xindex-strategies">
+  <title>Stratégies des méthode d'indexage</title>
+
+  <para>
+   Les opérateurs associés avec une classe d'opérateur sont identifiées par des
+   <quote>numéros de stratégie</>, qui servent à indentifier la sémantique de
+   chaque opérateur dans le contexte de sa classe d'opérateur. Par exemple, les
+   B-trees imposent un classement strict selon les clés, du plus petit au plus
+   grand, et ainsi des opérateurs comme <quote>plus petit que</> et <quote>plus
+   grand que</> sont intéressants en ce qui concerne un B-tree. Comme
+   <productname>PostgreSQL</productname> permet à l'utilisateur de définir des
+   opérateurs, <productname>PostgreSQL</productname> ne peut pas rechercher le
+   nom d'un opérateur (par exemple, <literal>&lt;</> ou <literal>&gt;=</>) et
+   rapporter de quelle comparaison il s'agit. Au lieu de cela, la méthode
+   d'indexage définit un ensemble de <quote>stratégies</>, qui peuvent être
+   comprises comme des opérateurs généralisés. Chaque classe d'opérateur
+   spécifie l'opérateur effectif correspondant à chaque stratégie pour un type
+   de donnée particulier et pour une interprétation de la sémantique d'index.
+  </para>
+
+  <para>
+   La méthode d'indexage B-tree définit cinq statégies, exposées dans le <xref
+   linkend="xindex-btree-strat-table">.
+  </para>
+
+   <table tocentry="1" id="xindex-btree-strat-table">
+    <title>Stratégies B-tree</title>
+    <tgroup cols="2">
+     <thead>
+      <row>
+       <entry>Opération</entry>
+       <entry>Numéro de stratégie</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>plus petit que</entry>
+       <entry>1</entry>
+      </row>
+      <row>
+       <entry>plus petit ou égal</entry>
+       <entry>2</entry>
+      </row>
+      <row>
+       <entry>égal</entry>
+       <entry>3</entry>
+      </row>
+      <row>
+       <entry>plus grand ou égal</entry>
+       <entry>4</entry>
+      </row>
+      <row>
+       <entry>plus grand que</entry>
+       <entry>5</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  <para>
+   Les index de découpage expriment seulement une égalité bit à bit et
+   utilisent ainsi une seule stratégie exposée dans le <xref
+   linkend="xindex-hash-strat-table">.
+  </para>
+
+   <table tocentry="1" id="xindex-hash-strat-table">
+    <title>Stratégies de découpage</title>
+    <tgroup cols="2">
+     <thead>
+      <row>
+       <entry>Opération</entry>
+       <entry>Numéro de stratégie</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>equal</entry>
+       <entry>1</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  <para>
+   Les index R-tree expriment des relations d'appartenance à un rectangle. Ils
+   utilisent huit stratégies, exposées dans le <xref
+   linkend="xindex-rtree-strat-table">.
+  </para>
+
+   <table tocentry="1" id="xindex-rtree-strat-table">
+    <title>Stratégies R-tree</title>
+    <tgroup cols="2">
+     <thead>
+      <row>
+       <entry>Opération</entry>
+       <entry>Numéro de stratégie</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>à gauche de</entry>
+       <entry>1</entry>
+      </row>
+      <row>
+       <entry>à gauche ou surchargeant</entry>
+       <entry>2</entry>
+      </row>
+      <row>
+       <entry>surchargeant</entry>
+       <entry>3</entry>
+      </row>
+      <row>
+       <entry>à droite ou surchargeant</entry>
+       <entry>4</entry>
+      </row>
+      <row>
+       <entry>à droite de</entry>
+       <entry>5</entry>
+      </row>
+      <row>
+       <entry>identique</entry>
+       <entry>6</entry>
+      </row>
+      <row>
+       <entry>contient</entry>
+       <entry>7</entry>
+      </row>
+      <row>
+       <entry>contenu par</entry>
+       <entry>8</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  <para>
+   Les index GiST sont encore plus flexibles&nbsp;: ils n'ont pas du tout
+   d'ensemble fixe de stratègies. En lieu et place, la routine d'appui
+   <quote>consistency</> de chaque classe d'opérateur GiST particulière
+   interprète les numéros de stratégie comme elle l'entend.
+  </para>
+
+  <para>
+   Notez que tous les opérateurs de stratégie renvoient des valeurs de type
+   booléen. Dans la pratique, tous les opérateurs définis comme stratégies de
+   méthode d'indexage doivent renvoyer un type <type>boolean</type> puisqu'ils
+   doivent apparaître au plus haut niveau d'une clause <literal>WHERE</> pour
+   être utilisés avec un index.
+  </para>
+
+  <para>
+   En fait, la colonne <structfield>amorderstrategy</structfield> dans
+   <classname>pg_am</> indique si la méthode d'indexage supporte les balayages
+   ordonnés. Zéro indique qu'elle ne les supporte pas&nbsp;; si elle les
+   supporte, <structfield>amorderstrategy</structfield> est le numéro de 
+   stratégie qui correspond à l'opérateur de classement. Par exemple, B-tree a
+   <structfield>amorderstrategy</structfield> = 1, qui est son numéro de
+   stratégie pour <quote>plus petit que</quote>.
+  </para>
+ </sect2>
+
+ <sect2 id="xindex-support">
+  <title>Routines d'appui de méthodes d'indexage</title>
+
+  <para>
+   Les stratégies n'apportent pas généralement assez d'informations au système
+   pour indiquer comment utiliser un index. Dans la pratique, les méthodes
+   d'index demandent des routines d'appui additionnelles pour fonctionner. Par
+   exemple, les méthodes d'index B-tree doivent être capables de comparer deux
+   clés et de déterminer laquelle est supérieure, égale ou inférieure à l'autre.
+   De la même façon, la méthode d'indexage R-tree doit être capable de calculer
+   les intersections, unions et dimensions des rectangles. Ces opérations ne
+   correspondent pas à des opérateurs utilisés dans les commandes SQL&nbsp;; ce
+   sont des routines administratives utilisées en interne par des méthodes
+   d'index.
+  </para>
+
+  <para>
+   Tout comme avec les stratégies, la classe d'opérateur reconnaît les fonctions
+   spécifiques avec lesquelles elle doit jouer chacun de ces rôles pour un
+   type de donnée et une interprétation sémantique. La méthode d'indexage
+   définit l'ensemble de fonctions dont elle a besoin et la classe d'opérateur
+   identifie les fonctions correctes à utiliser en les assignant aux
+   <quote>numéros de fonction d'appui</>.
+  </para>
+
+  <para>
+   Les B-trees demandent une seule fonction d'appui, exposée dans le <xref
+   linkend="xindex-btree-support-table">.
+  </para>
+
+   <table tocentry="1" id="xindex-btree-support-table">
+    <title>Fonctions d'appui de B-tree</title>
+    <tgroup cols="2">
+     <thead>
+      <row>
+       <entry>Fonction</entry>
+       <entry>Numéro d'appui</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>
+        Comparer deux clés et renvoyer un entier inférieure à zéro, zéro, ou
+        supérieure à zéro, indiquant si la première clé est inférieure, égale ou
+        supérieure à la deuxième.
+       </entry>
+       <entry>1</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  <para>
+   Pareillement, les index de découpage requièrent une fonction d'appui,
+   exposée dans le <xref linkend="xindex-hash-support-table">.
+  </para>
+
+   <table tocentry="1" id="xindex-hash-support-table">
+    <title>Fonctions d'appui pour découpage</title>
+    <tgroup cols="2">
+     <thead>
+      <row>
+       <entry>Fonction</entry>
+       <entry>Numéro de l'appui</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>Calculer la valeur de découpage pour une clé</entry>
+       <entry>1</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  <para>
+   Les index r-tree requièrent trois fonctions d'appui, exposées dans le <xref
+   linkend="xindex-rtree-support-table">.
+  </para>
+
+   <table tocentry="1" id="xindex-rtree-support-table">
+    <title>Fonctions d'appui pour R-tree </title>
+    <tgroup cols="2">
+     <thead>
+      <row>
+       <entry>Fonction</entry>
+       <entry>Numéro d'appui</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>union</entry>
+       <entry>1</entry>
+      </row>
+      <row>
+       <entry>intersection</entry>
+       <entry>2</entry>
+      </row>
+      <row>
+       <entry>size</entry>
+       <entry>3</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  <para>
+   Les index GiST requièrent sept fonctions d'appui, exposées dans le <xref
+   linkend="xindex-gist-support-table">.
+  </para>
+
+   <table tocentry="1" id="xindex-gist-support-table">
+    <title>Fonctions de support GiST</title>
+    <tgroup cols="2">
+     <thead>
+      <row>
+       <entry>Fonction</entry>
+       <entry>Numéro de support</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>consistent</entry>
+       <entry>1</entry>
+      </row>
+      <row>
+       <entry>union</entry>
+       <entry>2</entry>
+      </row>
+      <row>
+       <entry>compress</entry>
+       <entry>3</entry>
+      </row>
+      <row>
+       <entry>decompress</entry>
+       <entry>4</entry>
+      </row>
+      <row>
+       <entry>penalty</entry>
+       <entry>5</entry>
+      </row>
+      <row>
+       <entry>picksplit</entry>
+       <entry>6</entry>
+      </row>
+      <row>
+       <entry>equal</entry>
+       <entry>7</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  <para>
+   Contrairement aux opérateurs de stratégie, les fonctions d'appui renvoient le
+   type de donnée, quelqu'il soit, que la methode d'indexage particulière
+   attend, par exemple, dans le cas de la fonctioin de comparaison des B-trees,
+   un entier signé.
+ </sect2>
+
+ <sect2 id="xindex-example">
+  <title>Exemple</title>
+
+  <para>
+   Maintenant que nous avons vu les idées, voici l'exemple promis de création
+   d'une nouvelle classe d'opérateur. Cette classe d'opérateur encapsule les
+   opérateurs qui trient les nombres complexes selon l'ordre de la valeur
+   absolue, aussi avons-nous choisi le nom de
+   <literal>complex_abs_ops</literal>. En premier lieu, nous avons besoin d'un
+   ensemble d'opérateurs. La procédure pour définir des opérateurs a été
+   discutée dans la <xref linkend="xoper">.  Pour une classe d'opérateur sur les
+   B-trees, nous avons besoin des opérateurs&nbsp;:
+
+   <itemizedlist spacing="compact">
+    <listitem><simpara>absolute-value less-than (stratégie 1)&nbsp;;</></>
+    <listitem><simpara>absolute-value less-than-or-equal (stratégie
+     2)&nbsp;;</></>
+    <listitem><simpara>absolute-value equal (stratégie 3)&nbsp;;</></>
+    <listitem><simpara>absolute-value greater-than-or-equal (stratégie
+     4)&nbsp;;</></>
+    <listitem><simpara>absolute-value greater-than (stratégie 5)&nbsp;;</></>
+   </itemizedlist>
+  </para>
+
+  <para>
+   Le code C de l'opérateur d'égalité ressemble à ceci&nbsp;:
+
+<programlisting>
+#define Mag(c) ((c)-&gt;x*(c)-&gt;x + (c)-&gt;y*(c)-&gt;y)
+
+bool
+complex_abs_eq(Complex *a, Complex *b)
+{
+    double amag = Mag(a), bmag = Mag(b);
+    return (amag == bmag);
+}
+</programlisting>
+   Les quatre autres opérateurs sont très similaires. Vous pouvez trouver leur
+   code dans <filename>src/tutorial/complex.c</filename> et
+   <filename>src/tutorial/complex.sql</filename> dans la distribution des
+   sources.
+  </para>
+
+  <para>
+   Maintenant, déclarons les fonctions et les opérateurs basés sur ces
+   fonctions&nbsp;:
+<programlisting>
+CREATE FUNCTION complex_abs_eq(complex, complex) RETURNS boolean
+    AS '<replaceable>filename</replaceable>', 'complex_abs_eq'
+    LANGUAGE C;
+
+CREATE OPERATOR = (
+    leftarg = complex,
+    rightarg = complex,
+    procedure = complex_abs_eq,
+    restrict = eqsel,
+    join = eqjoinsel
+);
+</programlisting>
+   Il est important de spécifier les fonctions de sélectivité de restriction et
+   de jointure, sinon l'optimiseur sera incapable de faire un usage effectif de
+   l'index. Notez que les cas 'less-than', 'equal' et 'greater-than' doivent
+   utiliser des fonctions de sélectivité différentes.
+  </para>
+
+  <para>
+  Voici d'autres choses importantes à noter&nbsp;:
+
+  <itemizedlist>
+   <listitem>
+    <para>
+     Il ne peut y avoir qu'un seul opérateur nommé, disons, <literal>=</literal>
+     et acceptant un type <type>complex</type> pour ses deux opérandes. Dans le
+     cas présent, nous n'avons aucun autre opérateur <literal>=</literal> pour
+     <type>complex</type>, mais si nous construisons un type de donnée
+     fonctionnel, nous aurions certainement désiré que <literal>=</literal> soit
+     l'opération ordinaire d'égalité pour les nombres complexes (et non pour
+     l'égalité de leurs valeurs absolues). Dans ce cas, nous aurions eu besoin
+     d'utiliser un autre nom d'opérateur pour notre fonction
+     <function>complex_abs_eq</>.
+    </para>
+   </listitem>
+
+   <listitem>
+    <para>
+     Bien que <productname>PostgreSQL</productname> puisse se débrouiller avec
+     des fonctions ayant le même nom, tant qu'elles ont en argument des types de
+     données différents, C peut seulement faire face à une fonction globale
+     ayant un nom donné. Aussi ne devons-nous pas donner un nom simple comme
+     <filename>abs_eq</filename>. Habituellement, c'est une bonne habitude
+     d'inclure le nom du type de données dans le nom de la fonction C, pour ne
+     pas provoquer de conflit avec des fonctions pour d'autres types de donnée.
+    </para>
+   </listitem>
+
+   <listitem>
+    <para>
+     Nous aurions pu faire de  <filename>abs_eq</filename> le nom
+     <productname>PostgreSQL</productname> de la fonction, en laissant à
+     <productname>PostgreSQL</productname> le soin de la distinguer de toute
+     autre fonction <productname>PostgreSQL</productname> de même nom par les
+     types de données en argument. Pour la simplicité de l'exemple, nous
+     donnerons à la fonction le même nom au niveau de C et au niveau de
+     <productname>PostgreSQL</productname>.
+    </para>
+   </listitem>
+  </itemizedlist>
+  </para>
+
+  <para>
+   La prochaine étape est l'enregistrement de la routine d'appui nécessaire pour
+   les  B-trees. Le code exemple C qui implémente ceci est dans le même fichier
+   qui contient les fonctions d'opérateur. Voici comment déclarer la
+   fonction&nbsp;:
+
+<programlisting>
+CREATE FUNCTION complex_abs_cmp(complex, complex)
+    RETURNS integer
+    AS '<replaceable>filename</replaceable>'
+    LANGUAGE C;
+</programlisting>
+  </para>
+
+  <para>
+   Maintenant que nous avons les opérateurs requis et la routine d'appui, nous
+   pouvons enfin créer la classe d'opérateur.
+
+<programlisting>
+CREATE OPERATOR CLASS complex_abs_ops
+    DEFAULT FOR TYPE complex USING btree AS
+        OPERATOR        1       &lt; ,
+        OPERATOR        2       &lt;= ,
+        OPERATOR        3       = ,
+        OPERATOR        4       &gt;= ,
+        OPERATOR        5       &gt; ,
+        FUNCTION        1       complex_abs_cmp(complex, complex);
+</programlisting>
+  </para>
+
+  <para>
+   Et c'est fait&nbsp;! Il devrait être possible maintenant de créer et
+   d'utiliser les index B-tree sur les colonnes <type>complex</type>.
+  </para>
+
+  <para>
+   Nous aurions pu écrire les entrées de l'opérateur de façon plus explicite
+   comme dans
+
+   <programlisting>
+        OPERATOR        1       &lt; (complex, complex) ,
+</programlisting>
+   mais il n'y a pas besoin de faire ainsi quand les opérateurs prennent le même
+   type de donnée que celui pour lequel la classe d'opérateur a été définie.
+  </para>
+
+  <para>
+   Les exemples ci-dessus supposent que vous voulez que cette nouvelle classe
+   d'opérateur soit la classe d'opérateur B-tree par défaut pour le type de
+   donnée <type>complex</type>. Si vous ne voulez pas, supprimez simplement le
+   mot <literal>DEFAULT</>.
+  </para>
+ </sect2>
+
+ <sect2 id="xindex-opclass-dependencies">
+  <title>Dépendance du système pour les classes d'opérateur</title>
+
+   <indexterm>
+    <primary>Opérateur d'ordination</primary>
+   </indexterm>
+
+  <para>
+   <productname>PostgreSQL</productname> utilise les classe d'opérateur pour
+   inférer les propriétés des opérateurs de plusieurs autres façons que le seul
+   usage avec les index. Donc, vous pourriez vouloir créer des classes
+   d'opérateur même si vous n'avez pas l'intention d'indexer une quelconque
+   colonne de votre type de donnée.
+  </para>
+
+  <para>
+   En particulier, il existe des caractéristiques de SQL telles que
+   <literal>ORDER BY</> et <literal>DISTINCT</> qui requièrent la comparaison et
+   le tri des valeurs. Pour implémenter ces caractéristiques sur un type de
+   donnée défini par l'utilisateur, <productname>PostgreSQL</productname>
+   recherche la classe d'opérateur B-tree par défaut pour le type de donnée. Le
+   membre <quote>equals</> de cette classe d'opérateur définit pour le système
+   la notion d'égalité des valeurs pour <literal>GROUP BY</> et
+   <literal>DISTINCT</>, et le tri ordonné imposé par la classe d'opérateur
+   définit le <literal>ORDER BY</> par défaut.
+
+  </para>
+
+  <para>
+   La comparaison des tableaux de types définis par l'utilisateur repose sur les
+   sémantiques définies par la classe d'opérateur B-tree par défaut.
+  </para>
+
+  <para>
+   S'il n'y a pas de classe d'opérateur B-tree par défaut pour le type de
+   donnée, le système cherchera une classe d'opérateur de découpage. Mais
+   puisque cette classe d'opérateur ne fournit que l'égalité, c'est en pratique
+   seulement suffisant pour établir l'égalité de tableau.
+  </para>
+
+  <para>
+   Quand il n'y a pas de classe d'opérateur par défaut pour un type de donnée,
+   vous obtenez des erreurs telles que <quote>could not identify an ordering
+   operator</> si vous essayez d'utiliser ces caractéristiques SQL avec le type
+   de donnée.
+  </para>
+
+   <note>
+    <para>
+     Dans les versions de <ProductName>PostgreSQL</ProductName> antérieures à
+     la 7.4, les opérations de tri et de groupement utilisaient implicitement
+     les opérateurs nommés <literal>=</>, <literal>&lt;</> et
+     <literal>&gt;</>. Le nouveau comportement qui repose sur les classes
+     d'opérateurs par défaut évite d'avoir à faire une quelconque supposition
+     sur le comportement des opérateurs avec des noms particuliers.
+    </para>
+   </note>
+ </sect2>
+
+ <sect2 id="xindex-opclass-features">
+  <title>Caractéristiques spéciales des classes d'opérateur</title>
+
+  <para>
+   Il y a deux caractéristiques spéciales des classes d'opérateur dont nous
+   n'avons pas encore parlé, essentiellement parce qu'elles ne sont pas utiles
+   avec les méthodes d'index les plus communément utilisées.
+  </para>
+
+  <para>
+   Normalement, déclarer un opérateur comme membre d'une classe d'opérateur
+   signifie que la méthode d'indexage peut retrouver exactement l'ensemble de
+   lignes qui satisfait la condition <literal>WHERE</> utilisant cet opérateur.
+   Par exemple,
+<programlisting>
+SELECT * FROM table WHERE integer_column &lt; 4;
+</programlisting>
+   peut être accompli exactement par un index B-tree sur la colonne entière.
+   Mais il y a des cas où un index est utile comme un guide inexact vers la
+   colonne correspondante. Par exemple, si un index R-tree enregistre seulement
+   les rectangles limite des objets, alors il ne peut pas exactement satisfaire
+   une condition <literal>WHERE</> qui teste le chevauchement entre des objets
+   non rectangulaires comme des polygones. Cependant nous pourriions utiliser
+   l'index pour trouver des objets dont les rectangles limites chevauchent les
+   limites de l'objet cible. Dans ce cas, l'index est dit être <quote>lossy</>
+   pour l'opérateur, et nous ajoutons <literal>RECHECK</> à la clause
+   <literal>OPERATOR</> dans la commande <command>CREATE OPERATOR CLASS</>. 
+   <literal>RECHECK</> est valide si l'index est garanti retourner toutes les
+   lignes requises, plus peut-être des lignes supplémentaires pouvant être
+   éliminées par le recours à l'opérateur original.
+  </para>
+
+  <para>
+  Considérons à nouveau la situation où nous gardons dans l'index seulement le
+   rectangle délimitant un objet complexe comme un polygone. Dans ce cas, il
+   n'est pas très interessant de conserver le polygone entier dans l'index -
+   nous pouvons aussi bien conserver seulement un objet simple du type 
+   <type>box</>. Cette situation est exprimée par l'option <literal>STORAGE</>
+   dans la commande <command>CREATE OPERATOR CLASS</>&nbsp;: nous aurons à
+   écrire quelque chose comme
+
+<programlisting>
+CREATE OPERATOR CLASS polygon_ops
+    DEFAULT FOR TYPE polygon USING gist AS
+        ...
+        STORAGE box;
+</programlisting>
+
+   Actuellement, seule la méthode d'indexage GiST supporte un type
+   <literal>STORAGE</> qui soit différent du type de donnée de la colonne. Les
+   routines d'appui de GiST <literal>compress</> et <literal>decompress</>
+   doivent s'occuper de la conversion du type de donnée quand
+   <literal>STORAGE</> est utilisé.
+  </para>
+ </sect2>
+
+</sect1>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->
