@@ -1,0 +1,749 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/pltcl.sgml,v 1.10 2005/07/15 06:14:26 guillaume Exp $
+-->
+
+ <chapter id="pltcl">
+  <title>PL/Tcl - Langage procédural Tcl</title>
+
+  <indexterm zone="pltcl">
+   <primary>PL/Tcl</primary>
+  </indexterm>
+
+  <indexterm zone="pltcl">
+   <primary>Tcl</primary>
+  </indexterm>
+
+  <para>
+   PL/Tcl est un langage procédurale chargeable pour le système de bases de
+   données <productname>PostgreSQL</productname>, activant l'utilisation du
+   langage <ulink url="http://www.tcl.tk/">Tcl</ulink> pour l'écriture de
+   fonctions de procédures déclencheurs.
+  </para>
+
+  <!-- **** PL/Tcl overview **** -->
+
+  <sect1 id="pltcl-overview">
+   <title>Survol</title>
+
+   <para>
+    PL/Tcl offre un grand nombre de fonctionnalités qu'un codeur de
+    fonctions dispose avec le langage C, avec quelques restrictions.
+   </para>
+   <para>
+    La bonne restriction est que tout est exécuté dans un interpréteur
+    Tcl sûr. En plus de l'ensemble limité de commandes d'un Tcl
+    sûr, seules quelques commandes sont disponibles pour accéder à la base de
+    données via SPI et pour envoyer des messages via <function>elog()</>. Il
+    n'existe aucun moyen d'accéder aux valeurs internes du serveur de bases de
+    données ou pour gagner un accès niveau système d'exploitation avec les
+    droits du processus serveur <productname>PostgreSQL</productname> comme les
+    fonctions C vous le permettent. Du coup, un utilisateur non privilégié de la
+    base de données pourrait avoir le droit d'utiliser ce langage.
+   </para>
+   <para>
+    L'autre restriction d'implémentation est que les fonctions Tcl ne peuvent
+    pas être utilisées pour créer des fonctions d'entrées/sorties pour les 
+    nouveaux types de données.
+   </para>
+   <para>
+    Quelques fois, il est préférable d'écrire des fonctions Tcl non
+    restreintes par le Tcl sûr. Par exemple, vous pourriez vouloir une fonction
+    Tcl pour envoyer un courrier électronique. Pour gérer ces cas, il existe une
+    variante de <application>PL/Tcl</> appelée <literal>PL/TclU</> (Tcl non
+    accrédité). C'est exactement le même langage sauf qu'un interpréteur Tcl
+    complet est utilisé. <emphasis>Si <application>PL/TclU</> est utilisé, il
+    doit être installé comme langage procédural non accrédité</emphasis> de
+    façon à ce que seuls les superutilisateurs de la base de données puissent
+    créer des fonctions avec lui. Le codeur d'une fonction
+    <application>PL/TclU</> doit faire attention au fait que la fonction ne
+    pourra pas être utilisé pour faire autre chose que son but initial, car il
+    sera possible de faire tout ce qu'un administrateur de la base de données
+    peut faire.
+   </para>
+   <para>
+    L'objet partagé pour les gestionnaires d'appel <application>PL/Tcl</> et
+    <application>PL/TclU</> est automatiquement construit et installé dans le
+    répertoire des bibliothèques de <productname>PostgreSQL</productname> si le
+    support de Tcl est spécifié dans l'étape de configuration de la procédure
+    d'installation. Pour installer <application>PL/Tcl</> et/ou
+    <application>PL/TclU</> dans une base de données particulière, utilisez le
+    programme <command>createlang</command>, par exemple <literal>createlang
+    pltcl <replaceable>nom_base</></literal> ou <literal>createlang pltclu
+    <replaceable>nom_base</></literal>.
+   </para>
+  </sect1>
+
+  <!-- **** PL/Tcl description **** -->
+
+   <sect1 id="pltcl-functions">
+    <title>Fonctions et arguments PL/Tcl</title>
+
+    <para>
+     Pour créer une fonction dans le langage <application>PL/Tcl</>, utilisez
+     la syntaxe standard&nbsp;:
+
+<programlisting>
+CREATE FUNCTION <replaceable>nom_fonction</replaceable>
+(<replaceable>types_arguments</replaceable>) RETURNS
+<replaceable>type_en_retour</replaceable> AS $$
+    # corps de la fonction PL/Tcl
+$$ LANGUAGE pltcl;
+</programlisting>
+
+     <application>PL/TclU</> est identique sauf que le langage doit être
+     <literal>pltclu</>.
+    </para>
+
+    <para>
+     Le corps de la fonction est simplement un bout de script Tcl. Quand la
+     fonction est appelée, les valeurs des arguments sont passées en tant que
+     variables <literal>$1</literal> ...
+     <literal>$<replaceable>n</replaceable></literal> au script Tcl. Le résultat
+     est renvoyé à partir du code Tcl de la façon habituelle, avec une
+     instruction <literal>return</literal>.
+    </para>
+
+    <para>
+     Par exemple, une fonction renvoyant le plus grand de deux valeurs entières
+     pourrait être définie ainsi&nbsp;:
+
+<programlisting>
+CREATE FUNCTION tcl_max(integer, integer) RETURNS integer AS $$
+    if {$1 &gt; $2} {return $1}
+    return $2
+$$ LANGUAGE pltcl STRICT;
+</programlisting>
+
+     Notez la clause <literal>STRICT</>, qui nous permet d'éviter de penser aux
+     valeurs NULL en entrées&nbsp;: si une valeur NULL est passée, la
+     fonction ne sera pas appelée du tout mais renverra automatiquement un
+     résultat nul.
+    </para>
+
+    <para>
+     Dans une fonction non stricte, si la valeur réelle d'un argument est
+     NULL, la variable <literal>$<replaceable>n</replaceable></literal>
+     correspondante sera initialisée avec une chaîne vide. Pour détecter si un
+     argument particulier est nul, utilisez la fonction <literal>argisnull</>.
+     Par exemple, supposez que nous voulons <function>tcl_max</function> avec un
+     argument nul et un non nul pour renvoyer l'argument non nul plutôt que
+     nul&nbsp;:
+
+<programlisting>
+CREATE FUNCTION tcl_max(integer, integer) RETURNS integer AS $$
+    if {[argisnull 1]} {
+        if {[argisnull 2]} { return_null }
+        return $2
+    }
+    if {[argisnull 2]} { return $1 }
+    if {$1 &gt; $2} {return $1}
+    return $2
+$$ LANGUAGE pltcl;
+</programlisting>
+    </para>
+
+    <para>
+     Comme indiqué ci-dessus, pour renvoyer une valeur NULL à partir d'une
+     fonction PL/Tcl function, exécutez <literal>return_null</literal>. Ceci
+     peut être fait que la fonction soit stricte ou non.
+    </para>
+
+    <para>
+     Les arguments de type composé sont passés à la fonction comme des 
+     tableaux Tcl. Les noms des éléments du tableau sont les noms d'attribut du
+     type composite. Si un attribut dans la ligne passée à la valeur NULL, il
+     n'apparaîtra pas dans le tableau. Voici un exemple&nbsp;:
+
+<programlisting>
+CREATE TABLE employe (
+    nom text,
+    salaire integer,
+    age integer
+);
+
+CREATE FUNCTION surpaye(employe) RETURNS boolean AS $$
+    if {200000.0 &lt; $1(salaire)} {
+        return "t"
+    }
+    if {$1(age) &lt; 30 && 100000.0 &lt; $1(salaire)} {
+        return "t"
+    }
+    return "f"
+$$ LANGUAGE pltcl;
+</programlisting>
+    </para>
+
+    <para>
+     Il n'y a actuellement aucun support pour le retour d'une valeur
+     résultat de type composé et pour le retour d'ensembles.
+    </para>
+
+    <para>
+     <application>PL/Tcl</> n'a pas actuellement du support complet pour les
+     types de domaine&nbsp;: il traite un domaine de la même façon que le type
+     scalaire sous-jacent. Cela signifie que les contraintes associées avec le
+     domaine ne seront pas forcées. Ce n'est pas un problème pour les arguments
+     de la fonction mais c'est hasardeux de déclarer une fonction
+     <application>PL/Tcl</> renvoyant un type domaine.
+    </para>
+   </sect1>
+
+   <sect1 id="pltcl-data">
+    <title>Valeurs des données avec PL/Tcl</title>
+
+    <para>
+     Les valeurs des arguments fournies au code d'une fonction PL/Tcl sont
+     simplement les arguments en entrée convertis au format texte (comme s'ils
+     avaient été affiché par une instruction <command>SELECT</>). De même, la
+     commande <literal>return</> acceptera toute chaîne acceptable dans le
+     format d'entrée du type de retour déclaré pour la fonction. Donc, à
+     l'intérieur de la fonction PL/Tcl, toutes les valeurs de données sont
+     simplement des chaînes de texte.
+    </para>
+
+   </sect1>
+
+   <sect1 id="pltcl-global">
+    <title>Données globales avec PL/Tcl</title>
+
+    <indexterm zone="pltcl-global">
+     <primary>donnée globale</primary>
+     <secondary>in PL/Tcl</secondary>
+    </indexterm>
+
+    <para>
+     Quelque fois, il est utile d'avoir des données globales qui sont
+     conservées entre deux appels à une fonction ou qui sont partagées entre
+     plusieurs fonctions. Ceci peut être facilement obtenu car toutes les
+     fonctions PL/Tcl exécutées dans une session partagent le même interpréteur
+     Tcl sûr. Donc, toute variable globale Tcl est accessible aux appels de
+     fonctions PL/Tcl et persisteront pour la durée de la session SQL. (Notez
+     que les fonctions <application>PL/TclU</> partagent de la même façon les
+     données globales mais elles sont dans un interpréteur Tcl différent et ne
+     peuvent pas communiquer avec les fonctions PL/Tcl.)
+    </para>
+
+    <para>
+     Pour aider à la protection des fonctions PL/Tcl sur les interférences non
+     intentionnelles, un tableau global est rendu disponible pour chaque
+     fonction via la commande <function>upvar</>. Le nom global de cette
+     variable est le nom interne de la fonction alors que le nom local est
+     <literal>GD</>. Il est recommandé d'utiliser <literal>GD</> pour les
+     données privées persistantes d'une fonction. Utilisez les variables globales
+     Tcl uniquement pour les valeurs que vous avez l'intention de partager avec
+     les autres fonctions.
+    </para>
+
+    <para>
+     Un exemple de l'utilisation de <literal>GD</> apparaît dans l'exemple
+     <function>spi_execp</function> ci-dessous.
+    </para>
+   </sect1>
+
+   <sect1 id="pltcl-dbaccess">
+    <title>Accès à la base de données depuis PL/Tcl</title>
+
+    <para>
+     Les commandes suivantes sont disponibles pour accéder à la base de
+     données depuis le corps d'une fonction PL/Tcl&nbsp;:
+
+    <variablelist>
+
+     <varlistentry>
+      <term><literal><function>spi_exec</function> <optional role="tcl">-count <replaceable>n</replaceable></optional> <optional role="tcl">-array <replaceable>name</replaceable></optional> <replaceable>command</replaceable> <optional role="tcl"><replaceable>loop-body</replaceable></optional></literal></term>
+      <listitem>
+       <para>
+	Exécute une commande SQL donnée en tant que chaîne. Une erreur dans la
+	commande lève une erreur. Sinon, la valeur de retour de
+	<function>spi_exec</function> est le nombre de lignes intéressées dans
+	le processus (sélection, insertion, mise à jour ou suppression) par la
+	commande ou zéro si la commande est une instruction utilitaire. De plus,
+	si la commande est une instruction <command>SELECT</>, les valeurs des
+	données sélectionnées sont placées dans des variables Tcl décrites
+	ci-dessous.
+       </para>
+       <para>
+	La valeur optionnelle <literal>-count</> indique à
+	<function>spi_exec</function> le nombre maximum de lignes à travailler
+	dans la commande. L'effet de ceci est comparable à l'initialisation
+	d'une requête en tant que curseur et de dire <literal>FETCH
+	<replaceable>n</></>.
+       </para>
+       <para>
+	Si la commande est une instruction <command>SELECT</>, les valeurs des
+	colonnes de résultat sont placées dans les variables Tcl nommées d'après
+	les colonnes. Si l'option <literal>-array</> est donné, les valeurs de
+	colonnes sont stockées à la place dans un tableau associatif nommé, avec
+	les noms de colonnes utilisés comme index du tableau.
+       </para>
+       <para>
+        Si la commande est une instruction <command>SELECT</> et qu'aucun script
+	<replaceable>loop-body</> n'est donné, alors seule la première ligne
+	de résultats est stockée dans des variables Tcl&nbsp;; les lignes
+	suivants sont ignorées. Aucun stockage n'intervient si la requête ne
+	renvoie pas de ligne. (Ce cas est détectable avec le résultat de la
+	fonction <function>spi_exec</function>.) Par exemple,
+
+<programlisting>
+spi_exec "SELECT count(*) AS cnt FROM pg_proc"
+</programlisting>
+
+	initialisera la variable Tcl <literal>$cnt</> avec le nombre de lignes
+	dans le catalogue système <structname>pg_proc</>.
+       </para>
+       <para>
+        Si l'argument <replaceable>loop-body</> optionnel est donné, il est un
+	morceau de script Tcl qui est exécuté une fois pour chaque ligne du
+	résultat de la requête. (<replaceable>loop-body</> est ignoré si la
+	commande donnée n'est pas un <command>SELECT</>.) Les valeurs des
+	colonnes de la ligne actuelle sont stockées dans des variables Tcl avant
+	chaque itération. Par exemple,
+
+<programlisting>
+spi_exec -array C "SELECT * FROM pg_class" {
+    elog DEBUG "have table $C(relname)"
+}
+</programlisting>
+
+	affichera un message de trace pour chaque ligne de <literal>pg_class</>.
+	Cette fonctionnalité travaille de façon similaire aux autres
+	constructions de boucles de Tcl&nbsp;; en particulier,
+	<literal>continue</> et <literal>break</> fonctionnent de la même façon
+	à l'intérieur de <replaceable>loop-body</replaceable>.
+       </para>
+       <para>
+        Si une colonne d'un résultat de la requête est NULL, la variable cible
+	est <quote>dés-initialisée</> plutôt qu'initialisée.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><function>spi_prepare</function> <replaceable>query</replaceable> <replaceable>typelist</replaceable></term>
+      <listitem>
+       <para>
+	Prépare et sauvegarde un plan de requête pour une exécution future. Le 
+	plan sauvegardé sera conservé pour la durée de la session
+	actuelle.<indexterm><primary>préparer une requête</><secondary>en
+	PL/Tcl</></>
+       </para>
+       <para>
+        La requête peut utiliser des paramètres, c'est-à-dire des emplacements
+	pour des valeurs à fournir lorsque le plan sera réellement exécuté. Dans
+	la chaîne de requête, faites référence aux paramètres avec les symboles
+	<literal>$1</literal> ...
+	<literal>$<replaceable>n</replaceable></literal>. Si la requête utilise
+	les paramètres, les noms des types de paramètre doivent être donnés dans
+	une liste Tcl. (Écrivez une liste vide pour
+	<replaceable>typelist</replaceable> si aucun paramètre n'est utilisé.)
+	Actuellement, les types de paramètres doivent être identifiés par les
+	noms de types internes affichés dans la table système
+	<literal>pg_type</>&nbsp;; par exemple <literal>int4</> et non pas
+	<literal>integer</>.
+       </para>
+       <para>
+        La valeur de retour de <function>spi_prepare</function> est
+	l'identifiant de la requête à utiliser dans les appels suivants à
+	<function>spi_execp</function>. Voir <function>spi_execp</function> pour
+	un exemple.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal><function>spi_execp</> <optional role="tcl">-count <replaceable>n</replaceable></optional> <optional role="tcl">-array <replaceable>name</replaceable></optional> <optional role="tcl">-nulls <replaceable>string</replaceable></optional> <replaceable>queryid</replaceable> <optional role="tcl"><replaceable>value-list</replaceable></optional> <optional role="tcl"><replaceable>loop-body</replaceable></optional></literal></term>
+      <listitem>
+       <para>
+	Exécute une requête préparée précédemment avec <function>spi_prepare</>.
+	<replaceable>queryid</replaceable> est l'identifiant renvoyé par
+	<function>spi_prepare</>. Si la requête fait référence à des
+	paramètres, une liste de valeurs (<replaceable>value-list</replaceable>)
+	doit être fournie. C'est une liste Tcl des valeurs réelles des
+	paramètres. La liste doit être de la même longueur que la liste de types
+	de paramètres donnée précédemment lors de l'appel à
+	<function>spi_prepare</>. Oubliez-la si la requête n'a pas de
+	paramètres.
+       </para>
+       <para>
+	La valeur optionnelle pour <literal>-nulls</> est une chaîne d'espaces
+	et de caractères <literal>'n'</> indiquant à
+	<function>spi_execp</function> les paramètres nuls. Si indiqué, il doit
+	avoir exactement la même longueur que
+	<replaceable>value-list</replaceable>. Si elle est omise, toutes les
+	valeurs de paramètres sont non NULL.
+       </para>
+       <para>
+        Sauf si la requête et ses paramètres sont spécifiés,
+	<function>spi_execp</> fonctionne de la même façon que
+	<function>spi_exec</>. Les options <literal>-count</>,
+	<literal>-array</> et <replaceable>loop-body</replaceable> sont
+	identiques. Du coup, la valeur du résultat l'est aussi.
+       </para>
+       <para>
+	Voici un exemple d'une fonction PL/Tcl utilisant un plan préparée&nbsp;:
+
+<programlisting>
+CREATE FUNCTION t1_count(integer, integer) RETURNS integer AS $$
+    if {![ info exists GD(plan) ]} {
+        # prépare le plan sauvegardé au premier appel
+        set GD(plan) [ spi_prepare \
+                "SELECT count(*) AS cnt FROM t1 WHERE num &gt;= \$1 AND num &lt;= \$2" \
+                [ list int4 int4 ] ]
+    }
+    spi_execp -count 1 $GD(plan) [ list $1 $2 ]
+    return $cnt
+$$ LANGUAGE pltcl;
+</programlisting>
+
+        Nous avons besoin des antislashs à l'intérieur de la chaîne de la
+	requête passée à <function>spi_prepare</> pour s'assurer que les
+	marqueurs <literal>$<replaceable>n</replaceable></> seront passés
+	au travers de <function>spi_prepare</> sans transformation et ne sont
+	pas remplacées avec la substitution de variables de Tcl.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <indexterm>
+       <primary>spi_lastoid</primary>
+      </indexterm>
+      <term><function>spi_lastoid</></term>
+      <listitem>
+       <para>
+	Renvoie l'OID de la ligne insérée par le dernier appel à
+	<function>spi_exec</> ou <function>spi_execp</>, si la commande était un
+	<command>INSERT</> d'une seule ligne. (Sinon, vous obtenez zéro.)
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><function>quote</> <replaceable>string</replaceable></term>
+      <listitem>
+       <para>
+	Double toutes les occurrences de guillemet simple et d'antislash
+	dans la chaîne donnée. Ceci peut être utilisé pour mettre entre
+	guillemets des chaînes de façon sûr et pour qu'elles puissent être
+	insérées dans des commandes SQL passées à <function>spi_exec</function>
+	ou <function>spi_prepare</function>. Par exemple, pensez à une
+	chaîne de commande SQL comme&nbsp;:
+
+<programlisting>
+"SELECT '$val' AS ret"
+</programlisting>
+
+	où la variable Tcl <literal>val</> contient actuellement le mot
+	<literal>doesn't</literal>. Ceci finirait avec la chaîne de
+	commande&nbsp;:
+
+<programlisting>
+SELECT 'doesn't' AS ret
+</programlisting>
+
+	qui pourrait causer une erreur d'analyse lors de
+	<function>spi_exec</function> ou de
+	<function>spi_prepare</function>. Pour fonctionner correctement, la
+	commande soumise devrait contenir
+
+<programlisting>
+SELECT 'doesn''t' AS ret
+</programlisting>
+
+	qui peut-être créé avec PL/Tcl en utilisant
+
+<programlisting>
+"SELECT '[ quote $val ]' AS ret"
+</programlisting>
+
+        Un avantage de <function>spi_execp</function> est que vous n'avez pas à
+	mettre entre guillemets des valeurs de paramètres comme ceux-ci car les
+	paramètres ne sont jamais analysés comme faisant partie de la chaîne de
+	la commande SQL.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <indexterm>
+       <primary>elog</primary>
+       <secondary>in PL/Tcl</secondary>
+      </indexterm>
+      <term><function>elog</> <replaceable>level</replaceable> <replaceable>msg</replaceable></term>
+      <listitem>
+       <para>
+	Émet une trace ou un message d'erreur. Les niveaux possibles sont
+	<literal>DEBUG</>, <literal>LOG</>, <literal>INFO</>,
+	<literal>NOTICE</>, <literal>WARNING</>, <literal>ERROR</> et
+	<literal>FATAL</>. <literal>ERROR</> élève
+	une condition d'erreur&nbsp;; si elle n'est pas récupérée par le code
+	Tcl, l'erreur est propagée à la requête appelant, causant l'annulation
+	de la transaction ou sous-transaction en cours. Ceci est en fait
+	identique à la commande <literal>error</>. <literal>FATAL</>
+	annule la transaction et fait que la session courante s'arrête. (Il
+	n'existe probablement aucune raison d'utiliser ce niveau d'erreur dans
+	les fonctions PL/Tcl mais il est fourni pour que tous les messages
+	soient tout de même disponibles.) Les autres niveaux génèrent seulement
+	des messages de niveaux de priorité différent. Le fait que les
+	messages d'un niveau de priorité particulier sont reportés au client,
+	écrit dans les journaux du serveur, ou les deux à la fois, est contrôlé
+	par les variables de configuration <xref linkend="guc-log-min-messages">
+	et <xref linkend="guc-client-min-messages">. Voir <xref
+	linkend="runtime-config"> pour plus d'informations.
+       </para>
+      </listitem>
+     </varlistentry>
+
+    </variablelist>
+    </para>
+
+   </sect1>
+
+   <sect1 id="pltcl-trigger">
+    <title>Procédures pour déclencheurs en PL/Tcl</title>
+
+    <indexterm>
+     <primary>déclencheur</primary>
+     <secondary>en PL/Tcl</secondary>
+    </indexterm>
+
+    <para>
+     Les procédures pour déclencheurs peuvent être écrites en PL/Tcl.
+     <productname>PostgreSQL</productname> requiert qu'une procédure, devant
+     être appelée en tant que déclencheur, doit être déclarée comme une fonction
+     sans arguments et retourner une valeur de type <literal>trigger</>.
+    </para>
+    <para>
+     L'information du gestionnaire de déclencheur est passée au corps de la
+     procédure avec les variables suivantes&nbsp;:
+
+     <variablelist>
+
+      <varlistentry>
+       <term><varname>$TG_name</varname></term>
+       <listitem>
+	<para>
+	 Nom du déclencheur provenant de l'instruction <command>CREATE
+         TRIGGER</command>.
+	</para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>$TG_relid</varname></term>
+       <listitem>
+	<para>
+	 L'identifiant objet de la table qui est à la cause du lancement 
+	 du déclencheur.
+	</para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>$TG_relatts</varname></term>
+       <listitem>
+	<para>
+	 Une liste Tcl des noms de colonnes de la table, préfixée avec un
+	 élément de liste vide. Donc, rechercher un nom de colonne dans la liste
+	 avec la commande <function>lsearch</> de <application>Tcl</> renvoie le
+	 numéro de l'élément, en commençant à 1 pour la première colonne, de la
+	 même façon que les colonnes sont numérotées personnellement avec
+	 <productname>PostgreSQL</productname>.
+	</para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>$TG_when</varname></term>
+       <listitem>
+	<para>
+	 La chaîne <literal>BEFORE</> ou <literal>AFTER</> suivant le type
+	 d'appel du déclencheur.
+	</para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>$TG_level</varname></term>
+       <listitem>
+	<para>
+	 La chaîne <literal>ROW</> ou <literal>STATEMENT</> suivant le type
+	 d'appel du déclencheur.
+	</para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>$TG_op</varname></term>
+       <listitem>
+	<para>
+	 La chaîne <literal>INSERT</>, <literal>UPDATE</> ou
+	 <literal>DELETE</> suivant le type d'appel du déclencheur.
+	</para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>$NEW</varname></term>
+       <listitem>
+	<para>
+	 Un tableau associatif contenant les valeurs de la nouvelle ligne de la
+	 table pour les actions <command>INSERT</> ou <command>UPDATE</>
+	 ou vide pour <command>DELETE</>. Le tableau est indexé par nom de
+	 colonne. Les colonnes NULL n'apparaissent pas dans le tableau.
+	</para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>$OLD</varname></term>
+       <listitem>
+	<para>
+	 Un tableau associatif contenant les valeurs de l'ancienne ligne de la
+	 table pour les actions <command>UPDATE</> or <command>DELETE</> ou vide
+	 pour <command>INSERT</>. Le tableau est indexé par nom de colonne. Les
+	 colonnes NULL n'apparaissent pas dans le tableau.
+	</para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>$args</varname></term>
+       <listitem>
+	<para>
+	 Une liste Tcl des arguments de la procédure ainsi que le demande
+	 l'instruction <command>CREATE TRIGGER</command>. Ces arguments sont
+	 aussi accessibles par <literal>$1</literal> ...
+	 <literal>$<replaceable>n</replaceable></literal> dans le corps de la
+	 procédure.
+	</para>
+       </listitem>
+      </varlistentry>
+
+     </variablelist>
+    </para>
+
+    <para>
+     Le code de retour d'une procédure de déclencheur peut être faite avec
+     une des chaînes <literal>OK</> ou <literal>SKIP</> ou une liste renvoyée
+     par la commande Tcl <literal>array get</>. Si la valeur de retour est
+     <literal>OK</>, l'opération
+     (<command>INSERT</>/<command>UPDATE</>/<command>DELETE</>) qui a lancé le
+     déclencheur continuera normalement. <literal>SKIP</> indique au
+     gestionnaire de déclencheurs de supprimer silencieusement l'opération pour
+     cette ligne. Si une liste est renvoyée, elle indique à PL/Tcl de renvoyer
+     la ligne modifiée au gestionnaire de déclencheurs qui l'insérera au lieu de
+     celle données par <varname>$NEW</>. (Ceci fonctionne seulement pour
+     <command>INSERT</> et <command>UPDATE</>.) Inutile de dire que tout ceci
+     est vraiment significatif lorsque le déclencheur est <literal>BEFORE</> et
+     <command>FOR EACH ROW</>&nbsp;; sinon le code de retour est ignoré.
+    </para>
+    <para>
+     Voici un petit exemple de procédure déclencheur qui force une valeur
+     entière dans une table pour garder trace du nombre de mises à jour
+     réalisées sur la ligne. Pour les nouvelles lignes insérées, la valeur est
+     initialisée à 0 puis incrémentée à chaque opération de mise à jour.
+
+<programlisting>
+CREATE FUNCTION trigfunc_modcount() RETURNS trigger AS $$
+    switch $TG_op {
+        INSERT {
+            set NEW($1) 0
+        }
+        UPDATE {
+            set NEW($1) $OLD($1)
+            incr NEW($1)
+        }
+        default {
+            return OK
+        }
+    }
+    return [array get NEW]
+$$ LANGUAGE pltcl;
+
+CREATE TABLE mytab (num integer, description text, modcnt integer);
+
+CREATE TRIGGER trig_mytab_modcount BEFORE INSERT OR UPDATE ON mytab
+    FOR EACH ROW EXECUTE PROCEDURE trigfunc_modcount('modcnt');
+</programlisting>
+
+     Notez que la procédure déclencheur elle-même ne connaît pas le nom de la
+     colonne&nbsp;; c'est fourni avec les arguments du déclencheur. Ceci permet
+     à la procédure déclencheur d'être ré-utilisée avec différentes tables.
+    </para>
+   </sect1>
+
+   <sect1 id="pltcl-unknown">
+       <title>Les modules et la commande <function>unknown</></title>
+       <para>
+	PL/Tcl dispose du support de chargement automatique de code Tcl
+	lorsqu'il est utilisé. Il reconnaît une table spécial,
+	<literal>pltcl_modules</>, qui est présumée contenir les modules de code
+	Tcl. Si cette table existe, le module <literal>unknown</> est récupéré
+	de la table et chargé immédiatement dans l'interpréteur Tcl après
+	création de l'interpréteur.
+       </para>
+       <para>
+        Alors que le module <literal>unknown</> pourrait réellement contenir
+        tout script d'initialisation dont vous avez besoin, il définit
+        normalement une procédure Tcl <function>unknown</> qui est appelée
+        lorsque Tcl ne reconnaît pas le nom de la procédure appelée. La version
+        standard de <application>PL/Tcl</> essaie de trouver un module dans
+        <literal>pltcl_modules</> qui définira la procédure requis. Si une est
+        trouvée, elle est chargée dans l'interpréteur, puis l'exécution est
+        permise avec l'appel original de la procédure. Une deuxième table
+        <literal>pltcl_modfuncs</> fournit un index des fonctions et des modules
+        qu les définissent, de façon à ce que la recherche soit rapide.
+       </para>
+       <para>
+        La distribution <productname>PostgreSQL</productname> inclut les
+	scripts de support pour maintenir ces tables&nbsp;:
+	<command>pltcl_loadmod</>, <command>pltcl_listmod</>,
+	<command>pltcl_delmod</>, ainsi que le source pour le module standard
+	<literal>unknown</> dans <filename>share/unknown.pltcl</>. Ce module
+	doit être chargeable dans chaque base de données initialement pour
+	supporter le mécanisme de chargement automatique.
+       </para>
+       <para>
+        Les tables <literal>pltcl_modules</> et <literal>pltcl_modfuncs</>
+	doivent être lisibles par tous mais il est conseillé de les laisser
+	modifiables uniquement par le propriétaire, administrateur de la base de
+	données.
+       </para>
+   </sect1>
+
+   <sect1 id="pltcl-procnames">
+    <title>Noms de procédure Tcl</title>
+
+    <para>
+     Avec <productname>PostgreSQL</productname>, un nom de fonction peut être
+     utilisé par plusieurs fonctions tant que le nombre d'arguments ou leurs
+     types diffèrent. Néanmoins, Tcl requiert que les noms de procédure soient
+     distincts. PL/Tcl gère ceci en faisant en sorte que les noms de procédures
+     Tcl internes contiennent l'identifiant de l'objet de la fonction depuis la
+     table système <structname>pg_proc</>. Du coup, les fonctions
+     <productname>PostgreSQL</productname> avec un nom identique et des types
+     d'arguments différents seront aussi des procédures Tcl différentes. Ceci
+     ne concerne normalement pas le développeur PL/Tcl mais cela pourrait
+     apparaître dans une session de débogage.
+    </para>
+
+   </sect1>
+ </chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->
