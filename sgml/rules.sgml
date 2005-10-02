@@ -1,0 +1,2132 @@
+<!-- $Header: /var/lib/cvs/pgsql-fr/sgml/rules.sgml,v 1.14 2005/08/06 08:56:34 guillaume Exp $ -->
+
+<Chapter Id="rules">
+<Title>Système de règles</Title>
+
+ <indexterm zone="rules">
+  <primary>règle</primary>
+ </indexterm>
+
+<Para>
+     Ce chapitre discute du système de règles dans
+     <productname>PostgreSQL</productname>. Les systèmes de règles de
+     production sont simples conceptuellement mais il existe de nombreux points
+     subtils impliqués dans leur utilisation.
+</Para>
+
+<Para>
+     Certains autres systèmes de bases de données définissent des règles actives
+     pour la base de données, conservées habituellement en tant que procédures
+     stockées et déclencheurs. Avec <productname>PostgreSQL</productname>, elles
+     peuvent aussi être implémentées en utilisant des fonctions et des
+     déclencheurs.
+</Para>
+
+<Para>
+     Le système de règles (plus précisément, le système de règles de
+     réécriture de requêtes) est totalement différent des procédures stockées et
+     des déclencheurs. Il modifie les requêtes pour prendre en considération les
+     règles puis passe la requête modifiée au planificateur de requêtes pour
+     planification et exécution. Il est très puissant et peut être utilisé pour
+     beaucoup de choses comme des procédures en langage de requêtes, des vues et
+     des versions. Les fondations théoriques et la puissance de ce système de
+     règles sont aussi discutées dans <xref linkend="STON90b"> et <xref
+     linkend="ONG90">.
+</para>
+
+<Sect1 id="querytree">
+<Title>Arbre de requêtes</Title>
+
+<indexterm zone="querytree">
+ <primary>arbre de requêtes</primary>
+</indexterm>
+
+<Para>
+    Pour comprendre comment fonctionne le système de règles, il est nécessaire
+    de connaître quand il est appelé et quelles sont ses entrées et sorties.
+</Para>
+
+<Para>
+    Le système de règles est situé entre l'analyseur et le planificateur. Il
+    prend la sortie de l'analyseur, un arbre de requête et les règles de
+    réécriture définies par l'utilisateur qui sont aussi des arbres de requêtes
+    avec quelques informations supplémentaires, et crée zéro ou plus arbres de
+    requêtes comme résultat. Donc, son entrée et sortie sont toujours des
+    éléments que l'analyseur lui-même pourrait avoir produit et, du coup, tout
+    ce qu'il est voit est basiquement représentable comme une instruction
+    <Acronym>SQL</Acronym>.
+</Para>
+
+<Para>
+    Maintenant, qu'est-ce qu'un arbre de requêtes&nbsp;? C'est une
+    représentation interne d'une instruction <Acronym>SQL</Acronym> où les
+    parties qui le forment sont stockées séparément. Ces arbres de requêtes sont
+    affichables dans le journal de traces du serveur si vous avez configuré les
+    paramètres <varname>debug_print_parse</varname>,
+    <varname>debug_print_rewritten</varname>, ou
+    <varname>debug_print_plan</varname>. Les actions de règles sont aussi
+    enregistrées comme arbres de requêtes dans le catalogue système
+    <structname>pg_rewrite</structname>. Elles ne sont pas formatées comme la
+    sortie de traces mais elles contiennent exactement la même information.
+</Para>
+
+<Para>
+    Lire un arbre de requête brut requiert un peu d'expérience. Mais comme les
+    représentations <Acronym>SQL</Acronym> des arbres de requêtes sont
+    suffisantes pour comprendre le système de règles, ce chapitre ne
+    vous apprendra pas à les lire.
+</Para>
+
+<Para>
+    Lors de la lecture des représentations <Acronym>SQL</Acronym> des arbres de
+    requêtes dans ce chapitre, il est nécessaire d'être capable d'identifier les
+    morceaux cassés de l'instruction lorsqu'il est dans la structure de l'arbre
+    de requête. Les parties d'un arbre de requêtes sont
+
+<VariableList>
+    <VarListEntry>
+    <Term>
+        le type de commande
+    </Term>
+    <ListItem>
+    <Para>
+        C'est une simple valeur indiquant quelle commande
+        (<command>SELECT</command>, <command>INSERT</command>,
+        <command>UPDATE</command>, <command>DELETE</command>) produirait
+        l'arbre de requêtes.
+    </Para>
+    </ListItem>
+    </VarListEntry>
+
+    <VarListEntry>
+    <Term>
+        la table d'échelle
+    </Term>
+      <indexterm><primary>table d'échelle</></>
+    <ListItem>
+    <Para>
+        La table d'échelle est une liste des relations utilisées dans la
+        requête. Dans une instruction <command>SELECT</command>, ce sont les
+        relations données après le mot clé <literal>FROM</literal>.
+    </Para>
+
+    <Para>
+        Chaque entrée de la table d'échelle identifie une table ou une vue et
+        indique par quel nom elle est désignée dans les autres parties de la
+        requête. Dans l'arbre de requêtes, les entrées de la table d'échelle
+        sont référencées par des numéros plutôt que par des noms, donc il
+        importe peu, ici, de savoir s'il y a des noms dupliqués comme cela
+        serait le cas avec une instruction <Acronym>SQL</Acronym>. Ceci peut
+        arriver après que les tables d'échelle des règles aient été assemblées.
+        Les exemples dans ce chapitre n'auront pas cette situation.
+    </Para>
+    </ListItem>
+    </VarListEntry>
+
+    <VarListEntry>
+    <Term>
+        la relation résultat
+    </Term>
+    <ListItem>
+    <Para>
+        C'est un index dans la table d'échelle qui identifie la relation où
+        iront les résultats de la requête.
+    </Para>
+
+    <Para>
+        Les requêtes <command>SELECT</command> n'ont normalement pas de
+        relation résultat. Le cas spécial d'un <command>SELECT INTO</command>
+        est pratiquement identique à un <command>CREATE TABLE</command> suivi
+        par un <literal>INSERT ... SELECT</literal> et n'est pas discuté
+        séparément ici.
+    </Para>
+
+    <Para>
+        Pour les commandes <command>INSERT</command>, <command>UPDATE</command>,
+	et <command>DELETE</command>, la relation de résultat est la table (ou
+        vue&nbsp;!) où les changements prennent effet.
+    </Para>
+    </ListItem>
+    </VarListEntry>
+
+    <VarListEntry>
+    <Term>
+        la liste cible
+    </Term>
+    <indexterm><primary>liste cible</></>
+    <ListItem>
+    <Para>
+        La liste cible est une liste d'expressions définissant le résultat
+        d'une requête. Dans le cas d'un <command>SELECT</command>, ces
+        expressions sont celles qui construisent la sortie finale de la requête.
+        Ils correspondent aux expressions entre les mots clés
+        <command>SELECT</command> et <command>FROM</command>.
+        (<literal>*</literal> est seulement une abréviation pour tous les noms
+        de colonnes d'une relation. Il est étendu par l'analyseur en colonnes
+        individuelles, pour que le système de règles ne le voit jamais.)
+    </Para>
+
+    <Para>
+        Les commandes <command>DELETE</command> n'ont pas besoin d'une liste de
+        colonnes car elles ne produisent aucun résultat. En fait, le
+        planificateur ajoutera une entrée spéciale <acronym>CTID</> pour aller
+        jusqu'à la liste de cibles mais c'est après le système de règles&nbsp;;
+        pour le système de règles et sera discuté après&nbsp;; pour le système
+        de règles, la liste de cibles est vide.
+    </Para>
+
+    <Para>
+        Pour les commandes <command>INSERT</command>, la liste cible décrit les
+        nouvelles lignes devant aller dans la relation résultat. Elle consiste
+        en des expressions de la clause <literal>VALUES</> ou en celles de la
+        clause <command>SELECT</command> dans <literal>INSERT ...
+        SELECT</literal>. La première étape du processus de réécriture ajoute
+        les entrées de la liste cible pour les colonnes n'ont affectées par la
+        commande originale mais ayant des valeurs par défaut. Toute colonne
+        restante (avec soit une valeur donnée soit une valeur par défaut) sera
+        remplie par le planificateur avec une expression NULL constante.
+    </Para>
+
+    <Para>
+        Pour les commandes <command>UPDATE</command>, la liste cible décrit les
+        nouvelles lignes remplaçant les anciennes. Dans le système des règles,
+        elle contient seulement les expressions de la partie <literal>SET
+        colonne = expression</literal> de la commande. Le planificateur gérera
+        les colonnes manquantes en insérant des expressions qui copient les
+        valeurs provenant de l'ancienne ligne dans la nouvelle. et elle ajoutera
+        l'ancienne entrée <acronym>CTID</> dans la nouvelle ligne comme pour le
+        <command>DELETE</command>.
+    </Para>
+
+    <Para>
+        Chaque entrée de la liste cible contient une expression qui peut être
+        une valeur constante, une variable pointant vers une colonne d'une des
+        relations de la table d'échelle, un paramètre ou un arbre d'expressions
+        réalisé à partir d'appels de fonctions, de constantes, de variables,
+        d'opérateurs, etc.
+    </Para>
+    </ListItem>
+    </VarListEntry>
+
+    <VarListEntry>
+    <Term>
+        la qualification
+    </Term>
+    <ListItem>
+    <Para>
+        La qualification de la requête est une expression ressemblant à une de
+        celles contenues dans les entrées de la liste cible. La valeur résultant
+        de cette expression est un booléen indiquant si l'opération
+        (<command>INSERT</command>, <command>UPDATE</command>,
+        <command>DELETE</command> ou <command>SELECT</command>) pour la ligne de
+        résultat final devrait être exécutée ou non. Elle correspond à la clause
+        <literal>WHERE</> d'une instruction <Acronym>SQL</Acronym>.
+    </Para>
+    </ListItem>
+    </VarListEntry>
+
+    <VarListEntry>
+    <Term>
+        l'arbre de jointure
+    </Term>
+    <ListItem>
+    <Para>
+        L'arbre de jointure de la requête affiche la structure de la clause
+        <literal>FROM</>. Pour une simple requête comme <literal>SELECT ... FROM
+        a, b, c</literal>, l'arbre de jointure est une simple liste d'éléments
+        de <literal>FROM</> parce que nous sommes autorisés à les joindre dans
+        tout ordre. Mais quand des expressions <literal>JOIN</>, et plus
+        particulièrement les jointures externes, sont utilisées, nous devons les
+        joindre dans l'ordre affiché par les jointures. Dans ce cas, l'arbre de
+        jointure affiche la structure des expressions <literal>JOIN</>. Les
+        restrictions associées avec ces clauses <literal>JOIN</> particulières
+        (à partir d'expressions <literal>ON</> ou <literal>USING</>) sont
+        enregistrées comme des expressions de qualification attachées aux
+n&oelig;uds
+        de l'arbre de jointure. Il s'avère agréable d'enregistrer l'expression
+        de haut niveau <literal>WHERE</> comme une qualification attachée à
+        l'élément de l'arbre de jointure de haut niveau. Donc, réellement,
+        l'arbre de jointure représente à la fois les clauses <literal>FROM</> et
+        <literal>WHERE</> d'un <command>SELECT</command>.
+    </Para>
+    </ListItem>
+    </VarListEntry>
+
+    <VarListEntry>
+    <Term>
+        le reste
+    </Term>
+    <ListItem>
+    <Para>
+        Les autres parties de l'arbre de requête comme la clause <literal>ORDER
+        BY</> n'ont pas d'intérêt ici. Le système de règles substitue quelques
+        entrées lors de l'application des règles mais ceci n'a pas grand chose à
+        voir avec les fondamentaux du système de règles.
+    </Para>
+    </ListItem>
+    </VarListEntry>
+
+</VariableList>
+</para>
+</Sect1>
+
+<Sect1 id="rules-views">
+<Title>Vues et système de règles</Title>
+
+<indexterm zone="rules-views">
+ <primary>règle</primary>
+ <secondary>et vues</secondary>
+</indexterm>
+
+<indexterm zone="rules-views">
+ <primary>vue</>
+ <secondary>implémentation par les règles</>
+</indexterm>
+
+<Para>
+    Avec <ProductName>PostgreSQL</ProductName>, les vues sont implémentées en
+    utilisant le système de règles. En fait, il n'y a essentiellement pas de
+    différences entre
+
+<ProgramListing>
+CREATE VIEW mavue AS SELECT * FROM matable;
+</ProgramListing>
+    
+    et ces deux commandes
+
+<ProgramListing>
+CREATE TABLE mavue (<Replaceable>liste de colonnes identique à
+celle de matable</Replaceable>);
+CREATE RULE "_RETURN" AS ON SELECT TO mavue DO INSTEAD
+    SELECT * FROM matable;
+</ProgramListing>
+    
+    parce que c'est exactement ce que fait la commande <command>CREATE
+    VIEW</command> en interne. Ceci a quelques effets de bord. L'un d'entre eux
+    est que l'information sur une vue dans les catalogues système
+    <ProductName>PostgreSQL</ProductName> est exactement le même que pour celui
+    d'une table. Donc, pour l'analyseur, il n'y a aucune différence entre une
+    table et une vue. Elles sont la même chose&nbsp;: des relations.
+</Para>
+
+<Sect2 id="rules-select">
+<Title>Fonctionnement des règles <command>SELECT</command></Title>
+
+<indexterm zone="rules-select">
+ <primary>règle</primary>
+ <secondary sortas="SELECT">pour SELECT</secondary>
+</indexterm>
+
+<Para>
+    Les règles <literal>ON SELECT</> sont appliquées à toutes les requêtes comme
+    la dernière étape, même si la commande donnée est un
+    <command>INSERT</command>, <command>UPDATE</command> ou
+    <command>DELETE</command>. Et ils ont des sémantiques différentes à partir
+    des règles sur les autres types de commandes dans le fait qu'elles modifient
+    l'arbre de requêtes en place au lieu d'en créer un nouveau. Donc, les règles
+    <command>SELECT</command> sont décrites avant.
+</Para>
+
+<Para>
+    Actuellement, il n'existe qu'une action dans une règle <literal>ON
+    SELECT</> et elle doit être une action <command>SELECT</>
+    inconditionnelle qui est <literal>INSTEAD</>. Cette restriction était
+    requise pour rendre les règles assez sûres pour les ouvrir aux utilisateurs
+    ordinaires et cela restreint les règles <literal>ON SELECT</> à agir comme
+    des vues.
+</Para>
+
+<Para>
+    Les exemples pour ce chapitre sont deux vues jointes, réalisant quelques
+    calculs, et quelques vues supplémentaires les utilisant à leur tour. Une
+    des deux premières vues est personnalisée plus tard en ajoutant des règles
+    pour des opérations <command>INSERT</command>, <command>UPDATE</command> et
+    <command>DELETE</command> de façon à ce que le résultat final sera une vue
+    qui se comporte comme une vraie table avec quelques fonctionnalités
+    magiques. Il n'existe pas une tel exemple pour commencer et ceci rend les
+    choses plus difficiles à obtenir. Mais il est mieux d'avoir un exemple
+    couvrant tous les points discutés étape par étape plutôt que plusieurs
+    exemples, rendant la compréhension plus difficile.
+</Para>
+
+<Para>
+Pour cet exemple, nous avons besoin d'une petite fonction
+<literal>min</literal>, renvoyant la valeur la plus basse entre deux entiers.
+Nous la créons comme
+
+<ProgramListing>
+CREATE FUNCTION min(integer, integer) RETURNS integer AS $$
+    SELECT CASE WHEN $1 &lt; $2 THEN $1 ELSE $2 END
+$$' LANGUAGE SQL STRICT;
+</ProgramListing>
+</Para>
+
+<Para>
+    Les tables réelles dont nous avons besoin dans les deux
+    premières descriptions du système de règles sont les suivantes&nbsp;:
+
+<ProgramListing>
+CREATE TABLE shoe_data (
+    shoename   text,          -- clé primaire
+    sh_avail   integer,       -- nombre de pairs disponibles
+    slcolor    text,          -- couleur de lacet préférée
+    slminlen   real,          -- longueur minimum du lacet
+    slmaxlen   real,          -- longueur maximum du lacet
+    slunit     text           -- unité de longueur
+);
+
+CREATE TABLE shoelace_data (
+    sl_name    text,          -- clé primaire
+    sl_avail   integer,       -- nombre de pairs disponibles
+    sl_color   text,          -- couleur du lacet
+    sl_len     real,          -- longueur du lacet
+    sl_unit    text           -- unité de longueur
+);
+
+CREATE TABLE unit (
+    un_name    text,          -- clé primaire
+    un_fact    real           -- facteur pour le transformer en cm
+);
+</ProgramListing>
+
+    Comme vous pouvez le constater, elles représentent les données d'un magasin
+    de chaussures.
+</Para>
+
+<Para>
+    Les vues sont créées avec
+
+<ProgramListing>
+CREATE VIEW shoe AS
+    SELECT sh.shoename,
+           sh.sh_avail,
+           sh.slcolor,
+           sh.slminlen,
+           sh.slminlen * un.un_fact AS slminlen_cm,
+           sh.slmaxlen,
+           sh.slmaxlen * un.un_fact AS slmaxlen_cm,
+           sh.slunit
+      FROM shoe_data sh, unit un
+     WHERE sh.slunit = un.un_name;
+
+CREATE VIEW shoelace AS
+    SELECT s.sl_name,
+           s.sl_avail,
+           s.sl_color,
+           s.sl_len,
+           s.sl_unit,
+           s.sl_len * u.un_fact AS sl_len_cm
+      FROM shoelace_data s, unit u
+     WHERE s.sl_unit = u.un_name;
+
+CREATE VIEW shoe_ready AS
+    SELECT rsh.shoename,
+           rsh.sh_avail,
+           rsl.sl_name,
+           rsl.sl_avail,
+           min(rsh.sh_avail, rsl.sl_avail) AS total_avail
+      FROM shoe rsh, shoelace rsl
+     WHERE rsl.sl_color = rsh.slcolor
+       AND rsl.sl_len_cm &gt;= rsh.slminlen_cm
+       AND rsl.sl_len_cm &lt;= rsh.slmaxlen_cm;
+</ProgramListing>
+
+    La commande <command>CREATE VIEW</command> pour la vue
+    <literal>shoelace</literal> (qui est la plus simple que nous avons) écrira
+    une relation <literal>shoelace</> et une entrée dans
+    <structname>pg_rewrite</structname> indiquant la présence d'une règle de
+    réécriture devant être appliquée à chaque fois que la relation
+    <literal>shoelace</> est référencée dans une table d'échelle de la requête.
+    La règle n'a aucune qualification de règle (discuté plus tard, avec les
+    règles non <command>SELECT</> car les règles <command>SELECT</> ne le ont
+    pas encore) et qu'il s'agit de <literal>INSTEAD</>. Notez que les
+    qualifications de règles ne sont pas identiques aux qualifications de
+    requêtes. L'action de notre règle a une qualification de requête. L'action
+    de la règle a un arbre de requête qui est une copie de l'instruction
+    <command>SELECT</command> dans la commande de création de la vue.
+</Para>
+    
+    <Note>
+    <Para>
+    Les deux entrées supplémentaires de la table d'échelle pour <literal>NEW</>
+    et <literal>OLD</> (nommées <literal>*NEW*</> et <literal>*OLD*</> pour des
+    raisons historiques dans l'arbre de requête affiché) que vous pouvez voir
+    dans l'entrée de <structname>pg_rewrite</structname> ne sont d'aucun intérêt
+    pour les règles <command>SELECT</command>.
+    </Para>
+    </Note>
+
+<Para>
+    Maintenant, nous remplissons <literal>unit</literal>,
+    <literal>shoe_data</literal> et <literal>shoelace_data</literal>, et
+    lançons une requête simple sur une vue&nbsp;:
+
+<ProgramListing>
+INSERT INTO unit VALUES ('cm', 1.0);
+INSERT INTO unit VALUES ('m', 100.0);
+INSERT INTO unit VALUES ('inch', 2.54);
+
+INSERT INTO shoe_data VALUES ('sh1', 2, 'black', 70.0, 90.0, 'cm');
+INSERT INTO shoe_data VALUES ('sh2', 0, 'black', 30.0, 40.0, 'inch');
+INSERT INTO shoe_data VALUES ('sh3', 4, 'brown', 50.0, 65.0, 'cm');
+INSERT INTO shoe_data VALUES ('sh4', 3, 'brown', 40.0, 50.0, 'inch');
+
+INSERT INTO shoelace_data VALUES ('sl1', 5, 'black', 80.0, 'cm');
+INSERT INTO shoelace_data VALUES ('sl2', 6, 'black', 100.0, 'cm');
+INSERT INTO shoelace_data VALUES ('sl3', 0, 'black', 35.0 , 'inch');
+INSERT INTO shoelace_data VALUES ('sl4', 8, 'black', 40.0 , 'inch');
+INSERT INTO shoelace_data VALUES ('sl5', 4, 'brown', 1.0 , 'm');
+INSERT INTO shoelace_data VALUES ('sl6', 0, 'brown', 0.9 , 'm');
+INSERT INTO shoelace_data VALUES ('sl7', 7, 'brown', 60 , 'cm');
+INSERT INTO shoelace_data VALUES ('sl8', 1, 'brown', 40 , 'inch');
+
+SELECT * FROM shoelace;
+
+ sl_name   | sl_avail | sl_color | sl_len | sl_unit | sl_len_cm
+-----------+----------+----------+--------+---------+-----------
+ sl1       |        5 | black    |     80 | cm      |        80
+ sl2       |        6 | black    |    100 | cm      |       100
+ sl7       |        7 | brown    |     60 | cm      |        60
+ sl3       |        0 | black    |     35 | inch    |      88.9
+ sl4       |        8 | black    |     40 | inch    |     101.6
+ sl8       |        1 | brown    |     40 | inch    |     101.6
+ sl5       |        4 | brown    |      1 | m       |       100
+ sl6       |        0 | brown    |    0.9 | m       |        90
+(8 rows)
+</ProgramListing>
+   </para>
+
+   <para>
+    C'est la requête <command>SELECT</command> la plus simple que vous pouvez
+    lancer sur nos vues, donc nous prenons cette opportunité d'expliquer les
+    bases des règles de vues. <literal>SELECT * FROM shoelace</literal> a été
+    interprété par l'analyseur et a produit l'arbre de requête
+
+<ProgramListing>
+SELECT shoelace.sl_name, shoelace.sl_avail,
+       shoelace.sl_color, shoelace.sl_len,
+       shoelace.sl_unit, shoelace.sl_len_cm
+  FROM shoelace shoelace;
+</ProgramListing>
+
+    et ceci est donné au système de règles. Ce système traverse la table
+    d'échelle et vérifie s'il existe des règles pour chaque relation. Lors du
+    traitement d'une entrée de la table d'échelle pour
+    <literal>shoelace</literal> (la seule jusqu'à maintenant), il trouve la
+    règle <literal>_RETURN</literal> avec l'arbre de requête
+
+<ProgramListing>
+SELECT s.sl_name, s.sl_avail,
+       s.sl_color, s.sl_len, s.sl_unit,
+       s.sl_len * u.un_fact AS sl_len_cm
+  FROM shoelace *OLD*, shoelace *NEW*,
+       shoelace_data s, unit u
+ WHERE s.sl_unit = u.un_name;
+</ProgramListing>
+</Para>
+
+<Para>
+    Pour étendre la vue, la réécriture crée simplement une entrée de la table
+d'échelle de sous-requête contenant l'arbre de requête de l'action de la règle
+et substitue cette entrée par l'original référencé dans la vue. L'arbre
+d'échelle résultant de la réécriture est pratiquement identique à celui que
+vous avez saisi
+
+<ProgramListing>
+SELECT shoelace.sl_name, shoelace.sl_avail,
+       shoelace.sl_color, shoelace.sl_len,
+       shoelace.sl_unit, shoelace.sl_len_cm
+  FROM (SELECT s.sl_name,
+               s.sl_avail,
+               s.sl_color,
+               s.sl_len,
+               s.sl_unit,
+               s.sl_len * u.un_fact AS sl_len_cm
+          FROM shoelace_data s, unit u
+         WHERE s.sl_unit = u.un_name) shoelace;
+</ProgramListing>
+
+     Néanmoins, il y a une différence&nbsp;: la table d'échelle de la
+     sous-requête a deux entrées supplémentaires, <literal>shoelace *OLD*</> et
+     <literal>shoelace *NEW*</>. Ces entrées ne participent pas directement dans
+     la requête car elles ne sont pas référencées par l'arbre de jointure de la
+     sous-requête ou par la liste cible. La réécriture les utilise pour
+     enregistrer l'information de vérification des droits d'accès qui étaient
+     présents à l'origine dans l'entrée de table d'échelle référencée par la
+     vue. De cette façon, l'exécution vérifiera toujours que l'utilisateur a les
+     bons droits pour accéder à la vue même s'il n'y a pas d'utilisation directe
+     de la vue dans la requête réécrite.
+</Para>
+
+<Para>
+    C'était la première règle appliquée. Le système de règles continuera de
+    vérifier les entrées restantes de la table d'échelle dans la requête
+    principale (dans cet exemple, il n'en existe pas plus), et il vérifiera
+    récursivement les entrées de la table d'échelle dans la sous-requête ajoutée
+    pour voir si une d'elle référence les vues. (Mais il n'étendra ni
+    <literal>*OLD*</> ni <literal>*NEW*</> &mdash; sinon nous aurions une récursion
+    infinie&nbsp;!) Dans cet exemple, il n'existe pas de règles de réécriture
+    pour <literal>shoelace_data</> ou <literal>unit</>, donc la réécriture est
+    terminée et ce qui est ci-dessus est le résultat final donné au
+    planificateur.
+</Para>
+
+<Para>
+    Maintenant, nous voulons écrire une requête qui trouve les chaussures
+    actuellement dans le magasin dont nous avons les lacets correspondant
+    (couleur et longueur) et pour lesquels le nombre total de pairs
+    correspondant exactement est supérieur ou égal à deux.
+
+<ProgramListing>
+SELECT * FROM shoe_ready WHERE total_avail &gt;= 2;
+
+ shoename | sh_avail | sl_name | sl_avail | total_avail
+----------+----------+---------+----------+-------------
+ sh1      |        2 | sl1     |        5 |           2
+ sh3      |        4 | sl7     |        7 |           4
+(2 rows)
+</ProgramListing>
+</Para>
+
+<Para>
+    Cette fois, la sortie de l'analyseur est l'arbre de requête
+
+<ProgramListing>
+SELECT shoe_ready.shoename, shoe_ready.sh_avail,
+       shoe_ready.sl_name, shoe_ready.sl_avail,
+       shoe_ready.total_avail
+  FROM shoe_ready shoe_ready
+ WHERE shoe_ready.total_avail &gt;= 2;
+</ProgramListing>
+
+    La première règle appliquée sera celle de la vue
+    <literal>shoe_ready</literal> et cela résultera avec cet arbre de requête
+
+<ProgramListing>
+SELECT shoe_ready.shoename, shoe_ready.sh_avail,
+       shoe_ready.sl_name, shoe_ready.sl_avail,
+       shoe_ready.total_avail
+  FROM (SELECT rsh.shoename,
+               rsh.sh_avail,
+               rsl.sl_name,
+               rsl.sl_avail,
+               min(rsh.sh_avail, rsl.sl_avail) AS total_avail
+          FROM shoe rsh, shoelace rsl
+         WHERE rsl.sl_color = rsh.slcolor
+          AND rsl.sl_len_cm &gt;= rsh.slminlen_cm
+          AND rsl.sl_len_cm &lt;= rsh.slmaxlen_cm) shoe_ready
+ WHERE shoe_ready.total_avail &gt;= 2;
+</ProgramListing>
+
+    De façon similaire, les règles pour <literal>shoe</literal> et
+    <literal>shoelace</literal> sont substituées dans la table d'échelle de 
+    la sous-requête, amenant à l'arbre de requête final à trois niveaux&nbsp;:
+
+<ProgramListing>
+SELECT shoe_ready.shoename, shoe_ready.sh_avail,
+       shoe_ready.sl_name, shoe_ready.sl_avail,
+       shoe_ready.total_avail
+  FROM (SELECT rsh.shoename,
+               rsh.sh_avail,
+               rsl.sl_name,
+               rsl.sl_avail,
+               min(rsh.sh_avail, rsl.sl_avail) AS total_avail
+          FROM (SELECT sh.shoename,
+                       sh.sh_avail,
+                       sh.slcolor,
+                       sh.slminlen,
+                       sh.slminlen * un.un_fact AS slminlen_cm,
+                       sh.slmaxlen,
+                       sh.slmaxlen * un.un_fact AS slmaxlen_cm,
+                       sh.slunit
+                  FROM shoe_data sh, unit un
+                 WHERE sh.slunit = un.un_name) rsh,
+               (SELECT s.sl_name,
+                       s.sl_avail,
+                       s.sl_color,
+                       s.sl_len,
+                       s.sl_unit,
+                       s.sl_len * u.un_fact AS sl_len_cm
+                  FROM shoelace_data s, unit u
+                 WHERE s.sl_unit = u.un_name) rsl
+         WHERE rsl.sl_color = rsh.slcolor
+           AND rsl.sl_len_cm &gt;= rsh.slminlen_cm
+           AND rsl.sl_len_cm &lt;= rsh.slmaxlen_cm) shoe_ready
+ WHERE shoe_ready.total_avail &gt; 2;
+</ProgramListing>
+   </para>
+
+   <para>
+    Il s'avère que le planificateur réduira cet arbre en un arbre de requête
+    à deux niveaux&nbsp;: les commandes <command>SELECT</command> du bas seront
+    <quote>remontées</quote> dans le <command>SELECT</command> du milieu car il
+    n'est pas nécessaire de les traiter séparément. Mais le
+    <command>SELECT</command> du milieu restera séparé du haut car il contient
+    des fonctions d'agrégat. Si nous les avions monté, cela aurait modifié le
+    comportement du <command>SELECT</command> de haut niveau, ce qui n'est pas
+    ce que nous voulons. Néanmoins, réduire l'arbre de requête est une
+    optimisation qui ne concerne pas le système de réécriture.
+   </para>
+
+   <Note>
+    <Para>
+    Actuellement, il n'existe pas de mécanisme d'arrêts de récursion pour les 
+    règles de vues dans le système de règles (uniquement pour les autres types
+    de règles). Ceci n'est pas trop gênant car la seule façon de placer ce
+    système dans une boucle sans fin (massacrant le processus serveur jusqu'à ce
+    qu'il atteigne la limite en mémoire) est de créer des tables et de
+    configurer les règles de vue à la main avec <command>CREATE RULE</command>
+    de telle façon que une sélection à partir de l'autre qui sélectionne à
+    partir de la première. Cela pourrait ne jamais arriver si <command>CREATE
+    VIEW</command> est utilisé parce que pour le premier <command>CREATE
+    VIEW</command>, la deuxième relation n'existera pas et, du coup, la première
+    vue ne pourra pas sélectionner quelque chose de la seconde.
+    </Para>
+   </Note>
+</Sect2>
+
+<Sect2>
+<Title>Règles de vue dans des instructions non <command>SELECT</command></Title>
+
+<Para>
+    Deux détails de l'arbre de requête n'ont pas été abordés dans la
+    description des règles de vue ci-dessus. Ce sont le type de commande et le
+    relation résultante. En fait, les règles de vue n'ont pas besoin de cette
+    information.
+</Para>
+
+<Para>
+    Il existe seulement quelques différences entre un arbre de requête pour un
+    <command>SELECT</command> et un pour une autre commande. De façon évidente,
+ils ont un type de commande différent et pour une commande autre qu'
+un <command>SELECT</command>, la relation résultante pointe vers l'entrée de
+table d'échelle où le résultat devrait arriver. Tout le reste est absolument
+identique. Donc, avec deux tables <literal>t1</> et <literal>t2</> avec les
+colonnes <literal>a</> et <literal>b</>, les arbres de requêtes pour les
+deux commandes
+
+<ProgramListing>
+SELECT t2.b FROM t1, t2 WHERE t1.a = t2.a;
+
+UPDATE t1 SET b = t2.b WHERE t1.a = t2.a;
+</ProgramListing>
+
+    sont pratiquement identiques. En particulier&nbsp;:
+
+    <ItemizedList>
+        <ListItem>
+	<Para>
+	    Les tables d'échelle contiennent des entrées pour les tables
+	    <literal>t1</> et <literal>t2</>.
+	</Para>
+        </ListItem>
+
+        <ListItem>
+	<Para>
+	    Les listes cibles contiennent une variable pointant vers la colonne
+	    <literal>b</> de l'entrée de la table d'échelle pour la table
+	    <literal>t2</>.
+	</Para>
+        </ListItem>
+
+        <ListItem>
+	<Para>
+	    Les expressions de qualification comparent les colonnes
+	    <literal>a</> des deux entrées de table d'échelle pour une égalité.
+	</Para>
+        </ListItem>
+
+        <ListItem>
+	<Para>
+	    Les arbres de jointure affichent une jointure simple entre
+	    <literal>t1</> et <literal>t2</>.
+	</Para>
+        </ListItem>
+    </ItemizedList>
+   </para>
+
+   <para>
+    La conséquence est que les deux arbres de requête résultent en des plans
+    d'exécution similaires&nbsp;: ce sont tous les deux des jointures sur les
+    deux tables. Pour l'<command>UPDATE</command>, les colonnes manquantes 
+    de <literal>t1</> sont ajoutées à la liste cible par le planificateur et
+    l'arbre de requête final sera lu de cette façon
+
+<ProgramListing>
+UPDATE t1 SET a = t1.a, b = t2.b WHERE t1.a = t2.a;
+</ProgramListing>
+
+    et, du coup, l'exécuteur lancé sur la jointure produira exactement le même
+    résultat qu'un
+
+<ProgramListing>
+SELECT t1.a, t2.b FROM t1, t2 WHERE t1.a = t2.a;
+</ProgramListing>
+    
+    le ferait. Mais il y a un petit problème avec
+    <command>UPDATE</command>&nbsp;: l'exécuteur ne fait pas attention au but du
+    résultat de la jointure. Il produit simplement un ensemble de lignes
+    composant le résultat. La différence entre une commande
+    <command>SELECT</command> et une commande <command>UPDATE</command> est
+    gérée par celui qui a appelé l'exécuteur. L'appelant sait toujours (en
+    regardant dans l'arbre de requêtes) qu'il s'agit d'un
+    <command>UPDATE</command>, et il sait que le résultat ira dans la table
+    <literal>t1</>. Mais quelles lignes disponibles maintenant seront remplacées
+    par les nouvelles lignes&nbsp;?
+</Para>
+
+<Para>
+    Pour résoudre ce problème, une autre entrée est ajoutée dans la liste
+    cible de l'<command>UPDATE</command> (et aussi dans les instructions
+    <command>DELETE</command>)&nbsp;: l'identifiant actuel du tuple
+    (<acronym>CTID</>, acronyme de <foreignphrase>current tuple
+    ID</foreignphrase>).<indexterm><primary>CTID</></> Cette colonne système
+    contient le numéro de bloc du fichier et la position dans le bloc pour
+    cette ligne. Connaissant la table, le <acronym>CTID</> peut être utilisé
+    pour récupérer la ligne originale de <literal>t1</> à mettre à jour. Après
+    avoir ajouté le <acronym>CTID</> dans la liste cible, la requête ressemble à
+    ceci
+
+<ProgramListing>
+SELECT t1.a, t2.b, t1.ctid FROM t1, t2 WHERE t1.a = t2.a;
+</ProgramListing>
+    
+    Maintenant, un autre détail de <ProductName>PostgreSQL</ProductName> entre
+    en jeu. Les anciennes lignes de la table ne sont pas surchargées et cela
+    explique pourquoi <command>ROLLBACK</command> est rapide. Avec un
+    <command>UPDATE</command>, la nouvelle ligne résultat est insérée dans la
+    table (après avoir enlevé le <acronym>CTID</>) et dans le nouvel en-tête de
+    ligne de l'ancienne ligne, vers où pointe le <acronym>CTID</>, les entrées
+    <literal>cmax</> et <literal>xmax</> sont configurés par le compteur de
+    commande actuel et par l'identifiant de transaction actuel. Du coup,
+    l'ancienne ligne est cachée et, après validation de la transaction, le
+    nettoyeur (vacuum) peut réellement la déplacer.
+</Para>
+
+<Para>
+    Connaissant tout ceci, nous pouvons simplement appliquer les règles de vues
+    de la même façon que toute autre commande. Il n'y a pas de différence.
+</Para>
+</Sect2>
+
+<Sect2>
+<Title>Puissance des vues dans <ProductName>PostgreSQL</ProductName></Title>
+
+<Para>
+    L'exemple ci-dessus démontre l'incorporation des définitions de 
+    vues par le système de règles dans l'arbre de requête original. Dans le
+    deuxième exemple, un simple <command>SELECT</command> d'une vue a créé un
+    arbre de requête final qui est une jointure de quatre tables
+    (<literal>unit</> a été utilisé deux fois avec des noms différents).
+</Para>
+
+<Para>
+    Le bénéfice de l'implémentation des vues avec le système de règles est que
+    le planificateur a toute l'information sur les tables à parcourir et sur
+    les relations entre ces tables et les qualifications restrictives à partir
+    des vues et les qualifications à partir de la requête originale dans un
+    seule arbre de requête. Et c'est toujours la situation quand la requête
+    originale est déjà une jointure sur des vues. Le planificateur doit décider
+    du meilleur chemin pour exécuter la requête et plus le planificateur a
+    d'informations, meilleure sera la décision. Le système de règles implémenté
+    dans <ProductName>PostgreSQL</ProductName> s'en assure, c'est toute
+    l'information disponible sur la requête à ce moment.
+</Para>
+</Sect2>
+
+<Sect2 id="rules-views-update">
+<Title>Mise à jour d'une vue</Title>
+
+<Para>
+    Qu'arrive-t'il si une vue est nommée comme la relation cible d'un
+    <command>INSERT</command>, <command>UPDATE</command> ou
+    <command>DELETE</command>&nbsp;? Après avoir réalisées les substitutions
+    décrites ci-dessus, nous aurons un arbre de requête dans lequel la relation
+    résultante pointe vers une entrée de la table d'échelle de la sous-requête.
+    Ceci ne fonctionnera pas car la réécriture renvoie une erreur si elle
+    aperçoit qu'elle a produit une telle chose.
+</Para>
+
+<Para>
+    Pour modifier ceci, nous pouvons définir des règles modifiant le
+    comportement de ce type de commandes. C'est donc le thème de la prochaine
+    section.
+</Para>
+</Sect2>
+
+</Sect1>
+
+<Sect1 id="rules-update">
+<Title>Règles sur <command>INSERT</>, <command>UPDATE</> et
+<command>DELETE</></Title>
+
+<indexterm zone="rules-update">
+ <primary>règle</primary>
+ <secondary sortas="INSERT">pour INSERT</secondary>
+</indexterm>
+
+<indexterm zone="rules-update">
+ <primary>règle</primary>
+ <secondary sortas="UPDATE">pour UPDATE</secondary>
+</indexterm>
+
+<indexterm zone="rules-update">
+ <primary>règle</primary>
+ <secondary sortas="DELETE">pour DELETE</secondary>
+</indexterm>
+
+<Para>
+    Les règles définies sur <command>INSERT</>, <command>UPDATE</>
+    et <command>DELETE</> sont significativement différentes des règles de
+    vue décrites dans la section précédente. Tout d'abord, leur commande
+    <command>CREATE RULE</command> permet plus de choses&nbsp;:
+
+    <ItemizedList>
+        <ListItem>
+	<Para>
+	    Elles peuvent n'avoir aucune action.
+	</Para>
+	</ListItem>
+
+        <ListItem>
+	<Para>
+	    Elles peuvent avoir plusieurs actions.
+	</Para>
+	</ListItem>
+
+        <ListItem>
+	<Para>
+	    Elles peuvent être de type <literal>INSTEAD</> ou ou <literal>ALSO</>
+	    (valeur par défaut).
+	</Para>
+	</ListItem>
+
+        <ListItem>
+	<Para>
+	    Les pseudo relations <literal>NEW</> et <literal>OLD</> deviennent
+	    utiles.
+	</Para>
+	</ListItem>
+
+        <ListItem>
+	<Para>
+	    Elles peuvent avoir des qualifications de règles.
+	</Para>
+	</ListItem>
+    </ItemizedList>
+
+    Ensuite, elles ne modifient pas l'arbre de requête en place. À la place,
+    elles créent de nouveaux arbres de requêtes et peuvent abandonner
+    l'original.
+</Para>
+
+<Sect2>
+<Title>Fonctionnement des règles de mise à jour</Title>
+
+<Para>
+    Gardez la syntaxe
+
+<ProgramListing>
+CREATE RULE <replaceable>rule_name</> AS ON <replaceable>event</>
+    TO <replaceable>object</> [WHERE <replaceable>rule_qualification</>]
+    DO [ALSO|INSTEAD] [<replaceable>action</> | (<replaceable>actions</>) | NOTHING];
+</ProgramListing>
+
+    en tête.
+    Dans la suite, <firstterm>règles de mise à jour</> signifie les règles qui
+    sont définies sur <command>INSERT</>, <command>UPDATE</> ou
+    <command>DELETE</>.
+</Para>
+
+<Para>
+    Les règles de mise à jour sont appliquées par le système de règles lorsque
+    la relation résultante et le type de commande d'un arbre de requête sont
+    égaux pour l'objet et l'événement donné dans la commande <command>CREATE
+    RULE</command>. Pour les règles de mise à jour, le système de règles crée
+    une liste d'arbres de requêtes. Initialement, la liste d'arbres de requêtes
+    est vide. Il peut y avoir aucune (mot clé <literal>NOTHING</>), une ou
+    plusieurs actions. Pour simplifier, nous verrons une règle avec une action.
+    Cette règle peut avoir une  qualification et peut être de type
+    <literal>INSTEAD</> ou <literal>ALSO</> (valeur par défaut).
+</Para>
+
+<Para>
+    Qu'est-ce qu'une qualification de règle&nbsp;? C'est une restriction
+    indiquant le moment où doivent être réalisés les actions de la règle. Cette
+    qualification peut seulement référencer les pseudo relations <literal>NEW</>
+    et/ou <literal>OLD</>, qui représentent basiquement la relation qui a été
+    donné comme objet (mais avec une signification spéciale).
+</Para>
+
+   <para>
+    Donc, nous avons quatre cas qui produisent les arbres de requêtes suivant
+    pour une règle à une seule action.
+
+    <variablelist>
+     <varlistentry>
+      <term>Sans qualification et <literal>ALSO</></term>
+      <listitem>
+       <para>
+        l'arbre de requête à partir de l'action de la règle avec l'ajout de la
+        qualification de l'arbre de requête
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>Sans qualification mais avec <literal>INSTEAD</></term>
+      <listitem>
+       <para>
+        l'arbre de requête à partir de l'action de la règle avec l'ajout de la
+        qualification de l'arbre de requête original
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>Qualification donnée et <literal>ALSO</></term>
+      <listitem>
+       <para>
+        l'arbre de requête à partir de l'action de la règle avec l'ajout de la
+        qualification de la règle et de la qualification de l'arbre de requête
+        original
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>Qualification donnée avec <literal>INSTEAD</></term>
+      <listitem>
+       <para>
+        l'arbre de requête à partir de l'action de la règle avec la
+        qualification de la requête et la qualification de l'arbre de requête
+        original&nbsp;; et l'ajout de l'arbre de requête original avec la
+        qualification inverse de la règle
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+
+    Enfin, si la règle est <literal>ALSO</>, l'arbre de requête
+    original est ajouté à la liste. Comme seules les règles qualifiées
+    <literal>INSTEAD</> ont déjà ajouté l'arbre de requête original, nous
+    finissons avec un ou deux arbres de requête en sortie pour une règle avec
+    une action.
+</Para>
+
+<Para>
+    Pour les règles <literal>ON INSERT</>, la requête originale (si elle n'est
+    pas supprimée par <literal>INSTEAD</>) est réalisée avant toute action
+    ajoutée par les règles. Ceci permet aux actions de voir les lignes insérées.
+    Mais pour les règles <literal>ON UPDATE</> et <literal>ON DELETE</>, la
+    requête originale est réalisée après les actions ajoutées par les règles.
+    Ceci nous assure que les actions pourront voir les lignes à mettre à jour ou
+    à supprimer&nbsp;; sinon, les actions pourraient ne rien faire parce
+    qu'elles ne trouvent aucune ligne correspondant à leurs qualifications.
+</Para>
+
+<Para>
+    Les arbres de requêtes générés à partir des actions de règles sont 
+    envoyés de nouveau dans le système de réécriture et peut-être que d'autres
+    règles seront appliquées résultant en plus ou moins d'arbres de requêtes.
+    Donc, les actions d'une règle doivent avoir soit un type de commande
+    différent soit une relation résultante différente de celle où la règle
+    elle-même est active, sinon ce processus récursif se terminera dans une
+    boucle infinie. (L'expansion récursive d'une règle sera détectée et
+    rapportée comme une erreur.)
+</Para>
+
+<Para>
+    Les arbres de requête trouvés dans les actions du catalogue système
+    <structname>pg_rewrite</structname> sont seulement des modèles. Comme ils
+    peuvent référencer les entrées de la table d'échelle pour <literal>NEW</> et
+    <literal>OLD</>, quelques substitutions ont dû être faites avant qu'elles ne
+    puissent être utilisées. Pour toute référence de <literal>NEW</>, une entrée
+    correspondante est recherchée dans la liste cible de la requête originale.
+    Si elle est trouvée, cette expression de l'entrée remplace la référence.
+    Sinon, <literal>NEW</> signifie la même chose que <literal>OLD</> (pour un
+    <command>UPDATE</command>) ou est remplacé par une valeur NULL (pour un
+    <command>INSERT</command>). Toute référence à <literal>OLD</> est remplacée
+    par une référence à l'entrée de la table d'échelle qui est la relation
+    résultante.
+</Para>
+
+<Para>
+    Après que le système a terminé d'appliquer des règles de mise à jour, il 
+    applique les règles de vues pour le(s) arbre(s) de requête produit(s). Les
+    vues ne peuvent pas insérer de nouvelles actions de mise à jour, donc il
+    n'est pas nécessaire d'appliquer les règles de mise à jour à la sortie d'une
+    réécriture de vue.
+</Para>
+
+<Sect3>
+<Title>Une première requête étape par étape</Title>
+
+<Para>
+    Disons que nous voulons tracer les modifications dans la colonne
+    <literal>sl_avail</> de la relation <literal>shoelace_data</literal>. Donc,
+    nous allons configurer une table de traces et une règle qui va écrire une
+    entrée lorsqu'un <command>UPDATE</command> est lancé sur
+    <literal>shoelace_data</literal>.
+
+<ProgramListing>
+CREATE TABLE shoelace_log (
+    sl_name    text,          -- modification de shoelace
+    sl_avail   integer,       -- nouvelle valeur disponible
+    log_who    text,          -- qui l'a modifié
+    log_when   timestamp      -- quand
+);
+
+CREATE RULE log_shoelace AS ON UPDATE TO shoelace_data
+    WHERE NEW.sl_avail &lt;&gt; OLD.sl_avail
+    DO INSERT INTO shoelace_log VALUES (
+                                    NEW.sl_name,
+                                    NEW.sl_avail,
+                                    current_user,
+                                    current_timestamp
+                                );
+</ProgramListing>
+</Para>
+
+<Para>
+    Maintenant, quelqu'un fait&nbsp;:
+
+<ProgramListing>
+UPDATE shoelace_data SET sl_avail = 6 WHERE sl_name = 'sl7';
+</ProgramListing>
+
+    et nous regardons la table des traces&nbsp;:
+
+<ProgramListing>
+SELECT * FROM shoelace_log;
+
+ sl_name | sl_avail | log_who | log_when                        
+---------+----------+---------+----------------------------------
+ sl7     |        6 | Al      | Tue Oct 20 16:14:45 1998 MET DST
+(1 row)
+</ProgramListing>
+   </para>
+
+   <para>
+    C'est ce à quoi nous nous attendions. Voici ce qui s'est passé en tâche
+    de fond. L'analyseur a créé l'arbre de requête
+
+<ProgramListing>
+UPDATE shoelace_data SET sl_avail = 6
+  FROM shoelace_data shoelace_data
+ WHERE shoelace_data.sl_name = 'sl7';
+</ProgramListing>
+
+    Il existe une règle <literal>log_shoelace</literal> qui est <literal>ON
+    UPDATE</> avec l'expression de qualification de la règle
+
+<ProgramListing>
+NEW.sl_avail &lt;&gt; OLD.sl_avail
+</ProgramListing>
+
+    et l'action
+
+<ProgramListing>
+INSERT INTO shoelace_log VALUES (
+       *NEW*.sl_name, *NEW*.sl_avail,
+       current_user, current_timestamp )
+  FROM shoelace_data *NEW*, shoelace_data *OLD*;
+</ProgramListing>
+
+    (Ceci semble un peu étrange car vous ne pouvez pas normalement écrire
+    <literal>INSERT ... VALUES ... FROM</>. Ici, la clause <literal>FROM</>
+    indique seulement qu'il existe des entrées de la table d'échelle dans
+    l'arbre de requête pour <literal>*NEW*</> et <literal>*OLD*</>. Elles sont
+    nécessaires pour qu'elles puissent être référencées par des variables dans
+    l'arbre de requête de la commande <command>INSERT</command>.)
+</Para>
+
+<Para>
+    La règle est une règle qualifiée <literal>ALSO</> de façon à ce que
+    le système de règles doit renvoyer deux arbres de requêtes&nbsp;: l'action
+    de la règle modifiée et l'arbre de requête original. Dans la première
+    étape, la table d'échelle de la requête original est incorporée dans l'arbre
+    de requête d'action de la règle. Ceci a pour résultat&nbsp;:
+
+<ProgramListing>
+INSERT INTO shoelace_log VALUES (
+       *NEW*.sl_name, *NEW*.sl_avail,
+       current_user, current_timestamp )
+  FROM shoelace_data *NEW*, shoelace_data *OLD*,
+       <emphasis>shoelace_data shoelace_data</emphasis>;
+</ProgramListing>
+
+    Pour la deuxième étape, la qualification de la règle lui est ajoutée, donc
+    l'ensemble de résultat est restreint aux lignes où <literal>sl_avail</> a
+    changé&nbsp;:
+
+<ProgramListing>
+INSERT INTO shoelace_log VALUES (
+       *NEW*.sl_name, *NEW*.sl_avail,
+       current_user, current_timestamp )
+  FROM shoelace_data *NEW*, shoelace_data *OLD*,
+       shoelace_data shoelace_data
+ <emphasis>WHERE *NEW*.sl_avail &lt;&gt; *OLD*.sl_avail</emphasis>;
+</ProgramListing>
+
+    (Ceci semble encore plus étrange car <literal>INSERT ... VALUES</> n'a pas
+    non plus une clause <literal>WHERE</> mais le planificateur et l'exécuteur
+    n'auront pas de difficultés avec ça. Ils ont besoin de supporter cette même 
+    fonctionnalité pour <literal>INSERT ... SELECT</>.)
+   </para>
+
+   <para>
+    À l'étape 3, la qualification de l'arbre de requête original est ajoutée,
+    restreignant encore plus l'ensemble de résultats pour les seules lignes qui
+    auront été modifiées par la requête originale&nbsp;:
+
+<ProgramListing>
+INSERT INTO shoelace_log VALUES (
+       *NEW*.sl_name, *NEW*.sl_avail,
+       current_user, current_timestamp )
+  FROM shoelace_data *NEW*, shoelace_data *OLD*,
+       shoelace_data shoelace_data
+ WHERE *NEW*.sl_avail &lt;&gt; *OLD*.sl_avail
+   <emphasis>AND shoelace_data.sl_name = 'sl7'</emphasis>;
+</ProgramListing>
+   </para>
+
+   <para>
+    La quatrième étape remplace les références à <literal>NEW</> par les
+    entrées de la liste cible à partir de l'arbre de requête original ou par les
+    références de la variable correspondante à partir de la relation
+    résultat&nbsp;:
+
+<ProgramListing>
+INSERT INTO shoelace_log VALUES (
+       <emphasis>shoelace_data.sl_name</emphasis>, <emphasis>6</emphasis>,
+       current_user, current_timestamp )
+  FROM shoelace_data *NEW*, shoelace_data *OLD*,
+       shoelace_data shoelace_data
+ WHERE <emphasis>6</emphasis> &lt;&gt; *OLD*.sl_avail
+   AND shoelace_data.sl_name = 'sl7';
+</ProgramListing>
+
+   </para>
+
+   <para>
+    L'étape 5 modifie les références <literal>OLD</> en référence de la
+    relation résultat&nbsp;:
+
+<ProgramListing>
+INSERT INTO shoelace_log VALUES (
+       shoelace_data.sl_name, 6,
+       current_user, current_timestamp )
+  FROM shoelace_data *NEW*, shoelace_data *OLD*,
+       shoelace_data shoelace_data
+ WHERE 6 &lt;&gt; <emphasis>shoelace_data.sl_avail</emphasis>
+   AND shoelace_data.sl_name = 'sl7';
+</ProgramListing>
+   </para>
+
+   <para>
+    C'est tout. Comme la règle est de type <literal>ALSO</>, nous
+    affichons aussi l'arbre de requêtes original. En bref, l'affichage à partir
+    du système de règles est une liste de deux arbres de requêtes est une liste
+    de deux arbres de requêtes correspondant à ces instructions&nbsp;:
+
+<ProgramListing>
+INSERT INTO shoelace_log VALUES (
+       shoelace_data.sl_name, 6,
+       current_user, current_timestamp )
+  FROM shoelace_data
+ WHERE 6 &lt;&gt; shoelace_data.sl_avail
+   AND shoelace_data.sl_name = 'sl7';
+
+UPDATE shoelace_data SET sl_avail = 6
+ WHERE sl_name = 'sl7';
+</ProgramListing>
+
+    Elles sont exécutées dans cet ordre et c'est exactement le but de la règle.
+   </para>
+
+   <para>
+    Les substitutions et les qualifications ajoutées nous assurent que, si la
+requête originale était,
+
+<ProgramListing>
+UPDATE shoelace_data SET sl_color = 'green'
+ WHERE sl_name = 'sl7';
+</ProgramListing>
+
+    aucune trace ne serait écrire. Dans ce cas, l'arbre de requête original ne
+contient pas une entrée dans la liste cible pour <literal>sl_avail</>, donc
+<literal>NEW.sl_avail</> sera remplacé par <literal>shoelace_data.sl_avail</>. 
+Du coup, la commande supplémentaire générée par la règle est
+
+<ProgramListing>
+INSERT INTO shoelace_log VALUES (
+       shoelace_data.sl_name, <emphasis>shoelace_data.sl_avail</emphasis>,
+       current_user, current_timestamp )
+  FROM shoelace_data
+ WHERE <emphasis>shoelace_data.sl_avail</emphasis> &lt;&gt; shoelace_data.sl_avail
+   AND shoelace_data.sl_name = 'sl7';
+</ProgramListing>
+
+    et la qualification ne sera jamais vraie.
+   </para>
+
+   <para>
+    Si la requête originale modifie plusieurs lignes, cela fonctionne aussi.
+    Donc, si quelqu'un a lancé la commande
+
+<ProgramListing>
+UPDATE shoelace_data SET sl_avail = 0
+ WHERE sl_color = 'black';
+</ProgramListing>
+
+    en fait, quatre lignes sont modifiées (<literal>sl1</>, <literal>sl2</>,
+    <literal>sl3</> et <literal>sl4</>). Mais <literal>sl3</> a déjà
+    <literal>sl_avail = 0</>. Dans ce cas, la qualification des arbres de
+    requêtes originaux sont différents et cela produit un arbre de requête
+    supplémentaire
+
+<ProgramListing>
+INSERT INTO shoelace_log
+SELECT shoelace_data.sl_name, 0,
+       current_user, current_timestamp
+  FROM shoelace_data
+ WHERE 0 &lt;&gt; shoelace_data.sl_avail
+   AND <emphasis>shoelace_data.sl_color = 'black'</emphasis>;
+</ProgramListing>
+
+    à générer par la règle. Cet arbre de requête aura sûrement insérer trois
+nouvelles lignes de traces. Et c'est tout à fait correct.
+</Para>
+
+<Para>
+    Ici, nous avons vu pourquoi il est important que l'arbre de requête
+    original soit exécuté en premier. Si l'<command>UPDATE</command> a été
+    exécutée avant, toutes les lignes pourraient aussi être initialisées à zéro,
+    donc le <command>INSERT</command> tracé ne trouvera aucune ligne à
+    <literal>0 &lt;&gt; shoelace_data.sl_avail</literal>.
+</Para>
+</Sect3>
+
+</Sect2>
+
+<Sect2 id="rules-update-views">
+<Title>Coopération avec les vues</Title>
+
+<indexterm zone="rules-update-views"><primary>vue</><secondary>mise à jour</></>
+
+<Para>
+    Une façon simple de protéger les relations d'une vue de la possibilité
+    mentionnée que quelqu'un essaie de lancer des <command>INSERT</command>,
+    <command>UPDATE</command> ou <command>DELETE</command> sur elles est de
+    laisser s'abandonner ces arbres de requête. Donc, nous créons les règles
+
+<ProgramListing>
+CREATE RULE shoe_ins_protect AS ON INSERT TO shoe
+    DO INSTEAD NOTHING;
+CREATE RULE shoe_upd_protect AS ON UPDATE TO shoe
+    DO INSTEAD NOTHING;
+CREATE RULE shoe_del_protect AS ON DELETE TO shoe
+    DO INSTEAD NOTHING;
+</ProgramListing>
+
+    Maintenant, si quelqu'un essaie de faire une de ces opérations sur la
+    vue <literal>shoe</literal>, le système de règles appliquera ces règles.
+    Comme les règles n'ont pas d'action et sont de type <literal>INSTEAD</>, la
+    liste résultant des arbres de requêtes sera vide et la requête entière 
+    deviendra vide car il ne reste rien à optimiser ou exécuter après que le
+    système de règles en ait terminé avec elle.
+</Para>
+
+<Para>
+    Une façon plus sophistiquée d'utiliser le système de règles est de créer 
+    les règles qui réécrivent l'arbre de requête en un faisant la bonne
+    opération sur les vraies tables. Pour réaliser cela sur la vue
+    <literal>shoelace</literal>, nous créons les règles suivantes&nbsp;:
+
+<ProgramListing>
+CREATE RULE shoelace_ins AS ON INSERT TO shoelace
+    DO INSTEAD
+    INSERT INTO shoelace_data VALUES (
+           NEW.sl_name,
+           NEW.sl_avail,
+           NEW.sl_color,
+           NEW.sl_len,
+           NEW.sl_unit
+    );
+
+CREATE RULE shoelace_upd AS ON UPDATE TO shoelace
+    DO INSTEAD
+    UPDATE shoelace_data
+       SET sl_name = NEW.sl_name,
+           sl_avail = NEW.sl_avail,
+           sl_color = NEW.sl_color,
+           sl_len = NEW.sl_len,
+           sl_unit = NEW.sl_unit
+     WHERE sl_name = OLD.sl_name;
+
+CREATE RULE shoelace_del AS ON DELETE TO shoelace
+    DO INSTEAD
+    DELETE FROM shoelace_data
+     WHERE sl_name = OLD.sl_name;
+</ProgramListing>
+   </para>
+
+   <para>
+    Maintenant, supposons que quelque fois, un paquet de lacets arrive au 
+    magasin avec une grosse liste. Mais vous ne voulez pas mettre à jour
+    manuellement la vue <literal>shoelace</literal> à chaque fois. À la place,
+    nous configurons deux petites tables&nbsp; une où vous pouvez insérer les
+    éléments de la liste et une avec une astuce spéciale. Voici les commandes de
+    création&nbsp;:
+
+<ProgramListing>
+CREATE TABLE shoelace_arrive (
+    arr_name    text,
+    arr_quant   integer
+);
+
+CREATE TABLE shoelace_ok (
+    ok_name     text,
+    ok_quant    integer
+);
+
+CREATE RULE shoelace_ok_ins AS ON INSERT TO shoelace_ok
+    DO INSTEAD
+    UPDATE shoelace
+       SET sl_avail = sl_avail + NEW.ok_quant
+     WHERE sl_name = NEW.ok_name;
+</ProgramListing>
+
+    Maintenant, vous pouvez remplir la table <literal>shoelace_arrive</literal>
+    avec les données de la liste&nbsp;:
+
+<ProgramListing>
+SELECT * FROM shoelace_arrive;
+
+ arr_name | arr_quant
+----------+-----------
+ sl3      |        10
+ sl6      |        20
+ sl8      |        20
+(3 rows)
+</ProgramListing>
+
+    Jetez un &oelig;il rapidement aux données actuelles&nbsp;:
+    
+<ProgramListing>
+SELECT * FROM shoelace;
+
+ sl_name  | sl_avail | sl_color | sl_len | sl_unit | sl_len_cm
+----------+----------+----------+--------+---------+-----------
+ sl1      |        5 | black    |     80 | cm      |        80
+ sl2      |        6 | black    |    100 | cm      |       100
+ sl7      |        6 | brown    |     60 | cm      |        60
+ sl3      |        0 | black    |     35 | inch    |      88.9
+ sl4      |        8 | black    |     40 | inch    |     101.6
+ sl8      |        1 | brown    |     40 | inch    |     101.6
+ sl5      |        4 | brown    |      1 | m       |       100
+ sl6      |        0 | brown    |    0.9 | m       |        90
+(8 rows)
+</ProgramListing>
+
+    Maintenant, déplacez les lacets arrivés dans&nbsp;:
+
+<ProgramListing>
+INSERT INTO shoelace_ok SELECT * FROM shoelace_arrive;
+</ProgramListing>
+
+    et vérifiez le résultat&nbsp;:
+
+<ProgramListing>
+SELECT * FROM shoelace ORDER BY sl_name;
+
+ sl_name  | sl_avail | sl_color | sl_len | sl_unit | sl_len_cm
+----------+----------+----------+--------+---------+-----------
+ sl1      |        5 | black    |     80 | cm      |        80
+ sl2      |        6 | black    |    100 | cm      |       100
+ sl7      |        6 | brown    |     60 | cm      |        60
+ sl4      |        8 | black    |     40 | inch    |     101.6
+ sl3      |       10 | black    |     35 | inch    |      88.9
+ sl8      |       21 | brown    |     40 | inch    |     101.6
+ sl5      |        4 | brown    |      1 | m       |       100
+ sl6      |       20 | brown    |    0.9 | m       |        90
+(8 rows)
+
+SELECT * FROM shoelace_log;
+
+ sl_name | sl_avail | log_who| log_when                        
+---------+----------+--------+----------------------------------
+ sl7     |        6 | Al     | Tue Oct 20 19:14:45 1998 MET DST
+ sl3     |       10 | Al     | Tue Oct 20 19:25:16 1998 MET DST
+ sl6     |       20 | Al     | Tue Oct 20 19:25:16 1998 MET DST
+ sl8     |       21 | Al     | Tue Oct 20 19:25:16 1998 MET DST
+(4 rows)
+</ProgramListing>
+   </para>
+
+   <para>
+    C'est un long chemin du <literal>INSERT ... SELECT</literal> à ces
+    résultats. Et la description de la transformation de l'arbre de requêtes
+    sera la dernière dans ce chapitre. Tout d'abord, voici la sortie de
+    l'analyseur
+
+<ProgramListing>
+INSERT INTO shoelace_ok
+SELECT shoelace_arrive.arr_name, shoelace_arrive.arr_quant
+  FROM shoelace_arrive shoelace_arrive, shoelace_ok shoelace_ok;
+</ProgramListing>
+
+    Maintenant, la première règle <literal>shoelace_ok_ins</literal> est
+    appliquée et transforme ceci en
+
+<ProgramListing>
+UPDATE shoelace
+   SET sl_avail = shoelace.sl_avail + shoelace_arrive.arr_quant
+  FROM shoelace_arrive shoelace_arrive, shoelace_ok shoelace_ok,
+       shoelace_ok *OLD*, shoelace_ok *NEW*,
+       shoelace shoelace
+ WHERE shoelace.sl_name = shoelace_arrive.arr_name;
+</ProgramListing>
+
+    et jette l'<command>INSERT</command> actuel sur
+    <literal>shoelace_ok</literal>. La requête réécrite est passée de nouveau 
+    au système de règles et la seconde règle appliquée
+    <literal>shoelace_upd</literal> produit
+
+<ProgramListing>
+UPDATE shoelace_data
+   SET sl_name = shoelace.sl_name,
+       sl_avail = shoelace.sl_avail + shoelace_arrive.arr_quant,
+       sl_color = shoelace.sl_color,
+       sl_len = shoelace.sl_len,
+       sl_unit = shoelace.sl_unit
+  FROM shoelace_arrive shoelace_arrive, shoelace_ok shoelace_ok,
+       shoelace_ok *OLD*, shoelace_ok *NEW*,
+       shoelace shoelace, shoelace *OLD*,
+       shoelace *NEW*, shoelace_data shoelace_data
+ WHERE shoelace.sl_name = shoelace_arrive.arr_name
+   AND shoelace_data.sl_name = shoelace.sl_name;
+</ProgramListing>
+
+    De nouveau, il s'agit d'une règle <literal>INSTEAD</> et l'arbre de
+    requête précédent est jeté. Notez que cette requête utilise toujours la vue
+    <literal>shoelace</literal>. Mais le système de règles n'a pas fini cette
+    étape, donc il continue et lui applique la règle <literal>_RETURN</literal>.
+    Nous obtenons
+
+<ProgramListing>
+UPDATE shoelace_data
+   SET sl_name = s.sl_name,
+       sl_avail = s.sl_avail + shoelace_arrive.arr_quant,
+       sl_color = s.sl_color,
+       sl_len = s.sl_len,
+       sl_unit = s.sl_unit
+  FROM shoelace_arrive shoelace_arrive, shoelace_ok shoelace_ok,
+       shoelace_ok *OLD*, shoelace_ok *NEW*,
+       shoelace shoelace, shoelace *OLD*,
+       shoelace *NEW*, shoelace_data shoelace_data,
+       shoelace *OLD*, shoelace *NEW*,
+       shoelace_data s, unit u
+ WHERE s.sl_name = shoelace_arrive.arr_name
+   AND shoelace_data.sl_name = s.sl_name;
+</ProgramListing>
+
+    Enfin, la règle <literal>log_shoelace</literal> est appliquée, produisant
+    l'arbre de requête supplémentaire
+
+<ProgramListing>
+INSERT INTO shoelace_log
+SELECT s.sl_name,
+       s.sl_avail + shoelace_arrive.arr_quant,
+       current_user,
+       current_timestamp
+  FROM shoelace_arrive shoelace_arrive, shoelace_ok shoelace_ok,
+       shoelace_ok *OLD*, shoelace_ok *NEW*,
+       shoelace shoelace, shoelace *OLD*,
+       shoelace *NEW*, shoelace_data shoelace_data,
+       shoelace *OLD*, shoelace *NEW*,
+       shoelace_data s, unit u,
+       shoelace_data *OLD*, shoelace_data *NEW*
+       shoelace_log shoelace_log
+ WHERE s.sl_name = shoelace_arrive.arr_name
+   AND shoelace_data.sl_name = s.sl_name
+   AND (s.sl_avail + shoelace_arrive.arr_quant) &lt;&gt; s.sl_avail;
+</ProgramListing>
+    
+    Une fois que le système de règles tombe en panne de règles et renvoie
+    les arbres de requêtes générés.
+   </para>
+
+   <para>
+    Donc, nous finissons avec deux arbres de requêtes finaux qui sont
+    équivalents aux instructions <Acronym>SQL</Acronym>
+
+<ProgramListing>
+INSERT INTO shoelace_log
+SELECT s.sl_name,
+       s.sl_avail + shoelace_arrive.arr_quant,
+       current_user,
+       current_timestamp
+  FROM shoelace_arrive shoelace_arrive, shoelace_data shoelace_data,
+       shoelace_data s
+ WHERE s.sl_name = shoelace_arrive.arr_name
+   AND shoelace_data.sl_name = s.sl_name
+   AND s.sl_avail + shoelace_arrive.arr_quant &lt;&gt; s.sl_avail;
+           
+UPDATE shoelace_data
+   SET sl_avail = shoelace_data.sl_avail + shoelace_arrive.arr_quant
+  FROM shoelace_arrive shoelace_arrive,
+       shoelace_data shoelace_data,
+       shoelace_data s
+ WHERE s.sl_name = shoelace_arrive.sl_name
+   AND shoelace_data.sl_name = s.sl_name;
+</ProgramListing>
+
+    Le résultat est que la donnée provenant d'une relation insérée dans une
+    autre, modifiée en mise à jour dans une troisième, modifiée en mise
+    à jour dans une quatrième, cette dernière étant tracée dans une cinquième,
+    se voit réduite à deux requêtes.
+</Para>
+
+<Para>
+    Il y a un petit détail assez horrible. En regardant les deux requêtes, nous
+    nous apercevons que la relation <literal>shoelace_data</literal> apparaît
+    deux fois dans la table d'échelle où cela pourrait être réduit à une seule
+    occurrence. Le planificateur ne gère pas ceci et, du coup, le plan
+    d'exécution de la sortie du système de règles pour <command>INSERT</command>
+    sera
+
+<literallayout class="monospaced">
+Nested Loop
+  -&gt;  Merge Join
+        -&gt;  Seq Scan
+              -&gt;  Sort
+                    -&gt;  Seq Scan on s
+        -&gt;  Seq Scan
+              -&gt;  Sort
+                    -&gt;  Seq Scan on shoelace_arrive
+  -&gt;  Seq Scan on shoelace_data
+</literallayout>
+
+    alors qu'omettre la table d'échelle supplémentaire résulterait en un
+
+<literallayout class="monospaced">
+Merge Join
+  -&gt;  Seq Scan
+        -&gt;  Sort
+              -&gt;  Seq Scan on s
+  -&gt;  Seq Scan
+        -&gt;  Sort
+              -&gt;  Seq Scan on shoelace_arrive
+</literallayout>
+
+    qui produit exactement les mêmes entrées dans la table des traces. Du
+    coup, le système de règles a causé un parcours supplémentaire dans la table
+    <literal>shoelace_data</literal> qui n'est absolument pas nécessaire. Et le
+    même parcours redondant est fait une fois de plus dans
+    l'<command>UPDATE</command>. Mais ce fut réellement un travail difficile de
+    rendre tout ceci possible.
+</Para>
+
+<Para>
+    Maintenant, nous faisons une démonstration finale du système de règles de
+    <ProductName>PostgreSQL</ProductName> et de sa puissance. Disons que nous
+    ajoutons quelques lacets avec des couleurs extraordinaires à votre base de
+    données&nbsp;:
+
+<ProgramListing>
+INSERT INTO shoelace VALUES ('sl9', 0, 'pink', 35.0, 'inch', 0.0);
+INSERT INTO shoelace VALUES ('sl10', 1000, 'magenta', 40.0, 'inch', 0.0);
+</ProgramListing>
+
+    Nous voulons créer une vue vérifiant les entrées
+    <literal>shoelace</literal> qui ne correspondent à aucune chaussure pour
+    la couleur. Voici la vue
+
+<ProgramListing>
+CREATE VIEW shoelace_mismatch AS
+    SELECT * FROM shoelace WHERE NOT EXISTS
+        (SELECT shoename FROM shoe WHERE slcolor = sl_color);
+</ProgramListing>
+
+    Sa sortie est
+
+<ProgramListing>
+SELECT * FROM shoelace_mismatch;
+
+ sl_name | sl_avail | sl_color | sl_len | sl_unit | sl_len_cm
+---------+----------+----------+--------+---------+-----------
+ sl9     |        0 | pink     |     35 | inch    |      88.9
+ sl10    |     1000 | magenta  |     40 | inch    |     101.6
+</ProgramListing>
+   </para>
+
+   <para>
+    Maintenant, nous voulons le configurer pour que les lacets qui ne
+    correspondent pas et qui ne sont pas en stock sont supprimés de la base de
+    données. Pour rendre la chose plus difficile à
+    <ProductName>PostgreSQL</ProductName>, nous ne les supprimerons pas
+    directement. À la place, nous créons une vue supplémentaire
+
+<ProgramListing>
+CREATE VIEW shoelace_can_delete AS
+    SELECT * FROM shoelace_mismatch WHERE sl_avail = 0;
+</ProgramListing>
+
+    et le faisons de cette façon&nbsp;:
+
+<ProgramListing>
+DELETE FROM shoelace WHERE EXISTS
+    (SELECT * FROM shoelace_can_delete
+             WHERE sl_name = shoelace.sl_name);
+</ProgramListing>
+
+    <foreignphrase>Voilà</foreignphrase>:
+
+<ProgramListing>
+SELECT * FROM shoelace;
+
+ sl_name | sl_avail | sl_color | sl_len | sl_unit | sl_len_cm
+---------+----------+----------+--------+---------+-----------
+ sl1     |        5 | black    |     80 | cm      |        80
+ sl2     |        6 | black    |    100 | cm      |       100
+ sl7     |        6 | brown    |     60 | cm      |        60
+ sl4     |        8 | black    |     40 | inch    |     101.6
+ sl3     |       10 | black    |     35 | inch    |      88.9
+ sl8     |       21 | brown    |     40 | inch    |     101.6
+ sl10    |     1000 | magenta  |     40 | inch    |     101.6
+ sl5     |        4 | brown    |      1 | m       |       100
+ sl6     |       20 | brown    |    0.9 | m       |        90
+(9 rows)
+</ProgramListing>
+   </para>
+
+   <para>
+    Un <command>DELETE</command> sur une vue, avec une qualification de
+    sous-requête qui utilise au total quatre vues imbriquées/jointes, où l'entre
+    d'entre elles a une qualification de sous-requête contenant une vue et où
+    les colonnes des vues calculées sont utilisées, est réécrite en un seul
+    arbre de requête qui supprime les données demandées sur la vraie table.
+</Para>
+
+<Para>
+    Il existe probablement seulement quelques situations dans le vrai monde où
+    une telle construction est nécessaire. Mais, vous vous sentez mieux quand
+    cela fonctionne.
+</Para>
+</Sect2>
+
+</Sect1>
+
+<Sect1 id="rules-privileges">
+<Title>Règles et droits</Title>
+
+<indexterm zone="rules-privileges">
+ <primary>droit</primary>
+ <secondary sortas="Regeln">avec les règles</secondary>
+</indexterm>
+
+<indexterm zone="rules-privileges">
+ <primary>droit</primary>
+ <secondary sortas="Sichten">avec les vues</secondary>
+</indexterm>
+
+<Para>
+    À cause de la réécriture des requêtes par le système de règles de
+    <ProductName>PostgreSQL</ProductName>, d'autres tables/vues que celles
+    utilisées dans la requête originale pourraient être accédées. Lorsque des
+    règles de mise à jour sont utilisées, ceci peut inclure des droits
+    d'écriture sur les tables.
+</Para>
+
+<Para>
+    Les règles de réécriture n'ont pas de propriétaire séparé. Le propriétaire
+    d'une relation (table ou vue) est automatiquement le propriétaire des règles
+    de réécriture qui lui sont définies. Le système de règles de
+    <ProductName>PostgreSQL</ProductName> modifie le comportement du système de
+    contrôle d'accès par défaut. Les relations qui sont utilisées à cause des
+    règles se voient vérifier avec les droits du propriétaire de la règle, et
+    non avec ceux de l'utilisateur appelant cette règle. Ceci signifie qu'un
+    utilisateur a seulement besoin des droits requis pour les tables/vues qu'il
+    nomme explicitement dans ses requêtes.
+</Para>
+
+<Para>
+    Par exemple&nbsp;: un utilisateur a une liste de numéros de téléphone dont
+    certains sont privés, les autres étant d'intérêt pour la secrétaire du
+    bureau. Il peut construire de cette façon&nbsp;:
+
+<ProgramListing>
+CREATE TABLE phone_data (person text, phone text, private boolean);
+CREATE VIEW phone_number AS
+    SELECT person, phone FROM phone_data WHERE NOT private;
+GRANT SELECT ON phone_number TO secretary;
+</ProgramListing>
+    
+    Personne sauf lui (et les superutilisateurs de la base de données) ne peut
+    accéder à la table <literal>phone_data</>. Mais, à cause du 
+    <command>GRANT</>, la secrétaire peut lancer un <command>SELECT</command>
+    sur la vue <literal>phone_number</>. Le système de règles réécrira le
+    <command>SELECT</command> sur <literal>phone_number</> en un 
+    <command>SELECT</command> sur <literal>phone_data</> et ajoutera la
+    qualification que seules les entrées non privées (donc où
+    <literal>private</> est faux) sont désirées. Comme l'utilisateur est le
+    propriétaire de <literal>phone_number</> et du coup le propriétaire de la
+    règle, le droit de lecture de <literal>phone_data</> est maintenant vérifié
+    avec ses propres privilèges et la requête est autorisée. La vérification de
+    l'accès à <literal>phone_number</> est aussi réalisée mais ceci est fait
+    avec l'utilisateur appelant, donc personne sauf l'utilisateur et la
+    secrétaire ne peut l'utiliser.
+</Para>
+
+<Para>
+    Les droits sont vérifiés règle par règle. Donc, la secrétaire est
+    actuellement la seule à pouvoir voir les numéros de téléphone publiques.
+    Mais la secrétaire peut configurer une autre vue et autoriser l'accès au
+    public. Du coup, tout le monde peut voir les données de
+    <literal>phone_number</> via la vue de la secrétaire. Ce que la secrétaire
+    ne peut pas faire est de créer une vue qui accède directement à
+    <literal>phone_data</>. (En fait, elle le peut mais cela ne fonctionnera pas car
+    tous les accès seront refusés lors de la vérification des droits.) Dès que
+    l'utilisateur s'en rendra compte, du fait que la secrétaire a ouvert la vue
+    <literal>phone_number</> à tout le monde, il peut révoquer son accès.
+    Immédiatement, tous les accès de la vue de la secrétaire échoueront.
+</Para>
+
+<Para>
+    Il pourrait être dit que cette vérification règle par règle est une brèche
+    de sécurité mais ce n'est pas le cas. Si cela ne fonctionne pas de cette
+    façon, la secrétaire pourrait copier une table avec les mêmes colonnes que
+    <literal>phone_number</> et y copier les données une fois par jour. Du coup,
+    ce sont ces propres données et il peut accorder l'accès à tout le monde s'il
+    le souhaite. Une commande <command>GRANT</command> signifie, <quote>J'ai
+    confiance en vous</quote>. Si quelqu'un en qui vous avez confiance se
+    comporte ainsi, il est temps d'y réfléchir et d'utiliser
+    <command>REVOKE</command>.
+</Para>
+
+<Para>
+    Ce mécanisme fonctionne aussi pour les règles de mise à jour. Dans les
+    exemples de la section précédente, le propriétaire des tables de la base de
+    données d'exemple pourrait accorder les droits <literal>SELECT</>,
+    <literal>INSERT</>, <literal>UPDATE</> et <literal>DELETE</> sur la vue
+    <literal>shoelace</> à quelqu'un d'autre mais seulement <literal>SELECT</>
+    sur <literal>shoelace_log</>. L'action de la règle pourrait écrire des
+    entrées de trace qui seraient toujours exécutées avec succès et que l'autre
+    utilisateur pourrait voir. Mais il ne peut pas créer d'entrées fausses, pas
+    plus qu'il ne peut manipuler ou supprimer celles qui existent.
+</Para>
+</Sect1>
+
+<Sect1 id="rules-status">
+<Title>Règles et statut de commande</Title>
+
+<Para>
+    Le serveur <ProductName>PostgreSQL</ProductName> renvoie une chaîne de
+    statut de commande, comme <literal>INSERT 149592 1</>, pour chaque commande
+    qu'il reçoit. C'est assez simple lorsqu'il n'y a pas de règles impliquées.
+    Mais qu'arrive-t'il lorsque la requête est réécrite par des règles&nbsp;?
+</Para>
+
+<Para>
+    Les règles affectent le statut de la commande de cette façon&nbsp;:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       S'il n'y a pas de règle <literal>INSTEAD</> inconditionnelle pour la
+       requête, alors la requête donnée originellement sera exécutée et son
+       statut de commande sera renvoyé comme d'habitude. (Mais notez que s'il y
+       avait des règles <literal>INSTEAD</> conditionnelles, la négation de leur
+       qualifications sera ajouté à la requête initiale. Ceci pourrait réduire
+       le nombre de lignes qu'il traite et, si c'est le cas, le statut rapporté
+       en sera affecté.)
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       S'il y a des règles <literal>INSTEAD</> inconditionnelles pour la
+       requête, alors la requête originale ne sera pas exécutée du tout. Dans ce
+       cas, le serveur renverra le statut de la commande pour la dernière
+       requête qui a été insérée par une règle <literal>INSTEAD</>
+       (conditionnelle ou non) et est du même type de commande
+       (<command>INSERT</command>, <command>UPDATE</command> ou
+       <command>DELETE</command>) que la requête originale. Si aucune requête ne
+       rencontrant ces pré-requis n'est ajoutée à une règle, alors le statut de
+       commande renvoyé affiche le type de requête original et annule le
+       compteur de ligne et le champ OID.
+      </para>
+     </listitem>
+    </itemizedlist>
+
+    (Ce système a été établi pour <ProductName>PostgreSQL</ProductName> 7.3.
+    Dans les versions précédentes, le statut de commande pourrait afficher des
+    résultats différents lorsque les règles existent.)
+</Para>
+
+<Para>
+    Le programmeur peut s'assurer que toute règle <literal>INSTEAD</> désirée
+    est celle qui initialise le statut de commande dans le deuxième cas en
+    lui donnant un nom de règle étant le dernier en ordre alphabétique parmi les
+    règles actives pour qu'elle soit appliquée en dernier.
+</Para>
+</Sect1>
+
+<Sect1 id="rules-triggers">
+<Title>Règles contre déclencheurs</Title>
+
+<indexterm zone="rules-triggers">
+ <primary>règle</primary>
+ <secondary sortas="Trigger">comparée aux déclencheurs</secondary>
+</indexterm>
+
+<indexterm zone="rules-triggers">
+ <primary>déclencheur</primary>
+ <secondary sortas="Regeln">comparé aux règles</secondary>
+</indexterm>
+
+<Para>
+    Beaucoup de choses pouvant se faire avec des déclencheurs peuvent aussi
+    être implémentées en utilisant le système de règles de
+    <ProductName>PostgreSQL</ProductName>. Un des points qui ne pourra pas être
+    implémenté par les règles sont certains types de contraintes, notamment les
+    clés étrangères. Il est possible de placer une règle qualifiée qui réécrit
+    une commande en <literal>NOTHING</> si la valeur d'une colonne n'apparaît
+    pas dans l'autre table. Mais alors les données sont jetées et ce n'est pas
+    une bonne idée. Si des vérifications de valeurs valides sont requises et
+    dans le cas où il y a une erreur invalide, un message d'erreur devrait être
+    généré et cela devra se faire avec un déclencheur.
+</Para>
+
+<Para>
+    D'un autre côté, un déclencheur qui est lancé sur un
+    <command>INSERT</command> pour une vue peut faire la même chose qu'une
+    règle&nbsp;: placez les données ailleurs et supprimez les insertions dans la
+    vue. Mais, il ne pourra pas faire la même chose avec un
+    <command>UPDATE</command> ou un <command>DELETE</command> parce qu'il n'y a
+    pas de vraies données sur la vue qui pourraient être parcourues. Du coup, le
+    déclencheur ne serait jamais appelé. Seule une règle pourra vous aider.
+</Para>
+
+<Para>
+    Pour les éléments qui peuvent être implémentés par les deux, ce qui sera le
+    mieux dépend de l'utilisation de la base de données. Un déclencheur
+    est exécuté une fois pour chaque ligne affectée. Une règle manipule la
+    requête ou en génère une autre. Donc, si un grand nombre de lignes sont
+    affectées pour une instruction, ue règle lançant une commande supplémentaire
+    sera certainement plus rapide qu'un déclencheur appelé pour chaque ligne et qui
+    devra exécuter ces opérations autant de fois. Néanmoins, l'approche du
+    déclencheur est conceptuellement plus simple que l'approche de la règle et est
+    plus facile à utiliser pour les novices.
+</Para>
+
+<Para>
+    Ici, nous montrons un exemple où le choix d'une règle ou d'un déclencheur
+    joue sur une situation. Voici les deux tables&nbsp;:
+
+<ProgramListing>
+CREATE TABLE computer (
+    hostname        text,    -- indexé
+    manufacturer    text     -- indexé
+);
+
+CREATE TABLE software (
+    software        text,    -- indexé
+    hostname        text     -- indexé
+);
+</ProgramListing>
+
+    Les deux tables ont plusieurs milliers de lignes et les index sur
+    <structfield>hostname</> sont uniques. La règle ou le déclencheur devrait
+    implémenter une contrainte qui supprime les lignes de <literal>software</>
+    référençant un ordinateur supprimé. Le déclencheur utiliserait cette
+    commande&nbsp;:
+
+<ProgramListing>
+DELETE FROM software WHERE hostname = $1;
+</ProgramListing>
+
+    Comme le déclencheur est appelé pour chaque ligne individuelle supprimée à
+ partir de <literal>computer</>, il peut préparer et sauvegarder le plan pour
+cette commande et passer la valeur <structfield>hostname</> dans le paramètre.
+La règle devra être réécrite ainsi
+
+<ProgramListing>
+CREATE RULE computer_del AS ON DELETE TO computer
+    DO DELETE FROM software WHERE hostname = OLD.hostname;
+</ProgramListing>
+   </para>
+
+   <para>
+    Maintenant, nous apercevons différents types de suppressions. Dans le cas
+    d'un
+    
+<ProgramListing>
+DELETE FROM computer WHERE hostname = 'mypc.local.net';
+</ProgramListing>
+
+    la table <literal>computer</> est parcourue par l'index (rapide), et la
+    commande lancée par le déclencheur pourrait aussi utiliser un parcours
+    d'index (aussi rapide). La commande supplémentaire provenant de la règle
+serait
+
+<ProgramListing>
+DELETE FROM software WHERE computer.hostname = 'mypc.local.net'
+                       AND software.hostname = computer.hostname;
+</ProgramListing>
+
+    Comme il y a une configuration appropriée des index, le planificateur
+    créera un plan
+
+<literallayout class="monospaced">
+Nestloop
+  -&gt;  Index Scan using comp_hostidx on computer
+  -&gt;  Index Scan using soft_hostidx on software
+</literallayout>
+
+    Donc, il n'y aurait pas trop de différence de performance entre le
+    déclencheur et l'implémentation de la règle.
+   </para>
+
+   <para>
+    Avec la prochaine suppression, nous voulons nous débarrasser des 2000
+ordinateurs où <structfield>hostname</> commence avec <literal>old</>. Il
+existe deux commandes possibles pour ce faire. Voici l'une d'elle
+
+<ProgramListing>
+DELETE FROM computer WHERE hostname &gt;= 'old'
+                       AND hostname &lt;  'ole'
+</ProgramListing>
+
+    La commande ajoutée par la règle sera
+
+<ProgramListing>
+DELETE FROM software WHERE computer.hostname &gt;= 'old' AND computer.hostname &lt; 'ole'
+                       AND software.hostname = computer.hostname;
+</ProgramListing>
+
+    avec le plan
+
+<literallayout class="monospaced">
+Hash Join
+  -&gt;  Seq Scan on software
+  -&gt;  Hash
+    -&gt;  Index Scan using comp_hostidx on computer
+</literallayout>
+
+    L'autre commande possible est
+
+<ProgramListing>
+DELETE FROM computer WHERE hostname ~ '^old';
+</ProgramListing>
+
+    ce qui finira dans le plan d'exécution suivant pour la commande ajoutée
+    par la règle&nbsp;:
+
+<literallayout class="monospaced">
+Nestloop
+  -&gt;  Index Scan using comp_hostidx on computer
+  -&gt;  Index Scan using soft_hostidx on software
+</literallayout>
+
+    Ceci monte que le planificateur ne réalise pas que la qualification pour
+    <structfield>hostname</> dans <literal>computer</> pourrait aussi être
+    utilisée pour un parcours d'index sur <literal>software</> quand il existe
+    plusieurs expressions de qualifications combinées avec <literal>AND</>, ce
+    qui correspond à ce qu'il fait dans la version expression rationnelle de la
+    commande. Le déclencheur sera appelé une fois pour chacun des 2000 anciens
+    ordinateurs qui doivent être supprimées, et ceci résultera en un parcours
+    d'index sur <literal>computer</> et 2000 parcours d'index sur
+    <literal>software</>. L'implémentation de la règle le fera en deux commandes
+    qui utilisent les index. Et cela dépend de la taille globale de la table
+    <literal>software</>, si la règle sera toujours aussi rapide dans la
+    situation du parcours séquentiel. 2000 exécutions de commandes à partir du
+    déclencheur sur le gestionnaire SPI prend un peu de temps, même si tous les
+    blocs d'index seront rapidement dans le cache.
+</Para>
+
+<Para>
+    La dernière commande que nous regardons est
+
+<ProgramListing>
+DELETE FROM computer WHERE manufacurer = 'bim';
+</ProgramListing>
+
+    De nouveau, ceci pourrait résulter en de nombreuses lignes à supprimer de
+<literal>computer</>. Donc, le déclencheur lancera de nouveau de nombreuses
+commandes via l'exécuteur. La commande générée par la règle sera
+
+<ProgramListing>
+DELETE FROM software WHERE computer.manufacurer = 'bim'
+                       AND software.hostname = computer.hostname;
+</ProgramListing>
+
+    Le plan pour cette commande sera encore la boucle imbriquée sur les deux
+    parcours d'index, en utilisant seulement un index différent sur
+<literal>computer</>:
+
+<ProgramListing>
+Nestloop
+  -&gt;  Index Scan using comp_manufidx on computer
+  -&gt;  Index Scan using soft_hostidx on software
+</ProgramListing>
+
+    Dans chacun de ces cas, les commandes supplémentaires provenant du
+    système de règles seront plus ou moins indépendantes du nombre de lignes
+    affectées en une commande.
+</Para>
+
+<![IGNORE[
+<!-- What's happening with this?  If it doesn't come back, remove this section. -->
+<Para>
+    Another situation is cases on <command>UPDATE</command> where it dépends on the
+    change of an attribute if an action should be performed or
+    not. In <ProductName>PostgreSQL</ProductName> version 6.4, the
+    attribute specification for rule events is disabled (it will have
+    its comeback latest in 6.5, maybe earlier 
+    - stay tuned). So for now the only way to
+    create a rule as in the shoelace_log exemple is to do it with
+    a rule qualification. That results in an extra query that is
+    performed always, even if the attribute of interest cannot
+    change at all because it does not appear in the target list
+    of the initial query. When this is enabled again, it will be
+    one more advantage of rules over triggers. Optimization of
+    a trigger must fail by définition in this case, because the
+    fact that its actions will only be done when a specific attribute
+    is updated is hidden in its functionality. The définition of
+    a trigger only allows to specify it on row level, so whenever a
+    row is touched, the trigger must be called to make its
+    decision. The rule system will know it by looking up the
+    target list and will suppress the additional query completely
+    if the attribute isn't touched. So the rule, qualified or not,
+    will only do its scans if there ever could be quelquechose to do.
+</Para>
+]]>
+
+<Para>
+    Voici le résumé, les règles seront seulement significativement plus lentes
+    que les déclencheurs si leur actions résultent en des jointures larges et
+    mal qualifiées, une situation où le planificateur échoue.
+</Para>
+</Sect1>
+
+</Chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

@@ -1,0 +1,989 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/typeconv.sgml,v 1.7 2005/04/02 06:57:44 guillaume Exp $
+-->
+
+<chapter Id="typeconv">
+<title>Conversion de types</title>
+
+<indexterm zone="typeconv">
+ <primary>type de données</primary>
+ <secondary>conversion</secondary>
+</indexterm>
+
+<para>
+Le mélange de différents types de données dans la même expression peut
+être requis, intentionnellement ou pas, par les instructions
+<acronym>SQL</acronym>. <productname>PostgreSQL</productname> a des
+fonctionnalités étendues pour évaluer les expressions de type mixte.
+</para>
+
+<para>
+Dans la plupart des cas, un utilisateur n'aura pas besoin de
+comprendre les détails du mécanisme de conversion des types.
+Cependant, les conversions implicites faites par
+<productname>PostgreSQL</productname> peuvent affecter le résultat
+d'une requête. Quand cela est nécessaire, ces résultats peuvent être
+atteints directement en utilisant
+la conversion <emphasis>explicite</emphasis> de types.
+</para>
+
+<para>
+Ce chapitre introduit les mécanismes et les conventions sur les conversions
+de types dans <productname>PostgreSQL</productname>.  Référez-vous aux
+sections appropriées du <xref linkend="datatype"> et du
+<xref linkend="functions"> pour plus d'informations sur les types de
+données spécifiques, les fonctions et les opérateurs autorisés.
+</para>
+
+<sect1 id="typeconv-overview">
+<title>Vue d'ensemble</title>
+
+<para>
+<acronym>SQL</acronym> est un langage fortement typé.  C'est-à-dire que
+chaque élément de données est associé à un type de données qui détermine
+son comportement et son utilisation permise.
+<productname>PostgreSQL</productname> a un système de types extensible
+qui est beaucoup plus général et flexible que les autres
+implémentations de <acronym>SQL</acronym>.  Par conséquent, la plupart
+des comportements de conversion de types dans
+<productname>PostgreSQL</productname> est régis par des règles
+générales plutôt que par l'heuristique <foreignphrase>ad hoc</>. Cela
+permet aux expressions de types mixtes d'être significatives même
+avec des types définis par l'utilisateur.
+</para>
+
+<para>
+L'analyseur de <productname>PostgreSQL</productname> divise
+les éléments lexicaux en seulement cinq catégories fondamentales&nbsp;:
+les entiers, les nombres non entiers, les chaînes de caractères, les
+identifieurs et
+les mots-clé.  Les constantes de la plupart des types non-numériques
+sont d'abord classifiées comme chaînes de caractères.  La définition du
+langage <acronym>SQL</acronym> permet de spécifier le nom des types
+avec une chaîne et ce mécanisme peut être utilisé dans
+<productname>PostgreSQL</productname> pour lancer l'analyseur sur le
+bon chemin.  Par exemple, la requête
+
+<screen>
+SELECT text 'Origin' AS "label", point '(0,0)' AS "value";
+
+ label  | value
+--------+-------
+ Origin | (0,0)
+(1 row)
+</screen>
+
+a deux constantes littérales, de type <type>text</type> et
+<type>point</type>.  Si un type n'est pas spécifié pour une chaîne
+littérale, alors le type <type>inconnu</type> est assigné
+initialement pour être résolu dans les étapes ultérieures comme décrit
+plus bas.
+</para>
+
+<para>
+Il y a quatre constructions <acronym>SQL</acronym> fondamentales
+qui exigent des règles distinctes de conversion de types dans l'analyseur
+de <productname>PostgreSQL</productname>&nbsp;:
+
+<variablelist>
+<varlistentry>
+<term>
+Les appels fonctions
+</term>
+<listitem>
+<para>
+Une grande partie du système de types de
+<productname>PostgreSQL</productname> est construit autour d'un riche
+ensemble de fonctions.  Les fonctions peuvent avoir un ou
+plusieurs arguments.  Puisque que
+<productname>PostgreSQL</productname> permet la surcharge des
+fonctions, le nom de la fonction seul n'identifie plus uniquement la
+fonction à appeler&nbsp;; l'analyseur doit sélectionner la bonne fonction
+par rapport aux types des arguments fournis.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+Les opérateurs
+</term>
+<listitem>
+<para>
+<productname>PostgreSQL</productname> autorise les expressions avec
+des opérateurs de préfixe et de suffixe unaires (un argument) aussi bien
+que binaires (deux arguments). Comme les fonctions, les opérateurs peuvent être
+surchargés, et donc le même problème existe pour sélectionner le bon opérateur.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+Le stockage des valeurs
+</term>
+<listitem>
+<para>
+Les clauses <acronym>SQL</acronym> <command>INSERT</command> et
+<command>UPDATE</command> placent le résultat des expressions dans
+une table. Les expressions dans une clause doivent être en accord avec
+le type des colonnes cibles et peuvent être converties vers celles-ci.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+Les constructions <literal>UNION</literal>, <literal>CASE</literal> et <literal>ARRAY</literal>
+</term>
+<listitem>
+<para>
+Depuis que toutes les requêtes issues d'une clause
+<command>SELECT</command> utilisant une union doivent apparaître dans
+un ensemble unique de colonnes, les types de résultats de chaque
+clause <command>SELECT</command> doivent être assortis et convertis en un
+ensemble uniforme.  De façon similaire, les expressions de résultats d'une
+construction <literal>CASE</> doit être converti vers un type commun
+de façon à ce que l'ensemble de l'expression <literal>CASE</> ait un
+type de sortie connu.  Cela est la même chose pour les constructions
+avec <literal>ARRAY</>.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+</para>
+
+<para>
+Les catalogues systèmes stockent les informations au sujet de la
+validité des conversions entre les types de données et comment
+exécuter ces conversions.  Les conversions sont appelées
+<firstterm>casts</firstterm> en anglais. Des conversions de types
+supplémentaires peuvent être ajoutées par l'utilisateur avec la commande
+<command>CREATE CAST</command>.  (Cela est habituellement fait en
+conjonction avec la définition de nouveaux types de données.
+L'ensemble des conversions entre les types prédéfinis a été
+soigneusement choisi et le mieux est de ne pas le modifier.)
+</para>
+
+<indexterm>
+ <primary>type de données</primary>
+ <secondary>catégorie</secondary>
+</indexterm>
+
+<para>
+Concernant les types <acronym>SQL</acronym> standards, une heuristique
+additionnelle est fournie dans l'analyseur pour permettre de meilleures
+estimations du comportement approprié. Il y a plusieurs 
+<firstterm>catégories de types</firstterm> basiques définies&nbsp;:
+<type>boolean</type>, <type>numeric</type>, <type>string</type>,
+<type>bitstring</type>, <type>datetime</type>, <type>timespan</type>,
+<type>geometric</type>, <type>network</type> et utilisateurs.  Chaque
+catégorie, à l'exception des types définis par l'utilisateur, a un ou plusieurs
+<firstterm>types pré-définis</firstterm> qui sont préférentiellement
+choisis quand il y a une ambiguïté.  Dans la catégorie des types
+utilisateurs, chaque type est son propre type préféré.  Les
+expressions ambiguës (celles avec de multiples solutions d'analyse
+candidates) peuvent souvent être résolues quand il y a de nombreux
+types pré-définis possibles mais elles soulèveront une erreur quand il
+existe des choix multiples pour des types utilisateurs.
+</para>
+
+<para>
+Toutes les règles de conversions de types sont écrites en gardant à l'esprit
+plusieurs principes&nbsp;:
+
+<itemizedlist>
+<listitem>
+<para>
+Les conversions implicites ne doivent jamais avoir de résultats
+surprenants ou imprévisibles.
+</para>
+</listitem>
+
+<listitem>
+<para>
+Les types utilisateurs dont l'analyseur n'a pas
+<foreignphrase>à priori</> connaissance, devraient être
+<quote>plus hauts</quote> dans la hiérarchie des types. Dans les
+expressions de types mixtes, les types natifs doivent toujours être
+convertis en un type utilisateur (seulement si la conversion est
+nécessaire bien sûr).
+</para>
+</listitem>
+
+<listitem>
+<para>
+Les types utilisateurs ne sont pas reliés.  Actuellement
+<productname>PostgreSQL</productname> n'a pas d'informations
+disponibles sur les relations entre les types, autres que celles fournies 
+par les heuristiques codées en dur pour les types natifs et les relations
+implicites basées sur les fonctions et les conversions disponibles.
+</para>
+</listitem>
+
+<listitem>
+<para>
+Il n'y aura pas de surcharge depuis l'analyseur ou l'exécuteur si une
+requête n'a pas besoin d'une conversion de types implicite.  C'est-à-dire que
+si une requête est bien formulée et si les types sont déjà assortis, alors
+la requête devra s'exécuter sans perte de temps supplémentaire et sans
+introduire à l'intérieur de celle-ci des appels à des conversions
+implicites non nécessaires. 
+</para>
+
+<para>
+De plus, si une requête nécessite habituellement une conversion
+implicite pour une fonction et si l'utilisateur définit une nouvelle
+fonction avec les types des arguments corrects, l'analyseur devrait
+utiliser cette nouvelle fonction et ne fera plus des conversions
+implicites en utilisant l'ancienne fonction.
+</para>
+</listitem>
+</itemizedlist>
+</para>
+
+</sect1>
+
+<sect1 id="typeconv-oper">
+<title>Opérateurs</title>
+
+<indexterm zone="typeconv-oper">
+ <primary>opérateur</primary>
+ <secondary>résolution de types dans un appel</secondary>
+</indexterm>
+
+  <para>
+   L'opérateur spécifique à employer dans un appel d'opérateurs
+   est déterminé par la procédure ci-dessous.  Notez que cette
+   procédure est indirectement affectée par l'ordre d'insertion des
+   opérateurs.  Regardez la <xref linkend="sql-precedence"> pour plus
+   de détails.
+  </para>
+
+<procedure>
+<title>Résolution de types pour les opérateurs</title>
+
+<step performance="required">
+<para>
+Sélectionner les opérateurs à examiner depuis le catalogue système
+<classname>pg_operator</classname>.  Si un nom non-qualifié
+d'opérateur était utilisé (le cas habituel), les opérateurs examinés
+sont ceux avec un nom et un nombre d'arguments corrects et qui sont
+visibles dans le chemin de recherche courant (regardez la
+<xref linkend="ddl-schemas-path">).  Si un nom qualifié d'opérateur
+a été donné, seuls les opérateurs dans le schéma spécifique sont
+examinés.
+</para>
+
+<substeps>
+<step performance="optional">
+<para>
+Si un chemin de recherche trouve de nombreux opérateurs avec des types
+d'arguments identiques, seul celui apparaissant le plus tôt dans le
+chemin sera examiné.  Mais les opérateurs avec des types d'arguments
+différents sont examinés sur une base d'égalité indépendamment de leur
+position dans le chemin de recherche.
+</para>
+</step>
+</substeps>
+</step>
+
+<step performance="required">
+<para>
+Vérifier que l'opérateur accepte le type exact des arguments en
+entrée.  Si un opérateur existe (il peut en avoir uniquement un qui
+corresponde exactement dans l'ensemble des opérateurs considérés),
+utiliser cet opérateur.
+</para>
+
+<substeps>
+<step performance="optional">
+<para>
+Si un argument lors d'une invocation d'opérateur binaire est de type
+<type>inconnu</type>, alors considérer pour ce contrôle que c'est le
+même type que l'autre argument.  Les autres cas impliquant le type
+<type>inconnu</type> ne trouveront jamais une correspondance à ce
+niveau.
+</para>
+</step>
+</substeps>
+</step>
+
+<step performance="required">
+<para>
+Regarder pour la meilleure correspondance. 
+</para>
+<substeps>
+<step performance="required">
+<para>
+Se débarrasser des opérateurs candidats pour lesquels les types en
+entrée ne correspondent pas et qui ne peuvent pas être convertis (en
+utilisant une conversion implicite) pour correspondre.
+Le type <type>inconnu</type> est supposé être convertible vers
+n'importe quoi. Si un candidat reste, utiliser le, sinon aller à la
+prochaine étape.
+</para>
+</step>
+<step performance="required">
+<para>
+Parcourir tous les candidats et garder ceux avec la correspondance la
+plus exacte par rapport aux types en entrée.  (Les domaines sont
+considérés de la même façon que leur type de base pour cette étape.)
+Garder tous les candidats si aucun n'a de correspondances exactes.  Si
+seulement un candidat reste, utiliser le&nbsp;; sinon aller à la prochaine
+étape.
+</para>
+</step>
+<step performance="required">
+<para>
+Parcourir tous les candidats et garder ceux qui acceptent les types
+préférés (de la catégorie des types de données en entrée) aux positions
+où la conversion de types aurait été requise. 
+Garder tous les candidats si aucun n'accepte les types préférés.  Si
+seulement un candidat reste, utiliser le&nbsp;; sinon aller à la prochaine
+étape.
+</para>
+</step>
+<step performance="required">
+<para>
+Si des arguments en entrée sont <type>inconnus</type>, vérifier la
+catégorie des types acceptés à la position de ces arguments par les
+candidats restants. À chaque position, sélectionner la catégorie
+<type>chaîne de caractères</type> si un des candidats accepte cette
+catégorie.  (Cette tendance envers les chaînes de caractères est
+appropriée depuis que le terme type-inconnu ressemble à une chaîne de
+caractères.)  Dans le cas contraire, si tous les candidats restants
+acceptent la même catégorie de types, sélectionner cette catégorie.
+Dans le cas contraire échouer car le choix correct ne peut pas être
+déduit sans plus d'indices.  Se débarrasser maintenant des candidats qui
+n'acceptent pas la catégorie sélectionnée.  De plus, si des candidats
+acceptent un type préféré comme argument donné, se débarrasser des
+candidats qui acceptent, pour cet argument, les types qui ne sont pas
+préférés.
+</para>
+</step>
+<step performance="required">
+<para>
+Si seulement un candidat reste, utiliser le.  Si aucun candidat ou si
+plus d'un candidat reste, alors échouer.
+</para>
+</step>
+</substeps>
+</step>
+</procedure>
+
+<para>
+Quelques exemples suivent.
+</para>
+
+<example>
+<title>Résolution de types pour l'opérateur exponentiel</title>
+
+<para>
+Il n'y a qu'un seul opérateur exponentiel défini dans le catalogue et
+il prend deux arguments de type <type>double precision</type> (double précision).
+L'analyseur assigne initialement le type <type>integer</type> (entier)
+aux deux arguments de cette expression&nbsp;:
+<screen>
+SELECT 2 ^ 3 AS "exp";
+
+ exp
+-----
+   8
+(1 row)
+</screen>
+
+L'analyseur fait donc une conversion de types sur les deux opérandes et
+la requête est équivalente à
+
+<screen>
+SELECT CAST(2 AS double precision) ^ CAST(3 AS double precision) AS "exp";
+</screen>
+</para>
+</example>
+
+<example>
+<title>Résolution de types pour les opérateurs de concaténation de chaînes</title>
+
+<para>
+La syntaxe d'une chaîne de caractères est utilisée pour travailler avec
+les types chaînes mais aussi avec les types d'extensions complexes.
+Les chaînes de caractères avec un type non spécifié sont comparées avec
+les opérateurs candidats probables.
+</para>
+
+<para>
+Un exemple avec un argument non spécifié&nbsp;:
+<screen>
+SELECT text 'abc' || 'def' AS "text and unknown";
+
+ text and unknown
+------------------
+ abcdef
+(1 row)
+</screen>
+</para>
+
+<para>
+Dans ce cas, l'analyseur cherche à voir s'il existe un opérateur
+prenant <type>text</type> pour ses deux arguments.  Comme il y en a un,
+il suppose que le second argument devrait être interprété comme un type
+<type>text</type>.
+</para>
+
+<para>
+Voici une concaténation sur des types non spécifiés&nbsp;:
+<screen>
+SELECT 'abc' || 'def' AS "unspecified";
+
+ unspecified
+-------------
+ abcdef
+(1 row)
+</screen>
+</para>
+
+<para>
+Dans ce cas, il n'y a aucune allusion initiale sur quel type utiliser
+puisqu'aucun type n'est spécifié dans la requête.  Donc l'analyseur
+regarde pour tous les opérateurs candidats et trouve qu'il existe des
+candidats acceptant en entrée la catégorie chaîne de caractères
+(string) et la catégorie morceaux de chaînes (bit-string).  Puisque la
+catégorie chaînes de caractères est préférée quand elle est disponible,
+cette catégorie est sélectionnée. Le type préféré pour la catégorie
+chaînes étant <type>texte</type> (text), ce type est utilisé comme le type
+spécifique pour résoudre les types inconnus.
+</para>
+</example>
+
+<example>
+<title>Résolution de types pour les opérateurs de valeur absolue et de négation</title>
+
+<para>
+Le catalogue d'opérateurs de <productname>PostgreSQL</productname> a
+plusieurs entrées pour l'opérateur de préfixe <literal>@</>. Ces entrées
+implémentent toutes des opérations de valeur absolue pour des types de
+données numériques variées.  Une de ces entrées est pour le type
+<type>float8</type> (réel) qui est le type préféré dans la catégorie
+des numériques.  Par conséquent, <productname>PostgreSQL</productname>
+utilisera cette entrée quand il sera en face d'un argument non numérique&nbsp;:
+<screen>
+SELECT @ '-4.5' AS "abs";
+ abs
+-----
+ 4.5
+(1 row)
+</screen>
+Ici le système a effectué une conversion implicite du type
+<type>text</type> (texte) au type <type>float8</type> (réel) avant
+d'appliquer l'opérateur choisi.  Nous pouvons vérifier que
+<type>float8</type> et pas un autre type a été utilisé&nbsp;:
+<screen>
+SELECT @ '-4.5e500' AS "abs";
+
+ERROR:  "-4.5e500" is out of range for type double precision
+</screen>
+</para>
+
+<para>
+D'un autre côté, l'opérateur préfixe <literal>~</> (négation bit par bit) est
+défini seulement pour les types entiers et non pas pour
+<type>float8</type> (réel).  Ainsi, si nous essayons un cas similaire
+avec <literal>~</>, nous obtenons&nbsp;:
+<screen>
+SELECT ~ '20' AS "negation";
+
+ERROR:  operator is not unique: ~ "unknown"
+HINT:  Could not choose a best candidate operator. You may need to add explicit
+type casts.
+</screen>
+Ceci se produit parce que le système ne peut pas décider quel opérateur
+doit être préféré parmi les différents opérateurs <literal>~</>
+possibles.  Nous pouvons l'aider avec une conversion explicite&nbsp;:
+<screen>
+SELECT ~ CAST('20' AS int8) AS "negation";
+
+ negation
+----------
+      -21
+(1 row)
+</screen>
+</para>
+</example>
+
+</sect1>
+
+<sect1 id="typeconv-func">
+<title>Fonctions</title>
+
+<indexterm zone="typeconv-func">
+ <primary>fonction</primary>
+ <secondary>résolution de types dans une invocation</secondary>
+</indexterm>
+
+  <para>
+   La fonction spécifique à utiliser dans une invocation de fonctions
+   est déterminée selon les étapes suivantes.
+  </para>
+
+<procedure>
+<title>Résolution de types pour les fonctions</title>
+
+<step performance="required">
+<para>
+Sélectionner les fonctions à examiner depuis le catalogue système
+<classname>pg_proc</classname>.  Si un nom non-qualifié de fonction
+était utilisé, les fonctions examinées sont celles avec un nom et un
+nombre d'arguments corrects et qui sont visibles dans le chemin de
+recherche courant (regardez la <xref linkend="ddl-schemas-path">).  Si
+un nom qualifié de fonctions a été donné, seules les fonctions dans le
+schéma spécifique sont examinées.
+</para>
+
+<substeps>
+<step performance="optional">
+<para>
+Si un chemin de recherche trouve de nombreuses fonctions avec des types
+d'arguments identiques, seule celle apparaissant le plus tôt dans le
+chemin sera examinée.  Mais les fonctions avec des types d'arguments
+différents sont examinées sur une base d'égalité indépendamment de leur
+position dans le chemin de recherche.
+</para>
+</step>
+</substeps>
+</step>
+
+<step performance="required">
+<para>
+Vérifier que la fonction accepte le type exact des arguments en entrée.
+Si une fonction existe (il peut en avoir uniquement une qui corresponde
+exactement dans l'ensemble des fonctions considérées), utiliser cette
+fonction.  (Les cas impliquant le type <type>inconnu</type> ne
+trouveront jamais de correspondance à cette étape.)
+</para>
+</step>
+
+<step performance="required">
+<para>
+Si aucune correspondance n'est trouvée, regarder si l'appel à la
+fonction apparaît être une requête triviale de conversion de types.
+Cela arrive si l'appel à la fonction a juste un argument et si le nom
+de la fonction est le même que le nom (interne) de certains types de
+données.  De plus, l'argument de la fonction doit être soit un type
+inconnu soit un type qui a une compatibilité binaire avec le type de
+données nommés.  Quand ces conditions sont réunies, l'argument de la
+fonction est converti vers le type de données nommé sans aucun appel
+effectif à la fonction.
+</para>
+</step>
+<step performance="required">
+<para>
+Regarder pour la meilleure correspondance.
+</para>
+<substeps>
+<step performance="required">
+<para>
+Se débarrasser des fonctions candidates pour lesquelles les types en
+entrée ne correspondent pas et qui ne peuvent pas être convertis (en
+utilisant une conversion implicite) pour correspondre.  Le type
+<type>inconnu</type> est supposé être convertible vers n'importe quoi.
+Si seulement un candidat reste, utiliser le, sinon aller à la prochaine
+étape.
+</para>
+</step>
+<step performance="required">
+<para>
+Parcourir tous les candidats et garder ceux avec la correspondance la
+plus exacte par rapport aux types en entrée.  (Les domaines sont
+considérés de la même façon que leur type de base pour cette étape.)
+Garder tous les candidats si aucun n'a de correspondances exactes.  Si
+seulement un candidat reste, utiliser le&nbsp;; sinon aller à la prochaine
+étape.
+</para>
+</step>
+<step performance="required">
+<para>
+Parcourir tous les candidats et garder ceux qui acceptent les types
+préférés (de la catégorie des types de données en entrée) aux positions
+où la conversion de types aurait été requise.  Garder tous les candidats
+si aucun n'accepte les types préférés.  Si seulement un candidat
+reste, utiliser le&nbsp;; sinon aller à la prochaine étape.
+</para>
+</step>
+<step performance="required">
+<para>
+Si des arguments en entrée sont <type>inconnu</type>, vérifier les
+catégories de types acceptées à la position de ces arguments par les
+candidats restants. À chaque position, sélectionner la catégorie
+<type>chaîne de caractères</type> si un des candidats accepte cette
+catégorie.  (Cette tendance envers les chaînes de caractères est
+appropriée depuis que le terme type-inconnu ressemble à une chaîne de
+caractères.)  Dans le cas contraire, si tous les candidats restants
+acceptent la même catégorie de types, sélectionner cette catégorie.
+Dans le cas contraire échouer car le choix correct ne peut pas être
+déduit sans plus d'indices.  Se débarrasser maintenant des candidats qui
+n'acceptent pas la catégorie sélectionnée.  De plus, si des candidats
+acceptent un type préféré comme argument donné, se débarrasser des
+candidats qui acceptent, pour cet argument, les types qui ne sont pas
+préférés.
+</para>
+</step>
+<step performance="required">
+<para>
+Si seulement un candidat reste, utiliser le.  Si aucun candidat ou si
+plus d'un candidat reste, alors échouer.
+</para>
+</step>
+</substeps>
+</step>
+</procedure>
+
+<para>
+Notez que les règles de <quote>correspondance optimale</> sont
+identiques pour la résolution de types concernant les opérateurs et les
+fonctions.  Quelques exemples suivent.
+</para>
+
+<example>
+<title>Résolution de types pour les arguments de la fonction arrondie</title>
+
+<para>
+Il n'existe qu'une seule fonction <function>round</function>
+avec deux arguments.  (Le premier est un <type>numérique</type>, le
+second est un <type>entier</type>.  Ainsi, la requête suivante
+convertie automatiquement le type du premier argument de
+<type>entier</type> vers <type>numérique</type>.
+
+<screen>
+SELECT round(4, 4);
+
+ round
+--------
+ 4.0000
+(1 row)
+</screen>
+
+La requête est en fait transformée par l'analyseur en
+<screen>
+SELECT round(CAST (4 AS numeric), 4);
+</screen>
+</para>
+
+<para>
+Puisque le type <type>numérique</type> est initialement assigné aux
+constantes numériques avec un point décimal, la requête suivante ne
+requièrera pas une conversion de types et pourra par conséquent être
+un peu plus efficace&nbsp;:
+<screen>
+SELECT round(4.0, 4);
+</screen>
+</para>
+</example>
+
+<example>
+<title>Résolution de types pour les fonctions retournant un segment de chaîne</title>
+
+<para>
+Il existe plusieurs fonctions <function>substr</function>, une d'entre
+elles prend les types <type>texte</type> et <type>entier</type>.  Si
+cette fonction est appelée avec une constante de chaînes d'un type
+inconnu, le système choisi la fonction candidate qui accepte un
+argument issu de la catégorie préférée <literal>chaînes</literal>
+(c'est-à-dire de type <type>texte</type>).
+
+<screen>
+SELECT substr('1234', 3);
+
+ substr
+--------
+     34
+(1 row)
+</screen>
+</para>
+
+<para>
+Si la chaîne de caractères est déclarée comme étant du type
+<type>varchar</type> (chaîne de caractères de longueur variable), ce
+qui peut être le cas si elle vient d'une table, alors l'analyseur
+essayera de la convertir en <type>texte</type>&nbsp;:
+<screen>
+SELECT substr(varchar '1234', 3);
+
+ substr
+--------
+     34
+(1 row)
+</screen>
+
+Ceci est transformé par l'analyseur pour efficacement devenir
+<screen>
+SELECT substr(CAST (varchar '1234' AS text), 3);
+</screen>
+</para>
+<para>
+<note>
+<para>
+L'analyseur apprend depuis le catalogue <structname>pg_cast</> que les
+types <type>texte</type> et <type>varchar</type> ont une compatibilité
+binaire, ce qui veut dire que l'un peut être passé à une fonction qui
+accepte l'autre sans avoir à faire aucune conversion physique.  Par
+conséquent, aucun appel de conversion explicite de types n'est
+réellement inséré dans ce cas.
+</para>
+</note>
+</para>
+
+<para>
+Et si la fonction est appelée avec un argument de type
+<type>entier</type>, l'analyseur essayera de le convertir en
+<type>texte</type>&nbsp;:
+<screen>
+SELECT substr(1234, 3);
+
+ substr
+--------
+     34
+(1 row)
+</screen>
+
+Ceci est en fait exécuté de la façon suivante&nbsp;:
+<screen>
+SELECT substr(CAST (1234 AS text), 3);
+</screen>
+Cette transformation automatique peut réussir parce qu'il y a une
+invocation de conversion implicite du type <type>entier</type> vers
+le type <type>texte</type>. 
+</para>
+</example>
+
+</sect1>
+
+<sect1 id="typeconv-query">
+<title>Stockage de valeurs</title>
+
+  <para>
+   Les valeurs qui doivent être insérées dans une table sont converties
+   vers le type de données de la colonne de destination selon les
+   règles suivantes.
+  </para>
+
+<procedure>
+<title>Conversion de types pour le stockage de valeurs</title>
+
+<step performance="required">
+<para>
+Vérifier qu'il y ait une correspondance exacte avec la cible.
+</para>
+</step>
+
+<step performance="required">
+<para>
+Dans le cas contraire, essayer de convertir l'expression vers le type
+cible.  Cela réussira s'il y a une conversion (cast) enregistrée entre
+ces deux types.  Si une expression est de type inconnu, le contenu de
+la chaîne littérale sera fourni à l'entrée de la routine de conversion
+pour le type cible.
+</para>
+</step>
+
+<step performance="required">
+<para>
+Vérifier s'il y a une conversion de taille pour le type cible. Une conversion
+de taille est une conversion d'un type vers lui-même. Si elle est trouvée dans
+le catalogue <structname>pg_cast</>, appliquez-la à l'expression avant de la
+stocker dans la colonne de destination. La fonction d'implémentation pour une
+telle conversion prend toujours un paramètre supplémentaire de type
+<type>integer</type>, qui reçoit la longueur déclarée de la colonne de
+destination (en fait, il s'agit de la valeur <structfield>atttypmod</>&nbsp;;
+l'interprétation de <structfield>atttypmod</> varie pour les différents types de
+données). La fonction de conversion est responsable de l'application de toute
+sémantique dépendante de la longueur comme la vérification de la taille ou une
+troncature.
+</para>
+</step>
+
+</procedure>
+
+<example>
+<title>Conversion de types pour le stockage de <type>caractères</type></title>
+
+<para>
+Pour une colonne cible déclarée comme <type>character(20)</type>, la
+déclaration suivante assure que la valeur stockée a la taille correcte&nbsp;: 
+
+<screen>
+CREATE TABLE vv (v character(20));
+INSERT INTO vv SELECT 'abc' || 'def';
+SELECT v, length(v) FROM vv;
+
+          v           | length
+----------------------+--------
+ abcdef               |     20
+(1 row)
+</screen>
+</para>
+
+<para>
+Ce qui s'est réellement passé ici, c'est que les deux types inconnus
+sont résolus en <type>texte</type> par défaut, permettant à l'opérateur
+<literal>||</literal> de les résoudre comme une concaténation de
+<type>texte</type>.  Ensuite, le résultat <type>texte</type> de
+l'opérateur est converti en <type>bpchar</type> (
+<quote>blank-padded char</>, le nom interne du type de données
+<type>character</type> (caractère)) pour correspondre au type de la
+colonne cible.  (Depuis que les types <type>texte</type> et
+<type>bpchar</type> ont une compatibilité binaire, cette conversion
+n'insère aucun appel réel à une fonction.)  Enfin, la fonction de
+taille <literal>bpchar(bpchar, integer)</literal> est trouvée dans le
+catalogue système et appliquée au résultat de l'opérateur et à la
+longueur de la colonne stockée.  Cette fonction de type spécifique
+effectue le contrôle de la longueur requise et ajoute des espaces pour
+combler la chaîne.
+</para>
+</example>
+</sect1>
+
+<sect1 id="typeconv-union-case">
+<title>Constructions <literal>UNION</literal>, <literal>CASE</literal> et
+<literal>ARRAY</literal></title>
+
+<indexterm zone="typeconv-union-case">
+ <primary>UNION</primary>
+ <secondary>détermination du type de résultat</secondary>
+</indexterm>
+
+<indexterm zone="typeconv-union-case">
+ <primary>CASE</primary>
+ <secondary>détermination du type de résultat</secondary>
+</indexterm>
+
+<indexterm zone="typeconv-union-case">
+ <primary>ARRAY</primary>
+ <secondary>détermination du type de résultat</secondary>
+</indexterm>
+
+<para>
+Les constructions SQL avec des <literal>UNION</> doivent
+potentiellement faire correspondre des types différents pour avoir un
+ensemble unique dans le résultat.  L'algorithme de résolution est
+appliqué séparément à chaque colonne de sortie d'une requête d'union.
+Les constructions <literal>INTERSECT</> et <literal>EXCEPT</> résolvent
+des types différents de la même manière qu'<literal>UNION</>.  Les
+constructions <literal>CASE</> et <literal>ARRAY</> utilisent le même
+algorithme  pour faire correspondre les expressions qui les composent et
+sélectionner un type de résultat.
+</para>
+
+<procedure>
+<title>Résolution des types pour <literal>UNION</literal>, 
+<literal>CASE</literal> et <literal>ARRAY</literal></title>
+
+<step performance="required">
+<para>
+Si toutes les entrées sont du type <type>inconnu</type>, résoudre comme
+étant du type <type>texte</type> (le type préféré de la catégorie
+chaîne).  Dans le cas contraire, ignorer les entrées
+<type>inconnues</type> pendant le choix du type du résultat.
+</para>
+</step>
+
+<step performance="required">
+<para>
+Si toutes les entrées non-inconnues ne sont pas toutes de la même
+catégorie, échouer.
+</para>
+</step>
+
+<step performance="required">
+<para>
+Choisir la première entrée non-inconnue qui soit un type préféré dans
+sa catégorie ou autoriser toutes les entrées non-inconnues à être
+implicitement converties vers elle.
+</para>
+</step>
+
+<step performance="required">
+<para>
+Convertir toutes les entrées vers le type sélectionné.
+</para>
+</step>
+</procedure>
+
+<para>
+Quelques exemples suivent.
+</para>
+
+<example>
+<title>Résolution de types avec des types sous-spécifiés dans une union</title>
+
+<para>
+<screen>
+SELECT text 'a' AS "text" UNION SELECT 'b';
+
+ text
+------
+ a
+ b
+(2 rows)
+</screen>
+Ici, la chaîne de type inconnu <literal>'b'</literal> sera convertie
+vers le type <type>texte</type>.
+</para>
+</example>
+
+<example>
+<title>Résolution de types dans une union simple</title>
+
+<para>
+<screen>
+SELECT 1.2 AS "numeric" UNION SELECT 1;
+
+ numeric
+---------
+       1
+     1.2
+(2 rows)
+</screen>
+Le littéral <literal>1.2</> est du type <type>numérique</> (numeric en
+anglais) et la valeur <literal>1</>, de type <type>entier</type>, peut
+être convertie implicitement vers un type <type>numérique</>, donc ce
+type est utilisé.
+</para>
+</example>
+
+<example>
+<title>Résolution de types dans une union transposée</title>
+
+<para>
+<screen>
+SELECT 1 AS "real" UNION SELECT CAST('2.2' AS REAL);
+
+ real
+------
+    1
+  2.2
+(2 rows)
+</screen>
+Dans cet exemple, le type <type>real</> (réel) ne peut pas être
+implicitement converti en <type>integer</> (entier) mais un
+<type>integer</> peut être implicitement converti en <type>real</>&nbsp;; le
+résultat de l'union est résolu comme étant un <type>real</>.
+</para>
+</example>
+
+</sect1>
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:t
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

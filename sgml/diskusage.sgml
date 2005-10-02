@@ -1,0 +1,182 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/diskusage.sgml,v 1.8 2005/07/15 06:14:21 guillaume Exp $
+-->
+
+<chapter id="diskusage">
+ <title>Surveillance de l'utilisation de l'espace disque</title>
+
+ <para>
+  Ce chapitre traite de la manière d'effectuer une surveillance sur
+  l'utilisation de l'espace disque par un système de bases de données 
+  <productname>PostgreSQL</productname>.
+  
+ </para>
+
+ <sect1 id="disk-usage">
+  <title>Déterminer l'utilisation de l'espace disque</Title>
+
+  <indexterm zone="disk-usage">
+   <primary>utilisation de l'espace disque</primary>
+  </indexterm>
+
+  <para>
+   Chaque table possède un fichier d'en-tête principal dans lequel la plupart
+   des données sont stockées. Si la table comprend des colonnes avec des
+   valeurs potentiellement larges, il existe aussi un fichier <acronym>TOAST</>
+   associé à la table, qui est utilisé pour stocker les valeurs trop larges pour
+   tenir confortablement dans la table principale (voir <xref
+   linkend="storage-toast">). Il y aura un index sur la table <acronym>TOAST</>,
+   si elle existe. Il pourrait aussi y avoir des index associés à la table de
+   base. Chaque table et index sont stocké dans un fichier séparé &mdash;
+   parfois plusieurs fichiers si ce fichier devait dépasser la taille
+   d'1&nbsp;Go. Les conventions de nommage de ces fichiers sont décrites dans
+   <xref linkend="storage-file-layout">.
+  </para>
+
+  <para>
+  Vous pouvez surveiller l'espace disque en utilisant trois méthodes&nbsp;:
+  depuis <application>psql</application> en utilisant les résultats de 
+  la commande <command>VACUUM</command>, depuis <application>psql</application>
+  en utilisant l'outil se trouvant dans <filename>contrib/dbsize</filename>,
+  et depuis la ligne de commande en utilisant l'outil contenu dans 
+  <filename>contrib/oid2name</filename>. En utilisant 
+  <application>psql</application> sur une base de données sur laquelle ont
+  été lancés <command>VACUUM</command> ou <command>ANALYZE</command>,
+  vous pouvez lancer des requêtes vous permettant d'obtenir des informations
+  sur la place occupée par n'importe quelle table&nbsp;:
+<programlisting>
+SELECT relfilenode, relpages FROM pg_class WHERE relname = 'customer';
+
+ relfilenode | relpages 
+-------------+----------
+       16806 |       60
+(1 ligne)
+</programlisting>
+   Chaque page utilise en général 8&nbsp;Ko de d'espace disque (ne pas oublier
+   que <structfield>relpage</structfield> n'est mis à jour que par l'utilisation
+   des commandes <command>VACUUM</command> et <command>ANALYZE</command> et
+   par quelques commandes DDL comme <command>CREATE INDEX</>.) La valeur de
+   <structfield>relfilenode</> est d'un grand intérêt si vous voulez
+   examiner le fichier de la table directement.
+  </para>
+
+  <para>
+   Afin de connaître l'espace disque utilisé par les tables 
+   <acronym>TOAST</acronym>, lancez une requête similaire à la suivante&nbsp;:
+<programlisting>
+SELECT relname, relpages
+    FROM pg_class,
+         (SELECT reltoastrelid FROM pg_class
+          WHERE relname = 'customer') ss
+    WHERE oid = ss.reltoastrelid
+       OR oid = (SELECT reltoastidxid FROM pg_class
+                 WHERE oid = ss.reltoastrelid)
+    ORDER BY relname;
+
+       relname        | relpages 
+----------------------+----------
+ pg_toast_16806       |        0
+ pg_toast_16806_index |        1
+</programlisting>
+  </para>
+
+  <para>
+   Vous pouvez afficher également la taille des index&nbsp;:
+<programlisting>
+SELECT c2.relname, c2.relpages
+    FROM pg_class c, pg_class c2, pg_index i
+    WHERE c.relname = 'customer'
+        AND c.oid = i.indrelid
+        AND c2.oid = i.indexrelid
+        ORDER BY c2.relname;
+
+       relname        | relpages 
+----------------------+----------
+ customer_id_indexdex |       26
+</programlisting>
+  </para>
+
+  <para>
+   Vous pouvez trouver les tables les plus grosses en utilisant la requête
+   suivante&nbsp;:
+<programlisting>
+SELECT relname, relpages FROM pg_class ORDER BY relpages DESC;
+
+       relname        | relpages 
+----------------------+----------
+ bigtable             |     3290
+ customer             |     3144
+</programlisting>
+  </para>
+
+  <para>
+   <filename>contrib/dbsize</filename> crée dans votre base de données 
+   des fonctions permettant de trouver la taille des tables ou de la 
+   base de données à partir de <application>psql</application> sans avoir 
+   besoin d'exécuter <command>VACUUM</command> ou <command>ANALYZE</command>
+   préalablement.
+  </para>
+
+  <para>
+   Vous pouvez aussi utiliser l'utilitaire <filename>contrib/oid2name</filename>
+   afin d'afficher l'utilisation du disque. Lisez les exemples contenus dans 
+   le fichier <filename>README.oid2name</filename> dans ce même répertoire.
+   Il inclut un script permettant d'afficher la quantité de disque utilisée par
+   chaque base de données.
+  </para>
+ </sect1>
+
+ <sect1 id="disk-full">
+  <title>Échec sur disque plein</title>
+
+  <para>
+   Concernant la surveillance de l'espace disque, la tâche la plus importante
+   d'un administrateur de base de données est de s'assurer que le disque ne
+   soit pas complètement rempli. Un disque de données rempli ne corrompra pas
+   les données mais il pourrait bien empêcher des activités utiles. S'il s'agit
+   du disque contenant les fichier WAL, le serveur de la base de données fera un
+   PANIC et un arrêt pourrait survenir.
+  </para>
+
+  <para>
+   Si vous ne pouvez pas libérer un espace supplémentaire sur le disque en
+   supprimant d'autres choses, vous pouvez déplacer quelques fichiers de la base
+   de données vers d'autres systèmes de fichiers en utilisant les espaces
+   logiques. Voir <xref linkend="manage-ag-tablespaces"> pour plus
+   d'informations là-dessus.
+  </para>
+
+  <tip>
+   <para>
+   Certains systèmes de fichiers réagissent mal lorsqu'ils sont presque pleins.
+   À toutes fins utiles, n'attendez pas que le disque soit complètement plein
+   pour agir.
+   </para>
+  </tip>
+
+  <para>
+   Si votre système supporte les quotas disque par utilisateur, alors la
+   base de données sera naturellement sujette au quota placé sur
+   l'utilisateur qui exécute le serveur de base de données. Dépasser le
+   quota aura les mêmes mauvais effets que d'avoir un disque complètement
+   rempli.
+  </para>
+ </sect1>
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->
