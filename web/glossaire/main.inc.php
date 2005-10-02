@@ -1,3 +1,0 @@
-<?
-DEFINE('XML_HEADER','<?xml version="1.0" encoding="iso-8859-1"?>');
-?>
