@@ -1,0 +1,299 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/indexcost.sgml,v 1.5 2005/01/19 23:08:49 guillaume Exp $
+-->
+
+ <chapter id="indexcost">
+  <title>Fonctions d'estimation du coût des index</title>
+
+  <note>
+   <title>Auteur</title>
+
+   <para>
+    Ecrit par Tom Lane (<email>tgl@sss.pgh.pa.us</email>) le 2000-01-24
+   </para>
+  </note>
+
+   <note>
+    <para>
+     Ceci pourra faire partie d'un futur chapitre plus étoffé sur la
+     façon d'écrire des nouvelles méthodes d'accès aux index.
+    </para>
+   </note>
+
+  <para>
+   Chaque méthode d'accès aux index doit fournir une fonction d'estimation de
+   coût qui est utilisée par l'optimiseur de requêtes. L'OID de procédure de
+   cette fonction est donné dans le champ <literal>amcostestimate</literal>
+   de la ligne correspondant à cette méthode d'accès dans la table
+   <literal>pg_am</literal>.
+
+   <note>
+    <para>
+     Avant <productname>PostgreSQL</productname> 7.0, un mécanisme différent
+     était utilisé pour enregistrer les fonctions d'estimation de coût 
+     spécifiques des index.
+    </para>
+   </note>
+  </para>
+
+  <para>
+   La fonction amcostestimate reçoit en paramètres une liste de clauses
+   WHERE pour lesquelles il a été déterminé qu'elles peuvent utiliser
+   cet index. Elle doit retourner le coût estimé d'accès à l'index et la
+   sélectivité de la clause WHERE, c'est à dire la fraction de la table
+   principale qui sera retournée par le parcours de l'index.
+   Dans les cas simples, pratiquement tout le travail d'estimation de coût 
+   peut être réalisé en appelant des routines standard de l'optimiseur;
+   La fonction amcostestimate ne sert qu'à permettre à la méthode d'accès
+   d'ajouter sa connaissance spécifique du type d'index, au cas où il serait 
+   possible d'améliorer l'estimation standard.
+  </para>
+
+  <para>
+   Chaque fonction amcostestimate doit avoir la signature suivante:
+
+   <programlisting>
+void
+amcostestimate (Query *root,
+                RelOptInfo *rel,
+                IndexOptInfo *index,
+                List *indexQuals,
+                Cost *indexStartupCost,
+                Cost *indexTotalCost,
+                Selectivity *indexSelectivity,
+                double *indexCorrelation);
+   </programlisting>
+
+   Les quatre premiers paramètres sont des entrées:
+
+   <variablelist>
+    <varlistentry>
+     <term>root</term>
+     <listitem>
+      <para>
+       La requête traitée.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>rel</term>
+     <listitem>
+      <para>
+       La relation sur laquelle porte l'index.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>index</term>
+     <listitem>
+      <para>
+       L'index lui même.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>indexQuals</term>
+     <listitem>
+      <para>
+       Liste des clauses qualifiées pour l'index (implicitement
+       reliées par des ET logiques); une liste NIL indique qu'aucune
+       clause n'est qualifiée.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+
+  <para>
+   Les quatre derniers paramètres sont des sorties passées par référence:
+
+   <variablelist>
+    <varlistentry>
+     <term>*indexStartupCost</term>
+     <listitem>
+      <para>
+       Coût du démarrage du traitement de l'index
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>*indexTotalCost</term>
+     <listitem>
+      <para>
+       Coût total de traitement de l'index
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>*indexSelectivity</term>
+     <listitem>
+      <para>
+       Sélectivité de l'index
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>*indexCorrelation</term>
+     <listitem>
+      <para>
+       Coefficient de corrélation entre l'ordre de lecture de l'index
+       et l'ordre de la table sous-jacente.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+
+  <para>
+   Notez que les fonctions d'estimation de coût doivent être écrites en C,
+   pas en SQL ou avec un autre des langages de programmation disponibles,
+   car elles doivent accéder aux structures de données internes de 
+   l'optimiseur.
+  </para>
+
+  <para>
+   Le coût d'accès aux index doit être calculé avec les unités utilisées dans
+   <filename>src/backend/optimizer/path/costsize.c</filename>: la lecture 
+   séquentielle d'un bloc a un coût de 1,0, une lecture non séquentielle a un
+   coût de random_page_cost, et le coût de traitement d'une ligne d'index a
+   généralement un coût de cpu_index_tuple_cost (qui est un paramètre
+   réglable par l'utilisateur).
+   De plus, un multiple approprié de cpu_operator_cost doit être ajouté pour
+   chaque opérateur de comparaison appelé lors du traitement de l'index, et
+   spécialement pour l'évaluation des indexQuals eux-mêmes.
+  </para>
+
+  <para>
+   Le coût d'accès doit inclure chaque coût disque et CPU associé au parcours
+   de l'index lui même, mais PAS les coûts associés à la recherche ou au 
+   traitement des lignes de la table principale qui sont identifiées par
+   l'index.
+  </para>
+
+  <para>
+   Le <quote>coût de départ</quote> est la part du coût total de parcours qui
+   doit être dépensée avant de pouvoir retrouver la première ligne. Pour la
+   plupart des index, il peut être mis à zéro, mais un index qui a un coût de 
+   départ élevé peut vouloir lui donner un coût supérieur à zéro.
+  </para>
+
+  <para>
+   La sélectivité de l'index indexSelectivity doit indiquer la fraction de
+   la table principale qui sera retournée par le parcours de l'index.
+   Dans le cas d'un index peu intéressant, la sélectivité sera typiquement
+   supérieure à la fraction des lignes qui passent réellement les conditions
+   données.
+  </para>
+
+  <para>
+   indexCorrelation doit donner la corrélation (entre -1,0 et 1,0) entre l'ordre
+   de l'index et l'ordre de la table. Ce paramètre est utilisé pour ajuster le
+   coût de lecture de la table principale.
+  </para>
+
+  <procedure>
+   <title>Estimation de coût</title>
+   <para>
+    Une estimation de coût classique se fait comme suit:
+   </para>
+
+   <step>
+    <para>
+     Estimez et retournez la fraction de la table principale qui sera visitée,
+     en fonction des conditions qualifiés. En l'absence de connaissance
+     spécifique au type d'index, utilisez la fonction standard de l'optimiseur,
+     <function>clauselist_selectivity()</function>:
+
+     <programlisting>
+*indexSelectivity = clauselist_selectivity(root, indexQuals,
+                                           rel->relid, JOIN_INNER);
+     </programlisting>
+    </para>
+   </step>
+
+   <step>
+    <para>
+     Estimez le nombre de lignes d'index qui seront visitées durant le
+      parcours. Pour de nombreux types d'index, cette valeur vaut indexSelectivity
+     fois le nombre de lignes de l'index, mais elle peut valoir plus.
+     (Notez que la taille de l'index en pages et en lignes et disponible dans
+     la structure IndexOptInfo.)
+    </para>
+   </step>
+
+   <step>
+    <para>
+     Estimez le nombre de pages d'index qui seront retournées durant son 
+     parcours.
+     Ce sera peut-être juste indexSelectivity fois la taille de l'index en
+     pages.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     Calculez le coût d'accès à l'index. Un estimateur générique pourrait
+     procéder comme suit:
+
+     <programlisting>
+    /*
+     * La supposition générale est que les pages d'index vont être lues
+     * séquentiellement, si bien qu'elles ont un coût de 1,0 chacune, et
+     * non pas de random_page_cost.
+     * De plus, on ajoute le coût de l'évaluation des conditions pour chaque
+     * ligne d'index. Tous les coûts sont supposés payés incrémentalement
+     * durant le parcours de l'index.
+     */
+    cost_qual_eval(&amp;index_qual_cost, indexQuals);
+    *indexStartupCost = index_qual_cost.startup;
+    *indexTotalCost = numIndexPages +
+        (cpu_index_tuple_cost + index_qual_cost.per_tuple) * numIndexTuples;
+     </programlisting>
+    </para>
+   </step>
+
+   <step>
+    <para>
+     Estimez la corrélation d'index. Pour un index simple ordonné sur un
+     seul champ, cela peut se retrouver dans pg_statistic. 
+     Si vous ne savez pas, mettre zéro (pas de corrélation).
+    </para>
+   </step>
+  </procedure>
+
+  <para>
+   Des exemples de fonctions d'estimation peuvent être trouvés dans 
+   <filename>src/backend/utils/adt/selfuncs.c</filename>.
+  </para>
+
+  <para>
+   Par convention, l'entrée dans <literal>pg_proc</literal> pour une
+   fonction <literal>amcostestimate</literal> a huit arguments tous déclarés
+   comme <type>internal</type> (car aucun n'a un type connu de SQL), et le type
+   retourné est <type>void</type>.
+  </para>
+ </chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->
+

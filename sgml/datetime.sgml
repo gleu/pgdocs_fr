@@ -1,0 +1,1145 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/datetime.sgml,v 1.6 2005/01/10 00:35:00 guillaume Exp $
+-->
+
+ <appendix id="datetime-appendix">
+  <title>Support de Date/Heure</title>
+
+  <para>
+   <productname>PostgreSQL</productname> utilise un parseur heuristique interne
+   pour le support de toutes insertions de date/heure. Les dates et heures sont
+entrées
+   en tant que chaînes, et sont découpées en champs distincts avec une
+détermination
+   préliminaire du type d'information contenu dans le champ. Chaque champ est
+   interpreté et attribu une valeur numérique, ignoré ou rejeté.
+   Le parseur contient des tables de correspondance internes pour tout les
+champs
+   textuels y compris les mois, les jours de la semaine et les fuseaux
+horaires.
+  </para>
+
+  <para>
+   Cette annexe contient des informations sur le contenu de ces tables de
+   correspondance et décrit les méthodes utilisées par le parseur pour décoder
+   les dates et heures.
+  </para>
+
+  <sect1>
+   <title>Interprétation des Entrées Date/Heure</title>
+
+   <para>
+    Les entrées de type date/heure sont toutes décodés en utilisant le processus
+suivant.
+   </para>
+
+   <procedure>
+    <step>
+     <para>
+      Diviser la chaîne d'entrée en marqueurs et cataloguer chaque marqueur en
+tant que
+      une chaîne, heure, fuseau horaire ou nombre.
+     </para>
+
+     <substeps>
+      <step>
+       <para>
+	Si un marqueur numérique contient les deux points (<literal>:</literal>), ceci
+est une
+	chaîne d'heure. Inclure tout les chiffres et deux points suivants.
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si un marqueur numérique contient un tiret (<literal>-</literal>), une barre
+oblique
+	(<literal>/</literal>), ou plus d'un point (<literal>.</literal>), ceci est une
+	chaîne de date qui contient peut être un mois sous forme de texte.
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si un marqueur est uniquement numérique alors il est soit un champ
+simple
+        ou une date concaténée ISO 8601 (i.e.,
+	<literal>19990113</literal> pour le 13 janvier 1999) ou heure
+	(i.e., <literal>141516</literal> pour 14:15:16).
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si le marqueur commence avec un plus (<literal>+</literal>) ou un moins
+	(<literal>-</literal>), alors il est soit un fuseau horaire, soit un champ
+	spécial.
+       </para>
+      </step>
+     </substeps>
+    </step>
+
+    <step>
+     <para>
+      Si un marqueur est une chaîne texte, le comparer avec les différentes chaînes
+possibles.
+     </para>
+     
+     <substeps>
+      <step>
+       <para>
+	Faire une recherche binaire dans la table de correspondance pour le
+marqueur
+	en tant que chaîne spéciale (i.e., <literal>today</literal>),
+	jour (i.e., <literal>Thursday</literal>),
+	mois (i.e., <literal>January</literal>),
+	ou mot bruit (i.e., <literal>at</literal>, <literal>on</literal>).
+       </para>
+
+       <para>
+	Fixer les valeurs de champ et le masque binaire pour les champs.
+	Par exemple, fixer l'année, le mois, le jour pour
+<literal>today</literal>,
+	et aussi l'heure, les minutes, les secondes pour <literal>now</literal>.
+       </para>
+      </step>
+      
+      <step>
+       <para>
+	Si pas trouvé, faire une recherche binaire similaire dans une table de
+correspondance
+	pour faire correspondre le marqueur avec un fuseau horaire.
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si toujours pas trouvé, soulève une erreur.
+       </para>
+      </step>
+     </substeps>
+    </step>
+    
+    <step>
+     <para>
+      Quand le marqueur est un nombre ou un champ de nombre:
+     </para>
+
+     <substeps>
+      <step>
+       <para>
+	S'il y a huit ou six chiffres,
+	et aucun autre champ date n'a été lu, alors l'interpréter comme
+	une <quote>date concaténée</quote> (i.e.,
+	<literal>19990118</literal> ou <literal>990118</literal>).
+	L'interprétation est <literal>AAAAMMJJ</> ou <literal>AAMMJJ</>.
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si le marqueur est de trois chiffres
+	et une année a déjà été lue, alors il sera interprété comme un jour de l'année.
+       </para>
+      </step>
+      
+      <step>
+       <para>
+	Si quatre ou six chiffres et une année ont déjé été lus, alors il sera
+interprété
+	comme une heure (<literal>HHMM</> or <literal>HHMMSS</>).
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si trois chiffres ou plus et aucun champ date n'a été trouvé, il sera
+interprété
+	comme année (ceci force l'ordre aa-mm-jj des champs dates restants).
+       </para>
+      </step>
+
+      <step>
+       <para>
+        Sinon l'ordre de champ date est supposé suivre le parametre
+	<varname>DateStyle</varname> : mm-jj-aa, jj-mm-aa, ou aa-mm-jj.
+	Soulève une erreur si un champ jour ou mois est découvert hors des
+limites.
+       </para>
+      </step>
+     </substeps>
+    </step>
+
+    <step>
+     <para>
+      Si BC a été spécifié, rendre nulle l'année et ajouter un pour
+      le stockage interne.  (Il n'y a pas d'année zéro dans le calendrier
+Grégorien,
+      alors numériquement 1 BC devient l'année zéro.)
+     </para>
+    </step>
+
+    <step>
+     <para>
+      Si BC n'a pas été spécifié et le champ année fait deux chiffres en
+longueur, alors
+      ajuster l'année a quatre chiffres. Si le champ vaut moins que 70 alors
+ajouter 2000,
+      sinon ajouter 1900.
+
+      <tip>
+       <para>
+	Les années Grégoriennes AD 1-99 peuvent être entrées en utilisant 4
+chiffres avec les
+	zéros de devant (i.e., <literal>0099</literal> est AD 99). Les versions
+précédentes de
+	<productname>PostgreSQL</productname> acceptaient les années avec trois
+chiffres et
+        avec un seul chiffre mais depuis la version 7.0, les regles ont été
+renforcées
+	pour réduire de possibles ambiguïtés.
+       </para>
+      </tip>
+     </para>
+    </step>
+   </procedure>
+  </sect1>
+
+
+  <sect1 id="datetime-keywords">
+   <title>Mots clés Date/Heure</title>
+
+   <para>
+    <xref linkend="datetime-month-table"> montre les marqueurs qui sont
+    autorisés commme abréviations pour les noms des mois.
+   </para>
+
+    <table id="datetime-month-table">
+     <title>Abréviations des Mois</title>
+     <tgroup cols="2">
+      <thead>
+       <row>
+	<entry>Mois</entry>
+	<entry>Abréviations</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+	<entry>Avril</entry>
+	<entry>Apr</entry>
+       </row>
+       <row>
+	<entry>Août</entry>
+	<entry>Aug</entry>
+       </row>
+       <row>
+	<entry>Décembre</entry>
+	<entry>Dec</entry>
+       </row>
+       <row>
+	<entry>Février</entry>
+	<entry>Feb</entry>
+       </row>
+       <row>
+	<entry>Janvier</entry>
+	<entry>Jan</entry>
+       </row>
+       <row>
+	<entry>Juillet</entry>
+	<entry>Jul</entry>
+       </row>
+       <row>
+	<entry>Juin</entry>
+	<entry>Jun</entry>
+       </row>
+       <row>
+	<entry>Mars</entry>
+	<entry>Mar</entry>
+       </row>
+       <row>
+	<entry>Novembre</entry>
+	<entry>Nov</entry>
+       </row>
+       <row>
+	<entry>Octobre</entry>
+	<entry>Oct</entry>
+       </row>
+       <row>
+	<entry>Septembre</entry>
+	<entry>Sep, Sept</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+    <note>
+     <para>
+      Le mois de Mai n'a pas d'abréviation explicite, pour des raisons évidentes
+     </para>
+    </note>
+
+    <para>
+     <xref linkend="datetime-dow-table"> montre les marqueurs qui sont
+     autorisés comme abréviations pour les noms des jours de la semaine.
+    </para>
+
+     <table id="datetime-dow-table">
+      <title>Abréviations des Jours de la Semaine</title>
+      <tgroup cols="2">
+       <thead>
+	<row>
+	 <entry>Jour</entry>
+	 <entry>Abréviation</entry>
+	</row>
+       </thead>
+       <tbody>
+	<row>
+	 <entry>Dimanche</entry>
+	 <entry>Sun</entry>
+	</row>
+	<row>
+	 <entry>Lundi</entry>
+	 <entry>Mon</entry>
+	</row>
+	<row>
+	 <entry>Mardi</entry>
+	 <entry>Tue, Tues</entry>
+	</row>
+	<row>
+	 <entry>Mercredi</entry>
+	 <entry>Wed, Weds</entry>
+	</row>
+	<row>
+	 <entry>Jeudi</entry>
+	 <entry>Thu, Thur, Thurs</entry>
+	</row>
+	<row>
+	 <entry>Vendredi</entry>
+	 <entry>Fri</entry>
+	</row>
+	<row>
+	 <entry>Samedi</entry>
+	 <entry>Sat</entry>
+	</row>
+       </tbody>
+      </tgroup>
+     </table>
+
+   <para>
+    <xref linkend="datetime-mod-table"> montre les marqueurs qui servent
+    a modifiés divers contenus.
+   </para>
+
+    <table id="datetime-mod-table">
+     <title>Modificateurs de Champs Date/Heure</title>
+     <tgroup cols="2">
+      <thead>
+       <row>
+	<entry>Identifiant</entry>
+	<entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+	<entry><literal>ABSTIME</literal></entry>
+	<entry>Mot clé ignoré</entry>
+       </row>
+       <row>
+	<entry><literal>AM</literal></entry>
+	<entry>Heure avant 12:00</entry>
+       </row>
+       <row>
+	<entry><literal>AT</literal></entry>
+	<entry>Mot clé ignoré</entry>
+       </row>
+       <row>
+	<entry><literal>JULIAN</>, <literal>JD</>, <literal>J</></entry>
+	<entry>Le champ suivant est un jour Julien</entry>
+       </row>
+       <row>
+	<entry><literal>ON</literal></entry>
+	<entry>Mot clé ignoré</entry>
+       </row>
+       <row>
+	<entry><literal>PM</literal></entry>
+	<entry>Heure à ou après 12:00</entry>
+       </row>
+       <row>
+	<entry><literal>T</literal></entry>
+	<entry>Le champ suivant est de temps</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+   <para>
+    Le mot clé <literal>ABSTIME</literal> est ignoré pour des raisons
+    historiques: Dans de très vieilles versions de
+    <productname>PostgreSQL</productname>, des valeurs invalides de type
+<type>abstime</type>
+    étaient émises en tant que <literal>Invalid Abstime</literal>. Par contre,
+ceci n'est plus
+    le cas et ce mot clé sera probablement abandonné dans une future version.
+   </para>
+
+   <indexterm>
+    <primary>fuseau horaire</primary>
+    <secondary>abréviations</secondary>
+   </indexterm>
+
+   <para>
+    <xref linkend="datetime-timezone-table"> montre les abréviations de
+    fuseau horaire reconnus par <productname>PostgreSQL</productname>.
+    <productname>PostgreSQL</productname> contient des tables
+    internes pour le décodage de fuseau horaire puisqu'il n'y a aucune interface
+    standard du système d'exploitation pour donner l'accés à l'information
+    multi-fuseau horaire. Néanmoins le système d'exploitation servant de plateforme
+    <emphasis>est</emphasis> utilisé pour fournir l'information sur le
+    fuseau horaire en <emphasis>sortie</emphasis>.
+   </para>
+
+   <para>
+    Ce tableau est organisé par décalage du fuseau horaire à partir de <acronym>UTC</>,
+    plutôt que par ordre alphabétique. Ceci a été choisi pour faciliter la
+    correspondance entre l'usage local et les abréviations reconnues là ou
+    elles seraient différentes.
+   </para>
+
+    <table id="datetime-timezone-table">
+     <title>Abréviations de fuseaux horaires</title>
+     <tgroup cols="3">
+      <thead>
+       <row>
+	<entry>Fuseau horaire</entry>
+	<entry>Décalage à partir d'UTC</entry>
+	<entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+	<entry>NZDT</entry>
+	<entry>+13:00</entry>
+	<entry>New Zealand Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>IDLE</entry>
+	<entry>+12:00</entry>
+	<entry>International Date Line, East</entry>
+       </row>
+       <row>
+	<entry>NZST</entry>
+	<entry>+12:00</entry>
+	<entry>New Zealand Standard Time</entry>
+       </row>
+       <row>
+	<entry>NZT</entry>
+	<entry>+12:00</entry>
+	<entry>New Zealand Time</entry>
+       </row>
+       <row>
+	<entry>AESST</entry>
+	<entry>+11:00</entry>
+	<entry>Australia Eastern Summer Standard Time</entry>
+       </row>
+       <row>
+	<entry>ACSST</entry>
+	<entry>+10:30</entry>
+	<entry>Central Australia Summer Standard Time</entry>
+       </row>
+       <row>
+	<entry>CADT</entry>
+	<entry>+10:30</entry>
+	<entry>Central Australia Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>SADT</entry>
+	<entry>+10:30</entry>
+	<entry>South Australian Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>AEST</entry>
+	<entry>+10:00</entry>
+	<entry>Australia Eastern Standard Time</entry>
+       </row>
+       <row>
+	<entry>EAST</entry>
+	<entry>+10:00</entry>
+	<entry>East Australian Standard Time</entry>
+       </row>
+       <row>
+	<entry>GST</entry>
+	<entry>+10:00</entry>
+	<entry>Guam Standard Time, Russia zone 9</entry>
+       </row>
+       <row>
+	<entry>LIGT</entry>
+	<entry>+10:00</entry>
+	<entry>Melbourne, Australia</entry>
+       </row>
+       <row>
+	<entry>SAST</entry>
+	<entry>+09:30</entry>
+	<entry>South Australia Standard Time</entry>
+       </row>
+       <row>
+	<entry>CAST</entry>
+	<entry>+09:30</entry>
+	<entry>Central Australia Standard Time</entry>
+       </row>
+       <row>
+	<entry>AWSST</entry>
+	<entry>+09:00</entry>
+	<entry>Australia Western Summer Standard Time</entry>
+       </row>
+       <row>
+	<entry>JST</entry>
+	<entry>+09:00</entry>
+	<entry>Japan Standard Time, Russia zone 8</entry>
+       </row>
+       <row>
+	<entry>KST</entry>
+	<entry>+09:00</entry>
+	<entry>Korea Standard Time</entry>
+       </row>
+       <row>
+	<entry>MHT</entry>
+	<entry>+09:00</entry>
+	<entry>Kwajalein Time</entry>
+       </row>
+       <row>
+	<entry>WDT</entry>
+	<entry>+09:00</entry>
+	<entry>West Australian Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>MT</entry>
+	<entry>+08:30</entry>
+	<entry>Moluccas Time</entry>
+       </row>
+       <row>
+	<entry>AWST</entry>
+	<entry>+08:00</entry>
+	<entry>Australia Western Standard Time</entry>
+       </row>
+       <row>
+	<entry>CCT</entry>
+	<entry>+08:00</entry>
+	<entry>China Coastal Time</entry>
+       </row>
+       <row>
+	<entry>WADT</entry>
+	<entry>+08:00</entry>
+	<entry>West Australian Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>WST</entry>
+	<entry>+08:00</entry>
+	<entry>West Australian Standard Time</entry>
+       </row>
+       <row>
+	<entry>JT</entry>
+	<entry>+07:30</entry>
+	<entry>Java Time</entry>
+       </row>
+       <row>
+	<entry>ALMST</entry>
+	<entry>+07:00</entry>
+	<entry>Almaty Summer Time</entry>
+       </row>
+       <row>
+	<entry>WAST</entry>
+	<entry>+07:00</entry>
+	<entry>West Australian Standard Time</entry>
+       </row>
+       <row>
+	<entry>CXT</entry>
+	<entry>+07:00</entry>
+	<entry>Christmas (Island) Time</entry>
+       </row>
+       <row>
+	<entry>MMT</entry>
+	<entry>+06:30</entry>
+	<entry>Myanmar Time</entry>
+       </row>
+       <row>
+	<entry>ALMT</entry>
+	<entry>+06:00</entry>
+	<entry>Almaty Time</entry>
+       </row>
+       <row>
+	<entry>MAWT</entry>
+	<entry>+06:00</entry>
+	<entry>Mawson (Antarctica) Time</entry>
+       </row>
+       <row>
+	<entry>IOT</entry>
+	<entry>+05:00</entry>
+	<entry>Indian Chagos Time</entry>
+       </row>
+       <row>
+	<entry>MVT</entry>
+	<entry>+05:00</entry>
+	<entry>Maldives Island Time</entry>
+       </row>
+       <row>
+	<entry>TFT</entry>
+	<entry>+05:00</entry>
+	<entry>Kerguelen Time</entry>
+       </row>
+       <row>
+	<entry>AFT</entry>
+	<entry>+04:30</entry>
+	<entry>Afghanistan Time</entry>
+       </row>
+       <row>
+	<entry>EAST</entry>
+	<entry>+04:00</entry>
+	<entry>Antananarivo Summer Time</entry>
+       </row>
+       <row>
+	<entry>MUT</entry>
+	<entry>+04:00</entry>
+	<entry>Mauritius Island Time</entry>
+       </row>
+       <row>
+	<entry>RET</entry>
+	<entry>+04:00</entry>
+	<entry>Reunion Island Time</entry>
+       </row>
+       <row>
+	<entry>SCT</entry>
+	<entry>+04:00</entry>
+	<entry>Mahe Island Time</entry>
+       </row>
+       <row>
+	<entry>IRT, IT</entry>
+	<entry>+03:30</entry>
+	<entry>Iran Time</entry>
+       </row>
+       <row>
+	<entry>EAT</entry>
+	<entry>+03:00</entry>
+	<entry>Antananarivo, Comoro Time</entry>
+       </row>
+       <row>
+	<entry>BT</entry>
+	<entry>+03:00</entry>
+	<entry>Baghdad Time</entry>
+       </row>
+       <row>
+	<entry>EETDST</entry>
+	<entry>+03:00</entry>
+	<entry>Eastern Europe Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>HMT</entry>
+	<entry>+03:00</entry>
+	<entry>Hellas Mediterranean Time (?)</entry>
+       </row>
+       <row>
+	<entry>BDST</entry>
+	<entry>+02:00</entry>
+	<entry>British Double Standard Time</entry>
+       </row>
+       <row>
+	<entry>CEST</entry>
+	<entry>+02:00</entry>
+	<entry>Central European Summer Time</entry>
+       </row>
+       <row>
+	<entry>CETDST</entry>
+	<entry>+02:00</entry>
+	<entry>Central European Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>EET</entry>
+	<entry>+02:00</entry>
+	<entry>Eastern European Time, Russia zone 1</entry>
+       </row>
+       <row>
+	<entry>FWT</entry>
+	<entry>+02:00</entry>
+	<entry>French Winter Time</entry>
+       </row>
+       <row>
+	<entry>IST</entry>
+	<entry>+02:00</entry>
+	<entry>Israel Standard Time</entry>
+       </row>
+       <row>
+	<entry>MEST</entry>
+	<entry>+02:00</entry>
+	<entry>Middle European Summer Time</entry>
+       </row>
+       <row>
+	<entry>METDST</entry>
+	<entry>+02:00</entry>
+	<entry>Middle Europe Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>SST</entry>
+	<entry>+02:00</entry>
+	<entry>Swedish Summer Time</entry>
+       </row>
+       <row>
+	<entry>BST</entry>
+	<entry>+01:00</entry>
+	<entry>British Summer Time</entry>
+       </row>
+       <row>
+	<entry>CET</entry>
+	<entry>+01:00</entry>
+	<entry>Central European Time</entry>
+       </row>
+       <row>
+	<entry>DNT</entry>
+	<entry>+01:00</entry>
+	<entry><foreignphrase>Dansk Normal Tid</foreignphrase></entry>
+       </row>
+       <row>
+	<entry>FST</entry>
+	<entry>+01:00</entry>
+	<entry>French Summer Time</entry>
+       </row>
+       <row>
+	<entry>MET</entry>
+	<entry>+01:00</entry>
+	<entry>Middle European Time</entry>
+       </row>
+       <row>
+	<entry>MEWT</entry>
+	<entry>+01:00</entry>
+	<entry>Middle European Winter Time</entry>
+       </row>
+       <row>
+	<entry>MEZ</entry>
+	<entry>+01:00</entry>
+	<entry><foreignphrase>Mitteleuropéische Zeit</></entry>
+       </row>
+       <row>
+	<entry>NOR</entry>
+	<entry>+01:00</entry>
+	<entry>Norway Standard Time</entry>
+       </row>
+       <row>
+	<entry>SET</entry>
+	<entry>+01:00</entry>
+	<entry>Seychelles Time</entry>
+       </row>
+       <row>
+	<entry>SWT</entry>
+	<entry>+01:00</entry>
+	<entry>Swedish Winter Time</entry>
+       </row>
+       <row>
+	<entry>WETDST</entry>
+	<entry>+01:00</entry>
+	<entry>Western European Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>GMT</entry>
+	<entry>00:00</entry>
+	<entry>Greenwich Mean Time</entry>
+       </row>
+       <row>
+	<entry>UT</entry>
+	<entry>00:00</entry>
+	<entry>Universal Time</entry>
+       </row>
+       <row>
+	<entry>UTC</entry>
+	<entry>00:00</entry>
+	<entry>Universal Coordinated Time</entry>
+       </row>
+       <row>
+	<entry>Z</entry>
+	<entry>00:00</entry>
+	<entry>Same as UTC</entry>
+       </row>
+       <row>
+	<entry>ZULU</entry>
+	<entry>00:00</entry>
+	<entry>Same as UTC</entry>
+       </row>
+       <row>
+	<entry>WET</entry>
+	<entry>00:00</entry>
+	<entry>Western European Time</entry>
+       </row>
+       <row>
+	<entry>WAT</entry>
+	<entry>-01:00</entry>
+	<entry>West Africa Time</entry>
+       </row>
+       <row>
+	<entry>FNST</entry>
+	<entry>-01:00</entry>
+	<entry>Fernando de Noronha Summer Time</entry>
+       </row>
+       <row>
+	<entry>FNT</entry>
+	<entry>-02:00</entry>
+	<entry>Fernando de Noronha Time</entry>
+       </row>
+       <row>
+	<entry>BRST</entry>
+	<entry>-02:00</entry>
+	<entry>Brasilia Summer Time</entry>
+       </row>
+       <row>
+	<entry>NDT</entry>
+	<entry>-02:30</entry>
+	<entry>Newfoundland Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>ADT</entry>
+	<entry>-03:00</entry>
+	<entry>Atlantic Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>AWT</entry>
+	<entry>-03:00</entry>
+	<entry>(unknown)</entry>
+       </row>
+       <row>
+	<entry>BRT</entry>
+	<entry>-03:00</entry>
+	<entry>Brasilia Time</entry>
+       </row>
+       <row>
+	<entry>NFT</entry>
+	<entry>-03:30</entry>
+	<entry>Newfoundland Standard Time</entry>
+       </row>
+       <row>
+	<entry>NST</entry>
+	<entry>-03:30</entry>
+	<entry>Newfoundland Standard Time</entry>
+       </row>
+       <row>
+	<entry>AST</entry>
+	<entry>-04:00</entry>
+	<entry>Atlantic Standard Time (Canada)</entry>
+       </row>
+       <row>
+	<entry>ACST</entry>
+	<entry>-04:00</entry>
+	<entry>Atlantic/Porto Acre Summer Time</entry>
+       </row>
+       <row>
+	<entry>EDT</entry>
+	<entry>-04:00</entry>
+	<entry>Eastern Daylight-Saving Time</entry>
+       </row>
+       <!--
+      <row>
+      <entry>ZP4</entry>
+      <entry>-04:00</entry>
+      <entry>GMT +4 hours</entry>
+      </row>
+       -->
+       <row>
+	<entry>ACT</entry>
+	<entry>-05:00</entry>
+	<entry>Atlantic/Porto Acre Standard Time</entry>
+       </row>
+       <row>
+	<entry>CDT</entry>
+	<entry>-05:00</entry>
+	<entry>Central Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>EST</entry>
+	<entry>-05:00</entry>
+	<entry>Eastern Standard Time</entry>
+       </row>
+       <!--
+      <row>
+      <entry>ZP5</entry>
+      <entry>-05:00</entry>
+      <entry>GMT +5  hours</entry>
+      </row>
+       -->
+       <row>
+	<entry>CST</entry>
+	<entry>-06:00</entry>
+	<entry>Central Standard Time</entry>
+       </row>
+       <row>
+	<entry>MDT</entry>
+	<entry>-06:00</entry>
+	<entry>Mountain Daylight-Saving Time</entry>
+       </row>
+       <!--
+      <row>
+      <entry>ZP6</entry>
+      <entry>-06:00</entry>
+      <entry>GMT +6  hours</entry>
+      </row>
+       -->
+       <row>
+	<entry>MST</entry>
+	<entry>-07:00</entry>
+	<entry>Mountain Standard Time</entry>
+       </row>
+       <row>
+	<entry>PDT</entry>
+	<entry>-07:00</entry>
+	<entry>Pacific Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>AKDT</entry>
+	<entry>-08:00</entry>
+	<entry>Alaska Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>PST</entry>
+	<entry>-08:00</entry>
+	<entry>Pacific Standard Time</entry>
+       </row>
+       <row>
+	<entry>YDT</entry>
+	<entry>-08:00</entry>
+	<entry>Yukon Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>AKST</entry>
+	<entry>-09:00</entry>
+	<entry>Alaska Standard Time</entry>
+       </row>
+       <row>
+	<entry>HDT</entry>
+	<entry>-09:00</entry>
+	<entry>Hawaii/Alaska Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>YST</entry>
+	<entry>-09:00</entry>
+	<entry>Yukon Standard Time</entry>
+       </row>
+       <row>
+	<entry>MART</entry>
+	<entry>-09:30</entry>
+	<entry>Marquesas Time</entry>
+       </row>
+       <row>
+	<entry>AHST</entry>
+	<entry>-10:00</entry>
+	<entry>Alaska/Hawaii Standard Time</entry>
+       </row>
+       <row>
+	<entry>HST</entry>
+	<entry>-10:00</entry>
+	<entry>Hawaii Standard Time</entry>
+       </row>
+       <row>
+	<entry>CAT</entry>
+	<entry>-10:00</entry>
+	<entry>Central Alaska Time</entry>
+       </row>
+       <row>
+	<entry>NT</entry>
+	<entry>-11:00</entry>
+	<entry>Nome Time</entry>
+       </row>
+       <row>
+	<entry>IDLW</entry>
+	<entry>-12:00</entry>
+	<entry>International Date Line, West</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+  <formalpara>
+   <title>Australian Time Zones</title>
+
+   <para>
+    Il y a trois conflits de nommage entre les noms de fuseaux horaires
+    Australiens et les noms de fuseaux horaires utilisés Amérique du Sud
+    et du Nord:
+    <literal>ACST</literal>, <literal>CST</literal> et
+    <literal>EST</literal>.  Si l'option de démarrage
+    <varname>australian_timezones</varname> est mis à vrai alors
+    <literal>ACST</literal>, <literal>CST</literal>,
+    <literal>EST</literal> et <literal>SAT</literal> sont interprétés comme
+    des noms de fuseaux horaires Australiens, comme montré dans <xref
+    linkend="datetime-oztz-table">. Si ceci est faux (ce qui est le cas par
+    défaut) alors <literal>ACST</literal>, <literal>CST</literal>,
+    et <literal>EST</literal> sont pris comme des noms de fuseaux horaires
+    américains et <literal>SAT</literal> est interprété comme un mot peu significatif
+    indiquant Samedi.
+   </para>
+  </formalpara>
+
+    <table id="datetime-oztz-table">
+     <title>Abreviations de Fuseaux Horaires Australiens</title>
+     <tgroup cols="3">
+      <thead>
+       <row>
+	<entry>Fuseau Horaire</entry>
+	<entry>Offset from UTC</entry>
+	<entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+	<entry>ACST</entry>
+	<entry>+09:30</entry>
+	<entry>Temps Standard d'Australie Centrale</entry>
+       </row>
+       <row>
+	<entry>CST</entry>
+	<entry>+10:30</entry>
+	<entry>Australian Central Standard Time</entry>
+       </row>
+       <row>
+	<entry>EST</entry>
+	<entry>+10:00</entry>
+	<entry>Australian Eastern Standard Time</entry>
+       </row>
+       <row>
+	<entry>SAT</entry>
+	<entry>+09:30</entry>
+	<entry>South Australian Standard Time</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+  </sect1>
+
+  <sect1 id="datetime-units-history">
+  <title>Histoire d'Unités</title>
+
+  <para>
+   Le Julian Date a été inventé par le scholar franéais
+   Joseph Justus Scaliger (1540-1609)
+   et tient probablement son nom du pere de Scaliger,
+   le scholar Italian Julius Caesar Scaliger (1484-1558).
+   Les astronomes ont utilisés la periode Julian pour donner un nombre unique
+   a chaque jour depuis le 1 Janvier 4713 BC. ceci est la date dite Julian
+   (JD). JD 0 designe les 24 heures de midi UTC le 1 Janvier 4713 BC
+   jusqu'a midi UTC le 2 Janvier 4713 BC.
+  </para>
+
+   <para>
+   La <quote>Date Julian</quote> est différente du <quote>calendrier
+   Julian</quote>.  Le calendrier Julian 
+   a été introduit par Julius Caesar en 45 BC. Il était utilisé de maniére
+   courante jusqu'en l'an 1582, ou des pays ont commencés à se convertir au
+   calendrier Grégorien.  Dans le calendrier Julian, l'année tropical est
+   arrondie à 365 1/4 jours = 365.25 jours. ceci donne une erreur d'à peu près
+   1 jour tout les 128 ans.
+  </para>
+
+  <para>   
+   L'erreur de calendrier grandissante poussa le Pape
+   Gregory XIII a réformé le calendrier en accord avec les
+   instructions du Conseil de Trent.
+   Dans le calendrier Grégorien, l'année tropical est arrondie en
+   365 + 97 / 400 jours = 365.2425 jours. Donc, il faut à peu prés 3300
+   années pour l'année tropical pour virer d'un jour par rapport au
+   calendrier Grégorien.
+  </para>
+
+  <para>
+   L'arrondi 365+97/400 est obtenu en ayant 97 années bissextiles
+   tous les 400 ans, en utilisant les régles suivantes:
+
+   <simplelist>
+    <member>
+     Toutes les années divisibles par 4 sont des années bissextiles.
+    </member>
+    <member>
+     Par contre, toutes les années divisibles par 100 ne sont pas des années
+bissextiles.
+    </member>
+    <member>
+     Par contre, toutes les années divisibles par 400 sont, finalement, des
+années bissextiles.
+    </member>
+   </simplelist>
+
+   Donc 1700, 1800, 1900, 2100 et 2200 ne sont pas des années bissextiles. Mais
+1600,
+   2000 et 2400 sont des années bissextiles.
+
+   Par opposition, dans le plus ancien calendrier Julian, toutes les années
+divisibles par
+   4 sont des années bissextiles.
+  </para>
+
+  <para>
+   L'anonce du Pape de février 1582 décrétait que 10 jours devaient étre
+supprimés
+   du mois d'octobre 1582 pour que le 15 octobre suivent immédiatement après le
+4
+   octobre.
+   Cela a été appliqué en Italie, Pologne, Portugal et Espagne. Les autres pays
+   Catholiques ont suivi peu de temps mais les pays protestants ont été plus
+   récalcitrantes à changer et la Gréce n'a pas changé avant le début du 20éme
+   siécle.
+
+   La réforme a été appliquée par la Grande Bretagne et ses colonies (y compris
+ce
+   qu'est maintenant les Etats-Unis) en 1752.
+   Donc le 2 septembre 1752 a été suivi du 14 septembre 1752.
+
+   ceci est la raison pour laquelle la commande <command>cal</command> produit
+   la sortie suivante:
+
+<screen>
+$ <userinput>cal 9 1752</userinput>
+   septembre 1752
+di lu ma me je ve sa
+       1  2 14 15 16
+17 18 19 20 21 22 23
+24 25 26 27 28 29 30
+</screen>
+  </para>
+
+   <note>
+    <para>
+     Le standard SQL stipule que <quote>Au sein d'une definition d'un
+     <quote>datetime literal</quote>, les <quote>valeurs date/heure</quote>
+     sont restreintes par les règles naturelles pour les dates et heures
+     relatives au calendrier Grégorien</quote>. Les dates entre
+     1752-09-03 et 1752-09-13, bien qu'éliminés dans plusieurs pays
+     par ordre du Pape, sont conformes aux <quote>régles naturelles</quote> et
+sont
+     donc des dates valables.
+    </para>
+   </note>
+
+  <para>
+   Différents calendriers ont été developés dans différentes parties du monde,
+   la plupart précédant le système Grégorien.
+
+   Par exemple,
+   les débuts du calendrier chinois peuvent être évalués au alentour du 14éme
+   siécle avant J-C. La legende veut que l'empereur Huangdi invente le
+   calendrier en 2637 avant J-C.
+   
+   La République de Chine utilise le calendrier Grégorien pour ses besoins
+   civils. Le calendrier chinois est utilisé pour déterminer les festivals.
+  </para>
+ </sect1>
+</appendix>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->
