@@ -1,0 +1,990 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/perform.sgml,v 1.12 2005/09/22 18:34:42 guillaume Exp $
+-->
+
+ <chapter id="performance-tips">
+  <title>Conseils sur les performances</title>
+
+  <indexterm zone="performance-tips">
+    <primary>performance</primary>
+  </indexterm>
+
+  <para>
+   La performance des requêtes peut être affectée par beaucoup d'éléments.
+   Certains peuvent être manipulés par l'utilisateur, d'autres sont
+   fondamentaux au concept sous-jacent du système. Ce chapitre fournit des
+   conseils sur la compréhension et sur la configuration fine des performances
+   de <productname>PostgreSQL</productname>.
+  </para>
+
+  <sect1 id="using-explain">
+   <title>Utiliser <command>EXPLAIN</command></title>
+
+   <indexterm zone="using-explain">
+    <primary>EXPLAIN</primary>
+   </indexterm>
+
+   <indexterm zone="using-explain">
+    <primary>plan de requête</primary>
+   </indexterm>
+
+   <para>
+    <productname>PostgreSQL</productname> réalise un <firstterm>plan
+    de requête</firstterm> pour chaque requête qu'il reçoit. Choisir le bon
+    plan pour correspondre à la structure de la requête et aux propriétés des
+    données est absolument critique pour de bonnes performances, donc le système
+    inclut un <firstterm>planificateur</> complexe qui tente de sélectionner
+    les bons plans. Vous pouvez
+    utiliser la commande <xref linkend="sql-explain" endterm="sql-explain-title">
+    pour voir quel plan de requête le planificateur crée pour une requête particulière.
+    La lecture du plan est un art qui mérite un tutoriel complet, ce que vous
+    n'aurez pas là&nbsp;; ici ne se trouvent que des informations de base.
+   </para>
+
+   <para>
+    La structure d'un plan de requête est un arbre de <firstterm>n&oelig;uds
+    de plan</>. Les n&oelig;uds de bas niveau sont les n&oelig;uds de parcours
+    de tables&nbsp;: ils renvoient les lignes brutes d'une table. Il existe
+    différents types de n&oelig;uds de parcours pour les différentes méthodes
+    d'accès aux tables&nbsp;: parcours séquentiel, parcours d'index et parcours
+    d'index bitmap. Si la requête requiert des jointures, agrégations, tris
+    ou d'autres opérations sur les lignes brites, ce seront des n&oelig;uds
+    supplémentaires <quote>au-dessus</quote> des n&oelig;uds de parcours qui
+    réaliseront ces opérations. De nouveau, il y a habituellement plus d'une
+    façon possible de réaliser ces opérations, donc différents types de
+    n&oelig;uds peuvent aussi apparaître ici. La sortie
+    d'<command>EXPLAIN</command> comprend une ligne pour chaque n&oelig;ud dans
+    l'arbre du plan, montrant le type de n&oelig;ud basique avec les estimations
+    de coût que le planificateur a fait pour l'exécution de ce n&oelig;ud du
+    plan. La première ligne (le n&oelig;ud tout en haut) comprend le coût
+    d'exécution total estimé pour le plan&nbsp;; c'est ce nombre que le
+    planificateur cherche à minimiser.
+   </para>
+
+   <para>
+    Voici un exemple trivial, juste pour montrer à quoi ressemble l'affichage.
+    <footnote>
+     <para>
+      Les exemples dans cette section sont récupérés de la base de données des
+      tests de régression après avoir lancé un <command>VACUUM ANALYZE</>, en
+      utilisant les sources de la version 8.1. Vous devriez être capable
+      d'obtenir des résultats similaires si vous essayez vous-même les exemples
+      mais vos coûts estimés et les nombres de lignes varieront probablement
+      légèrement car les statistiques d'<command>ANALYZE</> se font à partir de
+      valeurs prises au hasard.
+     </para>
+    </footnote>
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1;
+
+                         QUERY PLAN
+-------------------------------------------------------------
+ Seq Scan on tenk1  (cost=0.00..458.00 rows=10000 width=244)
+</programlisting>
+   </para>
+
+   <para>
+    Les nombres donnés par <command>EXPLAIN</command> sont&nbsp;:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       Le coût estimé du lancement (temps passé avant que l'affichage de
+       la sortie ne commence, c'est-à-dire pour faire le tri dans un n&oelig;ud
+       de tri.)
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Coût total estimé (si toutes les lignes doivent être récupérées, ce qui
+       pourrait ne pas être le cas&nbsp;: par exemple une requête avec une
+       clause <literal>LIMIT</> ne paiera pas le coût total du n&oelig;ud
+       d'entrée du n&oelig;ud du plan <literal>Limit</>.)
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Nombre de lignes estimé en sortie par ce n&oelig;ud de plan (encore une
+       fois, seulement si exécuté jusqu'au bout.)
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Largeur moyenne estimée (en octets) des lignes en sortie par ce
+       n&oelig;ud de plan
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <para>
+    Les coûts sont mesurés en unités de récupération de page disque&nbsp;;
+    c'està-dire que 1,0 équivaut à une lecteur de page disque séquentiel par
+    définition.
+    (Les estimations de l'effort CPU sont aussi traitées&nbsp;; elles sont
+    converties en unités de page disque en
+    utilisant quelques facteurs assez arbitraires. Si vous voulez expérimenter
+    avec ces facteurs, voir la liste des paramètres de configuration en
+    exécution dans <xref linkend="runtime-config-query-constants">.)
+   </para>
+
+   <para>
+    Il est important de noter que le coût d'un n&oelig;ud de haut niveau inclut
+    le coût de tous les n&oelig;uds fils. Il est aussi important de réaliser
+    que le coût reflète seulement les éléments d'importance pour le
+    planificateur. En particulier, le coût ne considère pas le temps
+    dépensé dans la transmission des lignes de résultat au client, ce qui
+    pourrait être un facteur important dans le temps réellement passé&nbsp;; mais
+    le planificateur l'ignore parce qu'il ne peut pas le changer en modifiant
+    le plan. (Chaque plan correct sortira le même ensemble de lignes.)
+   </para>
+
+   <para>
+    La sortie des lignes est un peu difficile car il ne s'agit
+    <emphasis>pas</emphasis> du nombre de lignes traitées ou parcourues par le
+    plan de n&oelig;uds. C'est habituellement moins, reflétant la sélectivité
+    estimée des conditions de la clause <literal>WHERE</> qui sont appliquées au
+    n&oelig;ud. Idéalement, les estimations des lignes de haut niveau sera une
+    approximation des nombres de lignes déjà renvoyés, mis à jour, supprimés par
+    la requête.
+   </para>
+
+   <para>
+    Pour revenir à notre exemple&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1;
+
+                         QUERY PLAN
+-------------------------------------------------------------
+ Seq Scan on tenk1  (cost=0.00..458.00 rows=10000 width=244)
+</programlisting>
+   </para>
+
+   <para>
+    C'est aussi direct que ce que nous obtenons. Si vous faîtes&nbsp;:
+
+<programlisting>
+SELECT relpages, reltuples FROM pg_class WHERE relname = 'tenk1';
+</programlisting>
+
+    vous trouverez que <classname>tenk1</classname> a 358 pages disque et 10000
+    lignes. Donc, le coût est estimé à 358 lectures de page, dont le coût
+    individuel est estimé à 1,0, plus 10000 * <xref linkend="guc-cpu-tuple-cost">
+    qui vaut typiquement 0,01 (essayez <command>SHOW cpu_tuple_cost</command>).
+   </para>
+
+   <para>
+    Maintenant, modifions la requête pour ajouter une condition
+    <literal>WHERE</>&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 7000;
+
+                         QUERY PLAN
+------------------------------------------------------------
+ Seq Scan on tenk1  (cost=0.00..483.00 rows=7033 width=244)
+   Filter: (unique1 &lt; 7000)
+</programlisting>
+
+    Notez que l'affichage d'<command>EXPLAIN</> montre la clause <literal>WHERE</>
+    appliquée comme une condition de <quote>filtre</>&nbsp;; ceci signifie que le
+    n&oelig;ud de plan vérifie la condition pour chaque ligne qu'il parcourt et
+    ne conserve que celles qui satisfont la condition.
+    L'estimation des lignes en sortie a baissé à cause de la clause
+    <literal>WHERE</>. Néanmoins, le parcours devra toujours visiter les 10000
+    lignes, donc le coût n'a pas baissé&nbsp;; en fait, il a un peu augmenté
+    pour refléter le temps CPU supplémentaire dépensé pour vérifier la condition
+    <literal>WHERE</>.
+   </para>
+
+   <para>
+    Le nombre réel de lignes que cette requête sélectionnera est 7000 mais
+    l'estimation est approximative. Si vous tentez de dupliquer cette
+    expérience, vous obtiendrez probablement une estimation légèrement
+    différente&nbsp;; de plus, elle changera après chaque commande
+    <command>ANALYZE</command> parce que les statistiques produites par
+    <command>ANALYZE</command> sont prises à partir d'un extrait au hasard de la
+    table.
+   </para>
+
+   <para>
+    Maintenant, rendons la condition plus restrictive&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 100;
+
+                                  QUERY PLAN
+------------------------------------------------------------------------------
+ Bitmap Heap Scan on tenk1  (cost=2.37..232.35 rows=106 width=244)
+   Recheck Cond: (unique1 &lt; 100)
+   ->  Bitmap Index Scan on tenk1_unique1  (cost=0.00..2.37 rows=106 width=0)
+         Index Cond: (unique1 &lt; 100)
+</programlisting>
+
+    Ici, le planificateur a décidé d'utiliser un plan en deux étapes&nbsp;: le
+    n&oelig;ud en bas du plan visite un index pour trouver l'emplacements des
+    lignes correspondant à la condition de l'index, puis le n&oelig;ud du plan
+    du dessus récupère réellement ces lignes de la table. Récupérer séparément
+    les lignes est bien plus coûteux que de les lire séquentiellement mais
+    comme toutes les pages de la table n'ont pas à être visitées, cela revient
+    toujours moins cher qu'un parcours séquentiel. (La raison de l'utilisation
+    d'un plan à deux niveaux est que le n&oelig;ud du plan du dessus trie les
+    emplacements des lignes identifiés par l'index dans l'ordre physique avant
+    de les lire pour minimiser les coûts des récupérations séparés. Le
+    <quote>bitmap</> mentionné dans les noms de n&oelig;uds est le mécanisme
+    qui s'occupe du tri.)
+   </para>
+
+   <para>
+    Si la condition <literal>WHERE</> est assez sélective, le planificateur
+    pourrait basculer vers un plan de parcours d'index <quote>simple</>&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 3;
+
+                                  QUERY PLAN
+------------------------------------------------------------------------------
+ Index Scan using tenk1_unique1 on tenk1  (cost=0.00..10.00 rows=2 width=244)
+   Index Cond: (unique1 &lt; 3)
+</programlisting>
+
+    Dans ce cas, les lignes de la table sont récupérées dans l'ordre de l'index,
+    ce qui les rend encore plus coûteuses à lire mais elles sont si peu
+    nombreuses que le coût supplémentaire de triage des emplacements de lignes
+    ne vaut pas le coup. Vous verrez plus fréquemment ce type de plan pour les
+    requêtes qui récupèrent une seule ligne et pour les requêtes qui ont
+    une condition <literal>ORDER BY</> correspondant à l'ordre de l'index.
+   </para>
+
+   <para>
+    Ajoutez une autre condition à la clause <literal>WHERE</>&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 3 AND stringu1 = 'xxx';
+
+                                  QUERY PLAN
+-------------------------------------------------------------------------------
+ Index Scan using tenk1_unique1 on tenk1  (cost=0.00..10.01 rows=1 width=244)
+   Index Cond: (unique1 &lt; 3)
+   Filter: (stringu1 = 'xxx'::name)
+</programlisting>
+
+    La condition ajoutée <literal>stringu1 = 'xxx'</literal> réduit
+    l'estimation du nombre de lignes en sortie mais pas le coût car nous devons
+    toujours visiter le même ensemble de lignes. Notez que la clause
+    <literal>stringu1</> ne peut pas être appliqué à une condition d'index (car
+    cet index est seulement sur la colonne <literal>unique1</>). À la place, il
+    est appliqué comme un filtre sur les lignes récupérées par l'index. Du coup,
+    le coût a un peu augmenté pour refléter cette vérification supplémentaire.
+   </para>
+
+   <para>
+    S'il existe des index sur plusieurs colonnes utilisées dans la condition
+    <literal>WHERE</>, le planificateur pourrait choisir d'utiliser une
+    combinaison AND ou OR des index&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique2 &gt; 9000;
+
+                                     QUERY PLAN
+-------------------------------------------------------------------------------------
+ Bitmap Heap Scan on tenk1  (cost=11.27..49.11 rows=11 width=244)
+   Recheck Cond: ((unique1 &lt; 100) AND (unique2 &gt; 9000))
+   -&gt;  BitmapAnd  (cost=11.27..11.27 rows=11 width=0)
+         -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..2.37 rows=106 width=0)
+               Index Cond: (unique1 &lt; 100)
+         -&gt;  Bitmap Index Scan on tenk1_unique2  (cost=0.00..8.65 rows=1042 width=0)
+               Index Cond: (unique2 &gt; 9000)
+</programlisting>
+
+    Mais ceci requiert de visiter plusieurs index, donc ce n'est pas nécessaire
+    un gain comparé à l'utilisation d'un seul index et au traitement de l'autre
+    condition par un filtre. Si vous variez les échelles de valeurs impliquées,
+    vous vous apercevrez que le plan change en accord.
+   </para>
+
+   <para>
+    Maintenant, essayons de joindre deux tables, en utilisant les colonnes dont
+    nous avons discuté&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
+
+                                      QUERY PLAN
+--------------------------------------------------------------------------------------
+ Nested Loop  (cost=2.37..553.11 rows=106 width=488)
+   -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=2.37..232.35 rows=106 width=244)
+         Recheck Cond: (unique1 &lt; 100)
+         -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..2.37 rows=106 width=0)
+               Index Cond: (unique1 &lt; 100)
+   -&gt;  Index Scan using tenk2_unique2 on tenk2 t2  (cost=0.00..3.01 rows=1 width=244)
+         Index Cond: ("outer".unique2 = t2.unique2)
+</programlisting>
+   </para>
+
+   <para>
+    Dans cette jointure en boucle imbriquée, le parcours externe utilise le même
+    parcours de bitmap que celui vu précédemment et donc son
+    coût et le nombre de lignes sont les mêmes parce que nous appliquons la
+    clause <literal>WHERE</> <literal>unique1 &lt; 100</literal> à ce n&oelig;ud.
+    La clause <literal>t1.unique2 = t2.unique2</literal> n'a pas encore
+    d'intérêt donc elle n'affecte pas le nombre de lignes du parcours externe.
+    Pour le parcours interne, la valeur <literal>unique2</> de la ligne courante
+    du parcours externe est connectée dans le parcours d'index interne pour
+    produire une condition d'index identique à <literal>t2.unique2 =
+    <replaceable>constante</replaceable></literal>. Donc, nous obtenons le même
+    plan de parcours interne et les coûts que nous obtenons de, disons,
+    <literal>EXPLAIN SELECT * FROM tenk2 WHERE unique2 = 42</literal>. Les coûts
+    du n&oelig;ud correspondant à la boucle sont ensuite initialisés sur la base
+    du coût du parcours externe, avec une répétition du parcours interne pour
+    chaque ligne externe (ici, 106 * 3.01), plus un petit temps CPU pour traiter
+    la jointure.
+   </para>
+
+   <para>
+    Dans cet exemple, le nombre de lignes en sortie de la jointure est
+    identique aux nombres de lignes des deux parcours mais ce n'est pas vrai
+    en règle générale car vous pouvez avoir des clauses <literal>WHERE</>
+    mentionnant les deux tables et qui, donc, peuvent seulement être appliquées au
+    point de jointure, non pas aux parcours d'index. Par exemple, si nous avions
+    ajouté <literal>WHERE ... AND t1.hundred &lt; t2.hundred</literal>, cela
+    aurait diminué le nombre de lignes en sortie du n&oelig;ud de jointure mais
+    n'aurait pas changé les parcours d'index.
+   </para>
+
+   <para>
+    Une façon de rechercher des plans différents est de forcer le planificateur
+    à oublier certaines stratégies qu'il aurait donné vainqueur en utilisant les
+    options d'activation (enable)/désactivation (disable) décrites dans <xref
+    linkend="runtime-config-query-enable">. (C'est un outil complexe mais utile.
+    Voir aussi <xref linkend="explicit-joins">.)
+
+<programlisting>
+SET enable_nestloop = off;
+EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
+
+                                        QUERY PLAN
+------------------------------------------------------------------------------------------
+ Hash Join  (cost=232.61..741.67 rows=106 width=488)
+   Hash Cond: ("outer".unique2 = "inner".unique2)
+   -&gt;  Seq Scan on tenk2 t2  (cost=0.00..458.00 rows=10000 width=244)
+   -&gt;  Hash  (cost=232.35..232.35 rows=106 width=244)
+         -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=2.37..232.35 rows=106 width=244)
+               Recheck Cond: (unique1 &lt; 100)
+               -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..2.37 rows=106 width=0)
+                     Index Cond: (unique1 &lt; 100)
+</programlisting>
+
+    Ce plan propose d'extraire les 100 lignes intéressantes de
+    <classname>tenk1</classname> en utilisant le même parcours d'index, de les
+    placer dans une table de hachage en mémoire puis de faire un parcours
+    séquentiel de <classname>tenk2</classname>, en cherchant dans la table de
+    hachage des correspondances possibles de la ligne <literal>t1.unique2 =
+    t2.unique2</literal> at each <classname>tenk2</classname>. Le coût pour
+    lire <classname>tenk1</classname> et pour initialiser la table de hachage
+    correspond au coût de lancement complet pour la jointure hachée car nous
+    n'obtiendrons pas de lignes jusqu'à avoir lu <classname>tenk2</classname>.
+    Le temps total estimé pour la jointure inclut aussi une charge importante du
+    temps CPU pour requêter la table de hachage 10000 fois. Néanmoins, notez
+    que nous ne chargeons <emphasis>pas</emphasis> 10000 fois 232,35&nbsp;; la
+    configuration de la table de hachage n'est exécutée qu'une fois dans ce type
+    de plan.
+   </para>
+
+   <para>
+    Il est possible de vérifier la précision des coûts estimés par le
+    planificateur en utilisant <command>EXPLAIN ANALYZE</>. Cette commande
+    exécute réellement la requête puis affiche le vrai temps d'exécution
+    accumulé par chaque n&oelig;ud du plan, avec les mêmes coûts estimés que
+    ceux affichés par un simple <command>EXPLAIN</command>. Par exemple, nous
+    pourrions obtenir un résultat comme celui-ci&nbsp;:
+
+<screen>
+EXPLAIN ANALYZE SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
+
+                                                            QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=2.37..553.11 rows=106 width=488) (actual time=1.392..12.700 rows=100 loops=1)
+   -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=2.37..232.35 rows=106 width=244) (actual time=0.878..2.367 rows=100 loops=1)
+         Recheck Cond: (unique1 &lt; 100)
+         -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..2.37 rows=106 width=0) (actual time=0.546..0.546 rows=100 loops=1)
+               Index Cond: (unique1 &lt; 100)
+   -&gt;  Index Scan using tenk2_unique2 on tenk2 t2  (cost=0.00..3.01 rows=1 width=244) (actual time=0.067..0.078 rows=1 loops=100)
+         Index Cond: ("outer".unique2 = t2.unique2)
+ Total runtime: 14.452 ms
+</screen>
+
+    Notez que les valeurs <quote>temps réel</quote> sont en millisecondes alors
+    que les estimations de <quote>coût</quote> sont exprimées dans des unités
+    arbitraires de récupération de page disque&nbsp;; donc il y a peu de chances
+    qu'elles correspondent. L'important est de faire attention aux ratios.
+   </para>
+
+   <para>
+    Dans certains plans de requête, il est possible qu'un n&oelig;ud de
+    sous-plan soit exécuté plus d'une fois. Par exemple, le parcours d'index
+    interne est exécuté une fois par ligne externe dans le plan de boucle
+    imbriquée ci-dessus. Dans de tels cas, la valeur <quote>loops</quote>
+    renvoie le nombre total d'exécution du n&oelig;ud, et le temps réel et les
+    valeurs des lignes affichées sont une moyenne par exécution. Ceci est fait
+    pour que les nombres soient comparables avec la façon dont les estimations
+    de coûts sont affichées. Multipliez par la valeur de <quote>loops</quote>
+    pour obtenir le temps total réellement passé dans le n&oelig;ud.
+   </para>
+
+   <para>
+    Le <literal>Total runtime</literal> (temps total d'exécution) affiché
+    par <command>EXPLAIN ANALYZE</command> inclut les temps de lancement et
+    d'arrêt de l'exécuteur ainsi que le temps passé lors du traitement des
+    lignes de résultat. Il n'inclut pas le temps passé pour l'analyse, la
+    réécriture ou la planification. Pour une requête <command>SELECT</>, le
+    temps total d'exécution sera juste un peu plus important que le temps total
+    indiqué par le no&oelig;ud du plan de haut niveau. Pour les commandes
+    <command>INSERT</>, <command>UPDATE</> et <command>DELETE</>, le temps total
+    d'exécution pourrait être considérablement plus important parce qu'il inclut
+    le temps passé au traitement des lignes de résultat. Dans ces commandes, le
+    temps pour le n&oelig;ud du plan principal est essentiellement le temps
+    passé à calculer les nouvelles lignes et/ou l'emplacement des anciennes mais
+    il n'inclut pas le temps passé à faire des modifications.
+    Le temps passé à lancer les déclencheurs, s'il y en a, est aussi en dehors
+    du n&oelig;ud du plan principal et est affiché séparément pour chaque
+    déclencheur.
+   </para>
+
+   <para>
+    Il est bon de noter que les résultats de <command>EXPLAIN</> ne devraient
+    pas être extrapolés pour des situations autres que celles de vos tests en
+    cours&nbsp;; par exemple, les résultats sur une petite table ne peuvent
+    être appliqués à des tables bien plus importantes. Les estimations de coût
+    du planificateur ne sont pas linéaires et, du coup, il pourrait bien
+    choisir un plan différent pour une table plus petite ou plus grande. Un
+    exemple extrême est celui d'une table occupant une page disque. Vous
+    obtiendrez pratiquement toujours un parcours séquentiel que des index soient
+    disponibles ou non. Le planificateur réalise que cela va nécessiter la
+    lecture d'une seule page disque pour traiter la table dans ce cas, il n'y a
+    donc pas d'intérêt à étendre des lectures de pages supplémentaires pour un
+    index.
+   </para>
+  </sect1>
+
+ <sect1 id="planner-stats">
+  <title>Statistiques utilisées par le planificateur</title>
+
+  <indexterm zone="planner-stats">
+   <primary>statistiques</primary>
+   <secondary>du planificateur</secondary>
+  </indexterm>
+
+  <para>
+   Comme nous avons vu dans la section précédente, le planificateur de requêtes
+   a besoin d'estimer le nombre de lignes récupérées par une requête pour faire
+   les bons choix dans ses plans de requêtes. Cette section fournit un aperçu
+   rapide sur les statistiques que le système utilise pour ces estimations.
+  </para>
+
+  <para>
+   Un composant des statistiques est le nombre total d'entrées dans chaque
+   table et index, ainsi que le nombre de blocs disque occupés par chaque table
+   et index. Cette information est conservée dans la table
+   <link linkend="catalog-pg-class"><structname>pg_class</structname></link>
+   sur les colonnes <structfield>reltuples</structfield> et
+   <structfield>relpages</structfield>. Nous pouvons la regarder avec des
+   requêtes comme celle-ci&nbsp;:
+
+<screen>
+SELECT relname, relkind, reltuples, relpages FROM pg_class WHERE relname LIKE 'tenk1%';
+
+       relname        | relkind | reltuples | relpages
+----------------------+---------+-----------+----------
+ tenk1                | r       |     10000 |      358
+ tenk1_hundred        | i       |     10000 |       30
+ tenk1_thous_tenthous | i       |     10000 |       30
+ tenk1_unique1        | i       |     10000 |       30
+ tenk1_unique2        | i       |     10000 |       30
+(5 rows)
+</screen>
+
+   Ici, nous pouvons voir que <structname>tenk1</structname> contient 10000
+   lignes, comme pour ses index, mais que les index sont bien plus petits que la
+   table (ce qui n'est pas surprenant).
+  </para>
+
+  <para>
+   Pour des raisons d'efficacité, <structfield>reltuples</structfield> et
+   <structfield>relpages</structfield> ne sont pas mis à jour en temps réel, et
+   du coup, elles contiennent habituellement des valeurs un peu obsolètes. Elles
+   sont mises à jour par les commandes <command>VACUUM</>, <command>ANALYZE</>
+   et quelques commandes DDL comme <command>CREATE INDEX</>. Un
+   <command>ANALYZE</> seul, donc ne faisant pas partie d'un <command>VACUUM</>,
+   génère une valeur approximative de <structfield>reltuples</structfield> car
+   il ne lit pas chaque ligne de la table. Le planificateur mettra à l'échelle
+   les valeurs qu'il aura trouver dans <structname>pg_class</structname> pour
+   correspondre à la taille physique de la table, obtenant ainsi une
+   approximation plus proche de la réalité.
+  </para>
+
+  <indexterm>
+   <primary>pg_statistic</primary>
+  </indexterm>
+
+  <para>
+   La plupart des requêtes ne récupère qu'une fraction des lignes dans une
+   table à cause de clauses <literal>WHERE</> qui restreignent les lignes à
+   examiner. Du coup, le planificateur a besoin d'une estimation de la
+   <firstterm>sélectivité</> des clauses <literal>WHERE</>, c'est-à-dire la
+   fraction des lignes qui correspondent à chaque condition de la clause
+   <literal>WHERE</>. L'information utilisée pour cette tâche est stockée dans
+   le catalogue système <link
+   linkend="catalog-pg-statistic"><structname>pg_statistic</structname></link>.
+   Les entrées de <structname>pg_statistic</structname> sont mises à jour par
+   les commandes <command>ANALYZE</> et <command>VACUUM ANALYZE</> et sont
+   toujours approximatives même si elles ont été mises à jour récemment.
+  </para>
+
+  <indexterm>
+   <primary>pg_stats</primary>
+  </indexterm>
+
+  <para>
+   Plutôt que de regarder directement dans
+   <structname>pg_statistic</structname>, il est mieux de visualiser sa vue
+   <structname>pg_stats</structname> lors de l'examen manuel des statistiques.
+   <structname>pg_stats</structname> est conçu pour être plus facilement
+   lisible. De plus, <structname>pg_stats</structname> est lisible par tous
+   alors que <structname>pg_statistic</structname> n'est lisible que par un
+   superutilisateur. (Ceci empêche les utilisateurs non privilégiés d'apprendre
+   certains choses sur le contenu des tables d'autres personnes à partir des
+   statistiques. La vue <structname>pg_stats</structname> est restreinte pour
+   afficher seulement les lignes des tables lisibles par l'utilisateur courant.)
+   Par exemple, nous pourrions lancer&nbsp;:
+
+<screen>
+SELECT attname, n_distinct, most_common_vals FROM pg_stats WHERE tablename = 'road';
+
+ attname | n_distinct |                                                                                                                                                                                  most_common_vals                                                                                                                                                                                   
+---------+------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ name    |  -0.467008 | {"I- 580                        Ramp","I- 880                        Ramp","Sp Railroad                       ","I- 580                            ","I- 680                        Ramp","I- 80                         Ramp","14th                          St  ","5th                           St  ","Mission                       Blvd","I- 880                            "}
+ thepath |         20 | {"[(-122.089,37.71),(-122.0886,37.711)]"}
+(2 rows)
+</screen>
+  </para>
+
+  <para>
+   <structname>pg_stats</structname> est décrit en détail dans
+   <xref linkend="view-pg-stats">.
+  </para>
+
+  <para>
+   Le nombre d'informations stockées dans
+   <structname>pg_statistic</structname>, en particulier le nombre maximum
+   d'éléments dans les tableaux <structfield>most_common_vals</> et
+   <structfield>histogram_bounds</> pour chaque colonne, peut être initialisé
+   sur une base colonne-par-colonne en utilisant la commande <command>ALTER
+   TABLE SET STATISTICS</> ou globalement en initialisant la variable de
+   configuration <xref linkend="guc-default-statistics-target">. La limite par
+   défaut est actuellement de dix entrées. Augmenter la limite pourrait
+   permettre des estimations plus précises du planificateur, en particulier
+   pour les colonnes ayant des distributions de données irrégulières, au prix
+   d'un plus grand espace consommé dans <structname>pg_statistic</structname> et
+   en un temps plus long pour calculer les estimations. Par contre, une limite
+   plus basse pourrait être appropriée pour les colonnes à distributions de
+   données simples.
+  </para>
+
+ </sect1>
+
+ <sect1 id="explicit-joins">
+  <title>Contrôler le planificateur avec des clauses <literal>JOIN</>
+   explicites</title>
+
+  <indexterm zone="explicit-joins">
+   <primary>jointure</primary>
+   <secondary>contrôlant l'ordre</secondary>
+  </indexterm>
+
+  <para>
+   Il est possible de contrôler le planificateur de requêtes à un certain
+   point en utilisant une syntaxe <literal>JOIN</> explicite. Pour voir en
+   quoi ceci est important, nous allons besoin de quelques connaissances.
+  </para>
+
+  <para>
+   Dans une simple requête de jointure, telle que&nbsp;:
+<programlisting>
+SELECT * FROM a, b, c WHERE a.id = b.id AND b.ref = c.id;
+</programlisting>
+   le planificateur est libre de joindre les tables données dans n'importe
+   quel ordre. Par exemple, il pourrait générer un plan de requête qui joint A à
+   B en utilisant la condition <literal>WHERE</> <literal>a.id = b.id</>, puis
+   joint C à cette nouvelle table jointe en utilisant l'autre condition
+   <literal>WHERE</>. Ou il pourrait joindre B à C, puis A au résultat de cette
+   jointure précédente. Ou il pourrait joindre A à C puis les joindre avec B
+   mais cela pourrait ne pas être efficace car le produit cartésien complet de A
+   et C devra être formé alors qu'il n'y a pas de condition applicable dans la
+   clause <literal>WHERE</> pour permettre une optimisation de la jointure.
+   (Toutes les jointures dans l'exécuteur <productname>PostgreSQL</productname>
+   arrivent entre deux tables en entrées donc il est nécessaire de construire le
+   résultat de l'une ou de l'autre de ces façons.) Le point important est que
+   ces différentes possibilités de jointures donnent des résultats
+   sémantiquement équivalents mais pourraient avoir des coûts d'exécution
+   grandement différents. Du coup, le planificateur va toutes les explorer pour
+   trouver le plan de requête le plus efficace.
+  </para>
+
+  <para>
+   Quand une requête implique seulement deux ou trois tables, il y a peu
+   d'ordres de jointures à préparer. Mais le nombre d'ordres de jointures
+   possibles grandit de façon exponentielle au fur et à mesure que le nombre de
+   tables augmente. Au delà de dix tables en entrée, il n'est plus possible de
+   faire une recherche exhaustive de toutes les possibilités et même la
+   planification de six ou sept tables pourrait prendre beaucoup de temps.
+   Quand il y a trop de tables en entrée, le planificateur
+   <productname>PostgreSQL</productname> basculera d'une recherche exhaustive à
+   une recherche <firstterm>génétique</firstterm> probabiliste via un nombre
+   limité de possibilités. (La limite de bascule est initialisée par le paramètre
+   en exécution <xref linkend="guc-geqo-threshold">.) La recherche génétique prend
+   moins de temps mais elle ne trouvera pas nécessairement le meilleur plan
+   possible.
+  </para>
+
+  <para>
+   Quand la requête implique des jointures externes, le planificateur est moins
+   libre qu'il ne l'est lors de jointures internes. Par exemple, considérez
+<programlisting>
+SELECT * FROM a LEFT JOIN (b JOIN c ON (b.ref = c.id)) ON (a.id = b.id);
+</programlisting>
+   Bien que les restrictions de cette requête semblent superficiellement
+   similaires à l'exemple précédent, les sémantiques sont différentes car une
+   ligne doit être émise pour chaque ligne de A qui n'a pas de ligne
+   correspondante dans la jointure entre B et C. Du coup, le planificateur n'a
+   pas de choix dans l'ordre de la jointure ici&nbsp;: il doit joindre B à C
+   puis joindre A à ce résultat. Du coup, cette requête prend moins de temps à
+   planifier que la requête précédente.
+  </para>
+
+  <para>
+   La syntaxe de jointure interne explicite (<literal>INNER
+   JOIN</>, <literal>CROSS JOIN</> ou <literal>JOIN</>) est sémantiquement
+   identique à lister les relations en entrées du <literal>FROM</>, donc il
+   n'est pas nécessaire de contenir l'ordre de la jointure. Mais il est possible
+   d'instruire le planificateur de requêtes de
+   <productname>PostgreSQL</productname> pour traiter les <literal>JOIN</>
+   internes explicites comme s'ils contraignaient l'ordre de jointure. Par
+   exemple, ces trois requêtes sont logiquement équivalentes&nbsp;:
+<programlisting>
+SELECT * FROM a, b, c WHERE a.id = b.id AND b.ref = c.id;
+SELECT * FROM a CROSS JOIN b CROSS JOIN c WHERE a.id = b.id AND b.ref = c.id;
+SELECT * FROM a JOIN (b JOIN c ON (b.ref = c.id)) ON (a.id = b.id);
+</programlisting>
+   Mais si nous disons au planificateur d'honorer l'ordre des
+   <literal>JOIN</>, la deuxième et la troisième prendront moins de temps à
+   planifier que la première. Cet effet n'est pas inquiétant pour seulement
+   trois tables mais cela pourrait bien nous aider avec beaucoup de tables.
+  </para>
+
+  <para>
+   Pour forcer le planificateur à suivre l'ordre <literal>JOIN</> pour les
+   jointures internes, initialisez le paramètre en exécution
+   <xref linkend="guc-join-collapse-limit"> à 1. (D'autres valeurs possibles
+   sont discutées plus bas.)
+  </para>
+
+  <para>
+   Vous n'avez pas besoin de restreindre l'ordre de jointure pour diminuer le 
+   temps de recherche car il est bien d'utiliser les opérateurs <literal>JOIN</>
+   dans les éléments d'une liste <literal>FROM</>. Par exemple, considérez
+<programlisting>
+SELECT * FROM a CROSS JOIN b, c, d, e WHERE ...;
+</programlisting>
+   Avec <varname>join_collapse_limit</> = 1, ceci force le planificateur à
+   joindre A à B avant de les joindre aux autre stables mais sans restreindre
+   ses choix sinon. Dans cet exemple, le nombre d'ordres de jointures possibles
+   est réduit par un facteur de 5.
+  </para>
+
+  <para>
+   Restreindre la recherche du planificateur de cette façon est une technique
+   utile pour réduire les temps de planification et pour diriger le
+   planificateur vers un bon plan de requêtes. Si le planificateur choisit un
+   mauvais ordre de jointure par défaut, vous pouvez le forcer à choisir un
+   meilleur ordre via la syntaxe <literal>JOIN</> &mdash; en supposant que vous
+   connaissiez un meilleur ordre. Une expérimentation est recommandée.
+  </para>
+
+  <para>
+   Un problème très proche et affectant le temps de planification est le
+   regroupement de sous-requêtes dans leur requêtes parent. Par exemple,
+   considérez&nbsp;
+<programlisting>
+SELECT *
+FROM x, y,
+    (SELECT * FROM a, b, c WHERE quelquechose) AS ss
+WHERE quelquechosedautre;
+</programlisting>
+   Cette pourrait survenir suite à l'utilisation d'une vue contenant une
+   jointure&nbsp;; la règle <literal>SELECT</> de la vue sera insérée à la
+   place de la référence de la vue, demande une requête plutôt identique à celle
+   ci-dessus. Normalement, le planificateur essaiera de regrouper la
+   sous-requête avec son parent, donnant
+<programlisting>
+SELECT * FROM x, y, a, b, c WHERE quelquechose AND quelquechosedautre;
+</programlisting>
+   Ceci résulte habituellement en un meilleur plan que de planifier séparément
+   la sous-requête. (Par exemple, les conditions <literal>WHERE</> externes
+   pourraient être telles que joindre X à A élimine en premier lieu un bon
+   nombre de lignes de A, évitant ainsi le besoin de former la sortie complète
+   de la sous-requête.) Mais en même temps, nous avons accru le temps de
+   planification&nbsp;; ici, nous avons une problème de jointure à cinq tables
+   remplaçant un problème de deux jointures séparées à trois tables. À cause de
+   l'augmentation exponentielle du nombre de possibilités, ceci fait une grande
+   différence. Le planificateur essaie d'éviter de se retrouver coincé dans des
+   problèmes de recherche de grosses jointures en ne regroupant pas une
+   sous-requête sur plus de <varname>from_collapse_limit</>
+   éléments sont la résultante de la requête parent. Vous
+   pouvez comparer le temps de planification avec la qualité du plan en
+   ajustant ce paramètre en exécution.
+  </para>
+
+  <para>
+   <xref linkend="guc-from-collapse-limit"> et <xref
+   linkend="guc-join-collapse-limit"> sont
+   nommés de façon similaire parce qu'ils font pratiquement la même chose&nbsp;:
+   l'un d'eux contrôle le moment où le planificateur <quote>aplatira</> les
+   sous-requêtes et l'autre contrôle s'il y aura aplatissement des jointures
+   internes explicites. Typiquement, vous initialiserez 
+   <varname>join_collapse_limit</> comme <varname>from_collapse_limit</> (de
+   façon à ce que les jointures explicites et les sous-requêtes agissent de la
+   même façon) ou vous initialiserez <varname>join_collapse_limit</> à 1 (si
+   vous voulez contrôler l'ordre de jointure des jointures explicites). Mais
+   vous pourriez les initialiser différemment si vous tentez de configurer
+   finement la relation entre le temps de planification et le temps
+   d'exécution.
+  </para>
+ </sect1>
+
+ <sect1 id="populate">
+  <title>Remplir une base de données</title>
+
+  <para>
+   Vous pourriez avoir besoin d'insérer un grand nombre de données pour
+   remplir une base de données au tout début. Cette section contient quelques
+   suggestions pour réaliser cela de la façon la plus efficace.
+  </para>
+
+  <sect2 id="disable-autocommit">
+   <title>Désactivez la validation automatique (autocommit)</title>
+
+   <indexterm>
+    <primary>autocommit</primary>
+    <secondary>gros chargement de données</secondary>
+   </indexterm>
+
+   <para>
+    Désactivez la validation automatique et faites une seule validation à la
+    fin. (En SQL, ceci signifie de lancer <command>BEGIN</command> au début et
+   <command>COMMIT</command> à la fin. Quelques bibliothèques client pourraient
+   le faire derrière votre dos auquel cas vous devez vous assurer que la
+   bibliothèque le fait quand vous le voulez.) Si vous permettez à chaque
+   insertion d'être validée séparément, <productname>PostgreSQL</productname>
+   fait un gros travail pour chaque ligne ajoutée. Un bénéfice supplémentaire de
+   réaliser toutes insertions dans une transaction est que si l'insertion
+   d'une ligne échoue alors les lignes insérées jusqu'à maintenant seront
+   annulées. Vous ne serez donc pas bloqué avec des données partiellement
+   chargées.
+   </para>
+  </sect2>
+
+  <sect2 id="populate-copy-from">
+   <title>Utilisez <command>COPY</command></title>
+
+   <para>
+    Utilisez <xref linkend="sql-copy" endterm="sql-copy-title"> pour charger
+    toutes les lignes en une seule commande, plutôt que d'utiliser une série
+    de commandes <command>INSERT</command>. La commande <command>COPY</command>
+    est optimisée pour charger un grand nombre de lignes&nbsp;; elle est moins
+    flexible que <command>INSERT</command> mais introduit significativement moins
+    de surcharge lors du chargement de grosses quantités de données. Comme
+    <command>COPY</command> est une seule commande, il n'y a pas besoin de
+    désactiver la validation automatique (autocommit) si vous utilisez cette
+    méthode pour remplir une table.
+   </para>
+
+   <para>
+    Si vous ne pouvez pas utiliser <command>COPY</command>, utiliser <xref
+    linkend="sql-prepare" endterm="sql-prepare-title"> pourrait vous aider à
+    créer une instruction préparée <command>INSERT</command>, puis utilisez
+    <command>EXECUTE</command> autant de fois que nécessaire. Ceci évite
+    certaines surcharges lors d'une analyse et d'une planification répétées
+    de commandes <command>INSERT</command>.
+   </para>
+
+   <para>
+    Notez que charger un grand nombre de lignes en utilisant
+    <command>COPY</command> est pratiquement toujours plus rapide que d'utiliser
+    <command>INSERT</command>, même si <command>PREPARE</> est utilisé lorsque
+    de nombreuses insertions sont groupées en une seule transaction.
+   </para>
+  </sect2>
+
+  <sect2 id="populate-rm-indexes">
+   <title>Supprimez les index</title>
+
+   <para>
+    Si vous chargez une table tout juste créée, la façon la plus rapide est de
+    créer la table, de charger en lot les données de cette table en utilisant
+    <command>COPY</command>, puis de créer tous les index nécessaires pour la
+    table. Créer un index sur des données déjà existantes est plus rapide que de
+    mettre à jour de façon incrémentale à chaque ligne ajoutée.
+   </para>
+
+   <para>
+    Si vous ajoutez beaucoup de données à une table existante, il pourrait être
+    avantageux supprimer l'index, de charger la table, puis de recréer l'index.
+    Bien sûr, les performances de la
+    base de données pour les autres utilisateurs pourraient être sévèrement
+    affectées tout le temps où l'index sera manquant. Vous devez aussi y penser
+    à deux fois avant de supprimer des index uniques car la vérification
+    d'erreur apportée par la contrainte unique sera perdue tout le temps où
+    l'index est manquant.
+   </para>
+  </sect2>
+
+  <sect2 id="populate-rm-fkeys">
+   <title>Suppression des contraintes de clés étrangères</title>
+
+   <para>
+    Comme avec les index, une contrainte de clé étrangère peut être vérifiée
+    <quote>en gros volume</> plus efficacement plutôt que ligne par ligne.
+    Donc, il pourrait être utile de supprimer les contraintes de clés
+    étrangères, de charger les données et de créer de nouveau les contraintes.
+    De nouveau, il y a un compromis entre la vitesse de chargement des données
+    et la perte de la vérification des erreurs lorsque la contrainte manque.
+   </para>
+  </sect2>
+
+  <sect2 id="populate-work-mem">
+   <title>Augmentez <varname>maintenance_work_mem</varname></title>
+
+   <para>
+    Augmentez temporairement la variable <xref linkend="guc-maintenance-work-mem">
+    lors du chargement de grosses quantités de données peut amener une
+    amélioration des performances. Ceci aidera à l'accélération des commandes
+    <command>CREATE INDEX</> et <command>ALTER TABLE ADD FOREIGN KEY</>. Cela
+    ne changera pas grand chose pour la commande <command>COPY</>donc, ce
+    conseil est seulement utile quand vous utilisez une des deux ou les deux
+    techniques ci-dessus.
+   </para>
+  </sect2>
+
+  <sect2 id="populate-checkpoint-segments">
+   <title>Augmentez <varname>checkpoint_segments</varname></title>
+
+   <para>
+    Augmenter temporairement la variable de configuration <xref
+    linkend="guc-checkpoint-segments"> peut aussi aider à un chargement
+    rapide de grosses quantités de données. Ceci est dû au fait que charger
+    une grosse quantité de données dans <productname>PostgreSQL</productname>
+    causera la venue trop fréquentes de points de vérification (la
+    fréquent de ces points de vérification est spécifiée par la variable de
+    configuration <varname>checkpoint_timeout</varname>). Quand survient un
+    point de vérification, toutes les pages modifiées sont écrites sur le
+    disque. En augmentant <varname>checkpoint_segments</varname> temporairement
+    lors du chargement des données, le nombre de points de vérification requis
+    peut être diminué.
+   </para>
+  </sect2>
+
+  <sect2 id="populate-analyze">
+   <title>Lancez <command>ANALYZE</command> après</title>
+
+   <para>
+     Quand vous avez changé significativement la distribution des données à
+     l'intérieur d'une table, lancer <xref linkend="sql-analyze"
+     endterm="sql-analyze-title"> est fortement recommandée. Ceci inclut le
+     chargement de grosses quantités de données dans la table. Lancer
+     <command>ANALYZE</command> (ou <command>VACUUM ANALYZE</command>) vous
+     assure que le planificateur dispose de statistiques à jour sur la table.
+     Sans statistiques ou avec des statistiques obsolètes, le planificateur
+     pourrait prendre de mauvaises décisions lors de la planification de la
+     requête, amenant des performances pauvres sur toutes les tables sans
+     statistiques ou avec des statistiques inexactes.
+   </para>
+  </sect2>
+
+  <sect2 id="populate-pg-dump">
+   <title>Quelques notes sur <application>pg_dump</></title>
+
+   <para>
+    Les scripts de sauvegarde générés par <application>pg_dump</> appliquent,
+    automatiquement plusieurs, mais pas toutes, des indications ci-dessus. Pour
+    recharger une sauvegarde <application>pg_dump</> aussi rapidement que
+    possible, vous avez besoin de faire quelques étapes supplémentaires
+    manuellement. (Notez que ces points s'appliquent lors de la
+    <emphasis>restauration</> d'une sauvegarde, et non pas lors de sa
+    <emphasis>création</>. Les mêmes points s'appliquent lors de l'utilisation
+    de <application>pg_restore</> pour charger un fichier de sauvegarde
+    <application>pg_dump</>.)
+   </para>
+
+   <para>
+    Par défaut, <application>pg_dump</> utilise <command>COPY</> et, lorsqu'il
+    génère une sauvegarde complex, schéma et données, il est préférable de
+    charger les données avant de créer les index et les clés étrangères. Donc,
+    dans ce cas, les premières lignes de conduite sont gérées automatiquement.
+    Ce qui vous reste à faire est d'initialiser les valeurs appropriées
+    (c'est-à-dire plus importantes que les valeurs habituelles) pour
+    <varname>maintenance_work_mem</varname> et
+    <varname>checkpoint_segments</varname> avant de charger le script de
+    sauvegarde puis d'exécuter <command>ANALYZE</>.
+   </para>
+
+   <para>
+    Une sauvegarde des données seules utilise toujours <command>COPY</> mais
+    elle ne supprime ni ne recrée les index et elle ne touche généralement pas
+    les clés étrangères.
+
+     <footnote>
+      <para>
+       Vous pouvez obtenir l'effet de désactivation des clés étrangères en
+       utilisant l'option <option>-X disable-triggers</> &mdash; mais réalisez
+       que cela élimine, plutôt que repousse, la validation des clés étrangères
+       et qu'il est du coup possible d'insérer des données mauvaises si vous
+       l'utilisez.
+      </para>
+     </footnote>
+
+    Donc, lorsque vous chargez une sauvegarde ne contenant que les données,
+    c'est à vous de supprimer et recréer les index et clés étrangères si vous
+    souhaitez utiliser ces techniques. Il est toujours utile d'augmenter
+    <varname>checkpoint_segments</varname> lors du chargement des données
+    mais ne vous embêtez pas à augmenter
+    <varname>maintenance_work_mem</varname>&nbsp;; en fait, vous le ferez lors
+    d'une nouvelle création manuelle des index et des clés étrangères. Et
+    n'oubliez pas <command>ANALYZE</> une fois que vous avez terminé.
+   </para>
+  </sect2>
+  </sect1>
+
+ </chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

@@ -1,0 +1,339 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/page.sgml,v 1.5 2005/07/15 06:14:25 guillaume Exp $
+-->
+
+<chapter id="page">
+
+<title>Fichiers de page</title>
+
+<abstract>
+<para>
+Une description du format de page des fichiers de la base de données.
+</para>
+</abstract>
+
+<para>
+Cette section fournit un survol du format de page utilisé par les tables et
+index de <productname>PostgreSQL</productname>.  (Les méthodes d'accès
+aux index n'ont pas besoin d'utiliser ce format de page. Actuellement, toutes
+les méthodes d'index utilisent ce format basique mais les données conservées
+sur les métapages des index ne suivent généralement pas exactement les règles
+de disposition des éléments.) Les tables TOAST et les séquences sont formatées
+comme de simples tables.
+</para>
+
+<para>
+Dans l'explication suivante, un <firstterm>octet</firstterm> est supposé
+contenir huit bits. De plus, le terme <firstterm>élément</firstterm> fait
+référence à une valeur individuelle d'une donnée, stockée sur une page. Dans une
+table, un élément est une ligne&nbsp;; dans un index, un élément est une entrée
+d'index.
+</para>
+
+<para>
+
+<xref linkend="page-table"> affiche la disposition de base d'une page. Il
+existe cinq parties dans chaque page.
+
+</para>
+
+<table tocentry="1" id="page-table">
+<title>Exemple de disposition d'une page</title>
+<titleabbrev>Disposition d'une page</titleabbrev>
+<tgroup cols="2">
+<thead>
+<row>
+<entry>Élément</entry>
+<entry>Description</entry>
+</row>
+</thead>
+
+<tbody>
+
+<row>
+ <entry>PageHeaderData</entry>
+ <entry>20 octets de long. Contient des informations générales sur la
+ page, dont les pointeurs vers les espaces libres.</entry>
+</row>
+
+<row>
+<entry>ItemPointerData</entry>
+<entry>Tableau de couples (décalage, longueur) pointant vers les vrais
+éléments.</entry>
+</row>
+
+<row>
+<entry>Free space</entry>
+<entry>L'espace non alloué. Toutes les nouvelles lignes sont affectées ici,
+généralement à partir de la fin.</entry>
+</row>
+
+<row>
+<entry>Items</entry>
+<entry>Les éléments.</entry>
+</row>
+
+<row>
+<entry>Special Space</entry>
+<entry>Données spécifiques aux méthodes d'accès des index. Des méthodes différentes 
+stockent des données différentes. Vide pour les tables ordinaires.</entry>
+</row>
+
+</tbody>
+</tgroup>
+</table>
+
+ <para>
+
+  Les 20 premiers octets de chaque page consistent en un entête de page
+  (PageHeaderData). Son format est détaillé dans <xref
+  linkend="pageheaderdata-table">. Les deux premiers champs 
+  concernent les WAL. Ils sont suivis de trois champs d'entier codé sur deux octets 
+  (trois fois deux octets, donc), 
+  (<structfield>pd_lower</structfield>,
+  <structfield>pd_upper</structfield>,
+  et <structfield>pd_special</structfield>). Ils représentent les décalages 
+  d'octets pour le début de l'espace libre, la fin de cet espace libre et le
+  début de l'espace spécial. 
+  
+ </para>
+ 
+ <table tocentry="1" id="pageheaderdata-table">
+ <title>Disposition de PageHeaderData</title>
+ <titleabbrev>Disposition de PageHeaderData</titleabbrev>
+ <tgroup cols="4">   
+ <thead>
+  <row> 
+   <entry>Champ</entry>
+   <entry>Type</entry>
+   <entry>Longueur</entry>
+   <entry>Description</entry>
+  </row>
+ </thead>
+ <tbody>
+  <row>
+   <entry>pd_lsn</entry>
+   <entry>XLogRecPtr</entry>
+   <entry>8 octets</entry>
+   <entry>LSN&nbsp;: prochain octet après le dernier octet d'xlog</entry>
+  </row>
+  <row>
+   <entry>pd_sui</entry>
+   <entry>StartUpID</entry>
+   <entry>4 octets</entry>
+   <entry>SUI des dernières modifications (actuellement uniquement
+   utilisé par le <quote>heap AM</quote>)</entry>
+  </row>
+  <row>
+   <entry>pd_lower</entry>
+   <entry>LocationIndex</entry>
+   <entry>2 octets</entry>
+   <entry>Décalage du début de l'espace libre.</entry>
+  </row>
+  <row>
+   <entry>pd_upper</entry>
+   <entry>LocationIndex</entry>
+   <entry>2 octets</entry>
+   <entry>Décalage de la fin de l'espace libre.</entry>
+  </row>
+  <row>
+   <entry>pd_special</entry>
+   <entry>LocationIndex</entry>
+   <entry>2 octets</entry>
+   <entry>Décalage du début de l'espace spécial.</entry>
+  </row>
+  <row>
+   <entry>pd_pagesize_version</entry>
+   <entry>uint16</entry>
+   <entry>2 octets</entry>
+   <entry>Information sur la taille de la page et le numéro de version de la
+   disposition.</entry>
+  </row>
+ </tbody>
+ </tgroup>
+ </table>
+
+ <para>
+  Tous les détails sont disponibles dans src/include/storage/bufpage.h.
+ </para>
+
+ <para>  
+  L'espace spécial est une région à la fin de la page qui est allouée au moment
+  de l'initialisation de la page et contient des informations spécifiques à une
+  méthode d'accès. Les deux derniers octets de l'entête de la page,
+  <structfield>pd_pagesize_version</structfield>, stockent à la fois la taille
+  de la page et un indicateur de version. Depuis
+  <productname>PostgreSQL</productname> 7.3, le numéro de version est 1&nbsp;;
+  les versions précédentes utilisaient le numéro de version 0. (La
+  disposition basique de la page et le format de l'entête n'ont pas changé
+  mais la disposition des entêtes des lignes heap a changé.) La taille de la
+  page est présente essentiellement en tant que vérification croisée&nbsp;; 
+  avoir plus d'une taille de page dans une installation n'est pas supporté.
+ </para>
+
+ <para>
+
+  Après l'entête de page se trouvent les identifiants de l'élément
+  (<type>ItemIdData</type>), chacun nécessitant quatre octets. Un identifiant
+  d'élément contient un décalage d'octets vers le début de l'élément, sa
+  longueur en octets et un ensemble de bits d'attributs qui affectent son
+  interprétation. Les identifiants des nouveaux éléments sont alloués à la volée
+  à partir du début de l'espace libre. Le nombre
+  d'identifiants d'éléments présents se détermine en cherchant
+  <structfield>pd_lower</>, qui est incrémenté à chaque allocation d'un nouvel
+  identifiant. Comme un identifiant d'élément n'est jamais déplacé jusqu'à sa
+  libération, son index peut être utilisé sur le long terme pour
+  référencer un élément, même si l'élément lui-même est déplacé dans la page
+  pour compacter l'espace libre. En fait, chaque pointeur vers un élément
+  (<type>ItemPointer</type>, aussi connu sous le nom de
+  <type>CTID</type>) créé par
+  <productname>PostgreSQL</productname> consiste en un numéro de page et 
+  l'index d'un identifiant d'élément.
+
+ </para>
+
+ <para>
+ 
+  Les éléments eux-mêmes sont stockés dans l'espace à partir de la fin
+  de l'espace libre. La structure exacte varie en fonction du contenu de la
+  table. Les tables et les séquences toutes deux utilisent une structure nommée
+  <type>HeapTupleHeaderData</type>, décrite ci-dessous.
+
+ </para>
+ 
+ <para>
+ 
+  La section finale est la <quote>section spéciale</quote> qui peut contenir
+  tout ce que la méthode d'accès souhaite y stocker. Les tables ordinaires
+  ne l'utilisent absolument pas (indiqué en égalant <structfield>pd_special</> à la
+  taille de la page).
+  
+ </para>
+ 
+ <para>
+
+  Toutes les lignes de table sont structurées de la même façon. Il y a un
+  entête de taille fixe (occupant 23 octets sur la plupart des machines) suivi
+  d'un bitmap nul optionnel, d'un champ optionnel d'identifiant de l'objet et
+  des données utilisateur. L'entête est détaillé dans <xref
+  linkend="heaptupleheaderdata-table">. Les données utilisateur réelles
+  (colonnes de la ligne) commencent au décalage indiqué par
+  <structfield>t_hoff</>, qui doit toujours être un multiple de la distance
+  MAXALIGN pour la plateforme. Le bitmap nul est présent uniquement si le
+  bit <firstterm>HEAP_HASNULL</firstterm> est positionné dans
+  <structfield>t_infomask</structfield>. S'il est présent, il commence juste
+  après l'entête fixé et occupe assez d'octets pour disposer d'un bit par colonne
+  de données (c'est-à-dire l'ensemble des bits de <structfield>t_natts</>).
+  Dans cette liste de bits, un bit à 1 indique non nul, un bit à 0 nul. Quand le
+  bitmap n'est pas présent, toutes les colonnes sont supposées non NULL.
+  L'identifiant de l'objet est présent seulement si le bit
+  <firstterm>HEAP_HASOID</firstterm> est activé dans
+  <structfield>t_infomask</structfield>. S'il est présent, il apparaît juste
+  avant la limite <structfield>t_hoff</>. Tout bit supplémentaire nécessaire
+  pour faire de <structfield>t_hoff</> un multiple de MAXALIGN apparaîtra entre
+  le bitmap nul et l'identifiant de l'objet. (Du coup, ceci nous assure que l'
+  identifiant de l'objet est bien aligné.)
+  
+ </para>
+ 
+ <table tocentry="1" id="heaptupleheaderdata-table">
+ <title>Disposition de HeapTupleHeaderData</title>
+ <titleabbrev>Disposition de HeapTupleHeaderData</titleabbrev>
+ <tgroup cols="4">   
+ <thead>
+  <row> 
+   <entry>Champ</entry>
+   <entry>Type</entry>
+   <entry>Longueur</entry>
+   <entry>Description</entry>
+  </row>
+ </thead>
+ <tbody>
+  <row>
+   <entry>t_xmin</entry>
+   <entry>TransactionId</entry>
+   <entry>4 octets</entry>
+   <entry>insère le tampon XID</entry>
+  </row>
+  <row>
+   <entry>t_cmin</entry>
+   <entry>CommandId</entry>
+   <entry>4 octets</entry>
+   <entry>insère le tampon CID (couvert avec t_xmax)</entry>
+  </row>
+  <row>
+   <entry>t_xmax</entry>
+   <entry>TransactionId</entry>
+   <entry>4 octets</entry>
+   <entry>supprime le tampon XID</entry>
+  </row>
+  <row>
+   <entry>t_cmax</entry>
+   <entry>CommandId</entry>
+   <entry>4 octets</entry>
+   <entry>supprime le tampon CID (couvert avec t_xvac)</entry>
+  </row>
+  <row>
+   <entry>t_xvac</entry>
+   <entry>TransactionId</entry>
+   <entry>4 octets</entry>
+   <entry>XID pour l'opération VACUUM déplaçant la version de la ligne</entry>
+  </row>
+  <row>
+   <entry>t_ctid</entry>
+   <entry>ItemPointerData</entry>
+   <entry>6 octets</entry>
+   <entry>TID actuel de cette version de ligne ou de celle plus récente</entry>
+  </row>
+  <row>
+   <entry>t_natts</entry>
+   <entry>int16</entry>
+   <entry>2 octets</entry>
+   <entry>nombre d'attributs</entry>
+  </row>
+  <row>
+   <entry>t_infomask</entry>
+   <entry>uint16</entry>
+   <entry>2 octets</entry>
+   <entry>différents drapeaux</entry>
+  </row>
+  <row>
+   <entry>t_hoff</entry>
+   <entry>uint8</entry>
+   <entry>1 byte</entry>
+   <entry>décalage des données utilisateur</entry>
+  </row>
+ </tbody>
+ </tgroup>
+ </table>
+
+ <para>
+   Tous les détails sont disponibles dans src/include/access/htup.h.
+ </para>
+
+ <para>
+ 
+  Interpréter les données actuelles peut seulement être fait avec des
+  informations obtenues à partir d'autres tables, 
+  principalement <firstterm>pg_attribute</firstterm>. Les champs particuliers
+  sont <structfield>attlen</structfield> et
+  <structfield>attalign</structfield>. Il n'existe pas de façon d'obtenir
+  directement un attribut particulier, sauf s'il n'y a que des champs de
+  taille fixe et aucun NULL. Tout ceci est emballé dans les fonctions
+  <firstterm>heap_getattr</firstterm>, <firstterm>fastgetattr</firstterm>
+  et <firstterm>heap_getsysattr</firstterm>.
+  
+ </para>
+ <para>
+
+  Pour lire les données, vous avez besoin d'examiner chaque attribut. Vérifiez
+  tout d'abord que le champ est NULL en accord avec le bitmap nul. Si c'est le
+  cas, allez au suivant. Puis, assurez-vous que vous avez le bon alignement. Si
+  le champ est un champ de taille fixe, alors tous les octets sont simplement
+  placés. S'il s'agit d'un champ à taille variable (attlen == -1), alors cela
+  devient un peu plus compliqué car il faut utiliser la structure de longueur
+  variable <type>varattrib</type>. Suivant les options, les données peuvent
+être en ligne, compressées ou dans une autre table (TOAST).
+  
+ </para>
+</chapter>

@@ -1,0 +1,341 @@
+<!-- $PostgreSQL: pgsql/doc/src/sgml/rowtypes.sgml,v 2.4.4.1 2005/01/22 23:05:49 momjian Exp $ -->
+
+<sect1 id="rowtypes">
+ <title>Types composites</title>
+
+ <indexterm>
+  <primary>type composite</primary>
+ </indexterm>
+
+ <indexterm>
+  <primary>type de ligne</primary>
+ </indexterm>
+
+ <para>
+  Un <firstterm>type composite</> décrit la structure d'une ligne ou d'un
+  enregistrement&nbsp;; il est en essence une simple liste de noms de champs et
+  de leur types de données. <productname>PostgreSQL</productname> autorise
+  l'utilisation de valeurs de types composite identiques de plusieurs façons à
+  l'utilisation des types simples. Par exemple, une colonne d'une table peut
+  être déclarée comme étant de type composite.
+ </para>
+
+ <sect2>
+  <title>Déclaration de types composite</title>
+
+ <para>
+  Voici deux exemples simples de définition de types composite&nbsp;:
+<programlisting>
+CREATE TYPE complexe AS (
+    r       double precision,
+    i       double precision
+);
+
+CREATE TYPE element_inventaire AS (
+    nom             text,
+    id_fournisseur  integer,
+    prix            numeric
+);
+</programlisting>
+  La syntaxe est comparable à <command>CREATE TABLE</> sauf que seuls les noms
+  de champs et leur types peuvent être spécifiés&nbsp;; aucune contrainte (telle
+  que <literal>NOT NULL</>) ne peut être inclus actuellement. Notez que le mot
+  clé <literal>AS</> est essentiel&nbsp;; sans lui, le système penserait à un
+  autre genre de commande <command>CREATE TYPE</> et vous obtiendriez d'étranges
+  erreurs de syntaxe.
+ </para>
+
+ <para>
+  Après avoir défini les types, nous pouvons les utiliser pour créer des
+  tables&nbsp;:
+
+<programlisting>
+CREATE TABLE disponible (
+    element   element_inventaire,
+    nombre    integer
+);
+
+INSERT INTO disponible VALUES (ROW('fuzzy dice', 42, 1.99), 1000);
+</programlisting>
+
+  ou des fonctions&nbsp;:
+
+<programlisting>
+CREATE FUNCTION prix_extension(element_inventaire, integer) RETURNS numeric
+AS 'SELECT $1.prix * $2' LANGUAGE SQL;
+
+SELECT prix_extension(element, 10) FROM disponible;
+</programlisting>
+
+ </para>
+
+ <para>
+  Quand vous créez une table, un type composite est automatiquement créé, avec
+  le même nom que la table, pour représenter le type de ligne de la table. Par
+  exemple, si nous avions dit
+<programlisting>
+CREATE TABLE element_inventaire (
+    nom             text,
+    id_fournisseur  integer REFERENCES fournisseur,
+    prix            numeric CHECK (prix &gt; 0)
+);
+</programlisting>
+  alors le même type composite <literal>element_inventaire</> montré ci-dessus
+  aurait été créé et pourrait être utilisé comme ci-dessus. Néanmoins, notez
+  une restriction importante de l'implémentation actuelle&nbsp;: comme aucune
+  contrainte n'est associée avec un type composite, les contraintes indiquées
+  dans la définition de la table <emphasis>ne sont pas appliquées</> aux valeurs
+  du type composite en dehors de la table. (Un contournement partiel est
+  d'utiliser les types de domaine comme membres de types composites.)
+ </para>
+ </sect2>
+
+ <sect2>
+  <title>Entrée d'une valeur composite</title>
+
+  <indexterm>
+   <primary>type composite</primary>
+   <secondary>constante</secondary>
+  </indexterm>
+
+  <para>
+   Pour écrire une valeur composite comme une constante littérale, englobez
+   les valeurs du champ dans des parenthèses et séparez-les par des virgules.
+   Vous pouvez placer des guillemets doubles autour de chaque valeur de champ
+   et vous devez le faire si elle contient des virgules ou des parenthèses.
+   (Plus de détails ci-dessous). Donc, le format général d'une constante
+   composite est le suivant&nbsp;:
+<synopsis>
+'( <replaceable>val1</replaceable> , <replaceable>val2</replaceable> , ... )'
+</synopsis>
+   Voici un exemple
+<programlisting>
+'("fuzzy dice",42,1.99)'
+</programlisting>
+   qui serait une valeur valide du type <literal>element_inventaire</> défini
+   ci-dessus. Pour rendre un champ NULL, n'écrivez aucun caractère dans sa
+   position dans la liste. Par exemple, cette constante spécifie un troisième
+   champ NULL&nbsp;:
+<programlisting>
+'("fuzzy dice",42,)'
+</programlisting>
+   Si vous voulez un champ vide au lieu d'une valeur NULL, saisissez deux
+   guillemets&nbsp;:
+<programlisting>
+'("",42,)'
+</programlisting>
+   Ici, le premier champ est une chaîne vide non NULL alors que le troisième
+   est NULL.
+  </para>
+
+  <para>
+   (Ces constantes sont réellement seulement un cas spécial de constantes
+   génériques de type discutées dans <xref
+   linkend="sql-syntax-constants-generic">. La constante est initialement
+   traitée comme une chaîne et passée à la routine de conversion de l'entrée
+   de type composite. Une spécification explicite de type pourrait être
+   nécessaire.)
+  </para>
+
+ <para>
+  La syntaxe d'expression <literal>ROW</literal> pourrait aussi être utilisée
+  pour construire des valeurs composites. Dans la plupart des cas, ceci est
+  considérablement plus simple à utiliser que la syntaxe de chaîne littérale car
+  vous n'avez pas à vous inquiéter des multiples couches de guillemets. Nous avons
+  déjà utilisé cette méthode ci-dessus&nbsp;:
+<programlisting>
+ROW('fuzzy dice', 42, 1.99)
+ROW('', 42, NULL)
+</programlisting>
+  Le mot clé ROW est optionnel si vous avez plus d'un champ dans l'expression,
+  donc ceci peut être simplifié avec
+<programlisting>
+('fuzzy dice', 42, 1.99)
+('', 42, NULL)
+</programlisting>
+  La syntaxe de l'expression <literal>ROW</> est discutée avec plus de détails
+  dans <xref linkend="sql-syntax-row-constructors">.
+ </para>
+ </sect2>
+
+ <sect2>
+  <title>Accéder aux types composite</title>
+
+ <para>
+  Pour accéder à un champ d'une colonne composite, vous pouvez écrire un point
+  et le nom du champ, un peu comme la sélection d'un champ à partir d'un nom
+  de table. En fait, c'est tellement similaire que vous pouvez souvent utiliser
+  des parenthèses pour éviter une confusion de l'analyseur. Par exemple, vous
+  pouvez essayer de sélectionner des sous-champs à partir de notre exemple de
+  table, <literal>disponible</>, avec quelque chose comme&nbsp;:
+
+<programlisting>
+SELECT element.nom FROM disponible WHERE element.prix &gt; 9.99;
+</programlisting>
+
+  Ceci ne fonctionnera pas car le nom <literal>element</> est pris pour le nom
+  d'une table, et non pas d'un champ, suivant les règles de la syntaxe SQL. Vous
+  devez l'écrire ainsi&nbsp;:
+
+<programlisting>
+SELECT (element).nom FROM disponible WHERE (element).prix &gt; 9.99;
+</programlisting>
+
+  ou si vous avez aussi besoin d'utiliser le nom de la table (par exemple dans
+  une requête multi-table), de cette façon&nbsp;:
+
+<programlisting>
+SELECT (disponible.element).nom FROM disponible WHERE (disponible.element).prix &gt; 9.99;
+</programlisting>
+
+  Maintenant, l'objet entre parenthèses est correctement interprété comme une
+  référence à la colonne <literal>element</>, puis le sous-champ peut être
+  sélectionné à partir de lui.
+ </para>
+
+ <para>
+  Des problèmes syntaxiques similaires s'appliquent quand vous sélectionnez un
+  champ à partir d'une valeur composite. En fait, pour sélectionner un seul champ
+  à partir du résultat d'une fonction renvoyant une valeur composite, vous aurez
+  besoin d'écrire quelque chose comme
+
+<programlisting>
+SELECT (ma_fonction(...)).champ FROM ...
+</programlisting>
+
+  Sans les parenthèses supplémentaires, ceci provoquera une erreur.
+ </para>
+ </sect2>
+
+ <sect2>
+  <title>Modifier les types composite</title>
+
+ <para>
+  Voici quelques exemples de la bonne syntaxe pour insérer et mettre à jour
+  des colonnes composites. Tout d'abord pour insérer ou modifier une colonne
+  entière&nbsp;:
+
+<programlisting>
+INSERT INTO matab (col_complexe) VALUES((1.1,2.2));
+
+UPDATE matab SET col_complexe = ROW(1.1,2.2) WHERE ...;
+</programlisting>
+
+  Le premier exemple omet <literal>ROW</>, le deuxième l'utilise&nbsp;; nous
+  pouvons le faire des deux façons.
+ </para>
+
+ <para>
+  Nous pouvons mettre à jour un sous-champ individuel d'une colonne
+  composite&nbsp;:
+
+<programlisting>
+UPDATE matab SET col_complexe.r = (col_complexe).r + 1 WHERE ...;
+</programlisting>
+
+  Notez ici que nous n'avons pas besoin de (et, en fait, ne pouvons pas) placer
+  des parenthèses autour des noms de colonnes apparaissant juste après
+  <literal>SET</>, mais nous avons besoin de parenthèses lors de la référence à
+  la même colonne dans l'expression à droite du signe d'égalité.
+ </para>
+
+ <para>
+  Et nous pouvons aussi spécifier des sous-champs comme cibles de la commande
+  <command>INSERT</>&nbsp;:
+
+<programlisting>
+INSERT INTO matab (col_complexe.r, col_complexe.i) VALUES(1.1, 2.2);
+</programlisting>
+
+  Si tous les sous-champs d'une colonne ne sont pas spécifiés, ils sont remplis
+  avec une valeur NULL.
+ </para>
+ </sect2>
+
+ <sect2>
+  <title>Syntaxe en entrée et sortie d'un type composite</title>
+
+  <para>
+   La représentation texte externe d'une valeur composite consiste en des
+   éléments qui sont interprétés suivant les règles de conversion
+   d'entrées/sorties pour les types de champs individuels, plus des décorations
+   indiquant la structure composite. Cette décoration consiste en des parenthèses
+   (<literal>(</> et <literal>)</>) autour de la valeur entière ainsi que des
+   virgules (<literal>,</>) entre les éléments adjacents. Des espace blancs en
+   dehors des parenthèses sont ignorés mais à l'intérieur des parenthèses, ils
+   sont considérés comme faisant partie de la valeur du champ et pourrait ou non
+   être significatif suivant les règles de conversion de l'entrée pour le type
+   de données du champ. Par exemple, dans
+<programlisting>
+'(  42)'
+</programlisting>
+   l'espace blanc sera ignoré si le type du champ est un entier, mais pas s'il
+   s'agit d'un champ de type texte.
+  </para>
+
+  <para>
+   Comme indiqué précédemment, lors de l'écriture d'une valeur composite, vous
+   pouvez saisir des guillemets doubles autour de chaque valeur de champ
+   individuel. Vous <emphasis>devez</> le faire si la valeur du champ pourrait
+   sinon gêner l'analyseur de la valeur du champ composite. En particulier, les
+   champs contenant des parenthèses, des virgules, des guillemets doubles ou des
+   antislashs doivent être entre guillemets doubles. Pour placer un guillemet
+   double ou un antislash dans la valeur d'un champ composite entre guillemets,
+   faites-le précéder d'un antislash. (De plus, une paire de guillemets doubles
+   à l'intérieur d'une valeur de champ à guillemets doubles est pris pour
+   représenter un caractère guillemet double, en analogie aux règles des
+   guillemets simples dans les chaînes SQL littérales.) Autrement, vous pouvez
+   utiliser l'échappement par antislash pour protéger tous les caractères de
+   données qui auraient été pris pour une syntaxe composite.
+  </para>
+
+  <para>
+   Une valeur de champ composite vide (aucun caractère entre les virgules ou
+   parenthèses) représente une valeur NULL. Pour écrire une valeur qui est une
+   chaîne vide plutôt qu'une valeur NULL, écrivez <literal>""</>.
+  </para>
+
+  <para>
+   La routine de sortie composite placera des guillemets doubles autour des
+   valeurs de champs s'ils sont des chaînes vides ou s'ils contiennent des
+   parenthèses, virgules, guillemets doubles, antislash ou espaces blancs.
+   (Faire ainsi pour les espaces blancs n'est pas essentiel mais aide à la
+   lecture.) Les guillemets doubles et antislashs dans les valeurs des
+   champs seront doublés.
+  </para>
+
+ <note>
+  <para>
+   Rappelez-vous que ce que vous allez saisir dans une commande SQL sera tout
+   d'abord interprété comme une chaîne littérale, puis comme un composite. Ceci
+   double le nombre d'antislash dont vous avez besoin. Par exemple, pour insérer
+   un champ <type>text</> contenant un guillemet double et un antislash dans
+   une valeur composite, vous devez écrire
+<programlisting>
+INSERT ... VALUES ('("\\"\\\\")');
+</programlisting>
+   Le processeur des chaînes littérales supprime un niveau d'antislash de façon
+   à ce qui arrive à l'analyseur de valeurs composites ressemble à
+   <literal>("\"\\")</>. À son tour, la chaîne remplie par la routine d'entrée
+   du type de données <type>text</> devient <literal>"\</>. (Si nous étions en
+   train de travailler avec un type de données dont la routine d'entrée traite
+   aussi les antislashs spécialement, <type>bytea</> par exemple, nous
+   pourrions avoir besoin d'au plus huit antislashs dans la commande pour obtenir
+   un antislash dans le champ composite stocké.) Le guillemet dollar (voir <xref 
+   linkend="sql-syntax-dollar-quoting">) pourrait être utilisé pour éviter le
+   besoin des antislashs doublés.
+  </para>
+ </note>
+
+ <tip>
+  <para>
+   La syntaxe du constructeur <literal>ROW</> est habituellement plus simple à
+   utiliser que la syntaxe du littérale composite lors de l'écriture de valeurs
+   composites dans des commandes SQL. Dans <literal>ROW</>, les valeurs
+   individuelles d'un champ sont écrits de la même façon qu'ils l'auraient été
+   en étant pas membres du composite.
+  </para>
+ </tip>
+ </sect2>
+
+</sect1>
