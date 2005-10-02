@@ -1,0 +1,275 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/xtypes.sgml,v 1.8 2005/07/15 06:14:31 guillaume Exp $
+-->
+
+ <sect1 id="xtypes">
+  <title>Types définis par l'utilisateur</title>
+
+  <indexterm zone="xtypes">
+   <primary>type de données</primary>
+   <secondary>défini par l'utilisateur</secondary>
+  </indexterm>
+
+  <para>
+   Décrit dans la <xref linkend="extend-type-system">,
+   <productname>PostgreSQL</productname> peut être étendu pour supporter de
+   nouveaux types de données. Cette section décrit comment définir de nouveaux
+   types de base, qui sont des types de données définis en-dessous du niveau du
+   langage <acronym>SQL</>. Créer un nouveau type de base requiert
+   l'implémentation de fonctions pour opérer sur le type dans un langage de base
+   du niveau du C.
+  </para>
+
+  <para>
+   Les exemples de cette section sont disponibles dans
+   <filename>complex.sql</filename> et <filename>complex.c</filename>
+   du répertoire <filename>src/tutorial</> de la distribution des sources.
+   Voir le fichier <filename>README</> de ce répertoire pour les instructions
+   d'exécution des exemples.
+  </para>
+
+ <para>
+  <indexterm>
+   <primary>fonction d'entrée</primary>
+  </indexterm>
+  <indexterm>
+   <primary>fonction de sortie</primary>
+  </indexterm>
+  Un type défini par l'utilisateur doit toujours avoir des fonctions d'entrée
+  et de sortie. <indexterm><primary>fonction d'entrée</primary><secondary>d'un
+  type de données</secondary></indexterm><indexterm><primary>fonction de sortie
+  </primary><secondary>d'un type de données</secondary></indexterm>Ces
+  fonctions déterminent comment le type apparaît dans les chaînes de caractères
+  (pour l'entrée par l'utilisateur et le renvoi à l'utilisateur) et comment ce
+  type est organisé en mémoire. La fonction d'entrée prend comme argument une
+  chaîne de caractères terminée par NULL et renvoie la représentation interne
+  (en mémoire) du type. La fonction de sortie prend comme argument la
+  représentation interne du type et renvoie une chaîne de caractères terminée
+  par NULL. Si vous voulez faire plus avec le type que simplement l'enregistrer,
+  vous devez apporter des fonctions supplémentaires pour implémenter toutes
+  opérations que vous souhaitez avoir pour ce type.
+ </para>
+
+ <para>
+  Supposons que nous voulions définir un type <type>complex</> représentant les
+  nombres complexes. Une façon naturelle de représenter un nombre complexe en
+  mémoire serait la structure C suivante&nbsp;:
+
+<programlisting>
+typedef struct Complex {
+    double      x;
+    double      y;
+} Complex;
+</programlisting>
+
+  Nous aurons besoin d'utiliser ce type par référence car il est trop important
+  pour tenir sur une seule valeur <type>Datum</>.
+ </para>
+
+ <para>
+  Comme représentation externe du type sous forme de chaîne, nous choisissons
+  une chaîne de la forme <literal>(x,y)</literal>.
+ </para>
+
+ <para>
+  Habituellement, les fonctions d'entrée et de sortie ne sont pas compliquées à
+  écrire, surtout la fonction de sortie. Mais en définissant la représentation
+  externe du type par une chaîne, souvenez-vous que vous devez éventuellement
+  écrire un analyseur complet et robuste pour cette représentation en tant que
+  fonction d'entrée. Par exemple&nbsp;:
+
+<programlisting>
+PG_FUNCTION_INFO_V1(complex_in);
+
+Datum
+complex_in(PG_FUNCTION_ARGS)
+{
+    char       *str = PG_GETARG_CSTRING(0);
+    double      x,
+                y;
+    Complex    *result;
+
+    if (sscanf(str, " ( %lf , %lf )", &amp;x, &amp;y) != 2)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                 errmsg("invalid input syntax for complex: \"%s\"",
+                        str)));
+
+    result = (Complex *) palloc(sizeof(Complex));
+    result-&gt;x = x;
+    result-&gt;y = y;
+    PG_RETURN_POINTER(result);
+}
+</programlisting>
+
+  La fonction de sortie peut simplement s'écrire&nbsp;:
+
+<programlisting>
+PG_FUNCTION_INFO_V1(complex_out);
+
+Datum
+complex_out(PG_FUNCTION_ARGS)
+{
+    Complex    *complex = (Complex *) PG_GETARG_POINTER(0);
+    char       *result;
+
+    result = (char *) palloc(100);
+    snprintf(result, 100, "(%g,%g)", complex-&gt;x, complex-&gt;y);
+    PG_RETURN_CSTRING(result);
+}
+</programlisting>
+ </para>
+
+ <para>
+  Vous devriez faire attention en écrivant des fonctions d'entrée et de sortie
+  inverses l'une de l'autre. Sinon, vous aurez de graves problèmes quand vous
+  aurez besoin de sauvegarder votre base de données dans un fichier et ensuite
+  de le relire. Ceci est un problème particulièrement fréquent quand des nombres
+  à virgule flottante sont concernés.
+</para>
+
+ <para>
+  De manière optionnelle, un type défini par l'utilisateur peut apporter des
+  routines d'entrée et de sortie binaires. Les entrées/sorties binaires sont
+  normalement plus rapides mais moins portables que les entrées/sorties
+  textuelles. Avec les entrées/sorties textuelles, c'est à vous de définir
+  exactement la représentation binaire externe. La plupart des types de données
+  intégrés essaient d'apporter une représentation binaire indépendante de la
+  machine. Pour <type>complex</type>, nous allons revenir aux convertisseurs
+  d'entrées/sorties binaires pour le type <type>float8</>&nbsp;:
+
+<programlisting>
+PG_FUNCTION_INFO_V1(complex_recv);
+
+Datum
+complex_recv(PG_FUNCTION_ARGS)
+{
+    StringInfo  buf = (StringInfo) PG_GETARG_POINTER(0);
+    Complex    *result;
+
+    result = (Complex *) palloc(sizeof(Complex));
+    result-&gt;x = pq_getmsgfloat8(buf);
+    result-&gt;y = pq_getmsgfloat8(buf);
+    PG_RETURN_POINTER(result);
+}
+
+PG_FUNCTION_INFO_V1(complex_send);
+
+Datum
+complex_send(PG_FUNCTION_ARGS)
+{
+    Complex    *complex = (Complex *) PG_GETARG_POINTER(0);
+    StringInfoData buf;
+
+    pq_begintypsend(&amp;buf);
+    pq_sendfloat8(&amp;buf, complex-&gt;x);
+    pq_sendfloat8(&amp;buf, complex-&gt;y);
+    PG_RETURN_BYTEA_P(pq_endtypsend(&amp;buf));
+}
+</programlisting>
+ </para>
+
+ <para>
+  Pour définir le type <type>complex</type>, nous avons besoin de créer les
+  fonctions d'entrées/sorties définies par l'utilisateur avant de créer le
+  type&nbsp;:
+
+
+<programlisting>
+CREATE FUNCTION complex_in(cstring)
+    RETURNS complex
+    AS '<replaceable>filename</replaceable>'
+    LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION complex_out(complex)
+    RETURNS cstring
+    AS '<replaceable>filename</replaceable>'
+    LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION complex_recv(internal)
+   RETURNS complex
+   AS '<replaceable>filename</replaceable>'
+   LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION complex_send(complex)
+   RETURNS bytea
+   AS '<replaceable>filename</replaceable>'
+   LANGUAGE C IMMUTABLE STRICT;
+</programlisting>
+
+ Notez que la déclaration des fonctions d'entrée et de sortie doit pouvoir
+ référencer un type non encore défini. Ceci est permis mais provoque des
+ messages d'avertissement qui peuvent être ignorés. La fonction en entrée doit
+ d'abord apparaître.
+</para>
+
+ <para>
+  Finalement, nous pouvons déclarer le type de données&nbsp;:
+<programlisting>
+CREATE TYPE complex (
+   internallength = 16, 
+   input = complex_in,
+   output = complex_out,
+   receive = complex_recv,
+   send = complex_send,
+   alignment = double
+);
+</programlisting>
+ </para>
+
+ <para>
+  Quand vous définissez un nouveau type de base,
+  <productname>PostgreSQL</productname> fournit automatiquement le support pour
+  des tableaux de ce type. <indexterm><primary>tableau</primary><secondary>types
+  définis par l'utilisateur</secondary></indexterm> Pour des raisons
+  historiques, le type tableau a le même nom que le type de base avec un
+  caractère souligné (<literal>_</>) en préfixe.
+ </para>
+
+ <para>
+  Une fois que le type de données existe, nous pouvons déclarer les fonctions
+  supplémentaires pour apporter des opérations utiles pour ce type de données.
+  Les opérateurs peuvent alors être définis au-dessus de ces fonctions et, si
+  nécessaire, les classes d'opérateurs peuvent aussi être créées pour apporter
+  le support de l'indexage du type de données. Ces couches supplémentaires sont
+  discutées dans les sections suivantes.
+ </para>
+
+ <para>
+  Si les valeurs de votre type de donnée peuvent excéder une taille de quelques
+  centaines d'octets (sous la forme interne), vous devriez marquer le type de
+  données comme TOAST-able. <indexterm><primary>TOAST</primary><secondary>types
+  définis par l'utilisateur</secondary></indexterm> Pour cela, la
+  représentation interne doit suivre le cadre standard des données à longueur
+  variable&nbsp;: les quatre premiers octets doivent être un <type>int32</type>
+  contenant la longueur totale en octets de la donnée (lui-même inclus). Les
+  fonctions C opérant sur le type de données doivent faire bien attention à
+  déballer toutes les valeurs toast des données (ce détail peut normalement être
+  cachée dans les macros <function>GETARG</function>).  Puis, quand on exécute
+  la commande <command>CREATE TYPE</command>, spécifiez la longueur interne
+  comme <literal>variable</> et choisissez l'option de stockage en mémoire
+  appropriée.
+ </para>
+
+ <para>
+  Pour plus de détails, voir la description de la commande
+  <xref linkend="sql-createtype" endterm="sql-createtype-title">.
+ </para>
+</sect1>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

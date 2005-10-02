@@ -1,0 +1,2413 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/datetime.sgml,v 1.11 2005/09/15 07:03:16 guillaume Exp $
+-->
+
+ <appendix id="datetime-appendix">
+  <title>Support de Date/Heure</title>
+
+  <para>
+   <productname>PostgreSQL</productname> utilise un parseur heuristique interne
+   pour le support de toutes insertions de date/heure. Les dates et heures sont
+entrées
+   en tant que chaînes, et sont découpées en champs distincts avec une
+détermination
+   préliminaire du type d'information contenu dans le champ. Chaque champ est
+   interpreté et attribu une valeur numérique, ignoré ou rejeté.
+   Le parseur contient des tables de correspondance internes pour tout les
+champs
+   textuels y compris les mois, les jours de la semaine et les fuseaux
+horaires.
+  </para>
+
+  <para>
+   Cette annexe contient des informations sur le contenu de ces tables de
+   correspondance et décrit les méthodes utilisées par le parseur pour décoder
+   les dates et heures.
+  </para>
+
+  <sect1>
+   <title>Interprétation des Entrées Date/Heure</title>
+
+   <para>
+    Les entrées de type date/heure sont toutes décodés en utilisant le processus
+suivant.
+   </para>
+
+   <procedure>
+    <step>
+     <para>
+      Diviser la chaîne d'entrée en marqueurs et cataloguer chaque marqueur en
+tant que
+      une chaîne, heure, fuseau horaire ou nombre.
+     </para>
+
+     <substeps>
+      <step>
+       <para>
+	Si un marqueur numérique contient les deux points (<literal>:</literal>), ceci
+est une
+	chaîne d'heure. Inclure tout les chiffres et deux points suivants.
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si un marqueur numérique contient un tiret (<literal>-</literal>), une barre
+oblique
+	(<literal>/</literal>), ou plus d'un point (<literal>.</literal>), ceci est une
+	chaîne de date qui contient peut être un mois sous forme de texte.
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si un marqueur est uniquement numérique alors il est soit un champ
+simple
+        ou une date concaténée ISO 8601 (i.e.,
+	<literal>19990113</literal> pour le 13 janvier 1999) ou heure
+	(i.e., <literal>141516</literal> pour 14:15:16).
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si le marqueur commence avec un plus (<literal>+</literal>) ou un moins
+	(<literal>-</literal>), alors il est soit un fuseau horaire, soit un champ
+	spécial.
+       </para>
+      </step>
+     </substeps>
+    </step>
+
+    <step>
+     <para>
+      Si un marqueur est une chaîne texte, le comparer avec les différentes chaînes
+possibles.
+     </para>
+     
+     <substeps>
+      <step>
+       <para>
+	Faire une recherche binaire dans la table de correspondance pour le
+marqueur
+	en tant que chaîne spéciale (i.e., <literal>today</literal>),
+	jour (i.e., <literal>Thursday</literal>),
+	mois (i.e., <literal>January</literal>),
+	ou mot bruit (i.e., <literal>at</literal>, <literal>on</literal>).
+       </para>
+
+       <para>
+	Fixer les valeurs de champ et le masque binaire pour les champs.
+	Par exemple, fixer l'année, le mois, le jour pour
+<literal>today</literal>,
+	et aussi l'heure, les minutes, les secondes pour <literal>now</literal>.
+       </para>
+      </step>
+      
+      <step>
+       <para>
+	Si pas trouvé, faire une recherche binaire similaire dans une table de
+correspondance
+	pour faire correspondre le marqueur avec un fuseau horaire.
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si toujours pas trouvé, soulève une erreur.
+       </para>
+      </step>
+     </substeps>
+    </step>
+    
+    <step>
+     <para>
+      Quand le marqueur est un nombre ou un champ de nombre:
+     </para>
+
+     <substeps>
+      <step>
+       <para>
+	S'il y a huit ou six chiffres,
+	et aucun autre champ date n'a été lu, alors l'interpréter comme
+	une <quote>date concaténée</quote> (i.e.,
+	<literal>19990118</literal> ou <literal>990118</literal>).
+	L'interprétation est <literal>AAAAMMJJ</> ou <literal>AAMMJJ</>.
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si le marqueur est de trois chiffres
+	et une année a déjà été lue, alors il sera interprété comme un jour de l'année.
+       </para>
+      </step>
+      
+      <step>
+       <para>
+	Si quatre ou six chiffres et une année ont déjé été lus, alors il sera
+interprété
+	comme une heure (<literal>HHMM</> or <literal>HHMMSS</>).
+       </para>
+      </step>
+
+      <step>
+       <para>
+	Si trois chiffres ou plus et aucun champ date n'a été trouvé, il sera
+interprété
+	comme année (ceci force l'ordre aa-mm-jj des champs dates restants).
+       </para>
+      </step>
+
+      <step>
+       <para>
+        Sinon l'ordre de champ date est supposé suivre le paramêtre
+	<varname>DateStyle</varname> : mm-jj-aa, jj-mm-aa, ou aa-mm-jj.
+	Soulève une erreur si un champ jour ou mois est découvert hors des
+limites.
+       </para>
+      </step>
+     </substeps>
+    </step>
+
+    <step>
+     <para>
+      Si BC a été spécifié, rendre NULL l'année et ajouter un pour
+      le stockage interne.  (Il n'y a pas d'année zéro dans le calendrier
+Grégorien,
+      alors numériquement 1 BC devient l'année zéro.)
+     </para>
+    </step>
+
+    <step>
+     <para>
+      Si BC n'a pas été spécifié et le champ année fait deux chiffres en
+longueur, alors
+      ajuster l'année a quatre chiffres. Si le champ vaut moins que 70 alors
+ajouter 2000,
+      sinon ajouter 1900.
+
+      <tip>
+       <para>
+	Les années Grégoriennes AD 1-99 peuvent être entrées en utilisant 4
+chiffres avec les
+	zéros de devant (i.e., <literal>0099</literal> est AD 99). Les versions
+précédentes de
+	<productname>PostgreSQL</productname> acceptaient les années avec trois
+chiffres et
+        avec un seul chiffre mais depuis la version 7.0, les regles ont été
+renforcées
+	pour réduire de possibles ambiguïtés.
+       </para>
+      </tip>
+     </para>
+    </step>
+   </procedure>
+  </sect1>
+
+
+  <sect1 id="datetime-keywords">
+   <title>Mots clés Date/Heure</title>
+
+   <para>
+    <xref linkend="datetime-month-table"> montre les marqueurs qui sont
+    reconnus commme les noms des mois.
+   </para>
+
+    <table id="datetime-month-table">
+     <title>Noms des mois</title>
+     <tgroup cols="2">
+      <thead>
+       <row>
+	<entry>Mois</entry>
+	<entry>Abréviations</entry>
+       </row>
+      </thead>
+      <tbody>
+        <row>
+          <entry>Janvier</entry>
+          <entry>Jan</entry>
+        </row>
+        <row>
+          <entry>Février</entry>
+          <entry>Feb</entry>
+        </row>
+        <row>
+          <entry>Mars</entry>
+          <entry>Mar</entry>
+        </row>
+        <row>
+          <entry>Avril</entry>
+          <entry>Apr</entry>
+        </row>
+        <row>
+          <entry>Mai</entry>
+          <entry></entry>
+        </row>
+        <row>
+          <entry>Juin</entry>
+          <entry>Jun</entry>
+        </row>
+        <row>
+          <entry>Juillet</entry>
+          <entry>Jul</entry>
+        </row>
+        <row>
+          <entry>Août</entry>
+          <entry>Aug</entry>
+        </row>
+        <row>
+          <entry>Septembre</entry>
+          <entry>Sep, Sept</entry>
+        </row>
+        <row>
+          <entry>Octobre</entry>
+          <entry>Oct</entry>
+        </row>
+        <row>
+          <entry>Novembre</entry>
+          <entry>Nov</entry>
+        </row>
+        <row>
+          <entry>Décembre</entry>
+          <entry>Dec</entry>
+        </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+    <para>
+     <xref linkend="datetime-dow-table"> montre les marqueurs qui sont
+     reconnus comme les noms des jours de la semaine.
+    </para>
+
+     <table id="datetime-dow-table">
+      <title>Noms des jours de la semaine</title>
+      <tgroup cols="2">
+       <thead>
+	<row>
+	 <entry>Jour</entry>
+	 <entry>Abréviation</entry>
+	</row>
+       </thead>
+       <tbody>
+	<row>
+	 <entry>Dimanche</entry>
+	 <entry>Sun</entry>
+	</row>
+	<row>
+	 <entry>Lundi</entry>
+	 <entry>Mon</entry>
+	</row>
+	<row>
+	 <entry>Mardi</entry>
+	 <entry>Tue, Tues</entry>
+	</row>
+	<row>
+	 <entry>Mercredi</entry>
+	 <entry>Wed, Weds</entry>
+	</row>
+	<row>
+	 <entry>Jeudi</entry>
+	 <entry>Thu, Thur, Thurs</entry>
+	</row>
+	<row>
+	 <entry>Vendredi</entry>
+	 <entry>Fri</entry>
+	</row>
+	<row>
+	 <entry>Samedi</entry>
+	 <entry>Sat</entry>
+	</row>
+       </tbody>
+      </tgroup>
+     </table>
+
+   <para>
+    <xref linkend="datetime-mod-table"> montre les marqueurs qui servent
+    a modifiés divers contenus.
+   </para>
+
+    <table id="datetime-mod-table">
+     <title>Modificateurs de Champs Date/Heure</title>
+     <tgroup cols="2">
+      <thead>
+       <row>
+	<entry>Identifiant</entry>
+	<entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+	<entry><literal>ABSTIME</literal></entry>
+	<entry>Ignoré</entry>
+       </row>
+       <row>
+	<entry><literal>AM</literal></entry>
+	<entry>Heure avant 12:00</entry>
+       </row>
+       <row>
+	<entry><literal>AT</literal></entry>
+	<entry>Ignoré</entry>
+       </row>
+       <row>
+	<entry><literal>JULIAN</>, <literal>JD</>, <literal>J</></entry>
+	<entry>Le champ suivant est un jour Julien</entry>
+       </row>
+       <row>
+	<entry><literal>ON</literal></entry>
+	<entry>Ignoré</entry>
+       </row>
+       <row>
+	<entry><literal>PM</literal></entry>
+	<entry>Heure à ou après 12:00</entry>
+       </row>
+       <row>
+	<entry><literal>T</literal></entry>
+	<entry>Le champ suivant est de temps</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+   <para>
+    Le mot clé <literal>ABSTIME</literal> est ignoré pour des raisons
+    historiques: Dans de très vieilles versions de
+    <productname>PostgreSQL</productname>, des valeurs invalides de type
+<type>abstime</type>
+    étaient émises en tant que <literal>Invalid Abstime</literal>. Par contre,
+ceci n'est plus
+    le cas et ce mot clé sera probablement abandonné dans une future version.
+   </para>
+
+   <indexterm>
+    <primary>fuseau horaire</primary>
+    <secondary>abréviations en entrée</secondary>
+   </indexterm>
+
+   <para>
+    <xref linkend="datetime-timezone-input-table"> montre les abréviations de
+    fuseau horaire reconnus par <productname>PostgreSQL</productname> pour les
+    valeurs de type date/time. Notez que ces noms ne sont <emphasis>pas</>
+    nécessairement utilisés pour l'affichage de date/heure &mdash; la sortie est
+    pilotée par les abréviations officielles des fuseaux horaires associées avec
+    le paramètre de configuration <xref linkend="guc-timezone"> actuellement
+    sélectionné. (Il est probable que les prochaines versions utiliseront aussi
+    <varname>timezone</> pour les entrées.)
+   </para>
+
+   <para>
+    Ce tableau est organisé par décalage du fuseau horaire à partir de <acronym>UTC</>,
+    plutôt que par ordre alphabétique. Ceci a été choisi pour faciliter la
+    correspondance entre l'usage local et les abréviations reconnues là ou
+    elles seraient différentes.
+   </para>
+
+    <table id="datetime-timezone-input-table">
+     <title>Abréviations de fuseaux horaires en entrée</title>
+     <tgroup cols="3">
+      <thead>
+       <row>
+	<entry>Fuseau horaire</entry>
+	<entry>Décalage à partir d'UTC</entry>
+	<entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+	<entry>NZDT</entry>
+	<entry>+13:00</entry>
+	<entry>New Zealand Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>IDLE</entry>
+	<entry>+12:00</entry>
+	<entry>International Date Line, East</entry>
+       </row>
+       <row>
+	<entry>NZST</entry>
+	<entry>+12:00</entry>
+	<entry>New Zealand Standard Time</entry>
+       </row>
+       <row>
+	<entry>NZT</entry>
+	<entry>+12:00</entry>
+	<entry>New Zealand Time</entry>
+       </row>
+       <row>
+	<entry>AESST</entry>
+	<entry>+11:00</entry>
+	<entry>Australia Eastern Summer Standard Time</entry>
+       </row>
+       <row>
+	<entry>ACSST</entry>
+	<entry>+10:30</entry>
+	<entry>Central Australia Summer Standard Time</entry>
+       </row>
+       <row>
+	<entry>CADT</entry>
+	<entry>+10:30</entry>
+	<entry>Central Australia Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>SADT</entry>
+	<entry>+10:30</entry>
+	<entry>South Australian Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>AEST</entry>
+	<entry>+10:00</entry>
+	<entry>Australia Eastern Standard Time</entry>
+       </row>
+       <row>
+	<entry>EAST</entry>
+	<entry>+10:00</entry>
+	<entry>East Australian Standard Time</entry>
+       </row>
+       <row>
+	<entry>GST</entry>
+	<entry>+10:00</entry>
+	<entry>Guam Standard Time, Russia zone 9</entry>
+       </row>
+       <row>
+	<entry>LIGT</entry>
+	<entry>+10:00</entry>
+	<entry>Melbourne, Australia</entry>
+       </row>
+       <row>
+	<entry>SAST</entry>
+	<entry>+09:30</entry>
+	<entry>South Australia Standard Time</entry>
+       </row>
+       <row>
+	<entry>CAST</entry>
+	<entry>+09:30</entry>
+	<entry>Central Australia Standard Time</entry>
+       </row>
+       <row>
+	<entry>AWSST</entry>
+	<entry>+09:00</entry>
+	<entry>Australia Western Summer Standard Time</entry>
+       </row>
+       <row>
+	<entry>JST</entry>
+	<entry>+09:00</entry>
+	<entry>Japan Standard Time, Russia zone 8</entry>
+       </row>
+       <row>
+	<entry>KST</entry>
+	<entry>+09:00</entry>
+	<entry>Korea Standard Time</entry>
+       </row>
+       <row>
+	<entry>MHT</entry>
+	<entry>+09:00</entry>
+	<entry>Kwajalein Time</entry>
+       </row>
+       <row>
+	<entry>WDT</entry>
+	<entry>+09:00</entry>
+	<entry>West Australian Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>MT</entry>
+	<entry>+08:30</entry>
+	<entry>Moluccas Time</entry>
+       </row>
+       <row>
+	<entry>AWST</entry>
+	<entry>+08:00</entry>
+	<entry>Australia Western Standard Time</entry>
+       </row>
+       <row>
+	<entry>CCT</entry>
+	<entry>+08:00</entry>
+	<entry>China Coastal Time</entry>
+       </row>
+       <row>
+	<entry>WADT</entry>
+	<entry>+08:00</entry>
+	<entry>West Australian Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>WST</entry>
+	<entry>+08:00</entry>
+	<entry>West Australian Standard Time</entry>
+       </row>
+       <row>
+	<entry>JT</entry>
+	<entry>+07:30</entry>
+	<entry>Java Time</entry>
+       </row>
+       <row>
+	<entry>ALMST</entry>
+	<entry>+07:00</entry>
+	<entry>Almaty Summer Time</entry>
+       </row>
+       <row>
+	<entry>WAST</entry>
+	<entry>+07:00</entry>
+	<entry>West Australian Standard Time</entry>
+       </row>
+       <row>
+	<entry>CXT</entry>
+	<entry>+07:00</entry>
+	<entry>Christmas (Island) Time</entry>
+       </row>
+       <row>
+	<entry>MMT</entry>
+	<entry>+06:30</entry>
+	<entry>Myanmar Time</entry>
+       </row>
+       <row>
+	<entry>ALMT</entry>
+	<entry>+06:00</entry>
+	<entry>Almaty Time</entry>
+       </row>
+       <row>
+	<entry>MAWT</entry>
+	<entry>+06:00</entry>
+	<entry>Mawson (Antarctica) Time</entry>
+       </row>
+       <row>
+	<entry>IOT</entry>
+	<entry>+05:00</entry>
+	<entry>Indian Chagos Time</entry>
+       </row>
+       <row>
+	<entry>MVT</entry>
+	<entry>+05:00</entry>
+	<entry>Maldives Island Time</entry>
+       </row>
+       <row>
+	<entry>TFT</entry>
+	<entry>+05:00</entry>
+	<entry>Kerguelen Time</entry>
+       </row>
+       <row>
+	<entry>AFT</entry>
+	<entry>+04:30</entry>
+	<entry>Afghanistan Time</entry>
+       </row>
+       <row>
+	<entry>EAST</entry>
+	<entry>+04:00</entry>
+	<entry>Antananarivo Summer Time</entry>
+       </row>
+       <row>
+	<entry>MUT</entry>
+	<entry>+04:00</entry>
+	<entry>Mauritius Island Time</entry>
+       </row>
+       <row>
+	<entry>RET</entry>
+	<entry>+04:00</entry>
+	<entry>Reunion Island Time</entry>
+       </row>
+       <row>
+	<entry>SCT</entry>
+	<entry>+04:00</entry>
+	<entry>Mahe Island Time</entry>
+       </row>
+       <row>
+	<entry>IRT, IT</entry>
+	<entry>+03:30</entry>
+	<entry>Iran Time</entry>
+       </row>
+       <row>
+	<entry>EAT</entry>
+	<entry>+03:00</entry>
+	<entry>Antananarivo, Comoro Time</entry>
+       </row>
+       <row>
+	<entry>BT</entry>
+	<entry>+03:00</entry>
+	<entry>Baghdad Time</entry>
+       </row>
+       <row>
+	<entry>EETDST</entry>
+	<entry>+03:00</entry>
+	<entry>Eastern Europe Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>HMT</entry>
+	<entry>+03:00</entry>
+	<entry>Hellas Mediterranean Time (?)</entry>
+       </row>
+       <row>
+	<entry>BDST</entry>
+	<entry>+02:00</entry>
+	<entry>British Double Summer Time</entry>
+       </row>
+       <row>
+	<entry>CEST</entry>
+	<entry>+02:00</entry>
+	<entry>Central European Summer Time</entry>
+       </row>
+       <row>
+	<entry>CETDST</entry>
+	<entry>+02:00</entry>
+	<entry>Central European Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>EET</entry>
+	<entry>+02:00</entry>
+	<entry>Eastern European Time, Russia zone 1</entry>
+       </row>
+       <row>
+	<entry>FWT</entry>
+	<entry>+02:00</entry>
+	<entry>French Winter Time</entry>
+       </row>
+       <row>
+	<entry>IST</entry>
+	<entry>+02:00</entry>
+	<entry>Israel Standard Time</entry>
+       </row>
+       <row>
+	<entry>MEST</entry>
+	<entry>+02:00</entry>
+	<entry>Middle European Summer Time</entry>
+       </row>
+       <row>
+	<entry>METDST</entry>
+	<entry>+02:00</entry>
+	<entry>Middle Europe Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>SST</entry>
+	<entry>+02:00</entry>
+	<entry>Swedish Summer Time</entry>
+       </row>
+       <row>
+	<entry>BST</entry>
+	<entry>+01:00</entry>
+	<entry>British Summer Time</entry>
+       </row>
+       <row>
+	<entry>CET</entry>
+	<entry>+01:00</entry>
+	<entry>Central European Time</entry>
+       </row>
+       <row>
+	<entry>DNT</entry>
+	<entry>+01:00</entry>
+	<entry><foreignphrase>Dansk Normal Tid</foreignphrase></entry>
+       </row>
+       <row>
+	<entry>FST</entry>
+	<entry>+01:00</entry>
+	<entry>French Summer Time</entry>
+       </row>
+       <row>
+	<entry>MET</entry>
+	<entry>+01:00</entry>
+	<entry>Middle European Time</entry>
+       </row>
+       <row>
+	<entry>MEWT</entry>
+	<entry>+01:00</entry>
+	<entry>Middle European Winter Time</entry>
+       </row>
+       <row>
+	<entry>MEZ</entry>
+	<entry>+01:00</entry>
+	<entry><foreignphrase>Mitteleuropéische Zeit</></entry>
+       </row>
+       <row>
+	<entry>NOR</entry>
+	<entry>+01:00</entry>
+	<entry>Norway Standard Time</entry>
+       </row>
+       <row>
+	<entry>SET</entry>
+	<entry>+01:00</entry>
+	<entry>Seychelles Time</entry>
+       </row>
+       <row>
+	<entry>SWT</entry>
+	<entry>+01:00</entry>
+	<entry>Swedish Winter Time</entry>
+       </row>
+       <row>
+	<entry>WETDST</entry>
+	<entry>+01:00</entry>
+	<entry>Western European Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>GMT</entry>
+	<entry>00:00</entry>
+	<entry>Greenwich Mean Time</entry>
+       </row>
+       <row>
+	<entry>UT</entry>
+	<entry>00:00</entry>
+	<entry>Universal Time</entry>
+       </row>
+       <row>
+	<entry>UTC</entry>
+	<entry>00:00</entry>
+	<entry>Universal Coordinated Time</entry>
+       </row>
+       <row>
+	<entry>Z</entry>
+	<entry>00:00</entry>
+	<entry>Same as UTC</entry>
+       </row>
+       <row>
+	<entry>ZULU</entry>
+	<entry>00:00</entry>
+	<entry>Same as UTC</entry>
+       </row>
+       <row>
+	<entry>WET</entry>
+	<entry>00:00</entry>
+	<entry>Western European Time</entry>
+       </row>
+       <row>
+	<entry>WAT</entry>
+	<entry>-01:00</entry>
+	<entry>West Africa Time</entry>
+       </row>
+       <row>
+	<entry>FNST</entry>
+	<entry>-01:00</entry>
+	<entry>Fernando de Noronha Summer Time</entry>
+       </row>
+       <row>
+	<entry>FNT</entry>
+	<entry>-02:00</entry>
+	<entry>Fernando de Noronha Time</entry>
+       </row>
+       <row>
+	<entry>BRST</entry>
+	<entry>-02:00</entry>
+	<entry>Brasilia Summer Time</entry>
+       </row>
+       <row>
+	<entry>NDT</entry>
+	<entry>-02:30</entry>
+	<entry>Newfoundland Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>ADT</entry>
+	<entry>-03:00</entry>
+	<entry>Atlantic Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>AWT</entry>
+	<entry>-03:00</entry>
+	<entry>(unknown)</entry>
+       </row>
+       <row>
+	<entry>BRT</entry>
+	<entry>-03:00</entry>
+	<entry>Brasilia Time</entry>
+       </row>
+       <row>
+	<entry>NFT</entry>
+	<entry>-03:30</entry>
+	<entry>Newfoundland Standard Time</entry>
+       </row>
+       <row>
+	<entry>NST</entry>
+	<entry>-03:30</entry>
+	<entry>Newfoundland Standard Time</entry>
+       </row>
+       <row>
+	<entry>AST</entry>
+	<entry>-04:00</entry>
+	<entry>Atlantic Standard Time (Canada)</entry>
+       </row>
+       <row>
+	<entry>ACST</entry>
+	<entry>-04:00</entry>
+	<entry>Atlantic/Porto Acre Summer Time</entry>
+       </row>
+       <row>
+	<entry>EDT</entry>
+	<entry>-04:00</entry>
+	<entry>Eastern Daylight-Saving Time</entry>
+       </row>
+       <!--
+      <row>
+      <entry>ZP4</entry>
+      <entry>-04:00</entry>
+      <entry>GMT +4 hours</entry>
+      </row>
+       -->
+       <row>
+	<entry>ACT</entry>
+	<entry>-05:00</entry>
+	<entry>Atlantic/Porto Acre Standard Time</entry>
+       </row>
+       <row>
+	<entry>CDT</entry>
+	<entry>-05:00</entry>
+	<entry>Central Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>EST</entry>
+	<entry>-05:00</entry>
+	<entry>Eastern Standard Time</entry>
+       </row>
+       <!--
+      <row>
+      <entry>ZP5</entry>
+      <entry>-05:00</entry>
+      <entry>GMT +5  hours</entry>
+      </row>
+       -->
+       <row>
+	<entry>CST</entry>
+	<entry>-06:00</entry>
+	<entry>Central Standard Time</entry>
+       </row>
+       <row>
+	<entry>MDT</entry>
+	<entry>-06:00</entry>
+	<entry>Mountain Daylight-Saving Time</entry>
+       </row>
+       <!--
+      <row>
+      <entry>ZP6</entry>
+      <entry>-06:00</entry>
+      <entry>GMT +6  hours</entry>
+      </row>
+       -->
+       <row>
+	<entry>MST</entry>
+	<entry>-07:00</entry>
+	<entry>Mountain Standard Time</entry>
+       </row>
+       <row>
+	<entry>PDT</entry>
+	<entry>-07:00</entry>
+	<entry>Pacific Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>AKDT</entry>
+	<entry>-08:00</entry>
+	<entry>Alaska Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>PST</entry>
+	<entry>-08:00</entry>
+	<entry>Pacific Standard Time</entry>
+       </row>
+       <row>
+	<entry>YDT</entry>
+	<entry>-08:00</entry>
+	<entry>Yukon Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>AKST</entry>
+	<entry>-09:00</entry>
+	<entry>Alaska Standard Time</entry>
+       </row>
+       <row>
+	<entry>HDT</entry>
+	<entry>-09:00</entry>
+	<entry>Hawaii/Alaska Daylight-Saving Time</entry>
+       </row>
+       <row>
+	<entry>YST</entry>
+	<entry>-09:00</entry>
+	<entry>Yukon Standard Time</entry>
+       </row>
+       <row>
+	<entry>MART</entry>
+	<entry>-09:30</entry>
+	<entry>Marquesas Time</entry>
+       </row>
+       <row>
+	<entry>AHST</entry>
+	<entry>-10:00</entry>
+	<entry>Alaska/Hawaii Standard Time</entry>
+       </row>
+       <row>
+	<entry>HST</entry>
+	<entry>-10:00</entry>
+	<entry>Hawaii Standard Time</entry>
+       </row>
+       <row>
+	<entry>CAT</entry>
+	<entry>-10:00</entry>
+	<entry>Central Alaska Time</entry>
+       </row>
+       <row>
+	<entry>NT</entry>
+	<entry>-11:00</entry>
+	<entry>Nome Time</entry>
+       </row>
+       <row>
+	<entry>IDLW</entry>
+	<entry>-12:00</entry>
+	<entry>International Date Line, West</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+  <formalpara>
+   <title>Australian Time Zones</title>
+
+   <para>
+    Il y a trois conflits de nommage entre les noms de fuseaux horaires
+    Australiens et les noms de fuseaux horaires utilisés Amérique du Sud
+    et du Nord:
+    <literal>ACST</literal>, <literal>CST</literal> et
+    <literal>EST</literal>.  Si l'option de démarrage
+    <varname>australian_timezones</varname> est mis à vrai alors
+    <literal>ACST</literal>, <literal>CST</literal>,
+    <literal>EST</literal> et <literal>SAT</literal> sont interprétés comme
+    des noms de fuseaux horaires Australiens, comme montré dans <xref
+    linkend="datetime-oztz-table">. Si ceci est faux (ce qui est le cas par
+    défaut) alors <literal>ACST</literal>, <literal>CST</literal>,
+    et <literal>EST</literal> sont pris comme des noms de fuseaux horaires
+    américains et <literal>SAT</literal> est interprété comme un mot peu significatif
+    indiquant Samedi.
+   </para>
+  </formalpara>
+
+    <table id="datetime-oztz-table">
+     <title>Abreviations de fuseaux horaires australiens en entrée</title>
+     <tgroup cols="3">
+      <thead>
+       <row>
+	<entry>Fuseau Horaire</entry>
+	<entry>Offset from UTC</entry>
+	<entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+	<entry>ACST</entry>
+	<entry>+09:30</entry>
+	<entry>Temps Standard d'Australie Centrale</entry>
+       </row>
+       <row>
+	<entry>CST</entry>
+	<entry>+10:30</entry>
+	<entry>Australian Central Standard Time</entry>
+       </row>
+       <row>
+	<entry>EST</entry>
+	<entry>+10:00</entry>
+	<entry>Australian Eastern Standard Time</entry>
+       </row>
+       <row>
+	<entry>SAT</entry>
+	<entry>+09:30</entry>
+	<entry>South Australian Standard Time</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+  <indexterm>
+    <primary>fuseau horaire</primary>
+    <secondary>noms de configuration</secondary>
+  </indexterm>
+
+  <para>
+   <xref linkend="datetime-timezone-set-table"> affiche les noms de fuseau
+   horaire reconnu par <productname>PostgreSQL</productname> comme les valeurs
+   valides pour le paramètre <xref linkend="guc-timezone"> et en tant que
+   paramètres à la <literal>fonction AT TIME ZONE</> (voir
+   <xref linkend="functions-datetime-zoneconvert">). Notez que
+   ces noms sont conceptuellement aussi différents des noms montrés dans <xref
+   linkend="datetime-timezone-input-table">&nbsp;: la plupart de ces noms
+   implique une règle locale pour l'avancement de l'heure alors que les noms
+   précédents représentent seulement un décalage fixé à partir d'UTC.
+  </para>
+
+  <para>
+   Dans beaucoup de cas, il existe plusieurs noms équivalents pour la même zone.
+   Ils sont affichés sur la même ligne. La table est triée principalement par le
+   nom de la ville principale de la zone.
+  </para>
+
+        <table id="datetime-timezone-set-table">
+          <title>Noms des zones de fuseaux horaires pour la configuration de
+            <varname>timezone</> et <literal>AT TIME ZONE</></title>
+        <tgroup cols="1">
+          <thead>
+            <row>
+              <entry>Fuseau horaire</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry>Africa/Abidjan</entry>
+            </row>
+            <row>
+              <entry>Africa/Accra</entry>
+            </row>
+            <row>
+              <entry>Africa/Addis_Ababa</entry>
+            </row>
+            <row>
+              <entry>Africa/Algiers</entry>
+            </row>
+            <row>
+              <entry>Africa/Asmera</entry>
+            </row>
+            <row>
+              <entry>Africa/Bamako</entry>
+            </row>
+            <row>
+              <entry>Africa/Bangui</entry>
+            </row>
+            <row>
+              <entry>Africa/Banjul</entry>
+            </row>
+            <row>
+              <entry>Africa/Bissau</entry>
+            </row>
+            <row>
+              <entry>Africa/Blantyre</entry>
+            </row>
+            <row>
+              <entry>Africa/Brazzaville</entry>
+            </row>
+            <row>
+              <entry>Africa/Bujumbura</entry>
+            </row>
+            <row>
+              <entry>Africa/Cairo Egypt</entry>
+            </row>
+            <row>
+              <entry>Africa/Casablanca</entry>
+            </row>
+            <row>
+              <entry>Africa/Ceuta</entry>
+            </row>
+            <row>
+              <entry>Africa/Conakry</entry>
+            </row>
+            <row>
+              <entry>Africa/Dakar</entry>
+            </row>
+            <row>
+              <entry>Africa/Dar_es_Salaam</entry>
+            </row>
+            <row>
+              <entry>Africa/Djibouti</entry>
+            </row>
+            <row>
+              <entry>Africa/Douala</entry>
+            </row>
+            <row>
+              <entry>Africa/El_Aaiun</entry>
+            </row>
+            <row>
+              <entry>Africa/Freetown</entry>
+            </row>
+            <row>
+              <entry>Africa/Gaborone</entry>
+            </row>
+            <row>
+              <entry>Africa/Harare</entry>
+            </row>
+            <row>
+              <entry>Africa/Johannesburg</entry>
+            </row>
+            <row>
+              <entry>Africa/Kampala</entry>
+            </row>
+            <row>
+              <entry>Africa/Khartoum</entry>
+            </row>
+            <row>
+              <entry>Africa/Kigali</entry>
+            </row>
+            <row>
+              <entry>Africa/Kinshasa</entry>
+            </row>
+            <row>
+              <entry>Africa/Lagos</entry>
+            </row>
+            <row>
+              <entry>Africa/Libreville</entry>
+            </row>
+            <row>
+              <entry>Africa/Lome</entry>
+            </row>
+            <row>
+              <entry>Africa/Luanda</entry>
+            </row>
+            <row>
+              <entry>Africa/Lubumbashi</entry>
+            </row>
+            <row>
+              <entry>Africa/Lusaka</entry>
+            </row>
+            <row>
+              <entry>Africa/Malabo</entry>
+            </row>
+            <row>
+              <entry>Africa/Maputo</entry>
+            </row>
+            <row>
+              <entry>Africa/Maseru</entry>
+            </row>
+            <row>
+              <entry>Africa/Mbabane</entry>
+            </row>
+            <row>
+              <entry>Africa/Mogadishu</entry>
+            </row>
+            <row>
+              <entry>Africa/Monrovia</entry>
+            </row>
+            <row>
+              <entry>Africa/Nairobi</entry>
+            </row>
+            <row>
+              <entry>Africa/Ndjamena</entry>
+            </row>
+            <row>
+              <entry>Africa/Niamey</entry>
+            </row>
+            <row>
+              <entry>Africa/Nouakchott</entry>
+            </row>
+            <row>
+              <entry>Africa/Ouagadougou</entry>
+            </row>
+            <row>
+              <entry>Africa/Porto-Novo</entry>
+            </row>
+            <row>
+              <entry>Africa/Sao_Tome</entry>
+            </row>
+            <row>
+              <entry>Africa/Timbuktu</entry>
+            </row>
+            <row>
+              <entry>Africa/Tripoli Libya</entry>
+            </row>
+            <row>
+              <entry>Africa/Tunis</entry>
+            </row>
+            <row>
+              <entry>Africa/Windhoek</entry>
+            </row>
+            <row>
+              <entry>America/Adak America/Atka US/Aleutian</entry>
+            </row>
+            <row>
+              <entry>America/Anchorage SystemV/YST9YDT US/Alaska</entry>
+            </row>
+            <row>
+              <entry>America/Anguilla</entry>
+            </row>
+            <row>
+              <entry>America/Antigua</entry>
+            </row>
+            <row>
+              <entry>America/Araguaina</entry>
+            </row>
+            <row>
+              <entry>America/Aruba</entry>
+            </row>
+            <row>
+              <entry>America/Asuncion</entry>
+            </row>
+            <row>
+              <entry>America/Bahia</entry>
+            </row>
+            <row>
+              <entry>America/Barbados</entry>
+            </row>
+            <row>
+              <entry>America/Belem</entry>
+            </row>
+            <row>
+              <entry>America/Belize</entry>
+            </row>
+            <row>
+              <entry>America/Boa_Vista</entry>
+            </row>
+            <row>
+              <entry>America/Bogota</entry>
+            </row>
+            <row>
+              <entry>America/Boise</entry>
+            </row>
+            <row>
+              <entry>America/Buenos_Aires</entry>
+            </row>
+            <row>
+              <entry>America/Cambridge_Bay</entry>
+            </row>
+            <row>
+              <entry>America/Campo_Grande</entry>
+            </row>
+            <row>
+              <entry>America/Cancun</entry>
+            </row>
+            <row>
+              <entry>America/Caracas</entry>
+            </row>
+            <row>
+              <entry>America/Catamarca</entry>
+            </row>
+            <row>
+              <entry>America/Cayenne</entry>
+            </row>
+            <row>
+              <entry>America/Cayman</entry>
+            </row>
+            <row>
+              <entry>America/Chicago CST6CDT SystemV/CST6CDT US/Central</entry>
+            </row>
+            <row>
+              <entry>America/Chihuahua</entry>
+            </row>
+            <row>
+              <entry>America/Cordoba America/Rosario</entry>
+            </row>
+            <row>
+              <entry>America/Costa_Rica</entry>
+            </row>
+            <row>
+              <entry>America/Cuiaba</entry>
+            </row>
+            <row>
+              <entry>America/Curacao</entry>
+            </row>
+            <row>
+              <entry>America/Danmarkshavn</entry>
+            </row>
+            <row>
+              <entry>America/Dawson</entry>
+            </row>
+            <row>
+              <entry>America/Dawson_Creek</entry>
+            </row>
+            <row>
+              <entry>America/Denver MST7MDT SystemV/MST7MDT US/Mountain America/Shiprock Navajo</entry>
+            </row>
+            <row>
+              <entry>America/Detroit US/Michigan</entry>
+            </row>
+            <row>
+              <entry>America/Dominica</entry>
+            </row>
+            <row>
+              <entry>America/Edmonton Canada/Mountain</entry>
+            </row>
+            <row>
+              <entry>America/Eirunepe</entry>
+            </row>
+            <row>
+              <entry>America/El_Salvador</entry>
+            </row>
+            <row>
+              <entry>America/Ensenada America/Tijuana Mexico/BajaNorte</entry>
+            </row>
+            <row>
+              <entry>America/Fortaleza</entry>
+            </row>
+            <row>
+              <entry>America/Glace_Bay</entry>
+            </row>
+            <row>
+              <entry>America/Godthab</entry>
+            </row>
+            <row>
+              <entry>America/Goose_Bay</entry>
+            </row>
+            <row>
+              <entry>America/Grand_Turk</entry>
+            </row>
+            <row>
+              <entry>America/Grenada</entry>
+            </row>
+            <row>
+              <entry>America/Guadeloupe</entry>
+            </row>
+            <row>
+              <entry>America/Guatemala</entry>
+            </row>
+            <row>
+              <entry>America/Guayaquil</entry>
+            </row>
+            <row>
+              <entry>America/Guyana</entry>
+            </row>
+            <row>
+              <entry>America/Halifax Canada/Atlantic SystemV/AST4ADT</entry>
+            </row>
+            <row>
+              <entry>America/Havana Cuba</entry>
+            </row>
+            <row>
+              <entry>America/Hermosillo</entry>
+            </row>
+            <row>
+              <entry>America/Indiana/Indianapolis America/Indianapolis America/Fort_Wayne EST SystemV/EST5 US/East-Indiana</entry>
+            </row>
+            <row>
+              <entry>America/Indiana/Knox America/Knox_IN US/Indiana-Starke</entry>
+            </row>
+            <row>
+              <entry>America/Indiana/Marengo</entry>
+            </row>
+            <row>
+              <entry>America/Indiana/Vevay</entry>
+            </row>
+            <row>
+              <entry>America/Inuvik</entry>
+            </row>
+            <row>
+              <entry>America/Iqaluit</entry>
+            </row>
+            <row>
+              <entry>America/Jamaica Jamaica</entry>
+            </row>
+            <row>
+              <entry>America/Jujuy</entry>
+            </row>
+            <row>
+              <entry>America/Juneau</entry>
+            </row>
+            <row>
+              <entry>America/Kentucky/Louisville America/Louisville</entry>
+            </row>
+            <row>
+              <entry>America/Kentucky/Monticello</entry>
+            </row>
+            <row>
+              <entry>America/La_Paz</entry>
+            </row>
+            <row>
+              <entry>America/Lima</entry>
+            </row>
+            <row>
+              <entry>America/Los_Angeles PST8PDT SystemV/PST8PDT US/Pacific US/Pacific-New</entry>
+            </row>
+            <row>
+              <entry>America/Maceio</entry>
+            </row>
+            <row>
+              <entry>America/Managua</entry>
+            </row>
+            <row>
+              <entry>America/Manaus Brazil/West</entry>
+            </row>
+            <row>
+              <entry>America/Martinique</entry>
+            </row>
+            <row>
+              <entry>America/Mazatlan Mexico/BajaSur</entry>
+            </row>
+            <row>
+              <entry>America/Mendoza</entry>
+            </row>
+            <row>
+              <entry>America/Menominee</entry>
+            </row>
+            <row>
+              <entry>America/Merida</entry>
+            </row>
+            <row>
+              <entry>America/Mexico_City Mexico/General</entry>
+            </row>
+            <row>
+              <entry>America/Miquelon</entry>
+            </row>
+            <row>
+              <entry>America/Monterrey</entry>
+            </row>
+            <row>
+              <entry>America/Montevideo</entry>
+            </row>
+            <row>
+              <entry>America/Montreal</entry>
+            </row>
+            <row>
+              <entry>America/Montserrat</entry>
+            </row>
+            <row>
+              <entry>America/Nassau</entry>
+            </row>
+            <row>
+              <entry>America/New_York EST5EDT SystemV/EST5EDT US/Eastern</entry>
+            </row>
+            <row>
+              <entry>America/Nipigon</entry>
+            </row>
+            <row>
+              <entry>America/Nome</entry>
+            </row>
+            <row>
+              <entry>America/Noronha Brazil/DeNoronha</entry>
+            </row>
+            <row>
+              <entry>America/North_Dakota/Center</entry>
+            </row>
+            <row>
+              <entry>America/Panama</entry>
+            </row>
+            <row>
+              <entry>America/Pangnirtung</entry>
+            </row>
+            <row>
+              <entry>America/Paramaribo</entry>
+            </row>
+            <row>
+              <entry>America/Phoenix MST SystemV/MST7 US/Arizona</entry>
+            </row>
+            <row>
+              <entry>America/Port-au-Prince</entry>
+            </row>
+            <row>
+              <entry>America/Port_of_Spain</entry>
+            </row>
+            <row>
+              <entry>America/Porto_Acre America/Rio_Branco Brazil/Acre</entry>
+            </row>
+            <row>
+              <entry>America/Porto_Velho</entry>
+            </row>
+            <row>
+              <entry>America/Puerto_Rico SystemV/AST4</entry>
+            </row>
+            <row>
+              <entry>America/Rainy_River</entry>
+            </row>
+            <row>
+              <entry>America/Rankin_Inlet</entry>
+            </row>
+            <row>
+              <entry>America/Recife</entry>
+            </row>
+            <row>
+              <entry>America/Regina Canada/East-Saskatchewan Canada/Saskatchewan SystemV/CST6</entry>
+            </row>
+            <row>
+              <entry>America/Santiago Chile/Continental</entry>
+            </row>
+            <row>
+              <entry>America/Santo_Domingo</entry>
+            </row>
+            <row>
+              <entry>America/Sao_Paulo Brazil/East</entry>
+            </row>
+            <row>
+              <entry>America/Scoresbysund</entry>
+            </row>
+            <row>
+              <entry>America/St_Johns Canada/Newfoundland</entry>
+            </row>
+            <row>
+              <entry>America/St_Kitts</entry>
+            </row>
+            <row>
+              <entry>America/St_Lucia</entry>
+            </row>
+            <row>
+              <entry>America/St_Thomas America/Virgin</entry>
+            </row>
+            <row>
+              <entry>America/St_Vincent</entry>
+            </row>
+            <row>
+              <entry>America/Swift_Current</entry>
+            </row>
+            <row>
+              <entry>America/Tegucigalpa</entry>
+            </row>
+            <row>
+              <entry>America/Thule</entry>
+            </row>
+            <row>
+              <entry>America/Thunder_Bay</entry>
+            </row>
+            <row>
+              <entry>America/Toronto Canada/Eastern</entry>
+            </row>
+            <row>
+              <entry>America/Tortola</entry>
+            </row>
+            <row>
+              <entry>America/Vancouver Canada/Pacific</entry>
+            </row>
+            <row>
+              <entry>America/Whitehorse Canada/Yukon</entry>
+            </row>
+            <row>
+              <entry>America/Winnipeg Canada/Central</entry>
+            </row>
+            <row>
+              <entry>America/Yakutat</entry>
+            </row>
+            <row>
+              <entry>America/Yellowknife</entry>
+            </row>
+            <row>
+              <entry>Antarctica/Casey</entry>
+            </row>
+            <row>
+              <entry>Antarctica/Davis</entry>
+            </row>
+            <row>
+              <entry>Antarctica/DumontDUrville</entry>
+            </row>
+            <row>
+              <entry>Antarctica/Mawson</entry>
+            </row>
+            <row>
+              <entry>Antarctica/McMurdo Antarctica/South_Pole</entry>
+            </row>
+            <row>
+              <entry>Antarctica/Palmer</entry>
+            </row>
+            <row>
+              <entry>Antarctica/Rothera</entry>
+            </row>
+            <row>
+              <entry>Antarctica/Syowa</entry>
+            </row>
+            <row>
+              <entry>Antarctica/Vostok</entry>
+            </row>
+            <row>
+              <entry>Asia/Aden</entry>
+            </row>
+            <row>
+              <entry>Asia/Almaty</entry>
+            </row>
+            <row>
+              <entry>Asia/Amman</entry>
+            </row>
+            <row>
+              <entry>Asia/Anadyr</entry>
+            </row>
+            <row>
+              <entry>Asia/Aqtau</entry>
+            </row>
+            <row>
+              <entry>Asia/Aqtobe</entry>
+            </row>
+            <row>
+              <entry>Asia/Ashgabat Asia/Ashkhabad</entry>
+            </row>
+            <row>
+              <entry>Asia/Baghdad</entry>
+            </row>
+            <row>
+              <entry>Asia/Bahrain</entry>
+            </row>
+            <row>
+              <entry>Asia/Baku</entry>
+            </row>
+            <row>
+              <entry>Asia/Bangkok</entry>
+            </row>
+            <row>
+              <entry>Asia/Beirut</entry>
+            </row>
+            <row>
+              <entry>Asia/Bishkek</entry>
+            </row>
+            <row>
+              <entry>Asia/Brunei</entry>
+            </row>
+            <row>
+              <entry>Asia/Calcutta</entry>
+            </row>
+            <row>
+              <entry>Asia/Choibalsan</entry>
+            </row>
+            <row>
+              <entry>Asia/Chongqing Asia/Chungking</entry>
+            </row>
+            <row>
+              <entry>Asia/Colombo</entry>
+            </row>
+            <row>
+              <entry>Asia/Dacca Asia/Dhaka</entry>
+            </row>
+            <row>
+              <entry>Asia/Damascus</entry>
+            </row>
+            <row>
+              <entry>Asia/Dili</entry>
+            </row>
+            <row>
+              <entry>Asia/Dubai</entry>
+            </row>
+            <row>
+              <entry>Asia/Dushanbe</entry>
+            </row>
+            <row>
+              <entry>Asia/Gaza</entry>
+            </row>
+            <row>
+              <entry>Asia/Harbin</entry>
+            </row>
+            <row>
+              <entry>Asia/Hong_Kong Hongkong</entry>
+            </row>
+            <row>
+              <entry>Asia/Hovd</entry>
+            </row>
+            <row>
+              <entry>Asia/Irkutsk</entry>
+            </row>
+            <row>
+              <entry>Asia/Jakarta</entry>
+            </row>
+            <row>
+              <entry>Asia/Jayapura</entry>
+            </row>
+            <row>
+              <entry>Asia/Jerusalem Asia/Tel_Aviv Israel</entry>
+            </row>
+            <row>
+              <entry>Asia/Kabul</entry>
+            </row>
+            <row>
+              <entry>Asia/Kamchatka</entry>
+            </row>
+            <row>
+              <entry>Asia/Karachi</entry>
+            </row>
+            <row>
+              <entry>Asia/Kashgar</entry>
+            </row>
+            <row>
+              <entry>Asia/Katmandu</entry>
+            </row>
+            <row>
+              <entry>Asia/Krasnoyarsk</entry>
+            </row>
+            <row>
+              <entry>Asia/Kuala_Lumpur</entry>
+            </row>
+            <row>
+              <entry>Asia/Kuching</entry>
+            </row>
+            <row>
+              <entry>Asia/Kuwait</entry>
+            </row>
+            <row>
+              <entry>Asia/Macao Asia/Macau</entry>
+            </row>
+            <row>
+              <entry>Asia/Magadan</entry>
+            </row>
+            <row>
+              <entry>Asia/Makassar Asia/Ujung_Pandang</entry>
+            </row>
+            <row>
+              <entry>Asia/Manila</entry>
+            </row>
+            <row>
+              <entry>Asia/Muscat</entry>
+            </row>
+            <row>
+              <entry>Asia/Nicosia Europe/Nicosia</entry>
+            </row>
+            <row>
+              <entry>Asia/Novosibirsk</entry>
+            </row>
+            <row>
+              <entry>Asia/Omsk</entry>
+            </row>
+            <row>
+              <entry>Asia/Oral</entry>
+            </row>
+            <row>
+              <entry>Asia/Phnom_Penh</entry>
+            </row>
+            <row>
+              <entry>Asia/Pontianak</entry>
+            </row>
+            <row>
+              <entry>Asia/Pyongyang</entry>
+            </row>
+            <row>
+              <entry>Asia/Qatar</entry>
+            </row>
+            <row>
+              <entry>Asia/Qyzylorda</entry>
+            </row>
+            <row>
+              <entry>Asia/Rangoon</entry>
+            </row>
+            <row>
+              <entry>Asia/Riyadh</entry>
+            </row>
+            <row>
+              <entry>Asia/Riyadh87 Mideast/Riyadh87</entry>
+            </row>
+            <row>
+              <entry>Asia/Riyadh88 Mideast/Riyadh88</entry>
+            </row>
+            <row>
+              <entry>Asia/Riyadh89 Mideast/Riyadh89</entry>
+            </row>
+            <row>
+              <entry>Asia/Saigon</entry>
+            </row>
+            <row>
+              <entry>Asia/Sakhalin</entry>
+            </row>
+            <row>
+              <entry>Asia/Samarkand</entry>
+            </row>
+            <row>
+              <entry>Asia/Seoul ROK</entry>
+            </row>
+            <row>
+              <entry>Asia/Shanghai PRC</entry>
+            </row>
+            <row>
+              <entry>Asia/Singapore Singapore</entry>
+            </row>
+            <row>
+              <entry>Asia/Taipei ROC</entry>
+            </row>
+            <row>
+              <entry>Asia/Tashkent</entry>
+            </row>
+            <row>
+              <entry>Asia/Tbilisi</entry>
+            </row>
+            <row>
+              <entry>Asia/Tehran Iran</entry>
+            </row>
+            <row>
+              <entry>Asia/Thimbu Asia/Thimphu</entry>
+            </row>
+            <row>
+              <entry>Asia/Tokyo Japan</entry>
+            </row>
+            <row>
+              <entry>Asia/Ulaanbaatar Asia/Ulan_Bator</entry>
+            </row>
+            <row>
+              <entry>Asia/Urumqi</entry>
+            </row>
+            <row>
+              <entry>Asia/Vientiane</entry>
+            </row>
+            <row>
+              <entry>Asia/Vladivostok</entry>
+            </row>
+            <row>
+              <entry>Asia/Yakutsk</entry>
+            </row>
+            <row>
+              <entry>Asia/Yekaterinburg</entry>
+            </row>
+            <row>
+              <entry>Asia/Yerevan</entry>
+            </row>
+            <row>
+              <entry>Atlantic/Azores</entry>
+            </row>
+            <row>
+              <entry>Atlantic/Bermuda</entry>
+            </row>
+            <row>
+              <entry>Atlantic/Canary</entry>
+            </row>
+            <row>
+              <entry>Atlantic/Cape_Verde</entry>
+            </row>
+            <row>
+              <entry>Atlantic/Faeroe</entry>
+            </row>
+            <row>
+              <entry>Atlantic/Madeira</entry>
+            </row>
+            <row>
+              <entry>Atlantic/Reykjavik Iceland</entry>
+            </row>
+            <row>
+              <entry>Atlantic/South_Georgia</entry>
+            </row>
+            <row>
+              <entry>Atlantic/St_Helena</entry>
+            </row>
+            <row>
+              <entry>Atlantic/Stanley</entry>
+            </row>
+            <row>
+              <entry>Australia/ACT Australia/Canberra Australia/NSW Australia/Sydney</entry>
+            </row>
+            <row>
+              <entry>Australia/Adelaide Australia/South</entry>
+            </row>
+            <row>
+              <entry>Australia/Brisbane Australia/Queensland</entry>
+            </row>
+            <row>
+              <entry>Australia/Broken_Hill Australia/Yancowinna</entry>
+            </row>
+            <row>
+              <entry>Australia/Darwin Australia/North</entry>
+            </row>
+            <row>
+              <entry>Australia/Hobart Australia/Tasmania</entry>
+            </row>
+            <row>
+              <entry>Australia/LHI Australia/Lord_Howe</entry>
+            </row>
+            <row>
+              <entry>Australia/Lindeman</entry>
+            </row>
+            <row>
+              <entry>Australia/Melbourne Australia/Victoria</entry>
+            </row>
+            <row>
+              <entry>Australia/Perth Australia/West</entry>
+            </row>
+            <row>
+              <entry>CET</entry>
+            </row>
+            <row>
+              <entry>EET</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+1</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+2</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+3</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+4</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+5</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+6</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+7</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+8</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+9</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+10</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+11</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT+12</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-1</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-2</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-3</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-4</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-5</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-6</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-7</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-8</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-9</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-10</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-11</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-12</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-13</entry>
+            </row>
+            <row>
+              <entry>Etc/GMT-14</entry>
+            </row>
+            <row>
+              <entry>Europe/Amsterdam</entry>
+            </row>
+            <row>
+              <entry>Europe/Andorra</entry>
+            </row>
+            <row>
+              <entry>Europe/Athens</entry>
+            </row>
+            <row>
+              <entry>Europe/Belfast</entry>
+            </row>
+            <row>
+              <entry>Europe/Belgrade Europe/Ljubljana Europe/Sarajevo Europe/Skopje Europe/Zagreb</entry>
+            </row>
+            <row>
+              <entry>Europe/Berlin</entry>
+            </row>
+            <row>
+              <entry>Europe/Brussels</entry>
+            </row>
+            <row>
+              <entry>Europe/Bucharest</entry>
+            </row>
+            <row>
+              <entry>Europe/Budapest</entry>
+            </row>
+            <row>
+              <entry>Europe/Chisinau Europe/Tiraspol</entry>
+            </row>
+            <row>
+              <entry>Europe/Copenhagen</entry>
+            </row>
+            <row>
+              <entry>Europe/Dublin Eire</entry>
+            </row>
+            <row>
+              <entry>Europe/Gibraltar</entry>
+            </row>
+            <row>
+              <entry>Europe/Helsinki</entry>
+            </row>
+            <row>
+              <entry>Europe/Istanbul Asia/Istanbul Turkey</entry>
+            </row>
+            <row>
+              <entry>Europe/Kaliningrad</entry>
+            </row>
+            <row>
+              <entry>Europe/Kiev</entry>
+            </row>
+            <row>
+              <entry>Europe/Lisbon Portugal</entry>
+            </row>
+            <row>
+              <entry>Europe/London GB GB-Eire</entry>
+            </row>
+            <row>
+              <entry>Europe/Luxembourg</entry>
+            </row>
+            <row>
+              <entry>Europe/Madrid</entry>
+            </row>
+            <row>
+              <entry>Europe/Malta</entry>
+            </row>
+            <row>
+              <entry>Europe/Minsk</entry>
+            </row>
+            <row>
+              <entry>Europe/Monaco</entry>
+            </row>
+            <row>
+              <entry>Europe/Moscow W-SU</entry>
+            </row>
+            <row>
+              <entry>Europe/Oslo Arctic/Longyearbyen Atlantic/Jan_Mayen</entry>
+            </row>
+            <row>
+              <entry>Europe/Paris</entry>
+            </row>
+            <row>
+              <entry>Europe/Prague Europe/Bratislava</entry>
+            </row>
+            <row>
+              <entry>Europe/Riga</entry>
+            </row>
+            <row>
+              <entry>Europe/Rome Europe/San_Marino Europe/Vatican</entry>
+            </row>
+            <row>
+              <entry>Europe/Samara</entry>
+            </row>
+            <row>
+              <entry>Europe/Simferopol</entry>
+            </row>
+            <row>
+              <entry>Europe/Sofia</entry>
+            </row>
+            <row>
+              <entry>Europe/Stockholm</entry>
+            </row>
+            <row>
+              <entry>Europe/Tallinn</entry>
+            </row>
+            <row>
+              <entry>Europe/Tirane</entry>
+            </row>
+            <row>
+              <entry>Europe/Uzhgorod</entry>
+            </row>
+            <row>
+              <entry>Europe/Vaduz</entry>
+            </row>
+            <row>
+              <entry>Europe/Vienna</entry>
+            </row>
+            <row>
+              <entry>Europe/Vilnius</entry>
+            </row>
+            <row>
+              <entry>Europe/Warsaw Poland</entry>
+            </row>
+            <row>
+              <entry>Europe/Zaporozhye</entry>
+            </row>
+            <row>
+              <entry>Europe/Zurich</entry>
+            </row>
+            <row>
+              <entry>Factory</entry>
+            </row>
+            <row>
+              <entry>GMT GMT+0 GMT-0 GMT0 Greenwich Etc/GMT Etc/GMT+0 Etc/GMT-0 Etc/GMT0 Etc/Greenwich</entry>
+            </row>
+            <row>
+              <entry>Indian/Antananarivo</entry>
+            </row>
+            <row>
+              <entry>Indian/Chagos</entry>
+            </row>
+            <row>
+              <entry>Indian/Christmas</entry>
+            </row>
+            <row>
+              <entry>Indian/Cocos</entry>
+            </row>
+            <row>
+              <entry>Indian/Comoro</entry>
+            </row>
+            <row>
+              <entry>Indian/Kerguelen</entry>
+            </row>
+            <row>
+              <entry>Indian/Mahe</entry>
+            </row>
+            <row>
+              <entry>Indian/Maldives</entry>
+            </row>
+            <row>
+              <entry>Indian/Mauritius</entry>
+            </row>
+            <row>
+              <entry>Indian/Mayotte</entry>
+            </row>
+            <row>
+              <entry>Indian/Reunion</entry>
+            </row>
+            <row>
+              <entry>MET</entry>
+            </row>
+            <row>
+              <entry>Pacific/Apia</entry>
+            </row>
+            <row>
+              <entry>Pacific/Auckland NZ</entry>
+            </row>
+            <row>
+              <entry>Pacific/Chatham NZ-CHAT</entry>
+            </row>
+            <row>
+              <entry>Pacific/Easter Chile/EasterIsland</entry>
+            </row>
+            <row>
+              <entry>Pacific/Efate</entry>
+            </row>
+            <row>
+              <entry>Pacific/Enderbury</entry>
+            </row>
+            <row>
+              <entry>Pacific/Fakaofo</entry>
+            </row>
+            <row>
+              <entry>Pacific/Fiji</entry>
+            </row>
+            <row>
+              <entry>Pacific/Funafuti</entry>
+            </row>
+            <row>
+              <entry>Pacific/Galapagos</entry>
+            </row>
+            <row>
+              <entry>Pacific/Gambier SystemV/YST9</entry>
+            </row>
+            <row>
+              <entry>Pacific/Guadalcanal</entry>
+            </row>
+            <row>
+              <entry>Pacific/Guam</entry>
+            </row>
+            <row>
+              <entry>Pacific/Honolulu HST SystemV/HST10 US/Hawaii</entry>
+            </row>
+            <row>
+              <entry>Pacific/Johnston</entry>
+            </row>
+            <row>
+              <entry>Pacific/Kiritimati</entry>
+            </row>
+            <row>
+              <entry>Pacific/Kosrae</entry>
+            </row>
+            <row>
+              <entry>Pacific/Kwajalein Kwajalein</entry>
+            </row>
+            <row>
+              <entry>Pacific/Majuro</entry>
+            </row>
+            <row>
+              <entry>Pacific/Marquesas</entry>
+            </row>
+            <row>
+              <entry>Pacific/Midway</entry>
+            </row>
+            <row>
+              <entry>Pacific/Nauru</entry>
+            </row>
+            <row>
+              <entry>Pacific/Niue</entry>
+            </row>
+            <row>
+              <entry>Pacific/Norfolk</entry>
+            </row>
+            <row>
+              <entry>Pacific/Noumea</entry>
+            </row>
+            <row>
+              <entry>Pacific/Pago_Pago Pacific/Samoa US/Samoa</entry>
+            </row>
+            <row>
+              <entry>Pacific/Palau</entry>
+            </row>
+            <row>
+              <entry>Pacific/Pitcairn SystemV/PST8</entry>
+            </row>
+            <row>
+              <entry>Pacific/Ponape</entry>
+            </row>
+            <row>
+              <entry>Pacific/Port_Moresby</entry>
+            </row>
+            <row>
+              <entry>Pacific/Rarotonga</entry>
+            </row>
+            <row>
+              <entry>Pacific/Saipan</entry>
+            </row>
+            <row>
+              <entry>Pacific/Tahiti</entry>
+            </row>
+            <row>
+              <entry>Pacific/Tarawa</entry>
+            </row>
+            <row>
+              <entry>Pacific/Tongatapu</entry>
+            </row>
+            <row>
+              <entry>Pacific/Truk</entry>
+            </row>
+            <row>
+              <entry>Pacific/Wake</entry>
+            </row>
+            <row>
+              <entry>Pacific/Wallis</entry>
+            </row>
+            <row>
+              <entry>Pacific/Yap</entry>
+            </row>
+            <row>
+              <entry>UCT Etc/UCT</entry>
+            </row>
+            <row>
+              <entry>UTC Universal Zulu Etc/UTC Etc/Universal Etc/Zulu</entry>
+            </row>
+            <row>
+              <entry>WET</entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+
+  <para>
+   En plus des noms affichés dans la table, <productname>PostgreSQL</productname>
+   acceptera les noms des fuseaux horaire de la forme
+   <replaceable>STD</><replaceable>décalage</> ou
+   <replaceable>STD</><replaceable>décalage</><replaceable>DST</>, où
+   <replaceable>STD</> est une abréviation de fuseau,
+   <replaceable>décalage</> est un décalage numérique en heures à l'ouest d'UTC
+   et <replaceable>DST</> est une abréviation optionnelle de fuseau pour
+   l'avancement de l'heure, en supposant une heure avant le décalage indiqué.
+   Par exemple, si <literal>EST5EDT</> n'était pas déjà un nom reconnu, il
+   serait accepté et équivalent fonctionnellement au temps USA East Coast. Quand
+   un fuseau horaire d'avancement de l'heure est présent, il est supposé être
+   utilisé suivant les règles du fuseau horaire USA, donc cette fonctionnalité
+   est d'une utilité limitée en dehors de l'Amérique du Nord. Vous devez aussi
+   être prévenu que cette provision peut amener silencieusement des entrées
+   acceptées bien que boguées car il n'y a pas de vérification sur la cohérence
+   des abréviations de fuseau. Par exemple, <literal>SET TIMEZONE TO FOOBAR0</>
+   fonctionnera, laissant réellement le système utiliser une abréviation
+   particulière pour GMT.
+</para>
+
+</sect1>
+
+  <sect1 id="datetime-units-history">
+  <title>Histoire d'Unités</title>
+
+  <para>
+   Le Julian Date a été inventé par le scholar franéais
+   Joseph Justus Scaliger (1540-1609)
+   et tient probablement son nom du pere de Scaliger,
+   le scholar Italian Julius Caesar Scaliger (1484-1558).
+   Les astronomes ont utilisés la periode Julian pour donner un nombre unique
+   a chaque jour depuis le 1 Janvier 4713 BC. ceci est la date dite Julian
+   (JD). JD 0 designe les 24 heures de midi UTC le 1 Janvier 4713 BC
+   jusqu'à midi UTC le 2 Janvier 4713 BC.
+  </para>
+
+   <para>
+   La <quote>Date Julian</quote> est différente du <quote>calendrier
+   Julian</quote>.  Le calendrier Julian 
+   a été introduit par Julius Caesar en 45 BC. Il était utilisé de maniére
+   courante jusqu'en l'an 1582, ou des pays ont commencés à se convertir au
+   calendrier Grégorien.  Dans le calendrier Julian, l'année tropical est
+   arrondie à 365 1/4 jours = 365.25 jours. ceci donne une erreur d'à peu près
+   1 jour tout les 128 ans.
+  </para>
+
+  <para>   
+   L'erreur de calendrier grandissante poussa le Pape
+   Gregory XIII a réformé le calendrier en accord avec les
+   instructions du Conseil de Trent.
+   Dans le calendrier Grégorien, l'année tropical est arrondie en
+   365 + 97 / 400 jours = 365.2425 jours. Donc, il faut à peu prés 3300
+   années pour l'année tropical pour virer d'un jour par rapport au
+   calendrier Grégorien.
+  </para>
+
+  <para>
+   L'arrondi 365+97/400 est obtenu en ayant 97 années bissextiles
+   tous les 400 ans, en utilisant les régles suivantes:
+
+   <simplelist>
+    <member>
+     Toutes les années divisibles par 4 sont des années bissextiles.
+    </member>
+    <member>
+     Par contre, toutes les années divisibles par 100 ne sont pas des années
+bissextiles.
+    </member>
+    <member>
+     Par contre, toutes les années divisibles par 400 sont, finalement, des
+années bissextiles.
+    </member>
+   </simplelist>
+
+   Donc 1700, 1800, 1900, 2100 et 2200 ne sont pas des années bissextiles. Mais
+1600,
+   2000 et 2400 sont des années bissextiles.
+
+   Par opposition, dans le plus ancien calendrier Julian, toutes les années
+divisibles par
+   4 sont des années bissextiles.
+  </para>
+
+  <para>
+   L'anonce du Pape de février 1582 décrétait que 10 jours devaient étre
+supprimés
+   du mois d'octobre 1582 pour que le 15 octobre suivent immédiatement après le
+4
+   octobre.
+   Cela a été appliqué en Italie, Pologne, Portugal et Espagne. Les autres pays
+   Catholiques ont suivi peu de temps mais les pays protestants ont été plus
+   récalcitrantes à changer et la Gréce n'a pas changé avant le début du 20éme
+   siécle.
+
+   La réforme a été appliquée par la Grande Bretagne et ses colonies (y compris
+ce
+   qu'est maintenant les Etats-Unis) en 1752.
+   Donc le 2 septembre 1752 a été suivi du 14 septembre 1752.
+
+   ceci est la raison pour laquelle la commande <command>cal</command> produit
+   la sortie suivante:
+
+<screen>
+$ <userinput>cal 9 1752</userinput>
+   septembre 1752
+di lu ma me je ve sa
+       1  2 14 15 16
+17 18 19 20 21 22 23
+24 25 26 27 28 29 30
+</screen>
+  </para>
+
+   <note>
+    <para>
+     Le standard SQL stipule que <quote>Au sein d'une définition d'un
+     <quote>datetime literal</quote>, les <quote>valeurs date/heure</quote>
+     sont restreintes par les règles naturelles pour les dates et heures
+     relatives au calendrier Grégorien</quote>. Les dates entre
+     1752-09-03 et 1752-09-13, bien qu'éliminés dans plusieurs pays
+     par ordre du Pape, sont conformes aux <quote>régles naturelles</quote> et
+sont
+     donc des dates valables.
+    </para>
+   </note>
+
+  <para>
+   Différents calendriers ont été developés dans différentes parties du monde,
+   la plupart précédant le système Grégorien.
+
+   Par exemple,
+   les débuts du calendrier chinois peuvent être évalués au alentour du 14éme
+   siécle avant J-C. La legende veut que l'empereur Huangdi invente le
+   calendrier en 2637 avant J-C.
+   
+   La République de Chine utilise le calendrier Grégorien pour ses besoins
+   civils. Le calendrier chinois est utilisé pour déterminer les festivals.
+  </para>
+ </sect1>
+</appendix>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

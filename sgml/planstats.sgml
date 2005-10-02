@@ -1,0 +1,383 @@
+<!--
+$PostgreSQL: pgsql/doc/src/sgml/planstats.sgml,v 1.3 2005/03/14 06:49:48 neilc Exp $
+-->
+
+<chapter id="planner-stats-details">
+ <title>Comment le planificateur utilise les statistiques</title>
+
+  <para>
+   Ce chapitre est construit sur les informations fournies dans <xref
+   linkend="using-explain"> et <xref linkend="planner-stats">, et montre comment
+   le planificateur utilise les statistiques système pour estimer le nombre de
+   lignes que chaque étape d'une requête pourrait renvoyer. C'est une partie
+   importante du processus de planification / optimisation, fournissant une
+   bonne partie des informations pour le calcul des coûts.
+  </para>
+
+  <para>
+   Le but de ce chapitre n'est pas de documenter le code &mdash; ce serait mieux
+   fait dans le code lui-même &mdash; mais plutôt de présenter un aperçu du
+   fonctionnement. Ceci aidera peut-être la phase d'apprentissage pour quelqu'un
+   souhaitant lire le code. En conséquence, l'approche choisie est d'analyser
+   une série d'exemples de plus en plus complexes.
+  </para>
+
+  <para>
+   Les affichages et les algorythmes montrées ci-dessous sont prises de la
+   version 8.0. Le comportement des versions précédentes (et ultérieures)
+   pourraient varier.
+  </para>
+
+ <sect1 id="row-estimation-examples">
+  <title>Exemples d'estimation des lignes</title>
+
+  <indexterm zone="row-estimation-examples">
+   <primary>estimation de lignes</primary>
+   <secondary>planificateurr</secondary>
+  </indexterm>
+
+  <para>
+   Nous utilisons des exemples provenant de la base de données créée pour les
+   tests de régression. Commençons avec une requête très simple&nbsp;:
+<programlisting>
+EXPLAIN SELECT * FROM tenk1;
+
+                         QUERY PLAN
+-------------------------------------------------------------
+ Seq Scan on tenk1  (cost=0.00..445.00 rows=10000 width=244)
+</programlisting>
+   
+   Comment le planificateur détermine la cardinalité de
+   <classname>tenk1</classname> est couvert dans <xref
+   linkend="using-explain"> mais est répété ici pour être complet. Le nombre de
+   lignes est trouvé dans <classname>pg_class</classname>&nbsp;:
+
+<programlisting>
+SELECT reltuples, relpages FROM pg_class WHERE relname = 'tenk1';
+
+ relpages | reltuples
+----------+-----------
+      345 |     10000
+</programlisting>
+    Le planificateur vérifiera l'estimation <structfield>relpages</structfield>
+    (une opération peu chère) et, si incorrect, pourrait échelonner avec
+    <structfield>reltuples</structfield> pour obtenir une estimation du nombre
+    de lignes. Dans ce cas, il ne peut pas, du coup&nbsp;:
+
+<programlisting>
+rows = 10000
+</programlisting>
+
+  </para>
+   
+  <para>
+   Passons à un exemple avec une condition dans sa clause
+   <literal>WHERE</literal>&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 1000;
+
+                         QUERY PLAN
+------------------------------------------------------------
+ Seq Scan on tenk1  (cost=0.00..470.00 rows=1031 width=244)
+   Filter: (unique1 &lt; 1000)
+</programlisting>
+
+   Le planificateur examine la condition de la clause <literal>WHERE</literal>
+   &nbsp;:
+
+<programlisting>
+unique1 &lt; 1000
+</programlisting>
+
+   et cherche la fonction de restriction à partir de l'opérateur
+   <literal>&lt;</literal> dans <classname>pg_operator</classname>. C'est
+   contenu dans la colonne <structfield>oprrest</structfield> et le résultat,
+   dans ce cas, est <function>scalarltsel</function>. La fonction
+   <function>scalarltsel</function> récupère l'histogramme pour
+   <structfield>unique1</structfield> à partir de
+   <classname>pg_statistics</classname> - nous pouvons suivre ceci en utilisant
+   la vue plus simple, <classname>pg_stats</classname>&nbsp;:
+
+<programlisting>
+SELECT histogram_bounds FROM pg_stats 
+WHERE tablename='tenk1' AND attname='unique1';
+
+                   histogram_bounds
+------------------------------------------------------
+ {1,970,1943,2958,3971,5069,6028,7007,7919,8982,9995}
+</programlisting>
+
+   Ensuite, la fraction de l'histogramme occupée par <quote>&lt; 1000</quote>
+   est traitée. C'est la sélectivité. L'histogramme divise l'ensemble en plus
+   petites parties d'égales fréquences, donc tout ce que nous devons faire est
+   de localiser la partie où se trouve notre valeur et compter une
+   <emphasis>partie</emphasis> d'elle et <emphasis>toutes</emphasis> celles
+   qui la précèdent. La valeur 1000 est clairement dans la seconde partie
+   (970 - 1943), donc en supposant une distribution linéaire des valeurs à
+   l'intérieur de chaque partie, nous pouvons calculer la sélectivité comme
+   étant&nbsp;:
+
+<programlisting>
+selectivity = (1 + (1000 - bckt[2].min)/(bckt[2].max - bckt[2].min))/num_bckts
+            = (1 + (1000 - 970)/(1943 - 970))/10
+            = 0.1031
+</programlisting>
+
+   c'est-à-dire une partie complète plus une fraction linéaire de la seconde,
+   divisée par le nombre de parties. Le nombre de lignes estimées peut
+   maintenant être calculé comme le produit de la sélectivité et de la
+   cardinalité de <classname>tenk1</classname>&nbsp;:
+
+<programlisting>
+rows = rel_cardinality * selectivity
+     = 10000 * 0.1031
+     = 1031
+</programlisting>
+
+  </para>
+
+  <para>
+   Maintenant, considérons un exemple avec une condition d'égalité dans sa
+   clause <literal>WHERE</literal>&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE stringu1 = 'ATAAAA';
+
+                        QUERY PLAN
+----------------------------------------------------------
+ Seq Scan on tenk1  (cost=0.00..470.00 rows=31 width=244)
+   Filter: (stringu1 = 'ATAAAA'::name)
+</programlisting>
+
+   De nouveau, le planificateur examine la condition de la clause
+   <literal>WHERE</literal>&nbsp;:
+
+<programlisting>
+stringu1 = 'ATAAAA'
+</programlisting>
+
+   et cherche la fonction de restriction pour <literal>=</literal>, qui est
+   <function>eqsel</function>. Ce cas est un peu différent car les valeurs les
+   plus communes &mdash; <acronym>MCV</acronym> (acronyme de
+   <foreignphrase>Most Common Values</foreignphrase>) &mdash; sont utilisées
+   pour déterminer la sélectivité. Regardons-les avec quelques colonnes
+   supplémentaires qui nous serons utiles plus tard&nbsp;:
+
+<programlisting>
+SELECT null_frac, n_distinct, most_common_vals, most_common_freqs FROM pg_stats 
+WHERE tablename='tenk1' AND attname='stringu1';
+
+null_frac         | 0
+n_distinct        | 672
+most_common_vals  | {FDAAAA,NHAAAA,ATAAAA,BGAAAA,EBAAAA,MOAAAA,NDAAAA,OWAAAA,BHAAAA,BJAAAA}
+most_common_freqs | {0.00333333,0.00333333,0.003,0.003,0.003,0.003,0.003,0.003,0.00266667,0.00266667}
+</programlisting>
+
+   La sélectivité est simplement la fréquence la plus commune 
+   (<acronym>MCF</acronym>, acronyme de <foreignphrase>Most Common
+   Frequency</foreignphrase>) correspondant au troisième <acronym>MCV</acronym>
+   &mdash; 'ATAAAA'&nbsp;: 
+
+<programlisting>
+selectivity = mcf[3]
+            = 0.003
+</programlisting>
+
+   Le nombre estimé de lignes est seulement le produit de ceci avec la
+   cardinalité de <classname>tenk1</classname> comme précédemment&nbsp;:
+
+<programlisting>
+rows = 10000 * 0.003
+     = 30
+</programlisting>
+
+   Le nombre affiché par <command>EXPLAIN</command> est un de plus que ceci à
+   cause de quelques vérifications effectuées après l'estimation.
+  </para>
+
+  <para>
+   Maintenant, considérez la même requête mais avec une constante qui n'est pas
+   dans la liste <acronym>MCV</acronym>&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE stringu1 = 'xxx';
+
+                        QUERY PLAN
+----------------------------------------------------------
+ Seq Scan on tenk1  (cost=0.00..470.00 rows=15 width=244)
+   Filter: (stringu1 = 'xxx'::name)
+</programlisting>
+
+   C'est un problème assez différent, comment estimer la sélectivité quand la
+   valeur n'est <emphasis>pas</emphasis> dans la liste <acronym>MCV</acronym>.
+   L'approche est d'utiliser le fait que la valeur n'est pas dans la liste,
+   combinée avec la connaissance des fréquences pour tout les
+   <acronym>MCV</acronym>&nbsp;:
+
+<programlisting>
+selectivity = (1 - sum(mvf))/(num_distinct - num_mcv)
+            = (1 - (0.00333333 + 0.00333333 + 0.003 + 0.003 + 0.003 
+            + 0.003 + 0.003 + 0.003 + 0.00266667 + 0.00266667))/(672 - 10)
+            = 0.001465
+</programlisting>
+
+   c'est-à-dire ajouter toutes les fréquences pour les <acronym>MCV</acronym>
+   et les soustraire de un &mdash; parce qu'il n'est <emphasis>pas</emphasis>
+   un d'entre eux &mdash; et diviser les valeurs distinctes
+   <emphasis>restantes</emphasis>. Notez qu'il n'y a pas de valeurs NULL donc
+   nous n'avons pas à nous en soucier. Le nombre estimé de lignes est calculé
+   comme d'habitude&nbsp;:
+
+<programlisting>
+rows = 10000 * 0.001465
+     = 15
+</programlisting>
+
+  </para>
+
+  <para>
+   Augmentons la complexité en considérant un cas avec plus d'une condition
+   dans la clause <literal>WHERE</literal>&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 1000 AND stringu1 = 'xxx';
+
+                       QUERY PLAN
+-----------------------------------------------------------
+ Seq Scan on tenk1  (cost=0.00..495.00 rows=2 width=244)
+   Filter: ((unique1 &lt; 1000) AND (stringu1 = 'xxx'::name))
+</programlisting>
+
+   Une supposition d'indépendence est faite et les sélectivités des
+   restrictions individuelles sont multipliées ensemble&nbsp;:
+
+<programlisting>
+selectivity = selectivity(unique1 &lt; 1000) * selectivity(stringu1 = 'xxx')
+            = 0.1031 * 0.001465
+            = 0.00015104
+</programlisting>
+
+   Les estimations des lignes sont calculées comme avant&nbsp;:
+
+<programlisting>
+rows = 10000 * 0.00015104
+     = 2
+</programlisting>
+  </para>
+ 
+  <para>
+   Enfin, nous examinons une requête qui inclut un <literal>JOIN</literal> avec
+   une clause <literal>WHERE</literal>&nbsp;:
+
+<programlisting>
+EXPLAIN SELECT *  FROM tenk1 t1, tenk2 t2 
+WHERE t1.unique1 &lt; 50 AND t1.unique2 = t2.unique2;
+
+                                      QUERY PLAN
+-----------------------------------------------------------------------------------------
+ Nested Loop  (cost=0.00..346.90 rows=51 width=488)
+   ->  Index Scan using tenk1_unique1 on tenk1 t1  (cost=0.00..192.57 rows=51 width=244)
+         Index Cond: (unique1 &lt; 50)
+   ->  Index Scan using tenk2_unique2 on tenk2 t2  (cost=0.00..3.01 rows=1 width=244)
+         Index Cond: ("outer".unique2 = t2.unique2)
+</programlisting>
+
+   La restriction sur <classname>tenk1</classname> 
+   <quote>unique1 &lt; 50</quote> est évaluée avant la jointure de boucle
+   imbriquée. Ceci est géré de façon analogue à l'exemple précédent. L'opérateur
+   de restriction pour <literal>&lt;</literal> est
+   <function>scalarlteqsel</function> comme auparavant mais, cette fois, la
+   valeur 50 est dans la première partie de l'histogramme
+   <structfield>unique1</structfield>&nbsp;:
+
+<programlisting>
+selectivity = (0 + (50 - bckt[1].min)/(bckt[1].max - bckt[1].min))/num_bckts
+            = (0 + (50 - 1)/(970 - 1))/10
+            = 0.005057
+
+rows        = 10000 * 0.005057
+            = 51
+</programlisting>
+
+   La restriction pour la jointure est&nbsp;:
+
+<programlisting>
+t2.unique2 = t1.unique2
+</programlisting>
+
+   Ceci est dû au côté boucle imbriquée de la méthode de jointure, avec
+   <classname>tenk1</classname> dans la boucle externe. L'opérateur est notre
+   <literal>=</literal> familier, néanmoins la fonction de restriction est
+   obtenue à partir de la colonne <structfield>oprjoin</structfield> de
+   <classname>pg_operator</classname> - et est <function>eqjoinsel</function>.
+   De plus, nous utilisons l'information statistique pour
+   <classname>tenk2</classname> et <classname>tenk1</classname>&nbsp;:
+
+<programlisting>
+SELECT tablename, null_frac,n_distinct, most_common_vals FROM pg_stats 
+WHERE tablename IN ('tenk1', 'tenk2') AND attname='unique2';  
+
+tablename  | null_frac | n_distinct | most_common_vals
+-----------+-----------+------------+------------------
+ tenk1     |         0 |         -1 |
+ tenk2     |         0 |         -1 |
+</programlisting>
+
+   Dans ce cas, il n'y a pas d'information <acronym>MCV</acronym> pour
+   <structfield>unique2</structfield> parce que toutes les valeurs semblent
+   être unique, donc nous pouvons utiliser un algorythme qui relie seulement le
+   nombre de valeurs distinctes pour les deux relations ensembles avec leur
+   fractions NULL&nbsp;:
+
+<programlisting>
+selectivity = (1 - null_frac1) * (1 - null_frac2) * min(1/num_distinct1, 1/num_distinct2)
+            = (1 - 0) * (1 - 0) * min(1/10000, 1/1000)
+            = 0.0001
+</programlisting>
+
+   C'est-à-dire, soustraire la fraction NULL pour chacune des relations, et
+   divisez par le maximum des deux valeurs distinctes. Le nombre de lignes que
+   la jointure pourrait émettre est calculé comme la cardinalité du produit
+   cartésien de deux n&oelig;uds dans la boucle imbriquée, multipliée par
+   la sélectivité&nbsp;:
+
+<programlisting>
+rows = (outer_cardinality * inner_cardinality) * selectivity
+     = (51 * 10000) * 0.0001
+     = 51
+</programlisting>
+  </para>
+
+  <para>
+   Pour les personnes intéressées par plus de détails, l'estimation du nombre
+   de lignes d'une relation est couverte dans
+   <filename>src/backend/optimizer/util/plancat.c</filename>. La logique du
+   calcul pour les sélectivités des clauses est dans
+   <filename>src/backend/optimizer/path/clausesel.c</filename>. Les
+   implémentations actuelles de l'opérateur et des fonctions de restriction
+   des jointures sont disponibles dans
+   <filename>src/backend/utils/adt/selfuncs.c</filename>.
+  </para>
+
+ </sect1>
+
+
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

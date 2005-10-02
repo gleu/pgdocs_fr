@@ -1,0 +1,591 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/maintenance.sgml,v 1.11 2005/09/15 07:03:19 guillaume Exp $
+-->
+
+<chapter id="maintenance">
+ <title>Planifier les tâches de maintenance</title>
+
+ <indexterm zone="maintenance">
+  <primary>maintenance</primary>
+ </indexterm>
+
+  <para>
+   Pour bien fonctionner, un serveur <productname>PostgreSQL</productname>
+   nécessite quelques opérations de maintenance régulières, décrites ci-après.
+   Ces tâches sont par nature répétitives et peuvent facilement s'automatiser
+   grâce aux outils standards d'UNIX, comme les scripts
+   <application>cron</application>. La responsabilité de la mise en place de ces
+   scripts et du contrôle de leur bon fonctionnement relève de l'administrateur
+   de la base.
+  </para>
+
+  <para>
+   Une opération de maintenance évidente est la sauvegarde régulière des
+   données. Sans une sauvegarde récente il est impossible de restaurer après
+   un dommage grave (perte d'un disque, incendie, table supprimée par erreur,
+   etc.). Les mécanismes de sauvegarde et restauration disponibles dans
+   <productname>PostgreSQL</productname> sont détaillés dans le <xref
+   linkend="backup">.
+  </para>
+
+  <para>
+   L'autre tâche primordiale est de réaliser périodiquement un <quote>vacuum</>,
+   c'est à dire <quote>faire le vide</> dans la base de données.
+   Cette opération est détaillée dans la <xref linkend="routine-vacuuming">.
+  </para>
+
+  <para>
+   La gestion du fichier de traces mérite aussi une attention régulière.
+   Cela est détaillé dans la <xref linkend="logfile-maintenance">.
+  </para>
+
+  <para>
+   <productname>PostgreSQL</productname> demande peu de maintenance par rapport
+   à d'autres SGBD. Néanmoins, un suivi vigilant de ces tâches participera
+   beaucoup à rendre le système productif et agréable à utiliser.
+  </para>
+
+ <sect1 id="routine-vacuuming">
+  <title>Nettoyages réguliers</title>
+
+  <indexterm zone="routine-vacuuming">
+   <primary>vacuum</primary>
+  </indexterm>
+
+  <para>
+   La commande <command>VACUUM</> de <productname>PostgreSQL</productname>
+   doit être exécutée régulièrement pour plusieurs raisons&nbsp;:
+
+    <orderedlist>
+     <listitem>
+      <simpara>pour récupérer l'espace disque occupé par les lignes supprimées
+      ou mises à jour&nbsp;;</simpara>
+     </listitem>
+
+     <listitem>
+      <simpara>pour mettre à jour les statistiques utilisées par l'optimiseur de
+      <productname>PostgreSQL</productname>&nbsp;;</simpara>
+     </listitem>
+
+     <listitem>
+      <simpara>pour prévenir la perte des données les plus anciennes à cause
+      d'un <firstterm>cycle de l'identifiant de transaction (XID)</>.</simpara>
+     </listitem>
+    </orderedlist>
+
+   La fréquence et le périmètre des exécutions de <command>VACUUM</> variera
+   pour chacune des raisons ci-dessus selon les besoins des sites. De plus, les
+   administrateurs doivent appréhender chaque cas et développer une stratégie de
+   maintenance appropriée. L'objectif de cette section est de décrire
+   globalement les problèmes à résoudre&nbsp;; pour la syntaxe et les autres
+   détails, voir la page de référence de la commande <xref linkend="sql-vacuum"
+   endterm="sql-vacuum-title">.
+  </para>
+
+  <para>
+   À partir de <productname>PostgreSQL</productname> 7.2, la forme standard de 
+   <command>VACUUM</> peut être exécutée en parallèle des opérations
+   classiques de manipulation des données (select, insert, update, delete,
+   mais pas les modifications de définition). Les opérations de nettoyage par
+   <command>VACUUM</> sont largement moins pénalisantes qu'elles n'ont pu l'être
+   par le passé et il n'est plus aussi impératif de les planifier pendant les
+   plages d'utilisation peu intensives.
+  </para>
+
+  <para>
+   À partir de la version 8.0 de <productname>PostgreSQL</productname>, certains
+   paramètres de configuration peuvent être ajustés pour réduire l'impact du
+   vacuum en tâche de fond sur les performances. Voir <xref
+   linkend="runtime-config-resource-vacuum-cost">.
+  </para>
+
+  <sect2 id="vacuum-for-space-recovery">
+   <title>Récupérer l'espace disque</title>
+
+   <indexterm zone="vacuum-for-space-recovery">
+    <primary>espace disque</primary>
+   </indexterm>
+
+   <para>
+    Dans son fonctionnement normal, <productname>PostgreSQL</productname> ne
+    supprime pas immédiatement les versions périmées des lignes après un
+    <command>UPDATE</> ou un <command>DELETE</>.  Cette approche est
+    nécessaire pour la consistance des accès
+    concurrents (voir le <xref linkend="mvcc">)&nbsp;: la version de la ligne ne
+    doit pas être supprimée tant qu'elle est susceptible d'être lue par une
+    autre transaction. Mais finalement, une ligne qui est plus vieille que
+    toutes les transactions en cours n'est plus utile du tout. La place qu'elle
+    utilise doit être rendu pour être réutilisée par d'autres lignes afin
+    d'éviter un accroissement constant du volume occupé sur le disque. Cela est
+    réalisé en exécutant <command>VACUUM</>.
+   </para>
+
+   <para>
+    Évidemment, une table qui subit beaucoup de mises à jour et suppressions
+    nécessitera des nettoyages plus fréquents que les tables rarement modifiées.
+    Il peut être pertinent de programmer périodiquement par <application>cron</>
+    des tâches spécifiques qui nettoient uniquement les tables concernées (avec
+    <command>VACUUM</command>) et ignorent les tables que l'on sait peu
+    modifiées. Ceci ne sera vraiment utile que s'il y a à la fois des tables
+    volumineuses intensément modifiées et des tables volumineuses peu modifiées.
+    En effet, le coût supplémentaire lié au nettoyage d'une petite table ne
+    mérite pas que l'on s'en préoccupe.
+   </para>
+
+   <para>
+    Il existe deux variantes de la commande <command>VACUUM</command>. La
+    première forme, connu en tant que <quote>vacuum fainéant</quote> ou plus
+    simplement <command>VACUUM</command>, marque les données expirées dans les
+    tables et les index pour une utilisation future&nbsp;; il ne tente
+    <emphasis>pas</emphasis> de récupérer immédiatement l'espace utilisée par
+    cette donnée expirée. Du coup, le fichier de la table n'est pas plus petit
+    et tout l'espace inutilisé dans le fichier n'est pas redonné au système
+    d'exploitation. Cette variante de <command>VACUUM</command> peut être lancé
+    en concurrence avec les autres opérations normales de la base de données.
+   </para>
+
+   <para>
+   La seconde forme est la commande <command>VACUUM FULL</command>. Elle utilise
+   un algorithme plus agressif pour récupérer l'espace consommé par les versions
+   expirées des lignes. Tout espace qui est libéré par <command>VACUUM
+   FULL</command> est immédiatement rendu au système d'exploitation.
+   Malheureusement,
+   cette variante de la commande <command>VACUUM</command> acquiert un verrou
+   exclusif sur chaque table avant que <command>VACUUM FULL</command> ne la
+   traite. Du coup, utiliser fréquemment <command>VACUUM FULL</command> peut
+   avoir un effet extrêmement négatif sur les performances des requêtes
+   concurrentes sur la base de données.
+   </para>
+
+   <para>
+    La forme standard de <command>VACUUM</> est mieux utilisé dans le but de
+    maintenir une utilisation simple de l'espace disque. Donc, vous avez besoin
+    de redonner de l'espace disque au système d'exploitation, vous pouvez
+    utiliser <command>VACUUM FULL</> &mdash; mais quel est l'intérêt de redonner
+    de l'espace disque qui devra ensuite être de nouveau alloué&nbsp;? Des
+    <command>VACUUM</> standard et d'une fréquence modérée sont une meilleure
+    approche que des <command>VACUUM FULL</>, même non fréquents, pour maintenir
+    des tables mises à jour fréquemment.
+   </para>
+
+   <para>
+    La meilleure stratégie pour la plupart des sites est de planifier un
+    <command>VACUUM</> général sur toute la base une fois par jour, en dehors
+    des horaires normaux de production, accompagné si nécessaire de nettoyages
+    plus fréquents pour les tables subissant d'intenses modifications.
+    (Quelques installations avec un taux extrêmement important de
+    modifications de données lancent un <command>VACUUM</command> sur les
+    tables très occupées jusqu'à une fois toutes les quelques minutes.) S'il y
+    a plusieurs bases de données dans un cluster (groupe de bases de données),
+    ne pas oublier de nettoyer chacune d'entre elles&nbsp;; l'exécutable
+    <filename>vacuumdb</> peut s'avérer utile.
+   </para>
+
+   <tip>
+    <para>
+     Le programme <filename>contrib/pg_autovacuum</> peut être utile pour
+     automatiser des opérations de <command>VACUUM</command> fréquentes.
+    </para>
+   </tip>
+
+   <para>
+    <command>VACUUM FULL</> est recommandé dans les cas où vous savez que vous
+    avez supprimé la majorité des lignes dans une table, de façon à ce que la
+    taille de la table soit réduit de façon conséquente avec l'approche plus
+    plus agressive de <command>VACUUM FULL</>. Utilisez le <command>VACUUM</>
+    standard, et non pas <command>VACUUM FULL</>, pour les nettoyages standards.
+   </para>
+
+   <para>
+    Si vous avez une table dont le contenu est supprimé sur une base périodique,
+    considérez de le faire avec <command>TRUNCATE</command> plutôt qu'avec
+    <command>DELETE</command> suivi par un <command>VACUUM</command>.
+    <command>TRUNCATE</command> supprime le contenu entier de la table
+    immédiatement sans nécessiter un <command>VACUUM</command> ou
+    <command>VACUUM FULL</command> pour réclamer l'espace disque maintenant
+    inutilisé.
+</para>
+  </sect2>
+
+  <sect2 id="vacuum-for-statistics">
+   <title>Maintenir les statistiques du planificateur</title>
+
+   <indexterm zone="vacuum-for-statistics">
+    <primary>statistiques</primary>
+    <secondary>du planificateur</secondary>
+   </indexterm>
+
+   <indexterm zone="vacuum-for-statistics">
+    <primary>ANALYZE</primary>
+   </indexterm>
+
+   <para>
+    L'optimiseur de requêtes de <productname>PostgreSQL</productname> s'appuie
+    sur des informations statistiques sur le contenu des tables dans l'optique
+    de générer des plans d'exécutions efficaces pour les requêtes. Ces
+    statistiques sont collectées par la commande <command>ANALYZE</>, qui peut
+    être invoquée seule ou comme une option de <command>VACUUM</>. Il est
+    important d'avoir des statistiques relativement à jour sans quoi des mauvais
+    choix dans les plans d'exécution pourraient pénaliser la performance de la
+    base.
+   </para>
+
+   <para>
+    À l'instar du nettoyage pour récupérer l'espace, les statistiques doivent
+    être plus souvent collectées pour les tables intensément modifiées que pour
+    celles qui le sont moins. Mais même si la table est très modifiée, il se
+    peut que ces collectes soient inutiles si la distribution probabiliste des
+    données évolue peu. Une règle simple pour décider est de voir comment
+    évoluent les valeurs minimum et maximum des données. Par exemple, une
+    colonne de type <type>timestamp</type> qui contient la date de mise à jour
+    de la ligne aura une valeur maximum en continuelle croissance au fur et à
+    mesure des modifications&nbsp;; une telle colonne nécessitera plus de
+    collectes statistiques qu'une colonne qui contient par exemple les URL des
+    pages accédées sur un site web. La colonne qui contient les URL peut très
+    bien être aussi souvent modifiée mais la distribution probabiliste des
+    données changera certainement moins rapidement.
+   </para>
+
+   <para>
+    Il est possible d'exécuter <command>ANALYZE</> sur des tables spécifiques,
+    voire des colonnes spécifiques&nbsp;; il a donc toute flexibilité pour
+    mettre à jour certaines statistiques plus souvent que les autres en
+    fonction des besoins de l'application. Quoi qu'il en soit, dans la pratique,
+    l'utilité de cette fonctionnalité est douteuse. En effet, depuis
+    <productname>PostgreSQL</productname> 7.2, <command>ANALYZE</> est une
+    opération plutôt rapide, même pour les grosses tables, parce que la collecte
+    se base sur un échantillon aléatoire de la table et non sur toutes les
+    données. Il est donc probablement plus simple de l'utiliser systématiquement
+    sur toute la base.
+   </para>
+
+   <tip>
+    <para>
+     Même si il n'est pas très productif de règler précisément la fréquence de
+     <command>ANALYZE</> pour chaque colonne, il peut être intéressant d'ajuster
+     le niveau de détail des statistiques collectées pour chaque colonne. Les
+     colonnes très utilisées dans les clauses <literal>WHERE</> et dont la
+     distribution n'est pas uniforme requièrent des histogrammes plus précis
+     que les autres colonnes. Voir <command>ALTER TABLE SET STATISTICS</>.
+    </para>
+   </tip>
+
+   <para>
+    Pour la plupart des site, la meilleure stratégie est de programmer une
+    collecte générale des statistiques sur toute la base, une fois par jour.
+    Ceci peut être profitablement couplé avec un <command>VACUUM</> (la nuit
+    par exemple). Quoi qu'il en soit, les administrateurs des bases dont les
+    statistiques changent peu pourront juger que cela est exagéré et que des
+    exécutions moins fréquentes de <command>ANALYZE</> sont bien suffisantes.
+   </para>
+  </sect2>
+
+  <sect2 id="vacuum-for-wraparound">
+   <title>Éviter les cycles des identifiants de transactions</title>
+
+   <indexterm zone="vacuum-for-wraparound">
+    <primary>identifiant de transaction</primary>
+    <secondary>cycle</secondary>
+   </indexterm>
+
+   <para>
+    Le mécanisme de contrôle de concurrence multiversion (<acronym>MVCC</>) de
+    <productname>PostgreSQL</productname> s'appuie sur la possibilité de
+    comparer des identifiants de transactions (<acronym>XID</>)&nbsp;; c'est un
+    nombre croissant&nbsp;: la version d'une ligne dont le XID d'insertion est
+    supérieur au XID de la transaction en cours est <quote>dans le futur</> et
+    ne doit pas être visible de la transaction courante. Comme les identifiants
+    ont une taille limitée (32 bits à ce jour), un groupe qui est en activité
+    depuis longtemps (plus de 4 milliards de transactions) pourrait connaître un
+    cycle des identifiants de transaction&nbsp;: le XID reviendra à 0 et
+    soudainement les transactions du passé sembleront appartenir au futur - ce
+    qui signifie qu'elles deviennent invisibles. En bref, perte de données
+    totale. (En réalité, les données sont toujours là mais c'est un piètre
+    réconfort puisqu'elles resteront inaccessibles.)
+   </para>
+
+   <para>
+    Avant <productname>PostgreSQL</productname> 7.2, la seule parade contre
+    ces cycles de XID était de ré-exécuter <command>initdb</> au minimum tous
+    les 4 milliards de transaction. Bien sûr, cela n'était pas satisfaisant
+    pour les sites connaissant un trafic important, donc une nouvelle solution
+    a été élaborée. La nouvelle approche permet à un cluster de fonctionner
+    indéfiniment, sans <command>initdb</> ni aucune sorte de réinitialisation.
+    Le prix en est le suivant&nbsp;: <emphasis>toute table dans la base doit
+    être nettoyée au moins une fois tous les milliards de
+    transactions.</emphasis>
+   </para>
+
+   <para>
+    Dans la pratique, cette exigence n'est pas onéreuse mais comme son
+    manquement aurait pour conséquence une perte totale des données (pas
+    seulement de l'espace disque perdu ou des performances moindres), des
+    dispositions ont été prises pour aider les administrateurs à éviter le
+    désastre. Pour chaque base de données du groupe,
+    <productname>PostgreSQL</productname> conserve la trace de l'heure du
+    dernier <command>VACUUM</> sur toute la base. Quand une base approche du
+    problème dû au milliard de transactions, le système commence à émettre des
+    messages d'avertissement. Si rien n'est fait, il pourra en dernier lieu
+    stopper les opérations normales jusqu'à ce qu'une maintenance manuelle ne
+    soit effectuée. La suite de cette section en explique les détails.
+   </para>
+
+   <para>
+    La nouvelle approche pour la comparaison des XID distingue deux XID
+    spéciaux, numéros 1 et 2 (<literal>BootstrapXID</> et
+    <literal>FrozenXID</>). Ces deux XID sont toujours considérés comme plus
+    vieux que n'importe quel autre. Les XID normaux (ceux qui sont supérieurs à
+    deux) sont comparés sur une base modulo-2<superscript>31</>. Cela signifie
+    que pour chaque XID normal, il y en a deux milliards qui sont plus vieux et
+    deux milliards qui sont plus récents. Une autre manière de le dire est que
+    l'ensemble de définition des XID est circulaire et sans limite. De plus,
+    une ligne créée avec un XID normal donné, la version de la ligne apparaîtra
+    comme appartenant au passé pour les deux milliards de transactions qui
+    suivront quelque soit le XID. Si la ligne existe encore après deux milliards
+    de transactions, elle apparaîtra soudainement comme appartenant au futur.
+    Pour éviter la disparition des données, les versions trop anciennes doivent
+    se voir affecter le XID <literal>FrozenXID</> avant d'atteindre le seuil
+    fatidique des deux milliards de transactions. Une fois qu'elles ont ce XID
+    spécifique, elles appartiendront au passé pour toutes les transactions même
+    en cas de cycle. Cette affectation est réalisée par <command>VACUUM</>.
+   </para>
+
+   <para>
+    La politique normale de <command>VACUUM</> est d'affecter
+    <literal>FrozenXID</> à toute les lignes dont le XID se situe à plus de un
+    milliard de transactions dans le passé. Elle préserve le XID original tant
+    qu'il est utile. (En réalité, la plupart des lignes existeront et
+    disparaîtront avant d'être <quote>gelée</>. Avec cette méthode, l'intervalle
+    de sécurité maximum entre les exécutions de <command>VACUUM</> pour une
+    table est d'exactement un milliard de transactions&nbsp;: en attendant plus
+    longtemps, on s'expose à conserver des versions qui n'étaient pas assez
+    vielles pour se voir affecter <literal>FrozenXID</> lors de la précédente
+    exécution et qui apparaissent maintenant dans le futur du fait d'un cycle -
+    c'est-à-dire que les données semblent perdues. (Bien sûr, elles
+    réapparaîtront après deux nouveaux milliards de transactions mais cela n'a
+    pas d'intérêt).
+   </para>
+
+   <para>
+    Puisque des exécutions périodiques de <command>VACUUM</> sont nécessaires de
+    toutes manières, pour les raisons évoquées ci-dessus, il est très peu
+    probable qu'une table ne soit pas nettoyée du tout durant un milliard de
+    transactions. Pour aider les administrateurs à assurer que cette exigence
+    est remplie, <command>VACUUM</> conserve des statistiques sur les XID dans
+    la table système <literal>pg_database</>. Notamment, la table
+    <literal>pg_database</> contient, pour chaque base, une colonne
+    <literal>datfrozenxid</> qui est mise à jour après les <command>VACUUM</> de
+    la base (c'est-à-dire <command>VACUUM</> qui ne spécifie aucune table
+    particulière). La valeur qui est stockée est la limite en deçà de laquelle
+    cette exécution de <command>VACUUM</> a marqué la ligne comme
+    <quote>gelée</>. Tous les XID plus vieux que ce XID limite ont reçu le XID
+    <literal>FrozenXID</> pour cette base. Pour obtenir cette information, il
+    suffit d'exécuter la requête&nbsp;:
+
+<programlisting>
+SELECT datname, age(datfrozenxid) FROM pg_database;
+</programlisting>
+
+    La colonne <literal>age</> calcule le nombre de transactions effectuées
+    entre le XID limite et le XID courant.
+   </para>
+
+   <para>
+    Avec la méthode standard de gel du XID, La colonne <literal>age</> démarre à
+    un milliard pour une base fraîchement nettoyée. Si l'<literal>age</>
+    approche des deux milliards, la base doit de nouveau être nettoyée pour
+    éviter les erreurs liées au cycle du XID. Il est recommandé d'exécuter un
+    <command>VACUUM</> une fois tous les demi milliard de transactions pour
+    garder une marge de sécurité maximale. Pour aider à remplir cette
+    exigence, chaque <command>VACUUM</> émet un message si n'importe lequel des
+    enregistrements de <literal>pg_database</> indique un <literal>age</> de
+    plus de 1,5 milliard de transactions, par exemple&nbsp;:
+
+<programlisting>
+play=# VACUUM;
+WARNING:  database "mabase" must be vacuumed within 177009986 transactions
+HINT:  To avoid a database shutdown, execute a full-database VACUUM in "mabase".
+VACUUM
+</programlisting>
+   </para>
+
+   <para>
+    Si les messages d'avertissement émits par <command>VACUUM</> restent
+    ignorés, alors <productname>PostgreSQL</productname> commencera à émettre
+    un message d'avertissement comme ci-dessus à chaque lancement d'une
+    transaction une fois qu'il reste moins de 10 millions de transactions avant
+    le renouveau du cycle. Si ces messages sont aussi ignorés, le système
+    s'arrêtera et refusera d'exécuter de nouvelles transactions tant qu'il
+    restera moins de un million de transactions jusqu'au prochain cycle&nbsp;:
+
+<programlisting>
+play=# select 2+2;
+ERROR:  database is shut down to avoid wraparound data loss in database "mydb"
+HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
+</programlisting>
+
+    La marge de sécurité de un million de transactions existe pour permettre à
+    l'administrateur de récupérer ces données sans perte en exécutant
+    manuellement les commandes <command>VACUUM</> requises. Néanmoins, comme le
+    système n'excutera pas de commandes tant qu'il ne sera pas sorti du mode
+    d'arrêt par sécurité, la seule façon de le faire est de stopper le
+    postmaster et d'utiliser un moteur autonome pour exécuter le
+    <command>VACUUM</>. Le mode d'arrêt n'est pas pris en compte par le moteur
+    autonome. Voir la page de référence de <xref linkend="app-postgres"> pour
+    des détails sur l'utilisation du moteur autonome.
+   </para>
+
+   <para>
+    Avec l'option <command>FREEZE</>, la commande <command>VACUUM</> a un
+    comportement plus poussé&nbsp;: les versions des lignes sont gelées si elles
+    sont suffisamment vieilles pour être visibles de toutes les transactions en
+    cours. En particulier, sur une base en lecture seulement, <command>VACUUM
+    FREEZE</> aura pour résultat de geler toutes les lignes de la base. Donc,
+    tant que la base n'est pas modifiée, aucun nettoyage supplémentaire n'est
+    nécessaire pour éviter les problèmes de cycle du XID. Cette technique est
+    notamment utilisée par <command>initdb</> pour préparer la base
+    <literal>template0</>. Cela pourrait également être utilisé pour préparer
+    n'importe quelle base créée par l'administrateur avec
+    <literal>datallowconn</> = <literal>false</> dans <literal>pg_database</>,
+    puisqu'il n'y a pas moyen d'exécuter <command>VACUUM</command> sur une base
+    à laquelle on ne peut pas se connecter.
+   </para>
+
+   <warning>
+   <para>
+     Une base de données marquée <literal>datallowconn</> = <literal>false</>
+     dans <literal>pg_database</> est supposée être proprement gelé&nbsp;; les
+     messages automatique et l'arrêt de protection contre les cycles ne sont pas
+     pris en compte pour ces bases de données. Du coup, c'est à vous de vous
+     assurer que vous avez correctement gelé une base de données avant de la
+     marquer avec <literal>datallowconn</> = <literal>false</>.
+   </para>
+   </warning>
+
+  </sect2>
+ </sect1>
+
+
+ <sect1 id="routine-reindex">
+  <title>Ré-indexation régulière</title>
+
+  <indexterm zone="routine-reindex">
+   <primary>ré-indexation</primary>
+  </indexterm>
+
+  <para>
+   Dans certains cas, cela vaut la peine de reconstruire périodiquement les
+   index par la commande <command>REINDEX</>.
+   Quoiqu'il en soit, <productname>PostgreSQL</> 7.4 réduit nettement le besoin
+   de cette maintenance en comparaison des versions précédentes.
+  </para>
+ </sect1>
+
+
+ <sect1 id="logfile-maintenance">
+  <title>Maintenance du fichier de traces</title>
+
+  <indexterm zone="logfile-maintenance">
+   <primary>traces serveur</primary>
+   <secondary>maintenance du fichier de traces</secondary>
+  </indexterm>
+
+  <para>
+   Sauvegarder les journaux de trace du serveur de bases de données dans un
+   fichier plutôt que dans <filename>/dev/NULL</> est une bonne idée. Les
+   journaux sont d'une utilité incomparable lorsqu'arrive le moment où des
+   problèmes surviennent. Néanmoins, les journaux ont tendance à être
+   volumineux (tout spécialement à des niveaux de débogage importants) et vous
+   ne voulez pas les sauvegarder indéfiniment. Vous avez besoin de faire une
+   <quote>rotation</> des journaux pour que les nouveaux journaux sont
+   commencés et que les anciens soient supprimés après une période de temps
+   raisonnable.
+  </para>
+
+  <para>
+   Si vous redirigez simplement <systemitem>stderr</> du
+   <command>postmaster</command> dans un fichier, vous aurez un journal des
+   traces mais la seule façon de le tronquer sera d'arrêter et de relancer
+   <command>postmaster</command>. Ceci peut convenir si vous utilisez
+   <productname>PostgreSQL</productname> dans un environnement de développement
+   mais peu de serveurs de production trouveraient ce comportement acceptable.
+  </para>
+
+  <para>
+   Une meilleure approche est d'envoyer la sortie <systemitem>stderr</>
+   de <command>postmaster</> dans un programme de rotation de journaux. Il
+   existe un programme interne de rotation que vous pouvez utiliser en
+   configurant le paramètre <literal>redirect_stderr</> à
+   <literal>true</> dans <filename>postgresql.conf</>. Les paramètres de
+   contrôle pour ce programme sont décrits dans <xref
+   linkend="runtime-config-logging-where">.
+  </para>
+
+  <para>
+   Sinon, vous pourriez préférer utiliser un programme externe de rotation de
+   journaux si vous en utilisez déjà un avec d'autres serveurs. Par exemple,
+   l'outil <application>rotatelogs</application> inclus dans la distribution
+   <productname>Apache</productname> peut être utilisé avec
+   <productname>PostgreSQL</productname>. Pour cela, envoyez via un tube la
+   sortie <systemitem>stderr</> de <command>postmaster</> dans le programme
+   désiré. Si vous lancez le serveur avec <command>pg_ctl</>, alors
+   <systemitem>stderr</> est déjà directement renvoyé dans
+   <systemitem>stdout</>, donc vous avez juste besoin d'ajouter la commande via
+   un tube, par exemple&nbsp;:
+
+<programlisting>
+pg_ctl start | rotatelogs /var/log/pgsql_log 86400
+</programlisting>
+</para>
+
+  <para>
+   Une autre approche de production pour la gestion des journaux de trace est
+   de les envoyer à <application>syslog</> et de laisser <application>syslog</>
+   gérer la rotation des fichiers. Pour cela, initialisez le paramètre de
+   configuration <literal>log_destination</> à <literal>syslog</> (pour tracer
+   uniquement via <application>syslog</>) dans <filename>postgresql.conf</>.
+   Ensuite, vous pouvez envoyer un signal <literal>SIGHUP</literal> au démon
+   <application>syslog</> quand vous voulez le forcer à écrire dans un nouveau
+   fichier. Si vous voulez automatiser la rotation des journaux, le programme
+   <application>logrotate</application> peut être configuré pour fonctionner
+   avec les journaux de traces provenant de <application>syslog</application>.
+  </para>
+
+  <para>
+   Néanmoins, sur beaucoup de systèmes, <application>syslog</> n'est pas très
+   fiable, particulièrement avec les messages très gros&nbsp;; il pourrait
+   tronquer ou supprimer des messages au moment où vous en aurez le plus besoin.
+   De plus, sur <productname>Linux</>, <application>syslog</> synchronisera tout
+   message sur disque, amenant des performances assez pauvres. (Vous pouvez
+   utiliser un <literal>-</> au début du nom de fichier dans le fichier de
+   configuration <application>syslog</> pour désactiver ce comportement.)
+  </para>
+
+  <para>
+   Notez que toutes les solutions décrites ci-dessus font attention à lancer de
+   nouveaux journaux de traces à des intervalles configurables mais ils ne
+   gèrent pas la suppression des vieux fichiers de traces, qui ne sont
+   probablement plus très intéressants. Vous voudrez probablement configurer
+   un script pour supprimer périodiquement les anciens journaux. Une autre
+   possibilité est de configurer le programme de rotation pour que les anciens
+   journaux de traces soient écrasés de façon cyclique.
+  </para>
+ </sect1>
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

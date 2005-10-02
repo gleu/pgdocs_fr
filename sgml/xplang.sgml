@@ -1,0 +1,237 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/xplang.sgml,v 1.9 2005/08/06 08:56:35 guillaume Exp $
+-->
+
+ <chapter id="xplang">
+  <title id="xplang-title">Langages de procédures</title>
+
+  <indexterm zone="xplang">
+   <primary>langage de procédures</primary>
+  </indexterm>
+
+  <para>
+   <productname>PostgreSQL</productname> permet aux utilisateurs d'écrire des
+   fonctions et des procédures avec des langages autres que le SQL et le C. Ces
+   autres langages sont appelés génériquement des <firstterm>langages de
+   procédures</firstterm> (<acronym>LP</acronym>). Pour une fonction écrite dans
+   un langage de procédures, le serveur de bases de données n'a aucune
+   connaissance en interne de la façon d'interpréter le texte du source de la
+   fonction. À la place, la tâche est passée à un gestionnaire spécial qui
+   connaît les détails du langage. Le gestionnaire peut soit faire tout le
+   travail de découpage, d'analyse syntaxique, d'exécution, etc. par lui-même,
+   soit servir de <quote>colle</quote> entre
+   <productname>PostgreSQL</productname> et une implémentation existante d'un
+   langage de programmation. Le gestionnaire lui-même est une fonction en
+   langage C compilée dans une bibliothèque partagée et chargée à la demande,
+   tout comme toute autre fonction C.
+  </para>
+
+  <para>
+   Actuellement, il existe quatre langages de procédures disponibles dans la
+   distribution standard de <productname>PostgreSQL</productname>&nbsp;:
+   <application>PL/pgSQL</application> (<xref linkend="plpgsql">),
+   <application>PL/Tcl</application> (<xref linkend="pltcl">),
+   <application>PL/Perl</application> (<xref linkend="plperl">) et
+   <application>PL/Python</application> (<xref linkend="plpython">). D'autres
+   langages peuvent être définis par les utilisateurs. Les bases de
+   développement d'un nouveau langage de procédures sont couvertes dans le <xref
+   linkend="plhandler">.
+  </para>
+
+  <para>
+   Certains langages de procédures supplémentaires ne sont pas inclus dans la
+   distribution principale. <xref linkend="external-projects"> a quelques
+   informations pour les trouver.
+  </para>
+
+  <sect1 id="xplang-install">
+   <title>Installation de langages de procédures</title>
+
+   <para>
+    Un langage de procédures doit être <quote>installé</quote> dans chaque base
+    de données où il est destiné à être utilisé. Mais les langages de procédures
+    installés dans la base de données <literal>template1</> sont automatiquement
+    disponibles dans toutes les bases de données créées par la suite car leurs
+    entrées dans <literal>template1</> seront copiées par <command>CREATE
+    DATABASE</>. Ainsi, l'administrateur de bases de données peut décider quels
+    langages sont disponibles dans quelles bases de données et peut rendre
+    certains langages disponibles par défaut s'il le choisit.
+   </para>
+
+   <para>
+    Pour les langages fournis avec la distribution standard, le programme
+    <xref linkend="app-createlang"> peut être utilisé pour installer le
+    langage au lieu de reporter tous les détails à la main. Par exemple, pour
+    installer le langage <application>PL/pgSQL</application> dans la base de
+    données <literal>template1</>, utilisez
+<programlisting>
+createlang plpgsql template1
+</programlisting>
+    La procédure manuelle décrite ci-dessous n'est recommandée que pour
+    installer des langages personnalisés que <command>createlang</command> ne
+    connaît pas.
+   </para>
+
+   <procedure>
+    <title>
+     Installation manuelle de langages de procédures
+    </title>
+
+    <para>
+     Un langage de procédures s'installe dans une base de données en quatre
+     étapes, qui doivent être effectuées par le superutilisateur de bases de
+     données. Le programme <command>createlang</command> automatise tout sauf
+     l'<xref linkend="xplang-install-cr1">.
+    </para>
+
+    <step performance="required" id="xplang-install-cr1">
+     <para>
+      La bibliothèque partagée pour le gestionnaire de langage doit être compilée
+      et installée dans le répertoire de bibliothèques approprié. Ceci fonctionne
+      comme la construction et l'installation de modules à l'aide de fonctions C
+      classiques définies par un utilisateur&nbsp;; voir la <xref
+      linkend="dfunc">. Souvent, le gestionnaire du langage dépendra d'une
+      bibliothèque externe fournissant le moteur de langage actuel&nbsp;; dans
+      ce cas, il doit aussi être installé.
+     </para>
+    </step>
+
+    <step performance="required" id="xplang-install-cr2">
+     <para>
+      Le gestionnaire doit être déclaré par la commande 
+      <synopsis>
+CREATE FUNCTION <replaceable>nom_fonction</replaceable>()
+    RETURNS langage
+    AS '<replaceable>chemin-vers-objet-partagé</replaceable>'
+    LANGUAGE C;
+</synopsis>
+      Le type de retour spécial de <type>langage</type> indique au
+      système de bases de données que cette fonction ne renvoie pas l'un des
+      types de données <acronym>SQL</acronym> et n'est pas utilisable
+      directement dans des expressions <acronym>SQL</acronym>.
+     </para>
+    </step>
+
+    <step performance="optional" id="xplang-install-cr3">
+     <para>
+      En option, le gestionnaire de langages pourrait fournir une fonction de
+      <quote>validation</> qui vérifie la définition d'une fonction sans
+      réellement l'exécuter. La fonction de validation est appelée par
+      <command>CREATE FUNCTION</> si elle existe. Si une fonction de validation
+      est fournie par le gestionnaire, déclarez-la avec une commande comme
+<synopsis>
+CREATE FUNCTION <replaceable>nom_fonction_validation</replaceable>(oid)
+    RETURNS void
+    AS '<replaceable>chemin-vers-objet-partagé</replaceable>'
+    LANGUAGE C;
+</synopsis>
+     </para>
+    </step>
+
+    <step performance="required" id="xplang-install-cr4">
+     <para>
+      Le LP doit être déclaré par la commande
+<synopsis>
+CREATE <optional>TRUSTED</optional> <optional>PROCEDURAL</optional> LANGUAGE
+<replaceable>nom_langage</replaceable>
+    HANDLER <replaceable>nom_fonction_gestionnaire</replaceable>
+    <optional>VALIDATOR
+<replaceable>nom_fonction_valideur</replaceable></optional> ;
+</synopsis>
+      Le mot clé optionnel <literal>TRUSTED</literal> indique que les
+utilisateurs
+      ordinaires n'ayant pas de droits de super-utilisateur devraient être
+      autorisés à utiliser ce langage pour créer des procédures fonctions et 
+      déclencheurs. Les fonctions LP étant exécutées au sein du serveur de bases
+      de données, le paramètre <literal>TRUSTED</literal> ne devrait être positionné
+      que pour les langages n'accédant pas aux organes internes du serveur de bases 
+      ou du système de fichiers. Les langages
+      <application>PL/pgSQL</application>,
+      <application>PL/Tcl</application>, et
+      <application>PL/Perl</application>
+      sont considérés comme dignes de confiances&nbsp;; les langages
+      <application>PL/TclU</application>,
+      <application>PL/PerlU</application>, et
+      <application>PL/PythonU</application>
+      sont conçus pour ne fournir que des fonctionnalités limitées et
+      <emphasis>ne</emphasis> devraient <emphasis>pas</emphasis> être
+      considérées dignes de confiance.
+     </para>
+    </step>
+   </procedure>
+
+   <para>
+    L'<xref linkend="xplang-install-example"> montre comment fonctionne la procédure
+    d'installation manuelle avec le langage <application>PL/pgSQL</application>.
+   </para>
+
+   <example id="xplang-install-example">
+    <title>Installation manuelle de <application>PL/pgSQL</application></title>
+
+     <para>
+      La commande suivante indique au serveur de bases de données l'emplacement
+      de la bibliothèque partagée pour la fonction de gestion des appels du
+      langage <application>PL/pgSQL</application>.
+
+<programlisting>
+CREATE FUNCTION plpgsql_call_handler() RETURNS language_handler AS 
+    '$libdir/plpgsql' LANGUAGE C;
+</programlisting>
+     </para>
+
+     <para>
+      <application>PL/pgSQL</application> a une fonction de validation, donc
+      nous la déclarons aussi&nbsp;:
+
+<programlisting>
+CREATE FUNCTION plpgsql_validator(oid) RETURNS void AS
+    '$libdir/plpgsql' LANGUAGE C;
+</programlisting>
+     </para>
+
+     <para>
+      La commande
+<programlisting>
+CREATE TRUSTED PROCEDURAL LANGUAGE plpgsql
+    HANDLER plpgsql_call_handler
+    VALIDATOR plpgsql_validator;
+</programlisting>
+      définit alors que la fonction déclarée précédemment devrait être invoquée
+      pour les procédures fonctions ou déclencheurs pour lesquelles l'attribut
+      langage est <literal>plpgsql</literal>.
+     </para>
+  </example>
+
+   <para>
+    Lors de l'installation par défaut de <productname>PostgreSQL</productname>,
+    le gestionnaire pour le langage <application>PL/pgSQL</application> est
+    compilé et installé dans le répertoire des bibliothèques
+    (<quote>lib</quote>). Si le support de <application>Tcl</> y est
+    configuré, les gestionnaires pour <application>PL/Tcl</> et
+    <application>PL/TclU</> sont aussi compilés et installés au même endroit. De
+    même, les gestionnaires de <application>PL/Perl</> et
+    <application>PL/PerlU</> sont compilés et installés si le support de Perl
+    est configuré, et <application>PL/PythonU</> est installé si le support de
+    Python est configuré.
+   </para>
+
+  </sect1>
+
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->
