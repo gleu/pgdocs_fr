@@ -1,0 +1,507 @@
+
+ <sect1 id="xoper">
+  <title>Opérateurs définis par l'utilisateur</title>
+
+  <Para>
+   Chaque opérateur est un <quote>sucre syntaxique</quote> pour l'appel d'une
+   fonction sous-jacente qui fait le travail&nbsp;; aussi devez-vous en premier
+   lieu créer cette fonction avant de pouvoir créer l'opérateur. Toutefois, un
+   opérateur n'est pas <emphasis>simplement</emphasis> un <quote>sucre
+   syntaxique</quote> car il apporte une information supplémentaire qui aide le
+   planificateur de requête à optimiser les requêtes utilisées par l'opérateur.
+   La prochaine section est consacrée à l'explication de cette information
+   additionnelle. 
+  </Para>
+
+  <Para>
+   <productname>PostgreSQL</productname> accepte les opérateurs unaire gauche,
+   unaire droit et binaire. Les opérateurs peuvent être surchargés&nbsp;;
+   c'est-à-dire que le même nom d'opérateur peut être utilisé pour différents 
+   opérateurs, à condition qu'ils aient des nombres et des types différents
+   d'opérandes. Quand une requête est exécutée, le système détermine l'opérateur
+   à appeler en fonction du nombre et des types d'opérandes fournis.
+  </Para>
+
+  <Para>
+   Voici un exemple de création d'opérateur pour l'addition de deux nombres
+   complexes. Nous supposons avoir déjà créé la définition du type
+   <type>complex</type> (voir la <xref linkend="xtypes">). Premièrement, nous
+   avons besoin d'une fonction qui fasse le travail, ensuite nous pouvons
+   définir l'opérateur&nbsp;:
+
+<ProgramListing>
+CREATE FUNCTION complex_add(complex, complex)
+    RETURNS complex
+    AS '<replaceable>filename</replaceable>', 'complex_add'
+    LANGUAGE C;
+
+CREATE OPERATOR + (
+    leftarg = complex,
+    rightarg = complex,
+    procedure = complex_add,
+    commutator = +
+);
+</ProgramListing>
+  </Para>
+
+  <Para>
+   Maintenant nous pouvons exécuter la requête comme ceci&nbsp;:
+     
+<screen>
+SELECT (a + b) AS c FROM test_complex;
+
+        c
+-----------------
+ (5.2,6.05)
+ (133.42,144.95)
+</screen>
+  </Para>
+
+  <Para>
+   Nous avons montré comment créer un opérateur binaire. Pour créer des
+   opérateurs unaires, il suffit d'omettre un des <literal>leftarg</> (pour un
+   opérateur unaire gauche) ou <literal>rightarg</> (pour un opérateur unaire
+   droit). La clause <literal>procedure</> et les clauses argument sont les
+   seuls éléments requis dans la commande <command>CREATE OPERATOR</command>. La
+   clause <literal>commutator</> montrée dans l'exemple est une indication 
+   optionnelle pour l'optimiseur de requête. Des détails supplémentaires sur la
+   clause <literal>commutator</> et d'autres compléments d'optimisation sont
+   donnés dans la prochaine section.
+  </Para>
+ </sect1>
+
+  <sect1 id="xoper-optimization">
+   <title>Informations sur l'optimisation d'un opérateur</title>
+
+   <para>
+    Une définition d'opérateur <ProductName>PostgreSQL</ProductName> peut
+    inclure plusieurs clauses optionnelles qui donnent au système des
+    informations utiles sur le comportement de l'opérateur. Ces clauses
+    devraient être fournies chaque fois que c'est utile car elles peuvent
+    considérablement accélérer l'exécution des requêtes utilisant cet opérateur.
+    Mais si vous le faites, vous devez être sûr de leur justesse&nbsp;! L'usage
+    incorrect d'une clause d'optimisation peut entraîner un arrêt brutal du
+    processus serveur, des sorties subtilement fausses ou d'autres effets
+    pervers. Vous pouvez toujours abandonner une clause d'optimisation si vous
+    n'êtes pas sûr d'elle&nbsp;; la seule conséquence est un possible
+    ralentissement des requêtes.
+   </para>
+   
+   <para>
+    Des clauses d'optimisation additionnelles pourront être ajoutées dans les
+    futures versions de <productname>PostgreSQL</productname>. Celles décrites
+    ici sont toutes celles que cette version comprend.
+   </para>
+
+   <sect2>
+    <title><literal>COMMUTATOR</></title>
+
+    <para>
+    La clause <literal>COMMUTATOR</>, si elle est fournie, désigne un opérateur
+    qui est le commutateur de l'opérateur en cours de définition. Nous disons
+    qu'un opérateur A est le commutateur de l'opérateur B si (x A y) est égal à
+    (y B x) pour toutes valeurs possible de x, y. Notez que B est aussi le
+    commutateur de A. Par exemple, les opérateurs <literal>&lt;</> et
+    <literal>&gt;</> pour un type particulier de données sont habituellement des
+    commutateurs l'un pour l'autre, et l'opérateur <literal>+</> est
+    habituellement commutatif avec lui-même. Mais l'opérateur <literal>-</> 
+    n'est habituellement commutatif avec rien.
+    </para>
+    
+    <para>
+    Le type de l'opérande gauche d'un opérateur commuté est le même que
+    l'opérande droit de son commutateur, et vice versa. Aussi
+    <ProductName>PostgreSQL</ProductName> n'a besoin que du nom de l'opérateur
+    commutateur pour consulter le commutateur, et c'est tout ce qui doit être
+    fourni à la clause <literal>COMMUTATOR</> .
+    </para>
+
+    <para>
+    Vous avez juste à définir un opérateur auto-commutateur. Mais les choses
+    sont un peu plus compliquées quand vous définissez une paire de
+    commutateurs&nbsp;: comment peut-on définir la référence du premier au
+    second, alors que ce dernier n'est pas encore défini&nbsp;? Il y a deux
+    solutions à ce problème&nbsp;:
+ 
+     <itemizedlist>
+      <listitem>
+       <para>
+	Une façon d'opérer est d'omettre la clause <literal>COMMUTATOR</> dans
+	le premier opérateur que vous définissez et ensuite d'en insérer une
+	dans la définition du second opérateur. Puisque
+	<ProductName>PostgreSQL</ProductName> sait que les opérateurs
+	commutatifs vont par paire, quand il voit la seconde définition, il
+	retourne instantanément remplir la clause <literal>COMMUTATOR</>
+	manquante dans la première définition.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+	L'autre façon, plus directe, est de simplement inclure les clauses
+	<literal>COMMUTATOR</> dans les deux définitions. Quand 
+	<ProductName>PostgreSQL</ProductName> traite la première définition et
+	réalise que la clause <literal>COMMUTATOR</> se réfère à un opérateur
+	inexistant, le système va créer une entrée provisoire pour cet opérateur
+	dans le catalogue système. Cette entrée sera pourvue seulement de
+	données valides pour le nom de l'opérateur, les types d'opérande droit
+	et gauche et le type du résultat, puisque c'est tout ce que
+	<ProductName>PostgreSQL</ProductName> peut déduire à ce point. La
+	première entrée du catalogue pour l'opérateur sera liée à cette entrée
+	provisoire. Plus tard, quand vous définirez le second opérateur, le
+	système mettra à jour l'entrée provisoire avec les informations
+	additionnelles fournies par la seconde définition. Si vous essayez
+	d'utiliser l'opérateur provisoire avant qu'il ne soit complété, vous
+	aurez juste un message d'erreur.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+   </sect2>
+
+   <sect2>
+    <title><literal>NEGATOR</></title>
+
+    <para>
+    La clause <literal>NEGATOR</> dénomme un opérateur qui est l'opérateur de
+    négation de l'opérateur en cours de définition. Nous disons qu'un opérateur
+    A est l'opérateur de négation de l'opérateur B si tous les deux renvoient
+    des résultats booléens et si (x A y) est égal à NOT (x B y) pour toutes les
+    entrées possible x, y. Notez que B est aussi l'opérateur de négation de A.
+    Par exemple, <literal>&lt;</> et <literal>&gt;=</> forment une paire
+    d'opérateurs de négation pour la plupart des types de données. Un opérateur
+    ne peut jamais être validé comme son propre opérateur de négation . 
+    </para>
+
+    <para>
+    Au contraire des commutateurs, une paire d'opérateurs unaires peut être
+    validée comme une paire d'opérateurs de négation réciproques&nbsp;; ce qui
+    signifie que (A x) est égal à NOT (B x) pour tout x ou l'équivalent pour les
+    opérateurs unaires à droite.   
+    </para>
+
+    <para>
+    L'opérateur de négation d'un opérateur doit avoir les mêmes types
+    d'opérandes gauche et/ou droit que l'opérateur à définir, aussi comme
+    avec <literal>COMMUTATOR</>, seul le nom de l'opérateur doit être donné
+    dans la clause <literal>NEGATOR</>. 
+    </para>
+    
+    <para>
+    Définir un opérateur de négation est très utile pour l'optimiseur de
+    requêtes car il permet de simplifier des expressions telles que <literal>NOT
+    (x = y)</> en <literal>x &lt;&gt; y</>. Ceci arrive plus souvent que vous
+    ne pouvez le penser parce que les opérations <literal>NOT</> peuvent être
+    insérées à la suite d'autres réarrangements.
+    </para>
+
+    <para>
+    Des paires d'opérateurs de négation peuvent être définies en utilisant la
+    même méthode que pour les commutateurs.
+    </para>
+    
+  </sect2>
+  
+  <sect2>
+   <title><literal>RESTRICT</></title>
+
+   <para>
+    La clause <literal>RESTRICT</>, si elle est invoquée, nomme une fonction
+    d'estimation de sélectivité de restriction pour cet opérateur. (Notez que
+    c'est un nom de fonction, et non pas un nom d'opérateur.) Les clauses
+    <literal>RESTRICT</> n'ont de sens que pour les opérateurs binaires qui
+    renvoient un type <type>boolean</>. Un estimateur de sélectivité de
+    restriction repose sur l'idée de prévoir quelle fraction des lignes dans une
+    table satisfera une condition de clause <literal>WHERE</literal> de la forme
+<ProgramListing>
+colonne OP constante
+</ProgramListing>
+    pour l'opérateur courant et une valeur constante particulière. Ceci aide
+    l'optimiseur en lui donnant une idée du nombre de lignes qui sera éliminé
+    par les clauses <literal>WHERE</> qui ont cette forme. (Vous pouvez vous
+    demander, qu'arrivera-t-il si la constante est à gauche&nbsp;? hé bien,
+    c'est une des choses à laquelle sert le <literal>COMMUTATOR</> ...)
+   </para>
+
+   <para>
+    L'écriture de nouvelles fonctions d'estimation de restriction de sélectivité
+    est éloignée des objectifs de ce chapitre, mais heureusement, vous pouvez
+    habituellement simplement utiliser un des estimateurs standard du système
+    pour beaucoup de vos propres opérateurs. Voici les estimateurs standard de
+    restriction&nbsp;:
+    <simplelist>
+     <member><function>eqsel</> pour <literal>=</></member>
+     <member><function>neqsel</> pour <literal>&lt;&gt;</></member>
+     <member><function>scalarltsel</> pour <literal>&lt;</> ou <literal>&lt;=</></member>
+     <member><function>scalargtsel</>pour <literal>&gt;</> ou <literal>&gt;=</></member>
+   </simplelist>
+    Ces catégories peuvent sembler un peu curieuses, mais cela prend un sens si
+    vous y réfléchissez. <literal>=</> acceptera typiquement seulement une
+    petite fraction des lignes d'une table&nbsp;; <literal>&lt;&gt;</> rejettera
+    typiquement seulement une petite fraction des lignes de la table.
+    <literal>&lt;</> acceptera une fraction des lignes en fonction de la
+    situation de la constante donnée dans la gamme de valeurs de la colonne pour
+    cette table (ce qui est justement l'information collectée par la commande
+    <command>ANALYZE</command> et rendue disponible pour l'estimateur de
+    sélectivité). <literal>&lt;=</> acceptera une fraction légèrement plus
+    grande que <literal>&lt;</> pour la même constante de comparaison mais elles
+    sont assez proches pour ne pas valoir la peine d'être distinguées puisque
+    nous ne risquons pas de toute façon de faire mieux qu'une grossière
+    estimation. La même remarque s'applique à <literal>&gt;</> et
+    <literal>&gt;=</>.
+   </para>
+
+   <para>
+    Vous pouvez fréquemment vous en sortir à bon compte en utilisant soit
+    <function>eqsel</function> ou <function>neqsel</function> pour des
+    opérateurs qui ont une très grande ou une très faible sélectivité, même
+    s'ils ne sont pas réellement égalité ou inégalité. Par exemple, les
+    opérateurs géométrique d'égalité approchée utilisent
+    <function>eqsel</function> en supposant habituellement qu'ils ne
+    correspondent qu'à une petite fraction des entrées dans une table.
+   </para>
+
+   <para>
+    Vous pouvez utiliser <function>scalarltsel</> et <function>scalargtsel</>
+    pour des comparaisons de types de données qui possèdent un moyen de
+    conversion en scalaires numériques pour les comparaisons de rang. Si
+    possible, ajoutez le type de données à ceux acceptés par la fonction
+    <function>convert_to_scalar()</function> dans
+    <filename>src/backend/utils/adt/selfuncs.c</filename>. (Finalement, cette
+    fonction devrait être remplacée par des fonctions pour chaque type de
+    données identifié grâce à une colonne du catalogue système
+    <classname>pg_type</>&nbsp;; mais cela n'a pas encore été fait.) Si vous ne
+    faites pas ceci, les choses fonctionneront mais les estimations de
+    l'optimiseur ne seront pas aussi bonnes qu'elles pourraient l'être.
+   </para>
+
+   <para>
+    D'autres fonctions d'estimation de sélectivité conçues pour les opérateurs
+    géométriques sont placées dans
+    <filename>src/backend/utils/adt/geo_selfuncs.c</filename>&nbsp;:
+    <function>areasel</function>, <function>positionsel</function> et
+    <function>contsel</function>. Lors de cette rédaction, ce sont seulement
+    des fragments mais vous pouvez vouloir les utiliser (ou mieux les
+    améliorer).
+   </para>
+   </sect2>
+
+   <sect2>
+    <title><literal>JOIN</></title>
+
+    <para>
+     La clause <literal>JOIN</>, si elle est invoquée, nomme une fonction
+     d'estimation de sélectivité de jointure pour l'opérateur. (Notez que c'est
+     un nom de fonction, et non pas un nom d'opérateur.) Les clauses
+     <literal>JOIN</> n'ont de sens que pour les opérateurs binaires qui
+     renvoient un type <type>boolean</>. Un estimateur de sélectivité de
+     jointure repose sur l'idée de prévoir quelle fraction des lignes dans une
+     paire de tables satisfera une condition de clause
+     <literal>WHERE</literal> de la forme
+<ProgramListing>
+table1.column1 OP table2.column2
+</ProgramListing>
+     pour l'opérateur courant. Comme pour la clause <literal>RESTRICT</literal>,
+     ceci aide considérablement l'optimiseur en lui indiquant parmi plusieurs
+     séquences de jointure possibles laquelle prendra vraisemblablement le moins
+     de travail.
+    </para>
+
+    <para>
+     Comme précédemment, ce chapitre n'essaiera pas d'expliquer comment écrire
+     une fonction d'estimation de sélectivité de jointure mais suggérera
+     simplement d'utiliser un des estimateurs standard s'il est
+     applicable&nbsp;:
+     <simplelist>
+      <member><function>eqjoinsel</> pour <literal>=</></member>
+      <member><function>neqjoinsel</> pour <literal>&lt;&gt;</></member>
+      <member><function>scalarltjoinsel</> pour <literal>&lt;</> ou <literal>&lt;=</></member>
+      <member><function>scalargtjoinsel</> pour <literal>&gt;</> ou <literal>&gt;=</></member>
+      <member><function>areajoinsel</> pour des comparaisons basées sur une aire 2D</member>
+      <member><function>positionjoinsel</> pour des comparaisons basées sur une position 2D </member>
+      <member><function>contjoinsel</> pour des comparaisons basées sur un appartenance 2D</member>
+     </simplelist>
+    </para>
+   </sect2>
+
+   <sect2>
+    <title><literal>HASHES</></title>
+
+    <para>
+     La clause <literal>HASHES</literal> indique au système qu'il est permis
+     d'utiliser la méthode de jointure-découpage pour une jointure basée sur cet
+     opérateur. <literal>HASHES</> n'a de sens que pour un opérateur binaire qui
+     renvoie un <literal>boolean</> et en pratique l'opérateur égalité serait
+     mieux approprié pour certains types de données
+    </para>
+
+    <para>
+     La jointure-découpage repose sur l'hypothèse que l'opérateur de jointure
+     peut seulement renvoyer la valeur vrai pour des paires de valeurs droite et
+     gauche qui correspondent au même code de découpage. Si deux valeurs sont
+     placées dans deux différents paquets ("buckets"), la jointure ne pourra
+     jamais les comparer avec la supposition implicite que le résultat de
+     l'opérateur de jointure doit être faux. Ainsi, il n'y a aucun sens à
+     spécifier <literal>HASHES</literal> pour des opérateurs qui ne représentent
+     pas l'égalité.
+    </para>
+
+    <para>
+     Pour être marqué <literal>HASHES</literal>, l'opérateur de jointure doit
+     apparaître dans une classe d'opérateurs d'index de découpage. Ceci n'est
+     pas rendu obligatoire quand vous créez l'opérateur, puisque évidemment la
+     classe référençant l'opérateur peut ne pas encore exister. Mais les
+     tentatives d'utilisation de l'opérateur dans les jointure-découpage
+     échoueront à l'exécution si une telle classe d'opérateur n'existe pas. Le
+     système a besoin de la classe d'opérateur pour définir la fonction de
+     découpage spécifique au type de données d'entrée de l'opérateur. Bien sûr,
+     vous devez également fournir une fonction de découpage appropriée avant de
+     pouvoir créer la classe d'opérateur.
+    </para>
+
+    <para>
+     On doit apporter une grande attention à la préparation des fonctions de
+     découpage, parce qu'il y a des processus dépendants de la machine qui
+     peuvent ne pas faire les choses correctement. Par exemple, si votre type de
+     données est une structure dans laquelle peuvent se trouver des bits de
+     remplissage sans intérêt, vous ne pouvez pas simplement passer la structure
+     complète à la fonction <function>hash_any</>. (À moins d'écrire vos autres
+     opérateurs et fonctions de façon à s'assurer que les bits inutilisés sont
+     toujours zéro, ce qui est la stratégie recommandée.) Un autre exemple est
+     fourni sur les machines qui respectent le standard de virgule-flottante
+     <acronym>IEEE</>, le zéro négatif et le zéro positif sont des valeurs
+     différentes (les motifs de bit sont différents) mais ils sont définis pour
+     être égaux. Si une valeur flottante peut contenir un zéro négatif, alors
+     une étape supplémentaire est nécessaire pour s'assurer qu'elle génère la
+     même valeur de découpage qu'un zéro positif.
+    </para>
+
+    <note>
+    <para>
+     La fonction sous-jacente à un opérateur de jointure-découpage doit être
+     marquée immuable ou stable. Si elle est volatile, le système n'essaiera
+     jamais d'utiliser l'opérateur pour une jointure hachage.
+    </para>
+    </note>
+
+    <note>
+    <para>
+     Si un opérateur de jointure-hachage a une fonction sous-jacente marquée
+     stricte, la fonction doit également être complète&nbsp;: cela signifie
+     qu'elle doit renvoyer TRUE ou FALSE, jamais NULL, pour n'importe quelle
+     double entrée non nulle. Si cette règle n'est pas respectée, l'optimisation
+     de découpage des opérations <literal>IN</> peut générer des résultats
+     faux. (Spécifiquement, <literal>IN</> devrait renvoyer FALSE quand la
+     réponse correcte devrait être NULL&nbsp;; ou bien il devrait renvoyer une
+     erreur indiquant qu'il ne s'attendait pas à un résultat NULL.)
+    </para>
+    </note>
+
+   </sect2>
+
+   <sect2>
+    <title><literal>MERGES</> (<literal>SORT1</>, <literal>SORT2</>, <literal>LTCMP</>, <literal>GTCMP</>)</title>
+
+    <para>
+     La clause <literal>MERGES</literal>, si elle est présente, indique au système qu'il est permis d'utiliser
+     la méthode de jointure-union pour une jointure basée sur cet opérateur.
+     <literal>MERGES</> n'a de sens que pour un opérateur binaire qui renvoie un <literal>boolean</>,
+     et en pratique, cet opérateur doit représenter l'égalité pour des types de données ou des paires de types de données.
+    </para>
+
+    <para>
+     La jointure-union est fondée sur le principe d'ordonner les tables gauche et droite
+    et ensuite de les comparer en parallèle. Ainsi, les deux types de donnée doivent être 
+    capable d'être pleinement ordonnées, et l'opérateur de jointure doit  pouvoir 
+    réussir seulement pour des paires de valeur tombant à la <quote>même place</>
+     dans l'ordre de tri. En pratique, cela signifie que l'opérateur de jointure doit se comporter comme l'opérateur égalité.
+     Mais contrairement à la jointure-hachage, où il vaut mieux que les types de donnée
+     droite et gauche soit les mêmes (ou au moins soient bitwise équivalent), il est possible de faire une jointure-union
+     sur deux types de données distincts, tant qu'ils sont logiquement compatibles.
+     Par exemple, l'opérateur d'égalité <type>smallint</type>-contre-<type>integer</type> 
+     est susceptible d'opérer une jointure-union. Nous avons seulement besoin d'opérateurs de tri qui
+     organisent les deux types de données en séquences logiquement comparables.
+    </para>
+
+    <para>
+     L'exécution d'un jointure-union exige que le système soit capable d'identifier quatre opérateurs
+     rattachés à l'opérateur de jointure-union: la comparaison less-than pour le type de donnée 
+     de l'opérande gauche, la comparaison less-than pour le type de donnée de l'opérande droit, 
+     la comparaison less-than entre les deux types de donnée et la comparaison greater-than
+     entre les deux types de donnée. (Il y a en fait quatre opérateurs distincts si l'opérateur de 
+     jointure-union a deux types de données d'opérande différents; mais quand les types d'opérande sont les mêmes,
+     les trois opérateurs less-than sont tous le même opérateur.)
+     Il est possible de spécifier ces opérateurs individuellement par leur nom, comme les options respectives
+     <literal>SORT1</>, <literal>SORT2</>, <literal>LTCMP</>, et <literal>GTCMP</>.
+     Le système remplira respectivement par défaut les noms
+     <literal>&lt;</>, <literal>&lt;</>, <literal>&lt;</>, <literal>&gt;</>
+     si n'importe lequel d'entre eux est omis quand <literal>MERGES</> est spécifié
+    De même, <literal>MERGES</> sera supposé être indiqué si n'importe laquelle de ces quatre options apparaît, 
+    il est donc possible de seulement spécifier quelques unes de ces options et de laisser le système compléter le reste.
+    </para>
+
+    <para>
+     Les types de données des opérandes des quatre opérateurs de comparaison peuvent être déduits 
+     des types d'opérandes de l'opérateur de jointure-union, aussi, exactement comme avec 
+     <literal>COMMUTATOR</>, seuls les noms d'opérateurs ont besoin d'être donnés dans ces clauses. 
+     A moins que vous ne fassiez des choix particuliers de noms d'opérateurs, il suffit d'écrire <literal>MERGES</>
+     et laisser le système remplir les détails. (Comme avec <literal>COMMUTATOR</> et <literal>NEGATOR</>,
+     le système est capable de faire des entrées d'opérateur fictives si il vous arrive de définir l'opérateur égalité
+     avant les autres.)
+    </para>
+
+    <para>
+     Il existe des restrictions additionnelles sur les opérateurs que vous marquez comme jointure-union.
+     Ces restrictions ne sont pas actuellement contrôlées par la commande
+     <command>CREATE OPERATOR</command>, mais des erreurs peuvent intervenir 
+     lors de l'utilisation de l'opérateur si un des points suivants n'est pas vérifié:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+	Un opérateur d'égalité capable de jointure-union doit avoir un
+	commutateur capable de jointure-union (qui peut être lui-même si les
+	deux types de donnée d'opérande sont les mêmes, ou un opérateur
+	d'égalité apparenté si ils sont différents).
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Si il existe un opérateur capable de jointure-union reliant deux types
+	de données A et B, et un autre opérateur capable de jointure-union
+	reliant B à un troisième type de donnée C, alors A et C doivent aussi
+	avoir un opérateur capable de jointure-union&nbsp;; en d'autres mots,
+	avoir un opérateur de jointure-union doit être une propriété transitive.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Des résultats bizarre apparaîtront lors de l'exécution si les quatre opérateurs de comparaison
+	que vous nommez ne trient pas les valeurs de façon compatible.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+
+    <note>
+    <para>
+     La fonction sous jacente à un opérateur de jointure-union doit être marquée immuable ou stable. 
+     Si elle est volatile, le système n'essaiera jamais d'utiliser l'opérateur pour une jointure union.
+    </para>
+    </note>
+
+    <note>
+    <para>
+     Dans les versions de <ProductName>PostgreSQL</ProductName> antérieure à 7.3,
+    <literal>MERGES</> n'était pas disponible&nbsp;: pour faire un opérateur de
+     jointure union,
+     on devait explicitement écrire <literal>SORT1</> et <literal>SORT2</>. De plus,
+     les options <literal>LTCMP</> et <literal>GTCMP</>n'existaient pas&nbsp;;
+     les noms de ces opérateurs ont été rattachés respectivement à
+     <literal>&lt;</> et <literal>&gt;</>.
+    </para>
+    </note>
+   </sect2>
+  </sect1>
