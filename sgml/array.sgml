@@ -1,0 +1,662 @@
+<!-- $Header: /var/lib/cvs/pgsql-fr/sgml/array.sgml,v 1.11 2005/03/25 21:49:17 guillaume Exp $ -->
+
+<sect1 id="arrays">
+ <title>Tableaux</title>
+
+ <indexterm>
+  <primary>tableau</primary>
+  <secondary>array</secondary>
+ </indexterm>
+
+ <para>
+  <productname>PostgreSQL</productname> autorise que des colonnes d'une table
+  soient définies en tant que tableaux multidimensionnels à longueur variable.
+  Des tableaux de n'importe quel type, même défini par l'utilisateur, peuvent
+  être créés. (Nénamoins, les tableaux de type composite ou de domaines ne sont
+  pas encore supportés.)
+ </para>
+
+ <sect2>
+  <title>Déclaration des types de tableaux</title>
+
+ <para>
+  Pour illustrer l'utilisation des types de tableaux, créons cette table&nbsp;:
+<programlisting>
+CREATE TABLE sal_emp (
+    nom              text,
+    paye_par_semaine integer[],
+    planning         text[][]
+);
+</programlisting>
+  Comme indiqué ci-dessus, un type de donnée tableau est nommé en ajoutant des
+  crochets (<literal>[]</>) au type de données des éléments du tableau. La
+  commande ci-dessus créera une table nommée <structname>sal_emp</structname>
+  avec une colonne de type <type>text</type> (<structfield>nom</structfield>),
+  un tableau à une dimension de type <type>integer</type>
+  (<structfield>paye_par_semaine</structfield>), représentant le salaire d'un
+  employé par semaine et un tableau à deux dimensions de type
+  <type>text</type> (<structfield>planning</structfield>), représentant le
+  planning hebdomadaire de l'employé.
+ </para>
+
+ <para>
+  La syntaxe pour <command>CREATE TABLE</command> permet de spécifier la taille
+  exacte des tableaux, par exemple&nbsp;:
+
+<programlisting>
+CREATE TABLE tictactoe (
+    carres   integer[3][3]
+);
+</programlisting>
+
+  Néanmoins, l'implémentation actuelle n'oblige pas au respect des limites en
+  taille du tableau -- le comportement est identique à celui des tableaux dont
+  la longueur n'a pas été spécifiée.
+ </para>
+
+ <para>
+  En fait, l'implémentation actuelle n'oblige pas non plus à déclarer le
+  nombre de dimensions. Les tableaux d'un type d'élément particulier sont tous
+  considérés comme étant du même type, sans vérification de la taille ou du nombre de
+  dimensions. Donc, déclarer le nombre de dimensions ou la taille dans
+  <command>CREATE TABLE</command> a uniquement un but de documentation, cela
+  n'affecte pas le comportement lors de l'exécution.
+ </para>
+
+ <para>
+  Une syntaxe alternative, conforme au standard SQL:1999, pourrait être
+  utilisée pour les tableaux à une dimension.
+  <structfield>paye_par_semaine</structfield> pourrait avoir été définie ainsi&nbsp;:
+<programlisting>
+    paye_par_semaine  integer ARRAY[4],
+</programlisting>
+  Cette syntaxe nécessite une constante de type entier pour indiquer la taille
+  du tableau. Néanmoins, comme indiqué précédemment, <productname>PostgreSQL</>
+  n'impose aucune restriction sur la taille.
+ </para>
+ </sect2>
+
+ <sect2>
+  <title>Saisie de valeurs de type tableau</title>
+
+  <indexterm>
+   <primary>tableau</primary>
+   <secondary>constante</secondary>
+  </indexterm>
+
+  <para>
+   Pour écrire une valeur de type tableau comme une constante littérale,
+   encadrez les valeurs des éléments par des accolades et séparez-les par des
+   virgules. (Si vous connaissez le C, ce n'est pas différent de la syntaxe C
+   pour initialiser les structures.) Vous pouvez mettre des guillemets doubles
+   autour des valeurs des éléments et, en fait, vous devez le faire si elles
+   contiennent des virgules ou des accolades. (Plus de détails ci-dessous.)
+   Donc, le format général d'une constante de type tableau est la
+   suivante&nbsp;:
+<synopsis>
+'{ <replaceable>val1</replaceable> <replaceable>delim</replaceable> <replaceable>val2</replaceable> <replaceable>delim</replaceable> ... }'
+</synopsis>
+   où <replaceable>delim</replaceable> est le caractère de délimitation pour ce
+   type, tel qu'il est enregistré dans son entrée <literal>pg_type</literal>.
+   Parmi les types de données standards fournis par la distribution
+   <productname>PostgreSQL</productname>, le type <literal>box</> utilise un
+   point-virgule (<literal>;</>) mais tous les autres utilisent une virgule
+   (<literal>,</>). Chaque <replaceable>val</replaceable> est soit une constante
+   du type des éléments du tableau ou un sous-tableau. Voici un exemple d'une
+   constante tableau
+<programlisting>
+'{{1,2,3},{4,5,6},{7,8,9}}'
+</programlisting>
+   Cette constante a deux dimensions, un tableau 3 par 3 consistant en trois
+   sous-tableaux d'entiers.
+  </para>
+
+  <para>
+   (Ces types de constantes de tableau sont actuellement le seul cas spécifique
+   de constantes de type générique discutés dans la <xref
+   linkend="sql-syntax-constants-generic">. La constante est traitée
+   initialement comme une chaîne et passée à la routine de conversion d'entrées
+   de tableau. Une spécification explicite du type pourrait être nécessaire.)
+  </para>
+
+ <para>
+  Maintenant, nous pouvons montrer quelques instructions
+  <command>INSERT</command>.
+
+<programlisting>
+INSERT INTO sal_emp
+    VALUES ('Bill',
+    '{10000, 10000, 10000, 10000}',
+    '{{"rendez-vous", "repas"}, {}}');
+
+INSERT INTO sal_emp
+    VALUES ('Carol',
+    '{20000, 25000, 25000, 25000}',
+    '{{"rencontre", "repas"}, {"rencontre"}}');
+    ERROR:  multidimensional arrays must have array expressions with matching dimensions
+</programlisting>
+
+  Notez que les tableaux à plusieurs dimensions doivent avoir des limites
+  correspondantes pour chaque dimension. Une différence causerait un rapport
+  d'erreur.
+
+<programlisting>
+INSERT INTO sal_emp
+    VALUES ('Bill',
+    '{10000, 10000, 10000, 10000}',
+    '{{"rencontre", "repas"}, {"entrainement", "présentation"}}');
+
+INSERT INTO sal_emp
+    VALUES ('Carol',
+    '{20000, 25000, 25000, 25000}',
+    '{{"petit-déjeuner", "consulting"}, {"rencontre", "repas"}}');
+</programlisting>
+ </para>
+
+ <para>
+  Une limitation de l'implémentation actuelle des tableaux est que les éléments
+  individuels d'un tableau ne peuvent avoir la valeur SQL NULL. Le tableau
+  entier peut être NULL mais vous ne pouvez pas avoir des éléments NULL dans
+  un tableau avec d'autres éléments non NULL.
+ </para>
+
+ <para>
+  Le résultat des deux insertions précédentes ressemble à ceci&nbsp;:
+<programlisting>
+SELECT * FROM sal_emp;
+ nom   |      paye_par_semaine     |      planning
+-------+---------------------------+--------------------
+Bill  | {10000,10000,10000,10000} | {{rencontre,repas},{entrainement,présentation}}
+Carol | {20000,25000,25000,25000} | {{petit-déjeuner,consulting},{rencontre,repas}}
+(2 rows)
+</programlisting>
+ </para>
+
+ <para>
+  La syntaxe du constructeur <literal>ARRAY</literal> pourrait aussi être
+  utilisée&nbsp;:
+<programlisting>
+INSERT INTO sal_emp
+    VALUES ('Bill',
+    ARRAY[10000, 10000, 10000, 10000],
+    ARRAY[['rendez-vous', 'repas'], ['entrainement','présentation']]);
+
+INSERT INTO sal_emp
+    VALUES ('Carol',
+    ARRAY[20000, 25000, 25000, 25000],
+    ARRAY[['petit-déjeuner', 'consulting'], ['rencontre', 'repas']]);
+</programlisting>
+  Notez que les éléments du tableau sont des constantes SQL ordinaires ou
+  des expressions&nbsp;; par exemple, les chaînes de caractères littérales sont
+  encadrées par des guillemets simples au lieu de guillemets doubles comme cela
+  serait le cas dans un tableau littéral. La syntaxe du constructeur
+  <literal>ARRAY</> est discutée plus en profondeur dans la <xref
+  linkend="sql-syntax-array-constructors">.
+ </para>
+
+ </sect2>
+
+ <sect2>
+  <title>Accès aux tableaux</title>
+
+ <para>
+  Maintenant, nous pouvons lancer quelques requêtes sur la table. Tout d'abord,
+  montrons comment accéder à un seul élément du tableau à la fois. Cette
+  requête retrouve le nom des employés dont la paye a changé la deuxième
+  semaine&nbsp;:
+     
+<programlisting>
+SELECT nom FROM sal_emp WHERE paye_par_semaine[1] &lt;&gt; paye_par_semaine[2];
+
+ nom
+-------
+ Carol
+(1 row)
+</programlisting>
+
+  Les nombres du tableau sont écrit entre crochets. Par défaut,
+  <productname>PostgreSQL</productname> utilise la convention des nombres
+  commençant à 1 pour les tableaux, c'est-à-dire un tableau à
+  <replaceable>n</> éléments commence avec <literal>array[1]</literal> et finit
+  avec <literal>array[<replaceable>n</>]</literal>.
+ </para>
+
+ <para>
+  Cette requête retrouve la paye de la troisième semaine pour tous les employés&nbsp;:
+     
+<programlisting>
+SELECT paye_par_semaine[3] FROM sal_emp;
+
+ paye_par_semaine
+------------------
+          10000
+          25000
+(2 rows)
+</programlisting>
+ </para>
+
+ <para>
+  Nous pouvons aussi accéder à des parties rectangulaires arbitraires ou à des
+  sous-tableaux. Une partie d'un tableau est notée par l'écriture
+  <literal><replaceable>extrémité basse</replaceable>:<replaceable>extrémité haute</replaceable></literal>
+  quelque soit la dimension des tableaux. Par exemple, cette requête retrouve
+  le premier élément du planning de Bill pour les deux premiers jours de la
+  semaine&nbsp;:
+     
+<programlisting>
+SELECT planning[1:2][1:1] FROM sal_emp WHERE nom = 'Bill';
+
+      planning
+--------------------
+ {{rendez-vous},{entrainement}}
+(1 row)
+</programlisting>
+
+  Nous aurions aussi pu écrire
+
+<programlisting>
+SELECT planning[1:2][1] FROM sal_emp WHERE nom = 'Bill';
+</programlisting>
+
+  en ayant le même résultat. Une opération d'indiçage de rangée est toujours
+  prise pour représenter une tranche de rangée si un indice quelconque est
+  écrit sous la forme
+  <literal><replaceable>inférieur</replaceable>:<replaceable>supérieur</replaceable></literal>.
+  Une limite basse de 1 est supposée pour toute tranche dont seule une valeur
+  est spécifiée. Voici un autre exemple&nbsp;:
+<programlisting>
+SELECT planning[1:2][2] FROM sal_emp WHERE nom = 'Bill';
+
+         planning
+---------------------------
+ {{rendez-vous,repas},{entrainement,présentation}}
+(1 row)
+</programlisting>
+ </para>
+
+ <para>
+  Les dimensions actuelles de toute valeur d'un tableau sont disponibles avec la fonction
+  <function>array_dims</function>&nbsp;:
+
+<programlisting>
+SELECT array_dims(planning) FROM sal_emp WHERE nom = 'Carol';
+
+ array_dims
+------------
+ [1:2][1:1]
+(1 row)
+</programlisting>
+
+  <function>array_dims</function> donne un résultat de type <type>text</type>,
+  ce qui est agréable à lire mais peut-être moins simple à interpréter pour les programmes.
+  Les dimensions sont aussi récupérables avec <function>array_upper</function>
+  et <function>array_lower</function>, qui renvoient respectivement la limite
+  haute et basse d'un tableau spécifié.
+
+<programlisting>
+SELECT array_upper(planning, 1) FROM sal_emp WHERE nom = 'Carol';
+
+ array_upper
+-------------
+           2
+(1 row)
+</programlisting>
+ </para>
+ </sect2>
+
+ <sect2>
+  <title>Modification de tableaux</title>
+
+ <para>
+  La valeur d'un tableau peut être complètement remplacée&nbsp;:
+
+<programlisting>
+UPDATE sal_emp SET paye_par_semaine = '{25000,25000,27000,27000}'
+    WHERE nom = 'Carol';
+</programlisting>
+
+  ou en utilisant la syntaxe de l'expression <literal>ARRAY</literal>&nbsp;:
+
+<programlisting>
+UPDATE sal_emp SET paye_par_semaine = ARRAY[25000,25000,27000,27000]
+    WHERE nom = 'Carol';
+</programlisting>
+
+  Un tableau peut aussi être mis à jour pour un seul élément&nbsp;:
+
+<programlisting>
+UPDATE sal_emp SET paye_par_semaine[4] = 15000
+    WHERE nom = 'Bill';
+</programListing>
+
+  ou mise à jour par tranche&nbsp;:
+
+<programlisting>
+UPDATE sal_emp SET paye_par_semaine[1:2] = '{27000,27000}'
+    WHERE nom = 'Carol';
+</programlisting>
+
+ </para>
+
+ <para>
+  Une valeur de tableau enregistrée peut être agrandie pour affecter un élément
+  adjacent à ceux déjà présents ou en affectant à une partie adjacente
+  une partie des données déjà présentes. Par exemple, si le tableau
+  <literal>montableau</> a actuellement quatre éléments, il en aura cinq après
+  une mise à jour qui a affecté <literal>montableau[5]</>. Actuellement,
+  l'agrandissement de cette façon est seulement autorisé pour les tableaux à
+  une dimension, et non pas pour les tableaux multidimensionnels.
+ </para>
+
+ <para>
+  L'affectation de parties d'un tableau permet la création de tableaux
+  n'utilisant pas d'indice inférieur. Par exemple, vous pourriez affecter
+  <literal>montableau[-2:7]</> pour créer un tableau avec les valeurs d'indices
+  inférieurs allant de -2 à 7.
+ </para>
+
+ <para>
+  Les valeurs de nouveaux tableaux peuvent aussi être construites en utilisant
+  l'opérateur de concaténation,
+  <literal>||</literal>.
+<programlisting>
+SELECT ARRAY[1,2] || ARRAY[3,4];
+   ?column?
+---------------
+ {1,2,3,4}
+(1 row)
+
+SELECT ARRAY[5,6] || ARRAY[[1,2],[3,4]];
+      ?column?
+---------------------
+ {{5,6},{1,2},{3,4}}
+(1 row)
+</programlisting>
+</para>
+
+  <para>
+  L'opérateur de concaténation autorise un élément à être placé au début ou à
+  la fin d'un tableau à une dimension. Il accepte aussi deux tableaux à
+  <replaceable>N</> dimensions, ou un tableau à <replaceable>N</> dimensions
+  et un à <replaceable>N+1</> dimensions.
+  </para>
+
+ <para>
+  Lorsqu'un seul élément est placé au début d'un tableau à une dimension, le
+  résultat est un tableau disposant d'une limite inférieure égale à la limite
+  inférieure de l'opérande du côté droit moins un. Lorsqu'un élément est placé
+  à la fin d'un tableau à une dimension, le résultat est un tableau contenant la
+  limite inférieure de l'opérande gauche. Par exemple&nbsp;:
+<programlisting>
+SELECT array_dims(1 || ARRAY[2,3]);
+ array_dims
+------------
+ [0:2]
+(1 row)
+
+SELECT array_dims(ARRAY[1,2] || 3);
+ array_dims
+------------
+ [1:3]
+(1 row)
+</programlisting>
+ </para>
+
+ <para>
+  Lorsque deux tableaux ayant un même nombre de dimensions sont concaténés, le
+  résultat conserve la limite inférieure de l'opérande gauche. Le résultat est
+  un tableau comprenant chaque élément de l'opérande gauche suivi de chaque
+  élément de l'opérande droit. Par exemple&nbsp;:
+<programlisting>
+SELECT array_dims(ARRAY[1,2] || ARRAY[3,4,5]);
+ array_dims
+------------
+ [1:5]
+(1 row)
+
+SELECT array_dims(ARRAY[[1,2],[3,4]] || ARRAY[[5,6],[7,8],[9,0]]);
+ array_dims
+------------
+ [1:5][1:2]
+(1 row)
+</programlisting>
+ </para>
+
+ <para>
+  Lorsqu'un tableau à <replaceable>N</> dimensions est placé au début ou à la
+  fin d'un tableau à <replaceable>N+1</> dimensions, le résultat est analogue au
+  cas ci-dessus. Chaque sous-tableau de dimension <replaceable>N</> est en
+  quelque sorte un élément de la dimension externe d'un tableau à
+  <replaceable>N+1</> dimensions. Par exemple&nbsp;:
+<programlisting>
+SELECT array_dims(ARRAY[1,2] || ARRAY[[3,4],[5,6]]);
+ array_dims
+------------
+ [0:2][1:2]
+(1 row)
+</programlisting>
+ </para>
+
+ <para>
+  Un tableau peut aussi être construit en utilisant les fonctions
+  <function>array_prepend</function>, <function>array_append</function>
+  ou <function>array_cat</function>. Les deux premiers supportent seulement les
+  tableaux à une dimension alors que <function>array_cat</function> supporte les
+  tableaux multidimensionnels.
+
+  Notez que l'opérateur de concaténation vu ci-dessus est préféré à
+  l'utilisation directe de ces fonctions. En fait, les fonctions sont utilisées
+  principalement pour l'implémentation de l'opérateur de concaténation.
+  Néanmoins, elles pourraient être directement utiles dans la création
+  d'agrégats définis par l'utilisateur. Quelques exemples&nbsp;:
+
+<programlisting>
+SELECT array_prepend(1, ARRAY[2,3]);
+ array_prepend
+---------------
+ {1,2,3}
+(1 row)
+
+SELECT array_append(ARRAY[1,2], 3);
+ array_append
+--------------
+ {1,2,3}
+(1 row)
+
+SELECT array_cat(ARRAY[1,2], ARRAY[3,4]);
+   array_cat
+---------------
+ {1,2,3,4}
+(1 row)
+
+SELECT array_cat(ARRAY[[1,2],[3,4]], ARRAY[5,6]);
+      array_cat
+---------------------
+ {{1,2},{3,4},{5,6}}
+(1 row)
+
+SELECT array_cat(ARRAY[5,6], ARRAY[[1,2],[3,4]]);
+      array_cat
+---------------------
+ {{5,6},{1,2},{3,4}}
+</programlisting>
+ </para>
+ </sect2>
+
+ <sect2>
+  <title>Recherche dans des tableaux</title>
+
+ <para>
+  Pour rechercher une valeur dans un tableau, vous devez vérifier chaque valeur
+  dans le tableau. Ceci peut se faire à la main si vous connaissez la taille du
+  tableau. Par exemple&nbsp;:
+
+<programlisting>
+SELECT * FROM sal_emp WHERE paye_par_semaine[1] = 10000 OR
+                            paye_par_semaine[2] = 10000 OR
+                            paye_par_semaine[3] = 10000 OR
+                            paye_par_semaine[4] = 10000;
+</programlisting>
+
+  Néanmoins, ceci devient rapidement long pour les gros tableaux et n'est pas
+  très utile si la taille du tableau n'est pas certaine. Une autre méthode est
+  décrite dans <xref linkend="functions-comparisons">. La requête ci-dessus
+  est remplaçable par&nbsp;:
+
+<programlisting>
+SELECT * FROM sal_emp WHERE 10000 = ANY (paye_par_semaine);
+</programlisting>
+
+  De plus, vous pouvez trouvez les lignes où le tableau n'a que des valeurs
+  égales à 10000 avec&nbsp;:
+
+<programlisting>
+SELECT * FROM sal_emp WHERE 10000 = ALL (paye_par_semaine);
+</programlisting>
+
+ </para>
+
+ <tip>
+  <para>
+   Les tableaux ne sont pas toujours initialisés&nbsp;; rechercher des éléments
+   spécifiques d'un tableau pourrait être un signe d'une mauvaise conception de
+   la base de données. Utilisez plutôt une table séparée avec une
+   ligne pour chaque élément faisant parti du tableau. Cela sera plus simple
+   pour une recherche et fonctionnera mieux dans le cas d'un grand nombre
+   d'éléments.
+  </para>
+ </tip>
+ </sect2>
+
+ <sect2>
+  <title>Syntaxe d'entrée et de sortie des tableaux</title>
+
+  <para>
+   La représentation externe du type texte d'une valeur d'un tableau consiste en
+   des éléments interprétés suivant les règles de conversion d'entrées/sorties
+   pour le type de l'élément du tableau, plus des décorations indiquant la
+   structure du tableau. La décoration consiste en des accolades (<literal>{</>
+   et <literal>}</>) autour des valeurs du tableau et des caractères de
+   délimitation entre éléments adjacents. Le caractère délimiteur est
+   habituellement une virgule (<literal>,</>) mais peut être autre chose&nbsp;:
+   il est déterminé par la configuration <literal>typdelim</> pour le type
+   de l'élément du tableau (parmi les types de données standards supportés par
+   l'implémentation de <productname>PostgreSQL</productname>, le type
+   <literal>box</> utilise un point-virgule (<literal>;</>) mais tous les autres
+   utilisent la virgule). Dans un tableau multidimensionnel, chaque dimension
+   (row, plane, cube, etc.) utilise son propre niveau d'accolades et les
+   délimiteurs doivent être utilisés entre des entités adjacentes au sein d'accolades
+   de même niveau.
+  </para>
+
+  <para>
+   La routine de sortie du tableau placera des guillemets doubles autour des
+   valeurs des éléments si elles sont des chaînes vides ou contiennent des
+   accolades, des caractères délimiteurs, des guillemets doubles, des anti-slash
+   ou des espaces blancs. Les guillemets doubles et les anti-slash intégrés
+   aux valeurs des éléments auront un caractère d'échappement, l'anti-slash.
+   Pour les types de données numériques, il est sain de supposer que les doubles
+   guillemets n'apparaitront jamais, mais pour les types de données texte,
+   vous devez vous préparer à gérer la présence et l'absence de guillemets.
+   (Ceci est un changement du comportement à partir de la version pre-7.2 de
+   <productname>PostgreSQL</productname>.)
+  </para>
+
+  <para>
+   Par défaut, la valeur de la limite basse d'un tableau est initialisée à 1.
+   Si une des dimensions du tableau a une limite basse différente de 1, une
+   décoration supplémentaire indiquant les dimensions réelles du tableau
+   précède la décoration de la structure du tableau. Cette décoration consiste
+   en des crochets (<literal>[]</>) autour de chaque limite basse et haute d'une
+   dimension avec un délimiteur deux-points (<literal>:</>) entre chaque. La
+   décoration des dimensions du tableau est suivie par un signe d'égalité
+   (<literal>=</>). Par exemple&nbsp;:
+<programlisting>
+SELECT 1 || ARRAY[2,3] AS array;
+
+    array
+---------------
+[0:2]={1,2,3}
+(1 row)
+
+SELECT ARRAY[1,2] || ARRAY[[3,4]] AS array;
+
+          array
+--------------------------
+[0:1][1:2]={{1,2},{3,4}}
+(1 row)
+</programlisting>
+  </para>
+
+  <para>
+   Cette syntaxe peut aussi être utilisée pour spécifier des indices de tableau
+   différents des indices par défaut. Par exemple&nbsp;:
+<programlisting>
+SELECT f1[1][-2][3] AS e1, f1[1][-1][5] AS e2
+FROM (SELECT '[1:1][-2:-1][3:5]={{{1,2,3},{4,5,6}}}'::int[] AS f1) AS ss;
+
+ e1 | e2
+----+----
+  1 |  6
+(1 row)
+</programlisting>
+</para>
+
+  <para>
+   Comme indiqué précédemment, lors de l'écriture d'une valeur de tableau,
+   vous pourriez écrire des guillemets doubles autour de chaque élément
+   individuel de tableau. Vous <emphasis>devez</> le faire sinon la valeur
+   de l'élément pourrait rendre confus l'analyseur de la valeur du tableau.
+   Par exemple, les éléments contenant des crochets, virgules (ou un caractère
+   délimiteur), guillemets doubles, antislashs ou espace blanc (en début comme
+   en fin) doivent avoir des guillemets doubles. Pour placer un guillemet double
+   ou un antislash dans une valeur d'élément d'un tableau, faites-le précédé
+   d'un antislash. Autrement, vous pouvez utiliser les échappements pour protéger
+   caractères de données qui auraient été compris comme la syntaxe du tableau.
+  </para>
+
+  <para>
+   Vous pourriez écrire des espaces blancs avant un crochet gauche ou après un
+   crochet droit. Vous pourriez aussi écrire des espaces blancs avant tout élément
+   individuel. Dans tous les cas, l'espace blanc sera ignoré. Néanmoins, les
+   espaces blancs à l'intérieur des éléments entre guillemets doubles ou entourés
+   des deux côtés par des caractères autres que des espaces blancs ne sont pas
+   ignorés.
+  </para>
+
+ <note>
+  <para>
+   Rappelez-vous que ce que vous écrivez comme commande SQL sera tout d'abord
+   interprété en tant que chaîne littérale puis en tant que tableau. Ceci
+   double le nombre d'anti-slash dont vous aurez besoin. Par exemple, pour
+   insérer une valeur de tableau de type <type>text</> contenant un anti-slash
+   et un guillemet double, vous aurez besoin d'écrire
+<programlisting>
+INSERT ... VALUES ('{"\\\\","\\""}');
+</programlisting>
+   Le processeur de la chaîne littérale supprime un niveau d'anti-slash, donc
+   ce qui arrive à l'analyseur de tableau ressemble à <literal>{"\\","\""}</>.
+   A la place, les chaînes remplissant l'entrée du type de données
+   <type>text</> deviennent respectivement <literal>\</> et <literal>"</>.
+   (Si nous travaillions avec un type de données dont la routine d'entrée
+   traitait aussi les anti-slash de manière spéciale, <type>bytea</> par
+   exemple, nous pourrions avoir besoin d'au plus huit anti-slash dans la
+   commande pour en obtenir un dans l'élément stocké.)
+   Les guillemets dollar (voir <xref linkend="sql-syntax-dollar-quoting">)
+   pourraient être utilisés pour éviter le besoin des doubles anti-slashs.
+  </para>
+ </note>
+
+ <tip>
+  <para>
+   La syntaxe du constructeur <literal>ARRAY</> (voir <xref
+   linkend="sql-syntax-array-constructors">) est souvent plus facile à
+   utiliser que la syntaxe du tableau littéral lors de l'écriture de valeurs
+   du tableau en commandes SQL. Avec <literal>ARRAY</>, les valeurs de
+   l'élément individuel sont écrit de la même façon qu'ils auraient été écrit
+   s'ils n'avaient pas fait partie d'un tableau.
+  </para>
+ </tip>
+ </sect2>
+
+</sect1>

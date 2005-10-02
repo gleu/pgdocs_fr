@@ -1,0 +1,1324 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/backup.sgml,v 1.9 2005/04/02 06:57:37 guillaume Exp $
+-->
+<chapter id="backup">
+ <title>Sauvegardes et restaurations</title>
+
+ <indexterm zone="backup"><primary>backup</></>
+
+ <para>
+  Comme avec tout ce qui contient des données importantes, les bases de données
+  <productname>PostgreSQL</> doivent être sauvegardées régulièrement.
+  Bien que la procédure soit plutôt simple, il est important de comprendre les
+  techniques et les suppositions sous-jacentes à celle-ci.
+ </para>
+
+ <para>
+  Il y a trois approches fondamentalement différentes pour sauvegarder les 
+  données de <productname>PostgreSQL</>&nbsp;:
+  <itemizedlist>
+   <listitem><para><acronym>Sauvegarde SQL&nbsp;;</></para></listitem>
+   <listitem><para>Sauvegarde de niveau système de
+    fichiers&nbsp;;</para></listitem>
+   <listitem><para>Sauvegarde à chaud (ou en ligne).</para></listitem>
+  </itemizedlist>
+  Chacune a ses avantages et inconvénients.
+ </para>
+
+ <sect1 id="backup-dump">
+  <title>Sauvegarde <acronym>SQL</></title>
+
+  <para>
+   Le principe est de générer un fichier texte de commandes SQL (appelé 
+   <quote>fichier dump</quote>), qui, si on le renvoie au serveur, recrée une
+   base de données identique à celle sauvegardée.
+   <productname>PostgreSQL</> propose pour cela le programme utilitaire
+   <xref linkend="app-pgdump">. L'usage basique est&nbsp;:
+<synopsis>
+pg_dump <replaceable class="parameter">base_de_donnees</replaceable> &gt; <replaceable class="parameter">fichier_de_sortie</replaceable>
+</synopsis>
+   Comme vous le voyez, <application>pg_dump</> écrit son résultat sur la sortie standard.
+   Nous verrons plus loin que cela peut être pratique.
+  </para>
+
+  <para>
+   <application>pg_dump</> est un programme client <productname>PostgreSQL</>
+   classique (mais plutôt intelligent). Ceci veut dire que vous pouvez 
+   faire une sauvegarde depuis n'importe quel ordinateur ayant accès à la base.
+   Mais rappelez-vous que <application>pg_dump</> n'a pas de droits spéciaux.
+   En particulier, il doit avoir accès en lecture à toutes les tables que 
+   vous voulez sauvegarder, si bien qu'il doit être lancé pratiquement
+   toujours en tant que super-utilisateur de la base.
+  </para>
+
+  <para>
+   Pour préciser quel serveur de bases de données <application>pg_dump</> doit
+   contacter, utilisez les options de ligne de commande <option>-h
+   <replaceable>serveur</></> and <option>-p <replaceable>port</></>.
+   Le serveur par défaut est le serveur local, ou bien celui spécifié par la 
+   variable d'environnement <envar>PGHOST</envar>.
+   De la même façon, le port par défaut est indiqué par la variable d'environnement
+   <envar>PGPORT</envar>, ou en son absence, par la valeur par défaut précisée 
+   à la compilation. Heureusement, la serveur a normalement la même valeur par
+   défaut à la compilation.
+  </para>
+
+  <para>
+   Comme tout programme client <productname>PostgreSQL</>, <application>pg_dump</>
+   se connecte par défaut avec l'utilisateur de base de données de même nom que 
+   l'utilisateur système courant. Pour passer outre, précisez l'option 
+   <option>-U</option>, ou donnez une valeur à la variable d'environnement 
+   <envar>PGUSER</envar>. Rappelez-vous que les connexions de
+   <application>pg_dump</> sont soumises aux mécanismes normaux
+   d'authentification des programmes clients (qui sont décrits dans le <xref
+   linkend="client-authentication">).
+  </para>
+
+  <para>
+   Les sauvegardes créées par <application>pg_dump</> sont consistantes, ce
+   qui veut dire que les modifications effectuées alors que <application>pg_dump</>
+   est en cours de fonctionnement ne sont pas dans le fichier de résultat.
+   <application>pg_dump</> ne bloque pas les autres opérations sur la base 
+   lorsqu'il fonctionne (sauf celles qui ont besoin d'un verrou exclusif, comme 
+   <command>VACUUM FULL</command>.)
+  </para>
+
+  <important>
+   <para>
+    Lorsque votre base de données dépend des OID (par exemple en tant que clés 
+    étrangères), vous devez indiquer à <application>pg_dump</> de sauvegarder
+    aussi les OID. Pour cela, utilisez l'option <option>-o</option> sur la ligne
+    de commande.
+    Les <quote>gros objets</> ne sont pas non plus sauvegardés par défaut. 
+    Consultez la page de référence de la commande <xref linkend="app-pgdump"> si
+    vous utilisez les <quote>gros objets</>.
+   </para>
+  </important>
+
+  <sect2 id="backup-dump-restore">
+   <title>Restaurer la sauvegarde</title>
+
+   <para>
+    Les fichiers texte créés par <application>pg_dump</> sont prévus pour être 
+    lus par le programme <application>psql</application>. La syntaxe générale 
+    d'une commande de restauration est
+<synopsis>
+psql <replaceable class="parameter">base_de_donnees</replaceable> &lt; <replaceable class="parameter">fichier_d_entree</replaceable>
+</synopsis>
+    où <replaceable class="parameter">fichier_d_entree</replaceable> est ce que 
+    vous avez précisé comme <replaceable class="parameter">fichier_de_sortie</replaceable>
+    à la commande <application>pg_dump</>. La base de données 
+    <replaceable class="parameter">base_de_donnees</replaceable> n'est pas créée par cette 
+    commande. Vous devez la créer vous-même à partir de <literal>template0</>
+    avant d'exécuter <application>psql</> (par exemple avec <literal>createdb -T
+    template0 <replaceable class="parameter">base_de_donnees</></literal>).
+    <application>psql</> propose des options similaires à celles de
+    <application>pg_dump</> pour contrôler l'emplacement du serveur de bases de
+    données et le nom d'utilisateur. Voyez la page de référence de <xref
+    linkend="app-psql"> pour plus d'informations.
+    </para>
+
+   <para>
+    La base de données cible doit déjà exister avant de lancer la restauration,
+    ainsi que les utilisateurs possédant les objets dans la base de données
+    sauvegardés ou ayant des droits sur ces objets. S'ils n'existent pas, la
+    restauration échouera pour la création des objets dont ils sont
+    propriétaires ou pour lesquels ils ont des droits. (Quelque fois, cela
+    correspond à ce que vous souhaitez mais ce n'est pas le cas habituellement.)
+   </para>
+
+   <para>
+    Une fois restauré, il est recommandé de lancer <xref linkend="sql-analyze"
+    endterm="sql-analyze-title"> sur chacune des bases de données afin que
+    l'optimiseur de requêtes dispose de statistiques utiles. Une façon aisée de
+    le faire est de lancer la commande <command>vacuumdb -a -z</> pour lancer
+    <command>ANALYZE</> sur toutes les bases de données&nbsp;; ceci est
+    équivalent à lancer <command>VACUUM ANALYZE</command> manuellement.
+   </para>
+
+   <para>
+    La capacité de <application>pg_dump</> et <application>psql</> à écrire
+    et à lire dans des tubes permet de sauvegarder une base de données 
+    directement d'un serveur sur un autre. Par exemple&nbsp;:
+<programlisting>
+pg_dump -h <replaceable>serveur1</> <replaceable>base_de_donnees</> | psql -h <replaceable>serveur2</> <replaceable>base_de_donnees</>
+</programlisting>
+   </para>
+
+   <important>
+    <para>
+     Les fichiers de sauvegarde produits par <application>pg_dump</> sont
+     relatifs à <literal>template0</>. Cela signifie que chaque langage,
+     procédure, etc. ajoutés à <literal>template1</> seront aussi sauvegardés
+     par <application>pg_dump</>. En conséquence, si vous utilisez une base
+     <literal>template1</> modifiée, vous devez créer la base vide à partir de
+     <literal>template0</>, comme dans l'exemple précédent.
+    </para>
+   </important>
+
+   <para>
+    Pour des conseils sur le chargement efficace de grosses quantités de
+    données dans <productname>PostgreSQL</productname>, référez-vous à <xref
+    linkend="populate">.
+   </para>
+   
+  </sect2>
+
+  <sect2 id="backup-dump-all">
+   <title>Utilisation de <application>pg_dumpall</></title>
+
+   <para>
+    Le mécanisme précédent est peu pratique pour sauvegarder un serveur de bases
+    de données complet. <xref linkend="app-pg-dumpall"> est prévu pour cela.
+    <application>pg_dumpall</> sauvegarde toutes les bases de données d'un
+    groupe de bases de données <productname>PostgreSQL</> (appelé cluster) et
+    préserve les données communes au groupe de bases comme les utilisateurs et
+    les groupes. L'utilisation basique de cette commande est&nbsp;:
+<synopsis>
+pg_dumpall &gt; <replaceable>fichier_de_sortie</>
+</synopsis>
+    Le fichier de sauvegarde résultant peut être restauré avec <application>psql</>&nbsp;:
+<synopsis>
+psql template1 &lt; <replaceable class="parameter">fichier_d_entree</replaceable>
+</synopsis>
+    (Vous pouvez utiliser n'importe quelle base de données pour vous 
+    connecter mais si vous êtes en train de recharger un serveur vide, 
+    <literal>template1</> est la seule base de données disponible.)
+    Il faut obligatoirement être le super-utilisateur de la base pour restaurer
+    une sauvegarde faite avec <application>pg_dumpall</>, pour pouvoir restaurer
+    les informations sur les utilisateurs et les groupes.
+   </para>
+  </sect2>
+
+  <sect2 id="backup-dump-large">
+   <title>Gérer les grosses bases de données</title>
+
+   <para>
+    Comme <productname>PostgreSQL</productname> permet que des tables soient plus
+    grandes que la taille maximale d'un fichier sur votre système de fichiers,
+    sauvegarder une telle table en fichier peut poser des problèmes. 
+    Comme <application>pg_dump</> peut écrire sur la sortie standard, vous pouvez
+    utiliser des outils standard d'Unix pour contourner ce problème éventuel.
+   </para>
+
+   <formalpara>
+    <title>Compresser le fichier de sauvegarde</title>
+    <para>
+     Vous pouvez utiliser votre programme de compression habituel. Par exemple
+     <application>gzip</application>.
+
+<programlisting>
+pg_dump <replaceable class="parameter">base_de_donnees</replaceable> | gzip &gt; <replaceable class="parameter">nom_fichier</replaceable>.gz
+</programlisting>
+
+     Pour restaurer&nbsp;:
+
+<programlisting>
+createdb <replaceable class="parameter">base_de_donnees</replaceable>
+gunzip -c <replaceable class="parameter">nom_fichier</replaceable>.gz | psql <replaceable class="parameter">base_de_donnees</replaceable>
+</programlisting>
+
+     ou
+
+<programlisting>
+cat <replaceable class="parameter">nom_fichier</replaceable>.gz | gunzip | psql <replaceable class="parameter">base_de_donnees</replaceable>
+</programlisting>
+    </para>
+   </formalpara>
+
+   <formalpara>
+    <title>Couper le fichier avec <command>split</></title>
+    <para>
+     La commande <command>split</command> vous permet de découper le fichier en
+     morceaux d'une taille acceptable pour le système de fichiers sous-jacent.
+     Par exemple, pour faire des morceaux de 1&nbsp;Mo&nbsp;:
+ 
+<programlisting>
+pg_dump <replaceable class="parameter">base_de_donnees</replaceable> | split -b 1m - <replaceable class="parameter">nom_fichier</replaceable>
+</programlisting>
+
+     Pour restaurer&nbsp;:
+
+<programlisting>
+createdb <replaceable class="parameter">base_de_donnees</replaceable>
+cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceable class="parameter">base_de_donnees</replaceable>
+</programlisting>
+    </para>
+   </formalpara>
+
+   <formalpara>
+    <title>Utilisation du format de sauvegarde spécial</title>
+    <para>
+     Si <productname>PostgreSQL</productname> est installé sur un système où la 
+     bibliothèque de compression <application>zlib</> est disponible, ce format
+     de sauvegarde spécial peut être utilisé. Pour les grandes bases de données,
+     cela produira un fichier de sauvegarde d'une taille comparable à celle de
+     <command>gzip</command>, avec l'avantage supplémentaire de permettre de
+     restaurer des tables sélectivement. La commande qui suit sauvegarde une
+     base de données en utilisant le format de sauvegarde spécial&nbsp;:
+ 
+<programlisting>
+pg_dump -Fc <replaceable class="parameter">base_de_donnees</replaceable> &gt;
+<replaceable class="parameter">nom_fichier</replaceable>
+</programlisting>
+
+     Un format personnalisé de la sauvegarde n'est pas un script pour
+     <application>psql</> mais doit, à la place, être restauré avec
+     <application>pg_restore</>. Voir les pages de référence de <xref
+     linkend="app-pgdump"> et <xref linkend="app-pgrestore"> pour quelques
+     détails.
+    </para>
+   </formalpara>
+
+  </sect2>
+
+  <sect2 id="backup-dump-caveats">
+   <title>Limitations</title>
+
+   <para>
+    Pour des raisons de compatibilité avec les versions précédentes,
+    <application>pg_dump</> ne sauvegarde pas les gros objets par défaut.
+    <indexterm><primary>gros
+    objets</primary><secondary>sauvegarde</secondary></indexterm> Pour
+    les sauvegarder, vous devez utiliser soit le format de sauvegarde
+    spécial soit le format TAR, et passer l'option <option>-b</> à 
+    <application>pg_dump</>. Voyez la page de référence de <xref
+    linkend="app-pgdump"> pour plus de détails.
+    Le répertoire <filename>contrib/pg_dumplo</> des fichiers sources de <productname>PostgreSQL</>
+    contient aussi un programme qui peut sauvegarder les gros objets.
+  </para>
+
+   <para>
+    Merci de vous familiariser avec la page de référence de
+    <xref linkend="app-pgdump">.
+   </para>
+  </sect2>
+ </sect1>
+
+ <sect1 id="backup-file">
+  <title>Sauvegarde de niveau système de fichiers</title>
+
+  <para>
+   Une autre stratégie de sauvegarde est de copier les fichiers
+   utilisés par <productname>PostgreSQL</> pour enregistrer les données.
+   Dans la <xref linkend="creating-cluster">, l'emplacement de ces
+   fichiers sont donnés mais vous les avez probablement déjà trouvés si vous
+   vous intéressez à cette méthode. Vous pouvez utiliser n'importe quelle
+   méthode de sauvegarde, par exemple&nbsp;:
+ 
+<programlisting>
+tar -cf sauvegarde.tar /usr/local/pgsql/data
+</programlisting>
+  </para>
+
+  <para>
+   Il y a deux restrictions, cependant, qui rendent cette méthode inutilisable,
+   ou en tout cas inférieure à la méthode <application>pg_dump</>.
+ 
+   <orderedlist>
+    <listitem>
+     <para>
+      Le serveur de base de données <emphasis>doit</> être arrêté pour obtenir
+      une sauvegarde utilisable. Toutes les demi-mesures, comme supprimer
+      toutes les connections, ne fonctionneront <emphasis>pas</emphasis>
+      (principalement parce que <command>tar</command> et les outils similaires
+      ne font pas une image atomique de l'état du système de fichiers à un
+      moment spécifique). Vous trouverez des informations sur la façon d'arrêter
+      le serveur <productname>PostgreSQL</> dans la <xref
+      linkend="postmaster-shutdown">.
+    </para>
+
+     <para>
+      Il va sans dire que vous devez aussi éteindre le serveur avant de 
+      restaurer les données.
+      </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Si vous vous êtes aventurés dans les détails de l'organisation de la 
+      base de données, vous pouvez être tentés de ne sauvegarder et 
+      de ne restaurer que certaines tables ou bases de données particulières. 
+      Ceci ne fonctionnera <emphasis>pas</> parce que les informations
+      contenues dans ces fichiers ne sont qu'à moitié vraies. L'autre moitié
+      est dans les fichiers journaux de validation
+      <filename>pg_clog/*</filename>, qui 
+      contiennent l'état de la validation de chaque transaction. Un fichier de 
+      table n'est utilisable qu'avec cette information. Bien entendu, il est 
+      impossible de ne restaurer qu'une table et les données <filename>pg_clog</filename>
+      associées car cela rendrait toutes les autres tables du serveur 
+      inutilisables. Donc, les sauvegardes du système de fichiers fonctionnent
+      seulement pour les restaurations complètes d'un groupe entier de bases de
+      données.
+     </para>
+    </listitem>
+   </orderedlist>
+  </para>
+
+  <para>
+   Une autre approche à la sauvegarde du système de fichiers est de réaliser
+   une <quote>image cohérente</quote> du répertoire des données si le système
+   de fichiers supporte cette fonctionnalité (et que vous avez confiance
+   en sa bonne implémentation). La procédure typique est de faire une
+   <quote>image gelée</> du volume contenant la base de données, puis de
+   copier le répertoire data complètement (pas seulement quelques parties,
+   voir ci-dessus) de l'image sur un périphérique de sauvegarde, puis de
+   libérer l'image gelé. Ceci fonctionnera même si le serveur de la base de
+   données est en cours d'exécution. Néanmoins, une sauvegarde créée de cette
+   façon sauvegarde les fichiers de la base de données dans un état où le
+   serveur n'était pas correctement arrêté&nbsp;; du coup, au lancement du
+   serveur à partir des données sauvegardées, PostgreSQL pensera que le
+   serveur s'est stoppé brutalement et rejouera les journaux WAL. Ceci n'est
+   pas un problème, soyez-en juste conscient (et assurez-vous d'inclure les
+   fichiers WAL dans votre sauvegarde).
+  </para>
+
+  <para>
+   Si votre base de données est répartie sur plusieurs volumes (par exemple,
+   les fichiers de données sur un disque et les journaux WAL sur un autre),
+   il pourrait ne pas être possible d'obtenir des images gelées exactement au
+   même moment pour tous les volumes. Lisez la documentation de votre système
+   de fichiers avec attention avant de faire confiance à la technique d'images
+   cohérentes dans de telles situations. L'approche la plus sûre est d'arrêter
+   le serveyr de bases de données assez longtemps pour créer toutes les images
+   gelées.
+  </para>
+
+  <para>
+   Notez aussi qu'une sauvegarde des fichiers de données ne sera pas forcément 
+   moins grosse qu'une sauvegarde SQL. Au contraire, elle sera très certainement
+   plus  grande. (<application>pg_dump</application> ne sauvegarde pas le 
+   contenu des index, mais la commande pour les recréer.)
+  </para>
+
+ </sect1>
+
+ <sect1 id="backup-online">
+  <title>Sauvegardes à chaud et récupération à un instant (PITR)</title>
+
+  <indexterm zone="backup">
+   <primary>sauvegarde à chaud</primary>
+  </indexterm>
+
+  <indexterm zone="backup">
+   <primary>récupération à un instant</primary>
+  </indexterm>
+
+  <indexterm zone="backup">
+   <primary>PITR</primary>
+  </indexterm>
+
+  <para>
+   En permanence, <productname>PostgreSQL</> maintient des journaux WAL
+   (<firstterm>write ahead log</>) dans le sous-répertoire
+   <filename>pg_xlog/</> du répertoire des données du groupe. Ces journaux
+   décrivent chaque modification effectuée sur les fichiers de données des
+   bases. Ils existent principalement pour des raisons de sécurité suite à un
+   arrêt brutal&nbsp;: si le système s'arrête brutalement, la base de données
+   peut être restaurée pour avoir une cohérence des données en
+   <quote>rejouant</> les entrées des journaux enregistrées depuis le dernier
+   point de vérification. Néanmoins, l'existence de ces journaux rend possible
+   l'utilisation d'une troisième stratégie pour la sauvegarde des bases de
+   données&nbsp;: nous pouvons combiner une sauvegarde au niveau système de
+   fichiers avec la sauvegarde des fichiers WAL. Si la récupération est
+   nécessaire, nous restaurons la sauvegarde, puis rejouons à partir des
+   fichiers WAL sauvegardés pour amener la sauvegarde jusqu'à la date
+   actuelle. Cette approche est plus complexe à administrer que toutes les
+   autres approches mais elle comprend des bénéfices significatifs&nbsp;:
+  <itemizedlist>
+   <listitem>
+    <para>
+     Nous n'avons pas besoin de faire une sauvegarde parfaitement cohérente
+     comme point de départ. Toute incohérence dans la sauvegarde sera corrigée
+     par la ré-exécution des journaux (ceci n'est pas significativement
+     différent de ce qu'il se passe lors d'une récupération après un arrêt
+     brutal). Donc, nous n'avons pas besoin d'une fonctionnalité d'image
+     système du système de fichiers, simplement <application>tar</> ou un
+     autre outil d'archivage.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Comme nous pouvons assembler une longue séquence de fichiers à WAL pour
+     les rejouer, la sauvegarde continue est possible en continuant
+     simplement d'archiver les fichiers WAL. Ceci est particulièrement
+     intéressant pour les grosses bases de données où il pourrait ne pas
+     être facile de réaliser une sauvegarde complète fréquemment.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Rien ne dit que nous devons rejouer les entrées WAL jusqu'à la fin. Nous
+     pouvons stopper la ré-exécution à un certain point et avoir une image
+     cohérente de la base de données à ce moment-là. Du coup, cette technique
+     supporte la <firstterm>récupération à un instant</> (PITR)&nbsp;: il est
+     possible de restaurer la base de données à son état à tout moment depuis
+     le début de la sauvegarde.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Si nous remplissons en continue la série de fichiers WAL dans une autre
+     machine qui a été chargée avec le même fichier de sauvegarde de base,
+     nous avons un système <quote>à jour en permance</>&nbsp;: à tout
+     moment, nous pouvons monter la deuxième machine et avoir une copie quasi
+     complète de la base de données.
+    </para>
+   </listitem>
+  </itemizedlist>
+  </para>
+
+  <para>
+   Comme avec la technique de sauvegarde standard du système de fichiers,
+   cette méthode supporte la restauration d'un groupe de bases de données
+   complet, pas un sous-ensemble. De plus, il requiert beaucoup d'espace
+   d'archivage&nbsp;: la sauvegarde de base peut être légère mais un système
+   très utilisé génèrera beaucoup de mégaoctets de trafic WAL qui seront à
+   archiver. Malgré tout, c'est la technique de sauvegarde préférée dans
+   beaucoup de situations où la haute disponibilité est nécessaire.
+  </para>
+
+  <para>
+   Pour récupérer avec succès suite à l'utilisation d'une sauvegarde à chaud,
+   vous avez besoin d'une séquence continue de fichiers WAL archivés qui
+   s'étendent au moins jusqu'au point de départ de votre sauvegarde. Pour
+   commencer, vous devriez configurer et tester votre procédure d'archivage
+   des journaux WAL <emphasis>avant</> de faire votre première sauvegarde de
+   base. En accord, nous commencerons par discuter des mécanismes d'archivage
+   des fichiers WAL.
+  </para>
+
+  <sect2 id="backup-archiving-wal">
+   <title>Configurer l'archivage WAL</title>
+
+   <para>
+    Dans un sens abstrait, un système <productname>PostgreSQL</> fonctionnel
+    produit une séquence indéfiniment longue d'enregistrements WAL. Le système
+    divise physiquement cette séquence en <firstterm>fichiers segment</>
+    WAL, qui font normalement 16&nbsp;Mo chaque (bien que la taille puisse
+    être modifiée lors de la construction de <productname>PostgreSQL</>). Les
+    fichiers segment se voient donnés des noms numériques pour refléter leur
+    position dans la séquence abstraite des WAL. Lorsque le système n'utilise
+    pas l'archivage des WAL, il crée seulement quelques fichiers segment, puis
+    les <quote>recycle</> en renommant les fichiers segment devenus inutiles.
+    Il est supposé qu'un fichier segment dont le contenu précède le
+    dernier point de vérification n'a plus d'intérêt et peut être recyclé.
+   </para>
+
+   <para>
+    Lors de l'archivage des données WAL, nous voulons capturer le contenu de
+    chaque fichier segment une fois qu'il est rempli et sauvegarder les
+    données quelque part avant que le fichier segment ne soit recyclé pour
+    être réutilisé. Suivant l'application et le matériel disponible, 
+    <quote>sauvegarder les données quelque part</> peut se faire de plusieurs
+    façons&nbsp;: nous pouvons copier les fichiers segment dans un répertoire
+    NFS monté sur une autre machine, les écrire sur une cartouche (en vous
+    assurant que vous avez un moyen de restaurer le fichier avec son nom
+    d'origine) ou le grouper pour les graver sur un CD, ou encore autre chose.
+    Pour fournir autant de flexibilité que possible à l'administrateur de la
+    base de données, <productname>PostgreSQL</> essaie de ne faire aucune
+    supposition sur la façon dont l'archivage est réalisé. À la place,
+    <productname>PostgreSQL</> laisse l'administrateur spécifier une commande
+    shell à exécuter pour copier le fichier segment rempli là où vous le
+    souhaitez. La commande pourrait être aussi simple qu'un
+    <application>cp</> ou il pourrait impliquer un shell complexe &mdash;
+    à vous de voir.
+   </para>
+
+   <para>
+    La commande shell à utiliser est spécifiée par le paramètre de
+    configuration <xref linkend="guc-archive-command"> qui, en pratique, sera
+    toujours placé dans le fichier <filename>postgresql.conf</filename>. Dans
+    cette chaîne, tout <literal>%p</> est remplacé par le chemin absolu de
+    l'archive alors que tout <literal>%f</> est remplacé seulement par le
+    nom du fichier. Écrivez <literal>%%</> si vous avez besoin d'embarquer un
+    vrai caractère <literal>%</> dans la commande. La commande utile la plus
+    simple est quelque chose comme
+<programlisting>
+archive_command = 'cp -i %p /mnt/serveur/repertoire_archive/%f &lt;/dev/null'
+</programlisting>
+    qui copiera les segments WAL archivables dans le répertoire
+    <filename>/mnt/serveur/repertoire_archive</>. (Ceci est un exemple, pas
+    une recommandation, et pourrait ne pas fonctionner sur toutes les
+    plateformes.)
+   </para>
+
+   <para>
+    La commande d'archivage sera exécutée en tant que l'utilisateur 
+    propriétaire du serveur <productname>PostgreSQL</>. Comme la série de
+    fichiers WAL en cours d'archivage contient réellement tout ce qui se
+    trouve dans votre base de données, vous voudrez vous assurer que les
+    données archivées sont protégées des autres utilisateurs&nbsp;; par
+    exemple, si les archives sont stockées dans un répertoire où se trouvent
+    des droits de lecture pour le groupe ou pour les autres.
+   </para>
+
+   <para>
+    Il est important que la commande d'archivage renvoit le code de sortie
+    zéro si et seulement si l'exécution a réussi. En obtenant un résultat
+    zéro, <productname>PostgreSQL</> supposera que le fichier segment WAL a
+    été archivé avec succès et qu'il peut le supprimer ou le recycler.
+    Néanmoins, un statut différent de zéro indique à  
+    <productname>PostgreSQL</> que le fichier n'a pas été archivé&nbsp;; il
+    essaiera périodiquement jusqu'à ce qu'il y arrive.
+   </para>
+
+   <para>
+    La commande d'archivage devrait être généralement conçue pour refuser
+    d'écraser tout fichier archive déjà existant. Ceci est une fonctionnalité
+    de sécurité importante pour préserver l'intégrité de votre archive dans le
+    cas d'une erreur de l'administrateur (comme l'envoi de la sortie de deux
+    serveurs différents dans le même répertoire d'archivage). Il est
+    conseillable de tester votre commande d'archivage proposée pour vous
+    assurer qu'en effet il n'écrase pas un fichier existant <emphasis>et qu'il
+    renvoit un statut différent de zéro dans ce cas</>. Nous avons découvert
+    que <literal>cp -i</> travaille correctement sur certaines plateformes,
+    mais pas sur toutes. Si la commande choisie ne gère pas elle-même ce
+    cas, vous pouvez ajouter une commande pour tester l'existence du fichier
+    d'archivage. Par exemple, quelque chose comme
+<programlisting>
+archive_command = 'test ! -f .../%f &amp;&amp; cp %p .../%f'
+</programlisting>
+    fonctionne correctement sur la plupart des variantes Unix.
+   </para>
+
+   <para>
+    Lors de la conception de votre configuration d'archivage, considérez ce
+    qui se passerait si la commande d'archivage échouait de façon répété parce
+    que certains aspects demanderaient une intervention de l'opérateur ou
+    à cause d'un manque d'espace dans le répertoire d'archivage. Par exemple,
+    ceci pourrait arriver si vous écrivez sur une cartouche sans changeur 
+    automatique&nbsp;; quand la cartouche est remplie, rien ne peut être
+    archivé tant que la cassette n'est pas changée. Vous devez vous assurer
+    que toute erreur ou requête à un opérateur humain est rapportée de façon
+    approprié pour que la situation puisse être résolue relativement
+    rapidement. Le répertoire <filename>pg_xlog/</> continuera à se remplir
+    de fichiers segment WAL jusqu'à la résolution de la situation.
+   </para>
+
+   <para>
+    La vitesse de la commande d'archivage n'est pas importante, tant qu'elle
+    est au même rythme que la génération de données WAL du serveur. Les
+    opérations normales continuent même si le processus d'archivage est un peu
+    plus lent. Si l'archivage est significativement plus lent, alors la
+    quantité de données qui pourrait être perdue va croître. Cela signifie
+    aussi que le répertoire <filename>pg_xlog/</> contiendra un grand nombre
+    de fichiers segment non archivés, qui finiront éventuellement par
+    dépasser l'espace disque disponible. Il vous est conseillé de surveiller
+    le processus d'archivage pour vous assurer que tout fonctionne
+    normalement.
+   </para>
+
+   <para>
+    Si vous êtes encore inquiet sur votre capacité à récupérer tout à
+    l'instant présent, vous devriez prendre quelques actions supplémentaires 
+    pour vous assurer que les fichiers segments WAL partiellement remplis sont
+    aussi copiés quelque part. Ceci est particulièrement important si votre
+    serveur génère peu de trafic WAL (ou que seules certaines périodes sont
+    dans ce cas), car cela prendra beaucoup de temps avant qu'un fichier
+    segment WAL soit complètement remplis et prêt à archiver. Une façon
+    possible de gérer ceci est de configurer un job <application>cron</> qui,
+    périodiquement (une fois par minute, peut-être), identifie le fichier
+    segment WAL en cours et le sauvegarde à un endroit sûr. Ensuite, la
+    combinaison des segments WAL archivés et du segment courant sauvegardé
+    seront suffisant pour vous assurer de pouvoir toujours restaurer à une
+    minute près. Ce comportement n'est pas actuellement construit dans
+    <productname>PostgreSQL</> parce que nous ne voulions pas compliquer la
+    définition de <xref linkend="guc-archive-command"> en lui demandant de
+    garder trace des copies différentes archivées successivement du même
+    fichier WAL. La <xref linkend="guc-archive-command"> est seulement
+    appelée sur des segments WAL complets. Sauf dans le cas d'un échec, il
+    sera appelé seulement une fois pour un nom de fichier donné.
+   </para>
+
+   <para>
+    En écrivant votre commande d'archivage, vous pouvez vous assurer que les
+    noms de fichier à archiver auront 64 caractères maximum et pourraient
+    contenir toute combinaison de lettres ASCII, de chiffres et de points.
+    Il n'est pas nécessaire de se rappeller le chemin complet original
+    (<literal>%p</>) mais il est nécessaire de se rappeller du nom du fichier
+    (<literal>%f</>).
+   </para>
+
+   <para>
+    Notez que, bien que l'archivage WAL vous autorisera à restaurer toute
+    modification réalisée sur les données de votre base 
+    <productname>PostgreSQL</>, il ne restaurera pas les modifications
+    effectuées sur les fichiers de configuration (c'est-à-dire
+    <filename>postgresql.conf</>, <filename>pg_hba.conf</> et
+    <filename>pg_ident.conf</>) car ceux-ci sont édités manuellement plutôt
+    qu'au travers d'opérations SQL. Vous pourriez souhaité conserver les
+    fichiers de configuration à un endroit où ils seront sauvegardés avec vos
+    procédures standards de sauvegarde du système de fichiers. Voir
+    <xref linkend="runtime-config-file-locations"> pour savoir comment
+    modifier l'emplacement des fichiers de configuration.
+   </para>
+  </sect2>
+
+  <sect2 id="backup-base-backup">
+   <title>Réaliser une sauvegarde de base</title>
+
+   <para>
+    La procédure pour réaliser une sauvegarde de base est relativement
+    simple&nbsp;:
+  <orderedlist>
+   <listitem>
+    <para>
+     Assurez-vous que l'archivage WAL est activée et fonctionnelle.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Connectez-vous à la base de données en tant que superutilisateur et
+     lancer la commande
+<programlisting>
+SELECT pg_start_backup('label');
+</programlisting>
+     où <literal>label</> est toute chaîne que vous voulez utiliser pour
+     identifier de façon unique l'opération de sauvegarde. (Une bonne pratique
+     est d'utiliser le chemin complet où vous avez l'intention de placer le
+     fichier de sauvegarde.) <function>pg_start_backup</> crée un fichier
+     <firstterm>label de sauvegarde</>, nommé <filename>backup_label</>, dans
+     le répertoire du groupe avec des informations sur votre sauvegarde.
+    </para>
+
+    <para>
+     Peu importe la base de données à laquelle vous vous connectez pour lancer
+     cette commande. Vous pouvez ignorer le résultat renvoyé par la
+     fonction&nbsp;; mais si elle rapporte une erreur, gérez-la avant de
+     continuer.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Lancez la sauvegarde en utilisant n'importe quel outil de sauvegarde du
+     système de fichiers comme <application>tar</> ou <application>cpio</>. Il
+     n'est ni nécessaire ni désirable de stopper les opérations normales de
+     la base de données lorsque vous faites cela.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Connectez-vous de nouveau sur la base de données en tant que
+     superutilisateur et lancez la commande
+<programlisting>
+SELECT pg_stop_backup();
+</programlisting>
+     Si la commande réussit, c'est terminé.
+    </para>
+   </listitem>
+  </orderedlist>
+   </para>
+
+   <para>
+    Il n'est pas nécessaire d'être très concerné sur le temps passé entre
+    <function>pg_start_backup</> et le début réel de la sauvegarde, pas plus
+    qu'entre la fin de la sauvegarde et <function>pg_stop_backup</>&nbsp;; un
+    délai de quelques minutes ne posere pas de problème. Vous devez néanmoins
+    vous assurer que ces opérations sont effectuées dans la bonne séquence et
+    ne se couvrent pas.
+   </para>
+
+   <para>
+    Assurez-vous que votre sauvegarde inclut tous les fichiers du répertoire
+    du groupe de bases de données (c'est-à-dire
+    <filename>/usr/local/pgsql/data</>). Si vous utilisez des espaces logiques
+    qui ne se trouvent pas dans ce répertoire, faites attention à bien les
+    inclure (et assurez-vous que votre sauvegarde archive les liens
+    symboliques comme des liens, sinon la restauration posera problème pour
+    les espaces logiques).
+   </para>
+
+   <para>
+    Néanmoins, vous pourriez omettre de sauvegarder les fichiers du
+    sous-répertoire <filename>pg_xlog/</> contenu dans le répertoire du
+    groupe. Cette petite complication est intéressante parce qu'elle réduit le
+    risque d'erreurs lors de la restauration. Ceci est facile à arranger si
+    <filename>pg_xlog/</> est un lien symbolique pointant quelque part à
+    l'extérieur du répertoire du groupe, ce qui est une configuration commune
+    pour des raisons de performance.
+   </para>
+
+   <para>
+    Pour utiliser cette sauvegarde, vous aurez besoin de conserver les
+    fichiers segments WAL générés au moment ou après le lancement de la
+    sauvegarde. Pour vous aider dans ce travail, la fonction 
+    <function>pg_stop_backup</> crée un <firstterm>fichier historique de la
+    sauvegarde</> qui est immédiatement stocké dans l'aire des archives WAL.
+    Ce fichier est nommé d'après le nom du premier fichier segment WAL dont
+    vous avez besoin pour utiliser la sauvegarde. Par exemple, sur le fichier
+    WAL du début est <literal>0000000100001234000055CD</>, le fichier
+    historique sera nommé quelque chose comme
+    <literal>0000000100001234000055CD.007C9330.backup</>. (La deuxième partie
+    du nom de ce fichier contient la position exacte à l'intérieur du fichier
+    WAL et peut être habituellement ignorée.) Une fois que vous avez
+    sauvegardé de façon sûr votre fichier, vous pouvez supprimer tous les
+    segments WAL archivés dont le nom précède numériquement celui-là. Le
+    fichier historique de sauvegarde est un petit fichier texte. Il
+    contient la chaîne label que vous avez donné à 
+    <function>pg_start_backup</>, ainsi que les heures de début et de fin de
+    la sauvegarde. Si vous aviez utilisé le label pour identifier où le
+    fichier de sauvegarde est conservé, alors le fichier historique archivé
+    est suffisant pour vous indiquer le fichier sauvegarde à restaurer, si
+    vous en avez besoin.
+   </para>
+
+   <para>
+    Comme vous devez conserver tous les fichiers WAL archivés depuis votre
+    dernière sauvegarde de base, l'intervalle entre les sauvegardes de base
+    devrait habituellement être choisie suivant la quantité de stockage que
+    vous voulez consomné en fichier archives WAL. Vous devriez aussi
+    considérer combien de temps vous êtes prêt à dépenser pendant la
+    récupération, si celle-ci est nécessaire &mdash; le système devra rejouer
+    tous les segments WAL et ceci peut prendre beaucoup de temps si la
+    dernière sauvegarde de base est ancienne.
+   </para>
+
+   <para>
+    Il est aussi important de noter que la fonction
+    <function>pg_start_backup</> crée un fichier nommé 
+    <filename>backup_label</> dans le répertoire du groupe de bases de données
+    qui est ensuite supprimé de nouveau par <function>pg_stop_backup</>. Ce
+    fichier sera bien sûr archivé comem faisant parti du fichier de
+    sauvegarde. Le fichier label de la sauvegarde inclut la chaîne label que
+    vous avez donné à <function>pg_start_backup</>, ainsi que l'heure à
+    laquelle <function>pg_start_backup</> a été exécuté et le nom du fichier
+    WAL du début. En cas de confusion, il sera du coup possible de regarder
+    dans le fichier sauvegarde et de déterminer exactement de quelle session
+    de sauvegarde provient ce fichier.
+   </para>
+
+   <para>
+    Il est aussi possible de faire une sauvegarde alors que le postmaster est
+    arrêté. Dans ce cas, vous ne pouvez évidemment pas utiliser
+    <function>pg_start_backup</> ou <function>pg_stop_backup</> et vous serez
+    donc laissé à vous-même pour garder trace des fichiers de sauvegarde et de
+    jusqu'où vont les fichiers WAL associés. Il est généralement mieux de
+    suivre la procédure de sauvegarde à chaud ci-dessus.
+   </para>
+  </sect2>
+
+  <sect2 id="backup-pitr-recovery">
+   <title>Récupérer à partir d'une sauvegarde à chaud</title>
+
+   <para>
+    OK, le pire est arrivé et vous avez besoin de récupérer votre sauvegarde.
+    Voici la procédure&nbsp;:
+  <orderedlist>
+   <listitem>
+    <para>
+     Arrêtez le postmaster, s'il est en cours d'exécution.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Si vous avez de la place pour le faire, copiez le répertoire entier des
+     données du groupe et tout espace logique dans un emplacement temporaire
+     au cas où vous en auriez besoin plus tard. Notez que cette précaution
+     demandera que vous ayez assez de place libre sur votre système pour
+     contenir deux copies de votre base de données existante. Si vous n'avez
+     pas assez de place, vous devez au moins copier le contenu du
+     sous-répertoire <filename>pg_xlog</> du répertoire des données, car il
+     pourrait contenir des journaux qui n'ont pas été archivés avant l'arrêt
+     du serveur.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Nettoyez tous les fichier et sous-répertoires existants sous le
+     répertoire des données du groupe et sous les répertoires racines des
+     espaces logiques que vous utilisez.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Restaurez les fichiers de la base de données à partir de votre
+     sauvegarde. Faites attention à ce qu'ils soient restaurés avec la bonne
+     appartenance (l'utilisateur système de la base de donnéées, et non pas
+     root&nbsp;!) et avec les bons droits. Si vous utilisez les espaces
+     logiques, vous pourriez vouloir vérifier que les liens symboliques dans
+     <filename>pg_tblspc/</> ont été correctement restaurés.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Supprimez tout fichier présent dans <filename>pg_xlog/</>&nbsp;; ils
+     proviennent de la sauvegarde et sont du coup probablement obsolètes.
+     Si vous n'avez pas archivé <filename>pg_xlog/</> du tout, alors
+     re-créez le et assurez-vous de re-créer aussi
+     <filename>pg_xlog/archive_status/</>.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Si vous aviez des fichiers segments WAL non archivés que vous avez
+     sauvegardé dans l'étape 2, copiez-les dans <filename>pg_xlog/</>. (Il
+     est mieux de les copier, pas de les déplacer, car vous aurez toujours les
+     fichiers non modifiés si un problème survient et que vous devez
+     recommencer.)
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Créez un fichier de commandes de récupération 
+     <filename>recovery.conf</> dans le répertoire des données du groupe
+     (voir <xref linkend="recovery-config-settings">). Vous pourriez aussi
+     vouloir modifier temporairement <filename>pg_hba.conf</> pour empêcher
+     les utilisateurs ordinaires de se connecter tant que vous n'êtes pas
+     certain que la récupération a réussi.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Lancez le postmaster. Le postmaster se trouvera en mode récupération et
+     commencera la lecture des fichiers WAL archivés dont il a besoin. A la
+     fin du processus de récupération, le postmaster renommera
+     <filename>recovery.conf</> en <filename>recovery.done</> (pour empêcher
+     de retourner accidentellement en mode de récupération dans le cas d'un
+     arrêt brutal un peu plus tard), puis commencera les opérations normales
+     de la base de données.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     Inspectez le contenu de la base de données pour vous assurer que vous
+     avez récupéré ce que vous vouliez. Sinon, retournez à l'étape 1. Si
+     tout va bien, laissez vos utilisateurs venir en restaurant le fichier
+     <filename>pg_hba.conf</> à son état normal.
+    </para>
+   </listitem>
+  </orderedlist>
+   </para>
+
+   <para>
+    La partie clé de tout ceci est de configurer le fichier de commandes de
+    récupération. Il décrit comment vous voulez récupérer et à quel point la
+    récupération doit fonctionner. Vous pouvez utiliser 
+    <filename>recovery.conf.sample</> (normalement installer dans le
+    répertoire d'installation <filename>share/</>) comme prototype. La seule
+    chose que vous devez absolument spécifier dans
+    <filename>recovery.conf</> est <varname>restore_command</>, indiquant à
+    <productname>PostgreSQL</> comment récupérer les fichiers segments WAL
+    archivés. Comme <varname>archive_command</>, ceci est une chaîne contenant
+    le nom de la commande. Elle pourrait contenir <literal>%f</>, qui est
+    remplacé par le nom du journal souhaité, et <literal>%p</>, qui est
+    remplacé par le chemin absolu où copier le journal. Ecrivez 
+    <literal>%%</> si vous avez besoin d'embarquer un vrai caractère
+    <literal>%</> dans la commande. La commande utile la plus simple est
+    quelque chose comme
+<programlisting>
+restore_command = 'cp /mnt/serveur/répertoire_archive/%f %p'
+</programlisting>
+    qui copiera les segments WAL précédemment archivés à partir du répertoire
+    <filename>/mnt/serveur/répertoire_archive</>.  Vous pourriez bien sûr
+    utiliser quelque chose de plus compliqué, peut-être même un script shell
+    qui demandera à l'utilisateur de monter la cassette approprié.
+   </para>
+
+   <para>
+    Il est important que la commande renvoit un code de sortie différent de
+    zéro en cas d'échec. La commande <emphasis>se verra demander</> les
+    journaux absents de l'archive&nbsp;; il doit renvoyer autre chose que
+    zéro dans ce cas. Ceci n'est pas une condition d'erreur. Soyze conscient
+    que le nom de base du chemin <literal>%p</> sera différent de
+    <literal>%f</>&nbsp;; ne vous attendez pas à ce qu'ils soient
+    interchangeables.
+   </para>
+
+   <para>
+    Les segments WAL qui n'ont pas pu être trouvés dans l'archive seront
+    recherchés dans <filename>pg_xlog/</>&nbsp;; cela autorise l'utilisation
+    des segments non archivés. Néanmoins, les segments disponibles à partir de
+    l'archive seront utilisés de préférence par rapport aux fichiers dans
+    <filename>pg_xlog/</>. Le système ne surchargera pas le contenu existant
+    de <filename>pg_xlog/</> lors de la récupération des fichiers archivés.
+   </para>
+
+   <para>
+    Normalement, la récupération traitera tous les segments WAL disponibles,
+    restaurant du coup la base de données à cet instant (ou aussi proche que
+    nous le pouvons suivant les segments WAL disponibles). Mais, si vous
+    voulez récupérer à un instant particulier (disons, juste avant que
+    l'administrateur junior ait supprimé votre principal table de 
+    transaction), spécifiez simplement le point d'arrêt requis dans
+    <filename>recovery.conf</>. Vous pouvez spécifier le point d'arrêt, connu
+    sous le nom de <quote>cible de récupération</>, soit par la date/heure
+    soit par l'ID de la dernière transaction. Au moment où nous écrivons ceci,
+    seule l'option date/heure est tout à fait utilisable car il n'existe pas
+    d'outils pour vous aider à identifier avec une certaine précision l'ID de
+    transaction à utiliser.
+   </para>
+
+   <note>
+     <para>
+      Le point d'arrêt doit se situer après l'heure de fin de la sauvegarde
+      de base (le moment de <function>pg_stop_backup</>). Vous ne pouvez pas
+      utiliser une sauvegarde de base pour récupérer à un tel instant où la
+      sauvegarde était encore en cours. (Pour récupérer jusqu'à cet instant,
+      vous devez récupérer votre sauvegarde de base précédente et recommencer
+      à partir de là.)
+     </para>
+    </note>
+
+    <sect3 id="recovery-config-settings" xreflabel="Recovery Settings">
+     <title>Configuration de la récupération</title>
+
+     <para>
+      Ces configurations peuvent seulement être placées dans le fichier
+      <filename>recovery.conf</> et s'appliquent seulement pour la durée de la
+      récupération. Ils doivent être réinitialisés pour toute récupération
+      ultérieure que vous souhaitez réaliser. Ils ne peuvent pas être modifiés
+      une fois que la récupération à commencer.
+     </para>
+
+     <variablelist>
+
+     <varlistentry id="restore-command" xreflabel="restore_command">
+      <term><varname>restore_command</varname> (<type>string</type>)</term>
+      <listitem>
+       <para>
+        La commande shell exécuter pour récupérer un segment archivé de la
+        série de fichiers WAL. Ce paramètre est requis. Tout <literal>%f</>
+        dans la chaîne est remplacé par le nom du fichier à récupérer à
+        partir de l'archive et tout <literal>%p</> est remplacé par le chemin
+        absolu pour le copier sur le serveur. Ecrivez <literal>%%</> pour
+        embarquer un vrai caractère <literal>%</> dans la commande 
+       </para>
+       <para>
+        Il est important que la commande renvoit un code de sortie zéro si et
+        seulement si elle a réussi. La commande <emphasis>se verra
+        demander</> les noms des fichiers absents dans l'archive&nbsp;; elle
+        doit renvoyer une valeur différente de zéro dans ce cas.
+        Exemples&nbsp;:
+<programlisting>
+restore_command = 'cp /mnt/server/archivedir/%f "%p"'
+restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows
+</programlisting>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="recovery-target-time" xreflabel="recovery_target_time">
+      <term><varname>recovery_target_time</varname> 
+           (<type>timestamp</type>)
+      </term>
+      <listitem>
+       <para>
+        Ce paramètre spécifie le temps à partir duquel le serveur doit
+        arrêter la récupération. Au plus un entre
+        <varname>recovery_target_time</> et <xref
+        linkend="recovery-target-xid"> peut être spécifié. Par défaut, la
+        récupération se passe jusqu'à la fin du journal WAL. Le point
+        d'arrêt précis est aussi influencé par <xref
+        linkend="recovery-target-inclusive">.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="recovery-target-xid" xreflabel="recovery_target_xid">
+      <term><varname>recovery_target_xid</varname> (<type>string</type>)</term>
+      <listitem>
+       <para>
+        Ce paramètre spécifie l'ID de transaction où arrêter la récupération.
+        Gardez en tête qu'alors que les ID de transactions sont affectés
+        séquentiellement au début de la transaction, les transactions peuvent
+        se terminer dans un ordre numérique différent. Les transactions qui
+        seront récupérées sont celles qui ont été validées avant celle
+        spécifiée (et quelque fois en l'incluant). Au plus un entre
+        <varname>recovery_target_xid</> et <xref
+        linkend="recovery-target-time"> peut être spécifié. La valeur par
+        défaut est de récupérer jusqu'à la fin du journal WAL. Le point
+        d'arrêt précis est aussi influencé par
+        <xref linkend="recovery-target-inclusive">.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="recovery-target-inclusive" 
+                   xreflabel="recovery_target_inclusive">
+      <term><varname>recovery_target_inclusive</varname> 
+        (<type>boolean</type>)
+      </term>
+      <listitem>
+       <para>
+        Spécifie si nous stoppons tout de suite après la cible de
+        récupération spécifiée (<literal>true</literal>) ou tout juste avant
+        (<literal>false</literal>). S'applique à <xref
+        linkend="recovery-target-time"> et <xref
+        linkend="recovery-target-xid">, quelque soit celui qui est spécifié
+        pour cette récupération. Ceci indique si les transactions ayant
+        exactement l'instant de validation cible ou l'ID, respectivement,
+        seront inclus dans la récupération. La valeur par défaut est
+        <literal>true</>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="recovery-target-timeline" 
+                   xreflabel="recovery_target_timeline">
+      <term><varname>recovery_target_timeline</varname> 
+        (<type>string</type>)
+      </term>
+      <listitem>
+       <para>
+        Spécifie la récupération à un timeline particulier. La valeur par
+        défaut est de récupérer suivant le timeline en cours au moment où la
+        sauvegarde de base a été effectuée. Vous aurez seulement besoin de
+        configurer ce paramètre dans les situations complexes de récupération,
+        où le besoin de retourner à un état qui a été atteint après une
+        récupération à un temps donné. Voir <xref
+        linkend="backup-timelines"> pour des informations.
+       </para>
+      </listitem>
+     </varlistentry>
+
+   </variablelist>
+
+   </sect3>
+
+  </sect2>
+
+  <sect2 id="backup-timelines">
+   <title>Timelines</title>
+
+  <indexterm zone="backup">
+   <primary>timelines</primary>
+  </indexterm>
+
+   <para>
+    La possibilité de restaurer la base de données à un instant précédent
+    crée une complexité qui sont la base des histoires de science-fiction sur
+    le voyage dans le temps et les univers parallèles. Dans l'historique
+    original de la base de données, vous avez peut-être supprimé une table
+    critique à 17h15 mardi soir. Imperturbable, vous récupérez votre
+    sauvegarde, la restaurez jusqu'à 17h14 mardi soir, et êtes de nouveau
+    fonctionnel. Dans <emphasis>cette</> histoire de l'univers de la base de
+    données, vous n'avez jamais supprimé la table. Mais, supposez que vous
+    réalisez plus tard qu'après tout, ce n'était pas une si grande idée et
+    que vous voudriez revenir à un point plus lointain dans l'historique
+    original. Vous ne serez plus capable de le faire si, une fois que votre
+    base de donnée était de nouveau fonctionnelle, elle a écrit par dessus
+    certaines des séquences de fichiers segments WAL qui vous aurait permis
+    de récupérer à cet instant. Donc, vous voulez réellement distinguer les
+    séries d'enregistrements WAL générées après la récupération à un instant
+    donné de celles générées dans l'historique originale de la base de
+    données.
+   </para>
+
+   <para>
+    Pour gérer ces problèmes, <productname>PostgreSQL</> comprends la notion
+    de <firstterm>timelines</>. Chaque fois que vous récupérez à un certain
+    instant précédant la fin de la séquence WAL, un nouveau timeline est
+    créé pour identifier les séries d'enregistrements WAL générées après la
+    récupération. (Néanmoins, si la récupération continue jusqu'à la fin des
+    WAL, nous ne commençons pas une nouvelle timeline&nbsp;: nous étendons
+    celle qui existe.) Le numéro d'identifiant de la timeline fait partie 
+    des noms des fichiers segment WAL et, du coup, une nouvelle timeline
+    ne réécrit pas sur les données générées par des timelines précédentes.
+    Il est en fait possible d'archiver plusieurs timelines différentes.
+    Bien que cela semble être une fonctionnalité inutile, parfois, cela vous
+    sauve la vie. Considérez la situation où vous n'êtes plus sûr de l'instant
+    jusqu'où récupérer. Du coup, vous devez tester des récupérations à
+    différents instants jusqu'à trouver le meilleur moment dans l'ancien
+    historique. Sans les timelines, ce processus génèrerait un incroyable
+    bazar. Avec les timelines, vous pouvez récupérer à <emphasis>n'importe
+    quel</> état précédent, ceci incluant les états dans les branches de
+    timelines que vous abandonnerez plus tard.
+   </para>
+
+   <para>
+    Chaque fois qu'une nouvelle timeline est créée,
+    <productname>PostgreSQL</> crée un fichier d'<quote>historique des
+    timeline</> qui montre les timelines, leur branchement et le moment
+    auquel c'est arrivé. Ces fichiers historiques sont requis pour permettre
+    au système de récupérer les bons fichiers segment WAL lors de la
+    récupération à partir d'une archive contenant plusieurs timelines. Du
+    coup, elles sont archivées dans l'aire des WAL comme tous les fichiers
+    segment WAL. Les fichiers historique sont de simples fichiers texte,
+    donc il est peu coûteux et approprié de les conserver indéfiniment
+    (contrairement aux fichiers segments qui sont gros). Vous pouvez, si
+    vous le souhaitez, ajouter des commentaires au fichier historique pour
+    ajouter vos propres notes sur comment et pourquoi cette timeline
+    est particulièrement intéressante. De tels commentaires seront
+    particulièrement utiles quand vous avez un ticket des différentes
+    timelines comem résultat de l'expérimentation.
+   </para>
+
+   <para>
+    Le comportement par défaut de la récupération est de récupérer parmi la
+    timeline en cours au moment où la sauvegarde de base a été effectuée. Si
+    vous voulez récupérer à une timeline enfant (c'est-à-dire si vous voulez
+    retourner à un état qui a été enregistré après la tentative de
+    récupération), vous avez besoin de spécifier l'ID cible de la timeline
+    dans <filename>recovery.conf</>. Vous ne pouvez pas récupérer des
+    timelines qui ont effectué leur branchement plus tôt que le moment où
+    a été effectuée la sauvegarde de base.
+   </para>
+  </sect2>
+
+  <sect2 id="backup-online-caveats">
+   <title>Avertissements</title>
+
+   <para>
+    Au moment où nous écrivons ces lignes, il existe plusieurs limitations
+    sur la technique de sauvegarde à chaud. Elles seront probablement
+    corrigées dans une prochaine version&nbsp;:
+
+  <itemizedlist>
+   <listitem>
+    <para>
+     Les opérations sur des index autres que les B-tree (hash, R-treeet GiST)
+     ne sont pas tracées actuellement dans les WAL, donc ces types d'index
+     ne seront pas mis à jour. Le contournement recommandé est de
+     <command>REINDEX</>er manuellement chacun de ces index après avoir
+     terminé une opération de récupération.
+    </para>
+   </listitem>
+  </itemizedlist>
+   </para>
+
+   <para>
+    Il devrait aussi être noté que le format actuel des <acronym>WAL</acronym>
+    est extrêmement difficile à gérer car il inclut de nombreuses images des
+    pages disques. Ceci est approprié dans le cas des récupérations après un
+    arrêt brutal car nous pourrions avoir besoin de corriger des pages disque
+    partiellement écrites. Néanmoins, il n'est pas nécessaire de stocker
+    autant de copies de page pour les opérations PITR. Un développement
+    possible serait de compresser les données des WAL archivées en supprimant
+    les copies inutiles de pages.
+   </para>
+  </sect2>
+ </sect1>
+
+ <sect1 id="migration">
+  <title>Migration entre les différentes versions</title>
+
+  <indexterm zone="migration">
+   <primary>mise à jour</primary>
+  </indexterm>
+
+  <indexterm zone="migration">
+   <primary>version</primary>
+   <secondary>compatibilité</secondary>
+  </indexterm>
+
+  <para>
+   Cette section discute de la façon de migrer vos données de la base à partir
+   d'une version de <productname>PostgreSQL</> vers une autre, plus récente. La
+   procédure d'installation du logiciel <foreignphrase>per se</> n'est pas le
+   sujet de cette section&nbsp;; ces détails sont dans <xref
+   linkend="installation">.
+  </para>
+
+  <para>
+   En règle générale, le format interne des données est modifié entre les 
+   différentes versions de <productname>PostgreSQL</> (quand le nombre après le
+   deuxième point change). Ceci ne s'applique pas entre les différentes sorties
+   mineures ayant le même numéro de version majeur (quand le nombre après le
+   deuxième point change)&nbsp;; elles ont toujours un format de stockage
+   compatible.
+   Par exemple, les versions 7.0.1, 7.1.2 et 7.2 ne sont pas compatibles, alors
+   que les versions 7.1.1 et 7.1.2 le sont. Lorsque vous mettez à jour entre 
+   des versions compatibles, vous pouvez simplement remplacer les exécutables et
+   ré-utiliser le répertoire des données sur le disque. Sinon, vous avez besoin
+   de sauvegarder vos données et de les restaurer sur le nouveau serveur. Ceci
+   doit se faire en utilisant <application>pg_dump</>&nbsp;; les méthodes de
+   sauvegarde au niveau système de fichiers ne fonctionneront évidemment pas. Il
+   existe des vérifications en place pour vous empêcher d'utiliser un répertoire
+   de données d'une version incompatible version de
+   <productname>PostgreSQL</productname>, donc aucun mal ne sera fait si vous
+   essayez de lancer un serveur d'une mauvaise version dans un répertoire de
+   données.
+  </para>
+
+  <para>
+   Il est recommendé d'utiliser les programmes <application>pg_dump</> et
+   <application>pg_dumpall</> à partir de la nouvelle version de
+   <productname>PostgreSQL</>, pour utiliser les avantages de toutes
+   améliorations effectuées sur ces programmes. Les versions actuelles des
+   programmes de sauvegarde peuvent lire des données à partir des serveurs
+   d'anciennes versions, jusqu'à la 7.0.
+  </para>
+
+  <para>
+   Vous minimiserez la durée d'indisponibilité en installant le nouveau serveur
+   dans un répertoire différent et en lançant l'ancien et le nouveau serveur en 
+   parallèle sur des ports différents, puis en utilisant des commandes comme
+ 
+<programlisting>
+pg_dumpall -p 5432 | psql -d template1 -p 6543
+</programlisting>
+
+   pour transférer les données. Ou utilisez un fichier intermédiaire si vous
+   voulez. Vous pouvez alors éteindre le nouveau serveur et démarrer le nouveau
+   sur le port que l'ancien utilisait. Vous devez vous assurer que l'ancienne
+   base de données n'est pas modifiée après que vous ayez lancé 
+   <application>pg_dumpall</>, sans quoi ces modifications seraient évidemment 
+   perdues. Référez vous au <xref linkend="client-authentication"> pour savoir 
+   comment interdire l'accès.
+  </para>
+  
+  <para>
+   En pratique, vous voudrez certainement tester votre application sur le
+   nouveau serveur avant de basculer définitivement. C'est une autre raison
+   pour configurer des installations concurrentes avec l'ancienne et la nouvelle
+   version.
+  </para>
+
+  <para>
+   Si vous ne pouvez pas ou ne voulez pas lancer les deux serveurs en 
+   parallèle, vous pouvez faire l'étape de sauvegarde avant d'installer la 
+   nouvelle version, éteindre le serveur, déplacer l'ancienne version à un autre
+   endroit, installer la nouvelle, la démarrer et enfin restaurer les données. Par
+   exemple&nbsp;:
+   
+<programlisting>
+pg_dumpall &gt; sauvegarde.sql
+pg_ctl stop
+mv /usr/local/pgsql /usr/local/pgsql.old
+cd ~/postgresql-&version;
+gmake install
+initdb -D /usr/local/pgsql/data
+postmaster -D /usr/local/pgsql/data
+psql template1 &lt; sauvegarde.sql
+</programlisting>
+
+   Vous trouverez les méthodes pour arrêter et démarrer les serveurs, ainsi que 
+   d'autres détails dans le <xref linkend="runtime">.
+   Les instructions d'installation vous donneront des conseils sur les endroits 
+   stratégiques pour réaliser ces opérations.
+  </para>
+
+  <note>
+   <para>
+    Quand vous <quote>déplacez l'ancienne version à un autre endroit</quote>, 
+    l'ancienne installation pourrait ne plus être tout à fait utilisable.
+    Certains des exécutables contiennent les chemins absolus vers les
+    différents programmes et fichiers de données installés. Ceci n'est
+    habituellement pas un gros problème mais si vous planifiez d'utiliser deux
+    installations en parallèle pendant un moment, vous devez leur affecter des
+    répertoires d'installation différents au moment de la construction. (Ce
+    problème est rectifié pour <productname>PostgreSQL</> 8.0 et ultérieurs mais
+    vous devez faire bien attention à déplacer les anciennes installations.)
+   </para>
+  </note>
+ </sect1>
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-tabs-mode:nil
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/share/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

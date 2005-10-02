@@ -1,0 +1,174 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/xaggr.sgml,v 1.7 2005/03/14 06:03:50 guillaume Exp $
+-->
+
+ <sect1 id="xaggr">
+  <title>Agrégats définis par l'utilisateur</title>
+
+  <indexterm zone="xaggr">
+   <primary>fonctions agrégat</primary>
+   <secondary>extension</secondary>
+  </indexterm>
+
+  <para>
+   Dans <productname>PostgreSQL</productname>, les fonctions d'agrégat  
+   sont exprimées comme des <firstterm>valeurs d'état</firstterm>
+   et des <firstterm> fonctions d'état de transition</firstterm>. Autrement dit,
+   un agrégat peut être défini en termes d'état modifié chaque fois qu'une
+   entrée est traitée. Pour définir une nouvelle fonction d'agrégat, on choisit
+   un type de donnée pour la valeur d'état, une valeur initiale pour l'état et
+   une fonction de transition d'état. La fonction de transition d'état est
+   simplement une fonction ordinaire qui pourrait aussi bien être utilisée hors
+   du contexte de l'agrégat. Une <firstterm>fonction finale</firstterm> peut
+   également être spécifiée, au cas où le résultat désiré pour l'agrégat est
+   différent des données devant être conservées comme valeur courante de l'état.
+  </para>
+
+  <para>
+   Ainsi, en plus des types de données de l'argument et du résultat vus par
+   l'utilisateur, il existe un type de donnée pour la valeur d'état interne qui
+   peut être différent de ces deux derniers.</para>
+
+  <para>
+   Si nous définissons un agrégat qui n'utilise pas de fonction finale, nous
+   avons un agrégat qui calcule pour chaque ligne une fonction des valeurs de
+   colonnes. <function>sum</> est un exemple de cette sorte d'agrégat.
+   <function>sum</> commence à zéro et ajoute toujours la valeur de la ligne
+   courante à son total en cours. Par exemple, si nous voulons faire un agrégat
+   <function>sum</>  pour opérer sur un type de donnée pour des nombres
+   complexes, nous avons seulement besoin de la fonction d'addition pour ce type
+   de donnée. La définition de l'agrégat sera&nbsp;:
+<screen>
+CREATE AGGREGATE somme_complexe (
+    sfunc = ajout_complexe,
+    basetype = complexe,
+    stype = complexe,
+    initcond = '(0,0)'
+);
+
+SELECT somme_complexe(a) FROM test_complexe;
+
+ somme_complexe
+----------------
+     (34,53.9)
+</screen>
+
+   (Dans la pratique, nous aurions seulement nommé l'agrégat
+   <function>sum</function> et laissé <productname>PostgreSQL</productname>
+   déterminer quel genre de somme appliquer à une colonne de type
+   <type>complexe</type>.) 
+ </para> 
+  <para>
+   La définition précédente de <function>sum</function> renverra zéro (la
+   condition d'état initial) s'il n'y a pas de valeurs d'entrée non NULL.
+   Peut-être désirons-nous que dans ce cas elle retourne NULL &mdash; le
+   standard SQL prévoit que la fonction <function>sum</function> se comporte
+   ainsi. Nous pouvons faire ceci simplement en omettant l'instruction
+   <literal>initcond</literal>, de sorte que la condition d'état initial soit
+   NULL. Ordinairement, ceci signifierait que  <literal>sfunc</literal> aurait à
+   vérifier l'entrée d'une condition d'état NULL, mais pour la fonction
+   <function>sum</function> et quelques autres agrégats simples comme
+   <function>max</> et <function>min</>, il suffit d'insérer la première valeur
+   d'entrée non NULL dans la variable d'état et ensuite de commencer à
+   appliquer la fonction de transition d'état à la seconde valeur non NULL. 
+   <productname>PostgreSQL</productname> fera cela automatiquement si la
+   condition initiale est NULL et si la fonction de transition est marquée
+   <quote>strict</> (c'est-à-dire qu'elle ne doit pas être appelée pour des
+   entrées NULL).
+ </para> 
+    <para>
+    Un autre comportement par défaut d'une fonction de transition
+   <quote>strict</> est que la valeur d'état précédente est gardée inchangée
+   chaque fois qu'une entrée NULL est rencontrée. Ainsi, les valeurs NULL sont
+   ignorées. Sçi vous avez besoin d'un autre comportement pour les entrées NULL,
+   vous devez juste ne pas définir votre fonction de transition comme
+   <quote>strict</> et la coder pour vérifier les entrées NULL et faire le
+   nécessaire. 
+ </para>
+  
+  <para>
+   <function>avg</> (average = moyenne) est un exemple plus compliqué d'agrégat.
+   Il demande deux état courants&nbsp;: la somme des entrées et le compte du
+   nombre d'entrées. Le résultat final est obtenu en divisant ces quantités. La
+   moyenne est typiquement implémentée en utilisant comme valeur d'état un
+   tableau de deux éléments. Par exemple, l'implémentation intégrée de
+   <function>avg(float8)</function> ressemble à&nbsp;:
+
+<programlisting>
+CREATE AGGREGATE avg (
+    sfunc = float8_accum,
+    basetype = float8,
+    stype = float8[],
+    finalfunc = float8_avg,
+    initcond = '{0,0}'
+);
+</programlisting>
+  </para>
+
+  <para>
+   Les fonctions d'agrégat peuvent utiliser des fonctions d'état de transition
+   ou des fonctions finales polymorphes, de sorte que les mêmes fonctions
+   peuvent être utilisées pour implémenter de multiples agrégats. Voir la <xref
+   linkend="types-polymorphic"> pour une explication des fonctions polymorphes.
+   Pour aller encore plus loin, la fonction d'agrégat elle-même peut être
+   spécifiée avec un type de base et un type d'état polymorphes, permettant
+   ainsi à une unique définition de fonction de servir pour de multiples types
+   de données d'entrée. Voici un exemple d'agrégat polymorphe&nbsp;:
+
+<programlisting>
+CREATE AGGREGATE array_accum (
+    sfunc = array_append,
+    basetype = anyelement,
+    stype = anyarray,
+    initcond = '{}'
+);
+</programlisting>
+
+   Ici, le type d'état effectif pour n'importe quel appel d'agrégat est le type
+   tableau, ayant comme éléments le type effectif d'entrée.
+</para>
+
+  <para>
+   Voici le résultat quand on utilise deux types de donnée effectifs différents
+   comme arguments&nbsp;:
+<programlisting>
+SELECT attrelid::regclass, array_accum(attname)
+FROM pg_attribute WHERE attnum &gt; 0
+AND attrelid = 'pg_user'::regclass GROUP BY attrelid;
+ attrelid |                                 array_accum
+----------+-----------------------------------------------------------------------------
+ pg_user  | {usename,usesysid,usecreatedb,usesuper,usecatupd,passwd,valuntil,useconfig}
+(1 row)
+
+SELECT attrelid::regclass, array_accum(atttypid)
+FROM pg_attribute WHERE attnum &gt; 0
+AND attrelid = 'pg_user'::regclass GROUP BY attrelid;
+ attrelid |         array_accum
+----------+------------------------------
+ pg_user  | {19,23,16,16,16,25,702,1009}
+(1 row)
+</programlisting>
+  </para>
+
+  <para>
+   Pour plus de détails, voyez la commande
+   <xref linkend="sql-createaggregate" endterm="sql-createaggregate-title">.
+  </para>
+ </sect1>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

@@ -1,0 +1,183 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/plhandler.sgml,v 1.3 2005/03/14 06:03:49 guillaume Exp $
+-->
+
+ <chapter id="plhandler">
+   <title>Écrire un gestionnaire de langage de procédures</title>
+
+   <indexterm zone="plhandler">
+    <primary>langage de procédures</primary>
+    <secondary>gestionnaire</secondary>
+   </indexterm>
+
+   <para>
+    Tous les appels vers des fonctions écrites dans un langage autre que celui
+    de l'interface <quote>version 1</quote> pour les langages compilés (ceci
+    inclut les fonctions dans les langages de procédures définis par
+    l'utilisateur, les fonctions écrites en SQL et les fonctions utilisant
+    l'interface de langage compilé version 0), passent par une fonction du
+    <firstterm>gestionnaire d'appels</firstterm> spécifique au langage.
+    L'exécution de la fonction est de la responsabilité du gestionnaire
+    d'appels, par exemple l'interprétation du texte source founi. Ce chapitre
+    indique comment le gestionnaire d'appels d'un nouveau langage de procédures
+    peut être écrit.
+   </para>
+
+   <para>
+    Le gestionnaire d'appel d'un langage de procédures est une fonction
+    <quote>normale</quote> qui doit être écrite dans un langage compilé tel que
+    le C, en utilisant l'interface version-1, et enregistré avec
+    <productname>PostgreSQL</productname> comme ne prenant aucun argument
+    et retournant le type <type>language_handler</type>. Ce pseudo-type spécial
+    identifie la fonction en tant que gestionnaire d'appel et l'empêche d'être
+    appelé directement à partir des commandes SQL.
+   </para>
+
+   <para>
+    Le gestionnaire d'appels est appelé de la même façon que n'importe quel
+    autre fonction&nbsp;: il reçoit un pointeur vers une <type>struct</>ure
+    <structname>FunctionCallInfoData</structname> contenant des valeurs en
+    argument et une information sur la fonction appelée. Il doit renvoyer un
+    résultat <type>Datum</type> (et, si possible, initialiser le champ
+    <structfield>isnull</structfield> de la structure
+    <structname>FunctionCallInfoData</structname> s'il souhaite renvoyer un
+    résultat SQL NULL). La différence entre un gestionnaire d'appels et une
+    fonction ordinaire est que le champ
+    <structfield>flinfo-&gt;fn_oid</structfield> de la structure
+    <structname>FunctionCallInfoData</structname> contiendra l'OID
+    de la fonction à appeller, et non pas le gestionnaire d'appels lui-même.
+    Le gestionnaire d'appels doit utiliser ce champ pour déterminer la
+    fonction exécutée. De plus, la liste d'arguments passée a été configurée 
+    en accord avec la déclaration de la fonction cible, et non pas en
+    fonction du gestionnaire d'appels.
+   </para>
+
+   <para>
+    C'est au gestionnaire d'appels de récupérer de récupérer l'entrée de la
+    fonction à partir de la table système <classname>pg_proc</classname> et
+    d'analyser les types des arguments et de la valeur de retour de la fonction
+    appelée. La clause <literal>AS</> à partir de la commande
+    <command>CREATE FUNCTION</command> de la fonction sera trouvée dans la
+    colonne <literal>prosrc</literal> de la ligne de
+    <classname>pg_proc</classname>. C'est habituellement le texte du source du
+    langage de procédures lui-même (comme pour PL/Tcl) mais, en théorie, cela 
+    pourrait être un chemin vers un fichier ou tout autre chose qui indique
+    en détails au gestionnaire d'appels ce qu'il doit faire.
+   </para>
+
+   <para>
+    Souvent, la même fonction est appelée plusieurs fois par instruction SQL.
+    Un gestionnaire d'appels peut éviter des recherches d'informations répétées
+    sur la fonction appelée en utilisant le champ
+    <structfield>flinfo-&gt;fn_extra</structfield>. Il sera initialement à
+    <symbol>NULL</> mais pourra être configuré par le gestionnaire d'appels pour
+    pointer vers l'information de la fonction appelée. Pour les appels
+    suivants, si <structfield>flinfo-&gt;fn_extra</structfield> est déjà
+    différent de <symbol>NULL</>, alors il peut être utilisé et l'étape de
+    recherche d'information pourra être évitée. Le gestionnaire d'appels doit
+    s'assurer que <structfield>flinfo-&gt;fn_extra</structfield> pointe sur la
+    mémoire et qu'il y restera au moins jusqu'à la fin de la requête en cours
+    car une structure de données <structname>FmgrInfo</structname> peut être
+    conservée aussi longtemps. Une façon de le faire est d'allouer les données
+    supplémentaires dans le contexte mémoire spécifié par
+    <structfield>flinfo-&gt;fn_mcxt</structfield>&nbsp;; de telles données
+    auront normalement la même espérance de vie que
+    <structname>FmgrInfo</structname> lui-même. Mais le gestionnaire pourrait
+    aussi choisir d'utiliser un contexte mémoire de plus longue durée de façon à
+    cacher des informations sur les définitions des fonctions sur plusieurs
+    requêtes.
+   </para>
+
+   <para>
+    Lorsqu'une fonction en langage de procédures est appelé via un déclencheur,
+    aucun argument ne lui est passé dans le cas habituel mais le champ
+    <structfield>context</structfield> de
+    <structname>FunctionCallInfoData</structname> pointe sur une structure
+    <structname>TriggerData</structname>, plutôt que d'être
+    <symbol>NULL</> comme c'est le cas dans les appels de fonctions standards.
+    Le gestionnaire d'un langage devrait fournir des mécanismes pour que les
+    fonctions de langages de procédures obtiennent des informations du
+    déclencheur.
+   </para>
+
+   <para>
+    Voici un modèle de gestionnaire de langage de procédures écrit en C&nbsp;:
+<programlisting>
+#include "postgres.h"
+#include "executor/spi.h"
+#include "commands/trigger.h"
+#include "fmgr.h"
+#include "access/heapam.h"
+#include "utils/syscache.h"
+#include "catalog/pg_proc.h"
+#include "catalog/pg_type.h"
+
+PG_FUNCTION_INFO_V1(plsample_call_handler);
+
+Datum
+plsample_call_handler(PG_FUNCTION_ARGS)
+{
+    Datum          retval;
+
+    if (CALLED_AS_TRIGGER(fcinfo))
+    {
+        /*
+         * Appelé en tant que procédure d'un déclencheur
+         */
+        TriggerData    *trigdata = (TriggerData *) fcinfo-&gt;context;
+
+        retval = ...
+    }
+    else
+    {
+        /*
+         * Appelé en tant que fonction
+         */
+
+        retval = ...
+    }
+
+    return retval;
+}
+</programlisting>
+    Seules quelques milliers de lignes de codes ont été ajoutées à la place des
+    points pour compléter ce modèle.
+   </para>
+
+   <para>
+    Après avoir compilé la fonction du gestionnaire dans un module chargeable
+    (voir <xref linkend="dfunc">), les commandes enregistrent le langage
+    de procédures d'exemple&nbsp;:
+<programlisting>
+CREATE FUNCTION plsample_call_handler() RETURNS language_handler
+    AS '<replaceable>nomfichier</replaceable>'
+    LANGUAGE C;
+CREATE LANGUAGE plsample
+    HANDLER plsample_call_handler;
+</programlisting>
+   </para>
+
+   <para>
+    Les langages de procédures inclus dans la distribution standard sont de
+    bonnes références lorsque vous essayez d'écrire votre propre gestionnaire
+    d'appels. Regardez dans le sous-répertoire <filename>src/pl</> des sources.
+   </para>
+
+ </chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->
