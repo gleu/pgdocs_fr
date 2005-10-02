@@ -1,0 +1,822 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/plperl.sgml,v 1.12 2005/09/15 07:03:20 guillaume Exp $
+-->
+
+ <chapter id="plperl">
+  <title>PL/Perl - Le langage de procédures Perl</title>
+
+  <indexterm zone="plperl">
+   <primary>PL/Perl</primary>
+  </indexterm>
+
+  <indexterm zone="plperl">
+   <primary>Perl</primary>
+  </indexterm>
+
+  <para>
+   PL/Perl est un langage de procédures chargeable qui vous permet d'écrire des
+   fonctions <productname>PostgreSQL</productname> dans le <ulink
+   url="http://www.perl.com">langage de programmation Perl</ulink>.
+  </para>
+
+  <para>
+   Pour installer PL/Perl dans une base de données spécifique, utilisez la
+   commande <literal>createlang plperl <replaceable>nom_base</></literal>.
+  </para>
+
+  <tip>
+   <para>
+    Si un langage est installé dans <literal>template1</>, toutes les
+    bases de données créées ultérieurement disposeront automatiquement de ce
+    langage.
+   </para>
+  </tip>
+
+  <note>
+   <para>
+    Les utilisateurs des paquetages sources doivent explicitement autoriser la
+    construction de PL/Perl pendant le processus d'installation. (Se référer à
+    <xref linkend="install-short"> pour plus d'informations.) Les utilisateurs
+    des paquetages binaires peuvent trouver PL/Perl dans un sous-paquetage
+    séparé.
+   </para>
+  </note>
+
+ <sect1 id="plperl-funcs">
+  <title>Fonctions et arguments PL/Perl</title>
+
+  <para>
+   Pour créer une fonction dans le langage PL/Perl, utilisez la syntaxe
+   standard <xref linkend="sql-createfunction"
+   endterm="sql-createfunction-title">&nbsp;:
+<programlisting>
+CREATE FUNCTION <replaceable>nomfonction</replaceable>
+(<replaceable>types-arguments</replaceable>) RETURNS
+<replaceable>type-retour</replaceable> AS $$
+    # Corps de la fonction PL/Perl
+$$ LANGUAGE plperl;
+</programlisting>
+   Le corps de la fonction est du code Perl normal. Une fonction PL/Perl doit
+   toujours renvoyer une valeur scalaire. Vous pouvez renvoyer des structures
+   plus complexes (tableaux, enregistrements et ensembles) en renvoyant une
+   référence comm indiqué ci-dessous. Ne renvoyez jamais une liste.
+  </para>
+
+  <para>
+    La syntaxe de la commande <command>CREATE FUNCTION</command> requiert que le
+    corps de la fonction soit écrit comme une constante de type chaîne. Il est
+    habituellement plus agréable d'utiliser les guillemets dollar (voir <xref
+    linkend="sql-syntax-dollar-quoting">) pour cette constante. Si vous
+    choisissez d'utiliser la syntaxe à base de guillemets simples, vous devez
+    faire un échappement des marques de guillemets simples (<literal>'</>) et
+    des antislashs (<literal>\</>) utilisés dans le corps de la fonction,
+    typiquement en les doublant (voir <xref linkend="sql-syntax-strings">).
+  </para>
+
+  <para>
+   Les arguments et les résultats sont manipulés comme dans n'importe quel
+   routine Perl&nbsp;: les arguments sont passés au tableau
+   <varname>@_</varname> et une valeur de retour
+   est indiquée par <literal>return</> ou par la dernière expression
+   évaluée dans la fonction.
+  </para>
+
+  <para>
+   Par exemple, une fonction retournant le plus grand de deux entiers
+   peut être définie comme suit&nbsp;:
+
+<programlisting>
+CREATE FUNCTION perl_max (integer, integer) RETURNS integer AS $$
+    if ($_[0] &gt; $_[1]) { return $_[0]; }
+    return $_[1];
+$$ LANGUAGE plperl;
+</programlisting>
+  </para>
+
+  <para>
+   Si une valeur NULL en SQL<indexterm><primary>valeur NULL</><secondary
+   sortas="PL/Perl">en PL/Perl</></indexterm> est passée à une fonction,
+   cet argument apparaîtra comme <quote>undefined</> en Perl. La
+   fonction définie ci-dessus ne se comportera pas correctement avec des
+   arguments NULL (en fait, tout se passera comme s'ils avaient été des zéros).
+   Nous aurions pu ajouter <literal>STRICT</> à la définition de la fonction
+   pour forcer <productname>PostgreSQL</productname> à faire quelque chose de
+   plus raisonnable&nbsp;: si une valeur NULL est passée en argument, la
+   fonction ne sera pas du tout appelée mais retournera automatiquement un
+   résultat NULL. D'une autre façon, nous aurions pu vérifier dans le corps de
+   la fonction la présence d'arguments NULL. Par exemple, supposons que nous
+   voulions que <function>perl_max</function> avec un argument NULL et un autre
+   non NULL retourne une valeur non NULL plutôt qu'une valeur NULL, on aurait
+   écrit&nbsp;:
+
+<programlisting>
+CREATE FUNCTION perl_max (integer, integer) RETURNS integer AS $$
+    my ($a,$b) = @_;
+    if (! defined $a) {
+        if (! defined $b) { return undef; }
+        return $b;
+    }
+    if (! defined $b) { return $a; }
+    if ($a &gt; $b) { return $a; }
+    return $b;
+$$ LANGUAGE plperl;
+</programlisting>
+   Comme le montre l'exemple ci-dessus, passer une valeur NULL en SQL
+   à une fonction en PL/Perl retourne une valeur non définie. Et ceci,
+   que la fonction soit déclarée stricte ou non.
+  </para>
+
+  <para>
+   Perl peut renvoyer des tableaux <productname>PostgreSQL</productname>
+   comme référence à des tableaux Perl. Voici un exemple&nbsp;:
+
+<programlisting>
+CREATE OR REPLACE function returns_array()
+RETURNS text[][] AS $$
+    return [['a"b','c,d'],['e\\f','g']];
+$$ LANGUAGE plperl;
+
+select returns_array();
+</programlisting>
+  </para>
+
+  <para>
+   Les arguments de type composite sont passés à la fonction en tant que
+   références d'un tableau de découpage, les clés du tableau de découpage étant
+   les noms des attributs du type composé. Voici un exemple&nbsp;:
+
+<programlisting>
+CREATE TABLE employe (
+    nom text,
+    basesalaire integer,
+    bonus integer
+);
+
+CREATE FUNCTION empcomp(employe) RETURNS integer AS $$
+    my ($emp) = @_;
+    return $emp-&gt;{basesalaire} + $emp-&gt;{bonus};
+$$ LANGUAGE plperl;
+
+SELECT nom, empcomp(employe.*) FROM employe;
+</programlisting>
+  </para>
+
+  <para>
+   Une fonction PL/Perl peut renvoyer un résultat de type composite en utilisant
+   la même approche&nbsp;: renvoyer une référence à un hachage qui a les 
+   attributs requis. Par exemple,
+
+    <programlisting>
+      CREATE TYPE testligneperl AS (f1 integer, f2 text, f3 text);
+
+      CREATE OR REPLACE FUNCTION perl_ligne() RETURNS testrowperl AS $$
+      return {f2 =&gt; 'hello', f1 =&gt; 1, f3 =&gt; 'world'};
+      $$ LANGUAGE plperl;
+
+      SELECT * FROM perl_row();
+    </programlisting>
+
+    Toute colonne dans le type de données déclaré du résultat qui n'est pas
+    présente dans le hachage sera renvoyée NULL.
+  </para>
+
+  <para>
+    Les fonctions PL/Perl peuvent aussi renvoyer des ensembles de types
+    scalaires ou composites. Habituellement, vous voulez renvoyer une ligne à
+    la fois, à la fois pour améliorer le temps de démarrage et pour éviter
+    d'allonger la queue de l'ensemble des résultats en mémoire. Vous pouvez
+    faire ceci avec <function>return_next</function> comme indiqué ci-dessous.
+    Notez qu'après le dernier <function>return_next</function>, vous devez
+    placer soit <literal>return</literal> soit (encore mieux) <literal>return
+    undef</literal>.
+
+<programlisting>
+CREATE OR REPLACE FUNCTION perl_set_int(int)
+RETURNS SETOF INTEGER AS $$
+    foreach (0..$_[0]) {
+        return_next($_);
+    }
+    return undef;
+$$ LANGUAGE plperl;
+
+SELECT * FROM perl_set_int(5);
+
+CREATE OR REPLACE FUNCTION perl_set()
+RETURNS SETOF testrowperl AS $$
+    return_next({ f1 =&gt; 1, f2 =&gt; 'Hello', f3 =&gt; 'World' });
+    return_next({ f1 =&gt; 2, f2 =&gt; 'Hello', f3 =&gt; 'PostgreSQL' });
+    return_next({ f1 =&gt; 3, f2 =&gt; 'Hello', f3 =&gt; 'PL/Perl' });
+    return undef;
+$$ LANGUAGE plperl;
+</programlisting>
+
+    Pour les petits ensembles de résultats, vous pouvez renvoyer une référence
+    à un tableau contenant soit des scalaires, soit des références à des
+    tableaux soit des références à des hachages de types simples, de types
+    tableaux ou de types composites. Voici quelques exemples simples pour
+    renvoyer l'ensemble complet du résultant en tant que référence de
+    tableau&nbsp;:
+
+    <programlisting>
+      CREATE OR REPLACE FUNCTION perl_set_int(int) RETURNS SETOF INTEGER AS $$
+      return [0..$_[0]];
+      $$ LANGUAGE plperl;
+
+      SELECT * FROM perl_set_int(5);
+
+      CREATE OR REPLACE FUNCTION perl_set() RETURNS SETOF testligneperl AS $$
+      return [
+      { f1 =&gt; 1, f2 =&gt; 'Bonjour', f3 =&gt; 'Monde' },
+      { f1 =&gt; 2, f2 =&gt; 'Bonjour', f3 =&gt; 'PostgreSQL' },
+      { f1 =&gt; 3, f2 =&gt; 'Bonjour', f3 =&gt; 'PL/Perl' }
+      ];
+      $$  LANGUAGE plperl;
+
+      SELECT * FROM perl_set();
+    </programlisting>
+
+  </para>
+
+  <para>
+    <application>PL/Perl</> n'a actuellement pas de support complet pour les
+    types domaine&nbsp;: il traite un domaine de la même façon qu'un type
+    scalaire sous-jacent. Ceci signifie que les contraintes associées au
+    domaine ne seront pas forcées. Ceci n'est pas un problème pour les
+    arguments d'une fonction mais c'est hasardeux de déclarer une fonction
+    <application>PL/Perl</> renvoyant un type domaine.
+  </para>
+
+  <para>
+   Si vous souhaitez utiliser le pragma <literal>strict</> dans votre code,
+   la façon la plus simple de le faire est de configurer (<command>SET</>)
+   <literal>plperl.use_strict</literal> à true. Ce paramètre affecte les
+   compilations suivantes de fonctions <application>PL/Perl</> functions, mais
+   pas les fonctions déjà compilées dans la session en cours. Pour configurer
+   le paramètre avant que <application>PL/Perl</> ne soit chargé, il est
+   nécessaire d'avoir ajouté <quote><literal>plperl</></> dans la liste <xref
+   linkend="guc-custom-variable-classes"> de
+   <filename>postgresql.conf</filename>.
+  </para>
+
+  <para>
+   Une autre façon d'utiliser le pragma <literal>strict</> est de placer
+<programlisting>
+use strict;
+</programlisting>
+   dans le corps de la fonction. Mais ceci fonctionne uniquement dans les
+   fonctions <application>PL/PerlU</> car <literal>use</> n'est pas une
+   opération de confiance. Dans les fonctions <application>PL/Perl</>, vous
+   pouvez utiliser à la place&nbsp;:
+<programlisting>
+BEGIN { strict->import(); }
+</programlisting>
+  </para>
+ </sect1>
+
+ <sect1 id="plperl-database">
+  <title>Accès à la base de données depuis PL/Perl</title>
+
+  <para>
+   L'accès à la base de données à l'intérieur de vos fonctions écrites en Perl
+   peut se faire à partir de la fonction <function>spi_exec_query</function>
+   décrite ci-dessous ou à partir du module expérimental <ulink
+   url="http://www.cpan.org/modules/by-module/DBD/APILOS/">
+   <literal>DBD::PgSPI</literal></ulink>
+   (aussi disponible sur un miroir du <ulink 
+   url="http://www.cpan.org/SITES.html">
+   <acronym>CPAN</></ulink>).
+   Ce module rend accessible un descripteur de base de données conforme à
+   <acronym>DBI</> nommé
+   <varname>$pg_dbh</varname> qui peut-être utilisé pour exécuter des
+   requêtes en utilisant la syntaxe habituelle de
+   <acronym>DBI</>.<indexterm><primary>DBI</></indexterm>
+  </para>
+
+  <para>
+   Actuellement, PL/Perl fournit trois commandes Perl supplémentaires&nbsp;:
+
+   <variablelist>
+     <varlistentry>
+       <indexterm>
+         <primary>spi_exec_query</primary>
+         <secondary>en PL/Perl</secondary>
+       </indexterm>
+
+     <term><literal><function>spi_exec_query</>(<replaceable>query</replaceable> [, <replaceable>max-rows</replaceable>])</literal></term>
+     <term><literal><function>spi_exec_query</>(<replaceable>command</replaceable>)</literal></term>
+     <term><literal><function>spi_query</>(<replaceable>command</replaceable>)</literal></term>
+     <term><literal><function>spi_fetchrow</>(<replaceable>command</replaceable>)</literal></term>
+
+   <listitem>
+     <para>
+       <literal>spi_exec_query</literal> exécute une commande SQL et renvoit
+       l'ensemble complet de la ligne comme une référence à un table de
+       références hachées. <emphasis>Vous ne devez utiliser cette commande
+       que lorsque vous savez que l'ensemble de résultat sera relativement
+       petit.</emphasis>  Voici un exemple d'une requête (commande
+       <command>SELECT</command>) avec le nombre optionnel maximum de
+       lignes&nbsp;:
+       <programlisting>
+         $rv = spi_exec_query('SELECT * FROM ma_table', 5);
+       </programlisting>
+       Ceci entrevoit cinq lignes au maximum de la table
+       <literal>ma_table</literal>. Si <literal>ma_table</literal> a une 
+       colonne <literal>ma_colonne</literal>, vous obtenez la valeur de la
+       ligne <literal>$i</literal> du résultat de cette façon&nbsp;:
+       <programlisting>
+         $foo = $rv-&gt;{rows}[$i]-&gt;{ma_colonne};
+       </programlisting>
+       Le nombre total des lignes renvoyées d'une requête 
+       <command>SELECT</command> peut être accédé de cette façon&nbsp;:
+       <programlisting>
+         $nrows = $rv-&gt;{processed}
+       </programlisting>
+     </para>
+     
+     <para>
+       Voici un exemple en utilisant un type de commande différent&nbsp;:
+       <programlisting>
+         $query = "INSERT INTO ma_table VALUES (1, 'test')";
+         $rv = spi_exec_query($query);
+       </programlisting>
+       Ensuite, vous pouvez accéder au statut de la commande (c'est-à-dire,
+       <literal>SPI_OK_INSERT</literal>) de cette façon&nbsp;:
+       <programlisting>
+         $res = $rv-&gt;{status};
+       </programlisting>
+       Pour obtenir le nombre de lignes affectées, exécutez&nbsp;:
+       <programlisting>
+         $nrows = $rv-&gt;{processed};
+       </programlisting>
+     </para>
+
+     <para>
+       Voici un exemple complet&nbsp;:
+       <programlisting>
+CREATE TABLE test (
+    i int,
+    v varchar
+    );
+
+INSERT INTO test (i, v) VALUES (1, 'première ligne');
+INSERT INTO test (i, v) VALUES (2, 'deuxième ligne');
+INSERT INTO test (i, v) VALUES (3, 'troisième ligne');
+INSERT INTO test (i, v) VALUES (4, 'immortel');
+
+CREATE OR REPLACE FUNCTION test_munge() RETURNS SETOF test AS $$
+    my $rv = spi_exec_query('select i, v from test;');
+    my $status = $rv-&gt;{status};
+    my $nrows = $rv-&gt;{processed};
+    foreach my $rn (0 .. $nrows - 1) {
+        my $row = $rv-&gt;{rows}[$rn];
+        $row-&gt;{i} += 200 if defined($row-&gt;{i});
+        $row-&gt;{v} =~ tr/A-Za-z/a-zA-Z/ if (defined($row-&gt;{v}));
+        return_next($row);
+    }
+    return undef;
+$$ LANGUAGE plperl;
+
+SELECT * FROM test_munge();
+       </programlisting>
+     </para>
+    <para>
+    <literal>spi_query</literal> et <literal>spi_fetchrow</literal>
+    fonctionnent ensemble comme une paire d'ensembles de lignes pouvant être
+    assez importants ou pour les cas où vous souhaitez renvoyer les lignes dès
+    qu'elles arrivent. <literal>spi_fetchrow</literal> fonctionne
+    <emphasis>seulement</emphasis> avec <literal>spi_query</literal>. L'exemple
+    suivant illustre comment vous les utilisez ensemble&nbsp;:
+
+<programlisting>
+CREATE TYPE foo_type AS (the_num INTEGER, the_text TEXT);
+
+CREATE OR REPLACE FUNCTION lotsa_md5 (INTEGER) RETURNS SETOF foo_type AS $$
+    use Digest::MD5 qw(md5_hex);
+    my $file = '/usr/share/dict/words';
+    my $t = localtime;
+    elog(NOTICE, "opening file $file at $t" );
+    open my $fh, '&lt;', $file # ooh, it's a file access!
+        or elog(ERROR, "Can't open $file for reading: $!");
+    my @words = &lt;$fh&gt;;
+    close $fh;
+    $t = localtime;
+    elog(NOTICE, "closed file $file at $t");
+    chomp(@words);
+    my $row;
+    my $sth = spi_query("SELECT * FROM generate_series(1,$_[0]) AS b(a)");
+    while (defined ($row = spi_fetchrow($sth))) {
+        return_next({
+            the_num =&gt; $row-&gt;{a},
+            the_text =&gt; md5_hex($words[rand @words])
+        });
+    }
+    return;
+$$ LANGUAGE plperlu;
+
+SELECT * from lotsa_md5(500);
+</programlisting>
+    </para>
+
+   </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <indexterm>
+      <primary>elog</primary>
+      <secondary>en PL/Perl</secondary>
+     </indexterm>
+
+     <term><literal><function>elog</>(<replaceable>level</replaceable>,
+     <replaceable>msg</replaceable>)</literal></term>
+     <listitem>
+      <para>
+       Produit un message de trace ou d'erreur. Les niveaux possibles sont
+       <literal>DEBUG</>, <literal>LOG</>, <literal>INFO</>,
+       <literal>NOTICE</>, <literal>WARNING</> et <literal>ERROR</>.
+       <literal>ERROR</> lève une condition d'erreur&nbsp;; si elle n'est pas
+       récupérée par le code Perl l'entourant, l'erreur se propage à
+       l'extérieur de la requête appelante, causant l'annulation de la 
+       transaction ou sous-transaction en cours. Ceci est en fait identique à
+       la commande <literal>die</> de Perl. Les autres niveaux génèrent 
+       seulement des messages de niveaux de priorité différents. Le fait que
+       les messages d'un niveau de priorité particulier soient rapportés au
+       client, écrit dans les journaux du serveur, voire les deux, est contrôlé
+       par les variables de configuration <xref
+       linkend="guc-log-min-messages"> et <xref
+       linkend="guc-client-min-messages">. Voir <xref
+       linkend="runtime-config"> pour plus d'informations.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+ </sect1>
+
+ <sect1 id="plperl-data">
+   <title>Valeurs des données dans PL/Perl</title>
+   
+   <para>
+     Les valeurs de l'argument fournies au code d'une fonction PL/Perl sont
+     simplement les arguments en entrée convertis dans la forme textuelle
+     (comme si elles avaient été affichées par une instruction 
+     <command>SELECT</command>). Par contre, une commande <literal>return</>
+     acceptera toute chaîne dont le format en entrée est acceptable pour le
+     type déclaré en retour. Donc, à l'intérieur de la fonction PL/Perl,
+     toutes les valeurs sont simplement des chaînes de texte.
+   </para>
+ </sect1>
+
+<sect1 id="plperl-global">
+  <title>Valeurs globales dans PL/Perl</title>
+  
+  <para>
+    Vous pouvez utiliser le hachage global <varname>%_SHARED</varname> pour
+    stocker les données, incluant les références de code, entre les appels de
+    fonction pour la durée de vie de la session en cours.
+  </para>
+  
+  <para>
+    Voici un exemple simple pour des données partagées&nbsp;:
+    <programlisting>
+      CREATE OR REPLACE FUNCTION set_var(name text, val text) RETURNS text AS $$
+      if ($_SHARED{$_[0]} = $_[1]) {
+      return 'ok';
+      } else {
+      return "Ne peux pas initialiser la variable partagée $_[0] à $_[1]";
+      }
+      $$ LANGUAGE plperl;
+      
+      CREATE OR REPLACE FUNCTION get_var(name text) RETURNS text AS $$
+      return $_SHARED{$_[0]};
+      $$ LANGUAGE plperl;
+      
+      SELECT set_var('sample', 'Bonjour, PL/Perl ! Comment va ?');
+      SELECT get_var('sample');
+    </programlisting>
+  </para>
+  
+  <para>
+    Voici un exemple légèrement plus compliqué utilisant une référence de
+    code&nbsp;:
+    
+    <programlisting>
+      CREATE OR REPLACE FUNCTION myfuncs() RETURNS void AS $$
+      $_SHARED{myquote} = sub {
+      my $arg = shift;
+      $arg =~ s/(['\\])/\\$1/g;
+      return "'$arg'";
+      };
+      $$ LANGUAGE plperl;
+      
+      SELECT myfuncs(); /* initialise la fonction */
+      
+      /* Set up a function that uses the quote function */
+      
+      CREATE OR REPLACE FUNCTION use_quote(TEXT) RETURNS text AS $$
+      my $text_to_quote = shift;
+      my $qfunc = $_SHARED{myquote};
+      return &amp;$qfunc($text_to_quote);
+      $$ LANGUAGE plperl;
+    </programlisting>
+    
+    (Vous pourriez avoir remplacé le code ci-dessus avec la seule ligne
+    <literal>return $_SHARED{myquote}-&gt;($_[0]);</literal>
+    au prix d'une mauvaise lisibilité.)
+  </para>
+</sect1>
+
+ <sect1 id="plperl-trusted">
+  <title>Niveaux de confiance de PL/Perl</title>
+
+  <indexterm zone="plperl-trusted">
+   <primary>trusted</primary>
+   <secondary>PL/Perl</secondary>
+  </indexterm>
+
+  <para>
+   Normalement, PL/Perl est installé en tant que langage de programmation de
+   <quote>confiance</>, de nom <literal>plperl</>. Durant cette installation,
+   certaines commandes Perl sont désactivées pour préserver la sécurité. En
+   général, les commandes qui interagissent avec l'environnement sont
+   restreintes. Cela inclut les commandes sur les descripteurs de fichiers,
+   <literal>require</literal> et <literal>use</literal> (pour les modules
+   externes). Il n'est pas possible d'accéder aux fonctions et variables
+   internes du processus du serveur de base de données ou d'obtenir un accès au
+   niveau du système d'exploitation avec les droits du processus serveur, tel
+   qu'une fonction C peut le faire. Ainsi, n'importe quel utilisateur sans
+   droits sur la base de données est autorisé à utiliser ce langage.
+  </para>
+
+  <para>
+   Voici l'exemple d'une fonction qui ne fonctionnera pas car les commandes système
+   ne sont pas autorisées pour des raisons de sécurité&nbsp;:
+<programlisting>
+CREATE FUNCTION badfunc() RETURNS integer AS $$
+    open(TEMP, "&gt;/tmp/mauvaisfichier");
+    print TEMP "Je t'ai eu !\n";
+    return 1;
+$$ LANGUAGE plperl;
+</programlisting>
+   La création de cette fonction va réussir, mais pas son exécution.
+  </para>
+
+  <para>
+   Il est parfois souhaitable d'écrire des fonctions Perl qui ne sont pas
+   restreintes. Par exemple, on peut souhaiter vouloir envoyer des courriers
+   électroniques. Pour supporter ce cas de figure, PL/Perl peut aussi être
+   installé comme un langage <quote>douteux</> (habituellement nommé
+   <application>PL/PerlU</application>
+   <indexterm><primary>PL/PerlU</></indexterm>).
+   Dans ce cas, la totalité du langage Perl est accessible. Si la commande
+   <command>createlang</command> est utilisée pour installer le langage, le nom
+   du langage <literal>plperlu</literal> sélectionnera la version douteuse de
+   PL/Perl.
+  </para>
+
+  <para>
+   Les auteurs des fonctions <application>PL/PerlU</> doivent faire attention au
+   fait que celles-ci ne puissent être utilisées pour faire quelque chose de non
+   désiré, car cela donnera la possibilité d'agir comme si l'on possédait les
+   privilèges d'administrateur de la base de données. Il est à noter que le
+   système de base de données ne permet qu'aux super-utilisateurs de créer des
+   fonctions dans un langage douteux.
+  </para>
+
+  <para>
+   Si la fonction ci-dessus a été créée par un super-utilisateur en utilisant
+   le langage <literal>plperlu</>, l'exécution de celle-ci réussira.
+  </para>
+ </sect1>
+
+ <sect1 id="plperl-triggers">
+   <title>Déclencheurs PL/Perl</title>
+   
+   <para>
+     PL/Perl peut être utilisé pour écrire des fonctions pour déclencheurs.
+     Dans une fonction déclencheur, la référence hachée 
+     <varname>$_TD</varname> contient des informations sur l'événement du
+     déclencheur en cours. Les champs de la référence de hachage
+     <varname>$_TD</varname> sont&nbsp;:
+     
+     <variablelist>
+       <varlistentry>
+         <term><literal>$_TD-&gt;{new}{foo}</literal></term>
+         <listitem>
+           <para>
+             Valeur <literal>NEW</literal> de la colonne <literal>foo</literal>
+           </para>
+         </listitem>
+       </varlistentry>
+       
+       <varlistentry>
+         <term><literal>$_TD-&gt;{old}{foo}</literal></term>
+         <listitem>
+           <para>
+             Valeur <literal>OLD</literal> de la colonne <literal>foo</literal>
+           </para>
+         </listitem>
+       </varlistentry>
+       
+       <varlistentry>
+         <term><literal>$_TD-&gt;{name}</literal></term>
+         <listitem>
+           <para>
+             Nom du déclencheur appelé
+           </para>
+         </listitem>
+       </varlistentry>
+       
+       <varlistentry>
+         <term><literal>$_TD-&gt;{event}</literal></term>
+         <listitem>
+           <para>
+             Événément du déclencheur&nbsp;: <literal>INSERT</>, 
+             <literal>UPDATE</>, <literal>DELETE</> ou <literal>UNKNOWN</>
+           </para>
+         </listitem>
+       </varlistentry>
+
+       <varlistentry>
+         <term><literal>$_TD-&gt;{when}</literal></term>
+         <listitem>
+           <para>
+             Quand le déclencheur a été appelé&nbsp;:
+             <literal>BEFORE</literal> (avant), <literal>AFTER</literal>
+             (après) ou <literal>UNKNOWN</literal> (inconnu)
+           </para>
+         </listitem>
+       </varlistentry>
+
+       <varlistentry>
+         <term><literal>$_TD-&gt;{level}</literal></term>
+         <listitem>
+           <para>
+             Le niveau du déclencheur&nbsp;: <literal>ROW</literal> (ligne),
+             <literal>STATEMENT</literal> (instruction) ou
+             <literal>UNKNOWN</literal> (inconnu)
+           </para>
+         </listitem>
+       </varlistentry>
+
+       <varlistentry>
+         <term><literal>$_TD-&gt;{relid}</literal></term>
+         <listitem>
+           <para>
+             L'OID de la table sur lequel le déclencheur a été exécuté
+           </para>
+         </listitem>
+       </varlistentry>
+
+       <varlistentry>
+         <term><literal>$_TD-&gt;{relname}</literal></term>
+         <listitem>
+           <para>
+             Nom de la table sur lequel le déclencheur a été exécuté
+           </para>
+         </listitem>
+       </varlistentry>
+
+       <varlistentry>
+         <term><literal>$_TD-&gt;{argc}</literal></term>
+         <listitem>
+           <para>
+             Nombre d'arguments de la fonction déclencheur
+           </para>
+         </listitem>
+       </varlistentry>
+
+       <varlistentry>
+         <term><literal>@{$_TD-&gt;{args}}</literal></term>
+         <listitem>
+           <para>
+             Arguments de la fonction déclencheur. N'existe pas si
+             $_TD-&gt;{argc} vaut 0.
+           </para>
+         </listitem>
+       </varlistentry>
+
+     </variablelist>
+   </para>
+
+   <para>
+     Les déclencheurs peuvent renvoyer un des éléments suivants&nbsp;:
+  
+     <variablelist>
+       <varlistentry>
+         <term><literal>return;</literal></term>
+         <listitem>
+           <para>
+             Exécute l'instruction
+           </para>
+         </listitem>
+       </varlistentry>
+    
+       <varlistentry>
+         <term><literal>"SKIP"</literal></term>
+         <listitem>
+           <para>
+             N'exécute pas l'instruction
+           </para>
+         </listitem>
+       </varlistentry>
+    
+       <varlistentry>
+         <term><literal>"MODIFY"</literal></term>
+         <listitem>
+           <para>
+             Indique que la ligne <literal>NEW</literal> a été modifié par la
+             fonction déclencheur
+           </para>
+         </listitem>
+       </varlistentry>
+     </variablelist>
+   </para>
+
+   <para>
+     Voici un exemple d'une fonction déclencheur illustrant certains points
+     ci-dessus&nbsp;:
+     above:
+     <programlisting>
+    CREATE TABLE test (
+    i int,
+    v varchar
+    );
+    
+    CREATE OR REPLACE FUNCTION valid_id() RETURNS trigger AS $$
+    if (($_TD-&gt;{new}{i} &gt;= 100) || ($_TD-&gt;{new}{i} &lt;= 0)) {
+    return "SKIP";    # passe la commande INSERT/UPDATE
+    } elsif ($_TD-&gt;{new}{v} ne "immortal") {
+    $_TD-&gt;{new}{v} .= "(modified by trigger)";
+    return "MODIFY";  # modifie la ligne et exécute la commande INSERT/UPDATE
+    } else {
+    return;           # exécute la commande INSERT/UPDATE
+    }
+    $$ LANGUAGE plperl;
+    
+    CREATE TRIGGER test_valid_id_trig
+    BEFORE INSERT OR UPDATE ON test
+    FOR EACH ROW EXECUTE PROCEDURE valid_id();
+     </programlisting>
+   </para>
+ </sect1>
+
+ <sect1 id="plperl-missing">
+  <title>Limitations et fonctionnalités absentes</title>
+
+  <para>
+   Les fonctionnalités suivantes ne sont actuellement pas implémentées dans
+   PL/Perl, mais peuvent faire l'objet de contributions généreuses de votre part.
+
+   <itemizedlist>
+    <listitem>
+     <para>
+      Les fonctions PL/Perl ne peuvent pas s'appeler entre elles (parce
+      qu'elles sont considérées comme des sous-routines anonymes au sein de
+      Perl).
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      SPI n'est pas complètement implémenté.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Si vous récupérez des ensembles de données très importants en utilisant
+      <literal>spi_exec_query</literal>, vous devez être conscient qu'ils
+      iront tous en mémoire. Vous pouvez l'éviter en utilisant
+      <literal>spi_query</literal>/<literal>spi_fetchrow</literal> comme
+      montré précédemment.
+     </para>
+     <para>
+        Un problème similaire survient si une fonction renvoyant un ensemble
+        passe un gros ensemble de lignes à postgres via
+        <literal>return</literal>. Vous pouvez l'éviter aussi en utilisant à la
+        place <literal>return_next</literal> pour chaque ligne renvoyée, comme
+        indiqué précédemment.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+ </sect1>
+
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

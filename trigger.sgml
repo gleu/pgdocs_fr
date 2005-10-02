@@ -1,0 +1,728 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/trigger.sgml,v 1.9 2005/09/15 07:03:23 guillaume Exp $
+-->
+
+ <chapter id="triggers">
+  <title>Déclencheurs (triggers)</title>
+
+  <indexterm zone="triggers">
+   <primary>trigger</primary>
+  </indexterm>
+
+  <para>
+   Ce chapitre décrit l'écriture des fonctions déclencheurs. Ces
+   fonctions peuvent être écrites en C ou dans n'importe quel autre
+   langage procédural disponible. Il n'est pas actuellement possible
+   d'écrire une fonction déclencheur en langage SQL.
+  </para>
+
+  <sect1 id="trigger-definition">
+   <title>Survol du comportement des déclencheurs</title>
+
+   <para>
+    Une fonction déclencheur peut être définie pour s'exécuter avant ou
+    après une commande <command>INSERT</command>, <command>UPDATE</command>
+    ou <command>DELETE</command>, soit une fois par ligne modifiée soit
+    une fois par expression <acronym>SQL</acronym>. Si un élément déclencheur
+    se produit, le gestionnaire de déclencheurs est appelé au bon moment pour
+    gérer l'évènement.
+    </para>
+
+   <para>
+    La fonction déclencheur doit être définie avant que le déclencheur lui-même
+    puisse être créé. La fonction déclencheur doit être déclarée comme une
+    fonction ne prenant aucun argument et retournant un type <literal>trigger</>.
+    (La fonction déclencheur reçoit ses entrées via une structure
+    <structname>TriggerData</> passée spécifiquement, et pas sous la forme
+    d'arguments de fonctions ordinaires.)
+   </para>
+
+   <para>
+    Une fois qu'une fonction déclencheur est créée, le déclencheur (trigger)
+    est établi avec
+    <xref linkend="sql-createtrigger" endterm="sql-createtrigger-title">.
+    La même fonction déclencheur est utilisable par plusieurs déclencheurs.
+   </para>
+
+   <para>
+    Il existe deux types de déclencheurs&nbsp;: les déclencheurs en mode ligne
+    ou en mode instruction. Dans un déclencheur mode ligne, la fonction du
+    déclencheur est appelée une fois pour chaque ligne affectée par
+    l'instruction qui a lancé le déclencheur. Au contraire, un déclencheur mode
+    instruction n'est appelé qu'une seule fois lorsqu'une instruction appropriée
+    est exécutée, quelque soit le nombre de lignes affectées par cette
+    instruction. En particulier, une instruction n'affectant aucune ligne
+    résultera toujours en l'exécution de tout déclencheur mode instruction
+    applicable. Ces deux types sont quelque fois appelés respectivement des
+    <quote>déclencheurs niveau ligne</quote> et des <quote>déclencheurs niveaux
+    instruction</quote>.
+   </para>
+
+   <para>
+   Les déclencheurs <quote>avant</> en mode instruction se lancent naturellement
+   avant que l'instruction ait fait une modification alors que le déclencheur
+   <quote>après</> en mode instruction se lance à la fin de l'instruction. Les
+   déclencheurs <quote>avant</> en mode ligne s'exécutent immédiatement avant
+   qu'une ligne particulière ne soit traitée alors que les déclencheurs
+   <quote>après</> en mode ligne se déclenchent à la fin de l'instruction (mais
+   avant tout déclencheur <quote>après</> en mode instruction).
+   </para>
+
+   <para>
+   Les fonctions déclencheurs appelées par des déclencheurs niveau instruction
+   devraient toujours renvoyer <symbol>NULL</symbol>. Les fonctions déclencheurs
+   appelées par des déclencheurs niveau ligne peuvent renvoyer une ligne de la
+   table (une valeur de type <structname>HeapTuple</structname>) vers
+   l'exécuteur appelant, s'ils le veulent. Un déclencheur niveau ligne exécuté
+   avant une opération a les choix suivants&nbsp;:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       Il peut retourner un pointeur <symbol>NULL</> pour sauter l'opération
+       pour la ligne courante. Ceci instruit l'exécuteur de ne pas exécuter
+       l'opération niveau ligne qui a lancé le déclencheur (l'insertion ou la
+       modification d'une ligne particulière de la table).
+       </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Pour les seuls déclencheurs <command>INSERT</command> et
+       <command>UPDATE</command> au niveau ligne, la valeur de retour devient la
+       ligne qui sera insérée ou remplacera la ligne en cours de mise à jour.
+       Ceci permet à la fonction déclencheur de modifier la ligne en cours
+       d'insertion ou de mise à jour.
+      </para>
+     </listitem>
+    </itemizedlist>
+
+
+    Un déclencheur avant niveau ligne, qui n'est pas conçu pour avoir l'un de
+    ces comportements, doit prendre garde à retourner la même ligne que celle
+    qui lui a été passée comme nouvelle ligne (c'est-à-dire, la nouvelle
+    (<varname>NEW</varname>) ligne pour des déclencheurs
+    <command>INSERT</command> et <command>UPDATE</command>, l'ancienne
+    (<varname>OLD</varname>) ligne pour les déclencheurs
+    <command>DELETE</command>).
+   </para>
+
+   <para>
+    La valeur de retour est ignorée pour les déclencheurs niveau ligne lancés
+    après une opération. Ils pourraient donc très bien renvoyer la valeur
+    <symbol>NULL</>.
+   </para>
+
+   <para>
+    Si plus d'un déclencheur est défini pour le même évènement sur la même
+    relation, les déclencheurs seront lancés dans l'ordre alphabétique de leur
+    nom. Dans le cas de déclencheurs avant, les lignes, susceptibles d'être
+    modifiées, renvoyées par chaque déclencheur deviennent l'argument du
+    prochain déclencheur. Si un des déclencheurs avant renvoie un pointeur
+    <symbol>NULL</>, l'opération est abandonnée et les déclencheurs suivants ne
+    sont pas lancés.
+   </para>
+
+   <para>
+    Typiquement, les déclencheurs avant en mode ligne sont utilisés pour
+    vérifier ou modifier les données qui seront insérées ou mises à jour. Par
+    exemple, un déclencheur avant pourrait être utilisé pour insérer l'heure
+    actuelle dans une colonne de type timestamp ou pour vérifier que deux
+    éléments d'une ligne sont cohérents. Les déclencheurs après en mode ligne
+    sont pour la plupart utilisés pour propager des mises à jour vers d'autres
+    tables ou pour réaliser des tests de cohérence avec d'autres tables. La
+    raison de cette division du travail est qu'un déclencheur après peut être
+    certain qu'il voit la valeur finale de la ligne alors qu'un déclencheur
+    avant ne l'est pas&nbsp;; il pourrait exister d'autres déclencheurs avant
+    qui seront exécutés après lui. Si vous avez aucune raison spéciale pour le
+    moment du déclenchement, le cas avant est plus efficace car l'information
+    sur l'opération n'a pas besoin d'être sauvegardée jusqu'à la fin du
+    traitement.
+   </para>
+
+   <para>
+    Si une fonction déclencheur exécute des commandes SQL,
+    alors ces commandes peuvent relancer des déclencheurs. On appelle ceci un
+    déclencheur en cascade. Il n'y a pas de limitation directe du nombre de
+    niveaux de cascade. Il est possible que les cascades causent une invocation
+    récursive du même déclencheur&nbsp;; par exemple, un déclencheur
+    <command>INSERT</command> pourrait exécuter une commande qui insère une
+    ligne supplémentaire dans la même table, entraînant un nouveau lancement du
+    déclencheur <command>INSERT</command>. Il est de la responsabilité du
+    programmeur d'éviter les récursions infinies dans de tels scénarios.
+   </para>
+
+   <para>
+    Quand un <indexterm><primary>trigger</><secondary>arguments</></indexterm>
+    déclencheur est défini, des arguments peuvent être spécifiés pour
+    lui. L'objectif de l'inclusion d'arguments dans la définition du
+    déclencheur est de permettre à différents déclencheurs ayant des exigences
+    similaires d'appeler la même fonction. Par exemple, il pourrait y avoir une
+    fonction déclencheur généralisée qui prend comme arguments deux noms de
+    colonnes et place l'utilisateur courant dans l'une et un horodatage dans
+    l'autre. Correctement écrit, cette fonction déclencheur serait indépendante
+    de la table particulière sur laquelle il se déclenche. Ainsi, la même
+    fonction pourrait être utilisée pour des événements
+    <command>INSERT</command> sur n'importe quelle table ayant des colonnes
+    adéquates, pour automatiquement suivre les créations d'enregistrements dans
+    une table de transactions par exemple. Elle pourrait aussi être utilisée
+    pour suivre les dernières mises à jours si définie comme un déclencheur
+    <command>UPDATE</command>.
+   </para>
+
+   <para>
+    Chaque langage de programmation supportant les déclencheurs a sa propre
+    méthode pour rendre disponible les données en entrée à la fonction du
+    déclencheur. Cette donnée en entrée inclut le type d'événement du
+    déclencheur (c'est-à-dire <command>INSERT</command> ou
+    <command>UPDATE</command>) ainsi que tous les arguments listés dans
+    <command>CREATE TRIGGER</>. Pour un déclencheur niveau ligne, la donnée en
+    entrée inclut aussi la ligne <varname>NEW</varname> pour les déclencheurs
+    <command>INSERT</command> et <command>UPDATE</command> et/ou la ligne
+    <varname>OLD</varname> pour les déclencheurs <command>UPDATE</command> et
+    <command>DELETE</command>. Les déclencheurs niveau instruction n'ont
+    actuellement aucun moyen pour examiner le(s) ligne(s) individuelle(s)
+    modifiées par l'instruction.
+   </para>
+
+  </sect1>
+
+  <sect1 id="trigger-datachanges">
+   <title>Visibilité des modifications des données</title>
+
+   <para>
+    Si vous exécutez des commandes SQL dans votre fonction SQL et que ces
+    commandes accèdent à la table pour laquelle vous créez ce déclencheur,
+    alors vous avez besoin de connaître les règles de visibilité du déclencheur
+    car elles déterminent si les commandes SQL voient les données changées pour
+    lesquelles est exécuté le déclencheur. Brièvement&nbsp;:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+      Les déclencheurs niveau instruction suivent des règles de visibilité
+      simples&nbsp;: aucune des modifications réalisées par une instruction
+      n'est visible aux déclencheurs niveau instruction appelés avant
+      l'instruction alors que toutes les modifications sont visibles aux
+      déclencheurs après niveau instruction.
+	     </para>
+     </listitem>
+     
+     <listitem>
+      <para>
+      Les modifications de données (insertion, mise à jour ou suppression)
+      lançant le déclencheur ne sont naturellement <emphasis>pas</emphasis>
+      visibles aux commandes SQL exécutées dans un déclencheur avant en mode
+      ligne parce qu'elles ne sont pas encore survenues.
+      </para>
+     </listitem>
+     
+     <listitem>
+      <para>
+      Néanmoins, les commandes SQL exécutées par un déclencheur avant en mode
+      ligne <emphasis>verront</emphasis> les effets des modifications de données
+      pour les lignes précédemment traitées dans la même commande externe. Ceci
+      requiert une attention car l'ordre des événements des modifications ne
+      sont en général pas prévisibles&nbsp;; une commande SQL affectant
+      plusieurs lignes pourrait visiter les lignes dans n'importe quel ordre.
+      </para>
+     </listitem>
+     
+     <listitem>
+      <para>
+      Quand un déclencheur après en mode ligne est exécuté, toutes les
+      modifications de données réalisées par la commande externe sont déjà
+      terminées et sont visibles à la fonction appelée par le déclencheur.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <para>
+    Il existe plus d'informations sur les règles de visibilité des données dans
+    <xref linkend="spi-visibility">. L'exemple dans <xref
+    linkend="trigger-example"> contient une démonstration de ces règles.
+   </para>
+  </sect1>
+
+  <sect1 id="trigger-interface">
+   <title>Écrire des fonctions déclencheurs en C</title>
+
+   <indexterm zone="trigger-interface">
+    <primary>trigger</primary>
+    <secondary>en C</secondary>
+   </indexterm>
+
+   <para>
+    Cette section décrit les détails de bas niveau de l'interface d'une fonction
+    déclencheur. Ces informations ne sont nécessaires que lors de l'écriture
+    d'une fonction déclencheur en C. Si vous utilisez un langage de plus haut
+    niveau, ces détails sont gérés pour vous. La documentation
+    de chaque langage procédural explique comment écrire un déclencheur dans ce
+    langage.
+   </para>
+
+   <para>
+    Les fonctions déclencheurs doivent utiliser la <quote>version 1</> de
+    l'interface du gestionnaire de fonctions.
+   </para>
+
+   <para>
+    Quand une fonction est appelée par le gestionnaire de déclencheur, elle ne
+    reçoit aucun argument classique, mais un pointeur de <quote>contexte</>
+    pointant sur une structure <structname>TriggerData</>. Les fonctions C
+    peuvent vérifier si elles sont appelées par le gestionnaire de déclencheurs
+    ou pas en exécutant la macro
+<programlisting>
+CALLED_AS_TRIGGER(fcinfo)
+</programlisting>
+    qui se décompose en 
+<programlisting>
+((fcinfo)-&gt;context != NULL && IsA((fcinfo)-&gt;context, TriggerData))
+</programlisting>
+    Si elle retourne la valeur vraie, alors il est bon de convertir
+    <literal>fcinfo-&gt;context</> en type <literal>TriggerData *</literal> et
+de
+    faire usage de la structure pointée <structname>TriggerData</>. La fonction
+    <emphasis>ne</emphasis> doit <emphasis>pas</emphasis> modifier la
+    structure <structname>TriggerData</> ou une donnée quelconque vers laquelle
+    elle pointe.
+   </para>
+
+   <para>
+    <structname>struct TriggerData</structname> est définie dans
+    <filename>commands/trigger.h</filename>&nbsp;:
+
+<programlisting>
+typedef struct TriggerData
+{
+    NodeTag       type;
+    TriggerEvent  tg_event;
+    Relation      tg_relation;
+    HeapTuple     tg_trigtuple;
+    HeapTuple     tg_newtuple;
+    Trigger      *tg_trigger;
+    Buffer        tg_trigtuplebuf;
+    Buffer        tg_newtuplebuf;
+} TriggerData;
+</programlisting>
+
+    où les membres sont définis comme suit&nbsp;:
+
+    <variablelist>
+     <varlistentry>
+      <term><structfield>type</></term>
+      <listitem>
+       <para>
+        Toujours <literal>T_TriggerData</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tg_event</></term>
+      <listitem>
+       <para>
+	Décrit l'évènement pour lequel la fonction est appelée. Vous pouvez utiliser
+	les macros suivantes pour examiner <literal>tg_event</literal>:
+
+	<variablelist>
+	 <varlistentry>
+	  <term><literal>TRIGGER_FIRED_BEFORE(tg_event)</literal></term>
+	  <listitem>
+	   <para>
+	    Renvoie vrai si le déclencheur est lancé avant l'opération.
+	   </para>
+	  </listitem>
+	 </varlistentry>
+
+	 <varlistentry>
+	  <term><literal>TRIGGER_FIRED_AFTER(tg_event)</literal></term>
+	  <listitem>
+	   <para>
+	    Renvoie vrai si le déclencheur est lancé après l'opération.
+	   </para>
+	  </listitem>
+	 </varlistentry>
+
+	 <varlistentry>
+	  <term><literal>TRIGGER_FIRED_FOR_ROW(tg_event)</literal></term>
+	  <listitem>
+	   <para>
+	    Renvoie vrai si le déclencheur est lancé pour un évènement de bas
+            niveau.
+	   </para>
+	  </listitem>
+	 </varlistentry>
+
+	 <varlistentry>
+	  <term><literal>TRIGGER_FIRED_FOR_STATEMENT(tg_event)</literal></term>
+	  <listitem>
+	   <para>
+	    Renvoie vrai si le déclencheur est lancé pour un évènement de
+            niveau expression.
+           </para>
+	  </listitem>
+	 </varlistentry>
+
+	 <varlistentry>
+	  <term><literal>TRIGGER_FIRED_BY_INSERT(tg_event)</literal></term>
+	  <listitem>
+	   <para>
+	    Retourne vrai si le déclencheur est lancé par une commande 
+	    <command>INSERT</command>.
+	   </para>
+	  </listitem>
+	 </varlistentry>
+
+	 <varlistentry>
+	  <term><literal>TRIGGER_FIRED_BY_UPDATE(tg_event)</literal></term>
+	  <listitem>
+	   <para>
+	    Retourne vrai si le déclencheur est lancé par une commande
+            <command>UPDATE</command>.
+	   </para>
+	  </listitem>
+	 </varlistentry>
+
+	 <varlistentry>
+	  <term><literal>TRIGGER_FIRED_BY_DELETE(tg_event)</literal></term>
+	  <listitem>
+	   <para>
+	    Retourne vrai si le déclencheur est lancé par une commande
+            <command>DELETE</command>.
+	   </para>
+	  </listitem>
+	 </varlistentry>
+	</variablelist>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tg_relation</></term>
+      <listitem>
+       <para>
+	Un pointeur vers une structure décrivant la relation pour laquelle le
+        déclencheur est lancé. Voir <filename>utils/rel.h</> pour les détails
+        sur cette structure. Les choses les plus intéressantes sont 
+	<literal>tg_relation-&gt;rd_att</> (descripteur de nuplets de la
+relation)
+        et <literal>tg_relation-&gt;rd_rel-&gt;relname</> (nom de la
+relation&nbsp;;
+        le type n'est pas <type>char*</> mais <type>NameData</>; utilisez
+        <literal>SPI_getrelname(tg_relation)</> pour obtenir un <type>char*</>
+	si vous avez besoin d'une copie du nom).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tg_trigtuple</></term>
+      <listitem>
+       <para>
+	Un pointeur vers la ligne pour laquelle le déclencheur a été lancé. Il
+        s'agit de la ligne étant insérée, mise à jour ou effacée. Si ce                 déclencheur a été lancé pour une commande <command>INSERT</command> ou
+        <command>DELETE</command>, c'est ce que la fonction doit retourner si
+        vous ne voulez pas remplacer la ligne par une ligne différente (dans le
+        cas d'un <command>INSERT</command>) ou sauter l'opération.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tg_newtuple</></term>
+      <listitem>
+       <para>
+	Un pointeur vers la nouvelle version de la ligne, si le déclencheur a
+        été lancé pour un <command>UPDATE</command> et <symbol>NULL</> si c'est
+        pour un <command>INSERT</command> ou un <command>DELETE</command>.
+        C'est ce que devez faire retourner de la fonction si l'évènement est un
+        <command>UPDATE</command> et que vous ne voulez pas remplacer cette
+        ligne par une ligne différente ou bien sauter l'opération.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tg_trigger</></term>
+      <listitem>
+       <para>
+	Un pointeur vers une structure de type <structname>Trigger</>, définie
+        dans <filename>utils/rel.h</>:
+
+<programlisting>
+typedef struct Trigger
+{
+    Oid         tgoid;
+    char       *tgname;
+    Oid         tgfoid;
+    int16       tgtype;
+    bool        tgenabled;
+    bool        tgisconstraint;
+    Oid         tgconstrrelid;
+    bool        tgdeferrable;
+    bool        tginitdeferred;
+    int16       tgnargs;
+    int16       tgnattr;
+    int16       *tgattr;
+    char      **tgargs;
+} Trigger;
+</programlisting>
+
+       où <structfield>tgname</> est le nom du déclencheur,
+       <structfield>tgnargs</> est le nombre d'arguments dans
+       <structfield>tgargs</> et <structfield>tgargs</> est un tableau de
+       pointeurs vers les arguments spécifiés dans l'expression contenant la
+       commande <command>CREATE TRIGGER</command>. Les autres membres ne sont
+       destinés qu'à un usage interne.
+       </para>
+      </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><structfield>tg_trigtuplebuf</></term>
+        <listitem>
+         <para>
+          Le tampon contenant <structfield>tg_trigtuple</structfield> ou
+          <symbol>InvalidBuffer</symbol> s'il n'existe pas une telle ligne ou si
+          elle n'est pas stockée dans un tampon du disque.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><structfield>tg_newtuplebuf</></term>
+         <listitem>
+          <para>
+           Le tampon contenant <structfield>tg_newtuple</structfield> ou
+           <symbol>InvalidBuffer</symbol> s'il n'existe pas une telle ligne ou
+           si elle n'est pas stockée dans un tampon du disque.
+	  </para>
+         </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+
+   <para>
+    Une fonction déclencheur doit retourner soit un pointeur
+    <structname>HeapTuple</> soit un pointeur <symbol>NULL</> (<emphasis>pas</>
+    une valeur SQL NULL, donc ça ne place pas <parameter>isNull</parameter> à
+    true). Faites attention de renvoyer soit un
+    <structfield>tg_trigtuple</> soit un <structfield>tg_newtuple</>,
+    comme approprié, si vous ne voulez pas changer la ligne en cours de
+    modification.
+   </para>
+
+  </sect1>
+
+  <sect1 id="trigger-example">
+   <title>Un exemple complet</title>
+
+   <para>
+    Voici un exemple très simple de fonction déclencheur écrite en C.
+    (Les exemples de déclencheurs écrits avec différents langages procéduraux
+    pourraient être trouvés dans la documentation de ceux-ci.)
+   </para>
+
+   <para>
+    La fonction <function>trigf</> indique le nombre de lignes de la table
+    <structname>ttest</> et saute l'opération si la commande tente d'insérer une
+    valeur NULL dans la colonne <structfield>x</>. (Ainsi le déclencheur agit
+    comme une contrainte non NULL mais n'annule pas la transaction.)
+   </para>
+
+   <para>
+    Tout d'abord, la définition des tables&nbsp;:
+<programlisting>
+CREATE TABLE ttest (
+    x integer
+);
+</programlisting>
+   </para>
+
+   <para>
+    Voici le code source de la fonction tigger :
+<programlisting>
+#include "postgres.h"
+#include "executor/spi.h"       /* nécessaire pour fonctionner avec SPI */
+#include "commands/trigger.h"   /* ... et les déclencheurs */
+
+extern Datum trigf(PG_FUNCTION_ARGS);
+
+PG_FUNCTION_INFO_V1(trigf);
+
+Datum
+trigf(PG_FUNCTION_ARGS)
+{
+    TriggerData *trigdata = (TriggerData *) fcinfo-&gt;context;
+    TupleDesc   tupdesc;
+    HeapTuple   rettuple;
+    char       *when;
+    bool        checkNULL = false;
+    bool        isNULL;
+    int         ret, i;
+
+    /* on s'assure que la fonction est appelée en tant que déclencheur */
+    if (!CALLED_AS_TRIGGER(fcinfo))
+        elog(ERROR, "trigf: not called by trigger manager");
+
+    /* nuplet à retourner à l'exécuteur */
+    if (TRIGGER_FIRED_BY_UPDATE(trigdata-&gt;tg_event))
+        rettuple = trigdata-&gt;tg_newtuple;
+    else
+        rettuple = trigdata-&gt;tg_trigtuple;
+
+    /* vérification des valeurs NULL */
+    if (!TRIGGER_FIRED_BY_DELETE(trigdata-&gt;tg_event)
+        && TRIGGER_FIRED_BEFORE(trigdata-&gt;tg_event))
+        checkNULL = true;
+
+    if (TRIGGER_FIRED_BEFORE(trigdata-&gt;tg_event))
+        when = "before";
+    else
+        when = "after ";
+
+    tupdesc = trigdata-&gt;tg_relation-&gt;rd_att;
+
+    /* connexion au gestionnaire SPI */
+    if ((ret = SPI_connect()) &lt; 0)
+        elog(INFO, "trigf (fired %s): SPI_connect returned %d", when, ret);
+
+    /* obtient le nombre de lignes dans la table */
+    ret = SPI_exec("SELECT count(*) FROM ttest", 0);
+
+    if (ret &lt; 0)
+        elog(NOTICE, "trigf (fired %s): SPI_exec returned %d", when, ret);
+
+    /* count(*) renvoie int8, prenez garde à bien convertir */
+    i = DatumGetInt64(SPI_getbinval(SPI_tuptable-&gt;vals[0],
+                                    SPI_tuptable-&gt;tupdesc,
+                                    1,
+                                    &amp;isNULL));
+
+    elog (INFO, "trigf (fired %s): there are %d rows in ttest", when, i);
+
+    SPI_finish();
+
+    if (checkNULL)
+    {
+        SPI_getbinval(rettuple, tupdesc, 1, &amp;isNULL);
+        if (isNULL)
+            rettuple = NULL;
+    }
+
+    return PointerGetDatum(rettuple);
+}
+</programlisting>
+   </para>
+
+   <para>
+    Après avoir compilé le code source, déclarez la fonction et les
+    déclencheurs&nbsp;:
+<programlisting>
+CREATE FUNCTION trigf() RETURNS trigger
+    AS '<replaceable>nomfichier</>'
+    LANGUAGE C;
+
+CREATE TRIGGER tbefore BEFORE INSERT OR UPDATE OR DELETE ON ttest 
+    FOR EACH ROW EXECUTE PROCEDURE trigf();
+
+CREATE TRIGGER tafter AFTER INSERT OR UPDATE OR DELETE ON ttest 
+    FOR EACH ROW EXECUTE PROCEDURE trigf();
+</programlisting>
+   </para>
+
+   <para>
+    A présent, testez le fonctionnement du déclencheur&nbsp;:
+<screen>
+=&gt; INSERT INTO ttest VALUES (NULL);
+INFO:  trigf (fired before): there are 0 rows in ttest
+INSERT 0 0
+
+-- Insertion supprimé et déclencheur APRES non exécuté
+
+=&gt; SELECT * FROM ttest;
+ x
+---
+(0 rows)
+
+=&gt; INSERT INTO ttest VALUES (1);
+INFO:  trigf (fired before): there are 0 rows in ttest
+INFO:  trigf (fired after ): there are 1 rows in ttest
+                                       ^^^^^^^^
+                       souvenez vous de ce que nous avons dit sur la visibilité.
+INSERT 167793 1
+vac=&gt; SELECT * FROM ttest;
+ x
+---
+ 1
+(1 row)
+
+=&gt; INSERT INTO ttest SELECT x * 2 FROM ttest;
+INFO:  trigf (fired before): there are 1 rows in ttest
+INFO:  trigf (fired after ): there are 2 rows in ttest
+                                       ^^^^^^
+                       souvenez vous de ce que nous avons dit sur la visibilité.
+INSERT 167794 1
+=&gt; SELECT * FROM ttest;
+ x
+---
+ 1
+ 2
+(2 rows)
+
+=&gt; UPDATE ttest SET x = NULL WHERE x = 2;
+INFO:  trigf (fired before): there are 2 rows in ttest
+UPDATE 0
+=&gt; UPDATE ttest SET x = 4 WHERE x = 2;
+INFO:  trigf (fired before): there are 2 rows in ttest
+INFO:  trigf (fired after ): there are 2 rows in ttest
+UPDATE 1
+vac=&gt; SELECT * FROM ttest;
+ x
+---
+ 1
+ 4
+(2 rows)
+
+=&gt; DELETE FROM ttest;
+INFO:  trigf (fired before): there are 2 rows in ttest
+INFO:  trigf (fired after ): there are 1 rows in ttest
+INFO:  trigf (fired before): there are 1 rows in ttest
+INFO:  trigf (fired after ): there are 0 rows in ttest
+                                       ^^^^^^
+                       souvenez vous de ce que nous avons dit sur la visibilité.
+DELETE 2
+=&gt; SELECT * FROM ttest;
+ x
+---
+(0 rows)
+</screen>
+
+   </para>
+
+   <para>
+    Vous trouverez des exemples plus complexes dans 
+    <filename>src/test/regress/regress.c</filename> et dans
+    <filename>contrib/spi</filename>.
+   </para>
+  </sect1>
+ </chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

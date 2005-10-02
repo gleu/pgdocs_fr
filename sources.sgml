@@ -1,0 +1,786 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/sources.sgml,v 1.6 2005/07/15 06:14:29 guillaume Exp $
+-->
+
+ <chapter id="source">
+  <title>Conventions de codage pour PostgreSQL</title>
+
+  <sect1 id="source-format">
+   <title>Formatage</title>
+
+   <para>
+    Le formatage du code source utilise un espacement de quatre colonnes
+    pour les tabulations, avec la préservation de celles-ci
+    (c'est-à-dire que les tabulations ne sont pas converties en
+    espaces).  Chaque niveau logique d'indentation est une tabulation
+    supplémentaire.  Les règles de disposition (positionnement des
+    parenthèses, etc) suivent les conventions BSD.
+   </para>
+
+   <para>
+    Bien que les correctifs (patchs) soumis ne sont absolument pas tenus de
+    suivre ces règles de formatage, il est recommandé de le faire.  Votre
+    code sera passé dans <application>pgindent</>, donc il n'y a pas
+    d'intérêts à ce qu'il soit joli grâce à d'autres ensembles de
+    conventions de formatage.
+   </para>
+
+   <para>
+    Pour <productname>Emacs</productname>, ajoutez ce qui suit (ou quelque chose
+    de semblable) à votre fichier d'initialisation
+    <filename>~/.emacs</filename>&nbsp;:
+
+<programlisting>
+;; vérification des fichiers avec un chemin contenant "postgres" ou "pgsql"
+(setq auto-mode-alist
+  (cons '("\\(postgres\\|pgsql\\).*\\.[ch]\\'" . pgsql-c-mode)
+        auto-mode-alist))
+(setq auto-mode-alist
+  (cons '("\\(postgres\\|pgsql\\).*\\.cc\\'" . pgsql-c-mode)
+        auto-mode-alist))
+
+(defun pgsql-c-mode ()
+  ;; Configuration du formatage pour le code C de PostgreSQL
+  (interactive)
+  (c-mode)
+  (setq-default tab-width 4)
+  (c-set-style "bsd")             ; positionner c-basic-offset à 4, plus d'autres choses
+  (c-set-offset 'case-label '+)   ; ajuste l'indentation de la casse pour correspondre aux usages de PG
+  (setq indent-tabs-mode t))      ; pour être sûr que nous gardons les tabulations en indentant
+</programlisting>
+   </para>
+
+   <para>
+    Pour <application>vi</application>, votre
+    <filename>~/.vimrc</filename> ou le fichier équivalent devrait
+    contenir ce qui suit&nbsp;:
+
+<programlisting>
+set tabstop=4
+</programlisting>
+
+    ou d'une manière équivalente, dans <application>vi</application>, essayez
+
+<programlisting>
+:set ts=4
+</programlisting>
+   </para>
+
+   <para>
+    Les outils de parcours de texte <application>more</application> et
+    <application>less</application> peuvent être appelés de la manière
+    suivante
+<programlisting>
+more -x4
+less -x4
+</programlisting>
+    pour qu'ils affichent correctement les tabulations.
+   </para>
+  </sect1>
+
+  <sect1 id="error-message-reporting">
+   <title>Reporter les erreurs dans le serveur</title>
+
+   <indexterm>
+    <primary>ereport</primary>
+   </indexterm>
+   <indexterm>
+    <primary>elog</primary>
+   </indexterm>
+
+   <para>
+    Les messages d'erreurs, d'alertes et de traces générés à l'intérieur
+    du code du serveur doivent être créés en utilisant
+    <function>ereport</> ou son ancien cousin <function>elog</>.
+    L'utilisation de cette fonction est assez complexe pour que cela
+    requiert quelques explications.
+   </para>
+
+   <para>
+    Il y a deux éléments requis pour chaque message&nbsp;: un niveau de
+    sévérité (allant de <literal>DEBUG</> à <literal>PANIC</>) et un
+    message texte primaire.  De plus, il y a des éléments optionnels,
+    le plus commun d'entre eux est le code d'identifiant de l'erreur
+    qui suit les conventions SQLSTATE des spécifications SQL.
+    <function>ereport</> en elle-même n'est qu'une fonction shell qui
+    existe principalement pour des convenances syntaxiques faisant
+    ressembler la génération de messages à l'appel d'une fonction dans
+    un code source C.  Le seul paramètre directement accepté par
+    <function>ereport</> est le niveau de sévérité.  Le message texte
+    primaire et les autres éléments de messages optionnels sont
+    générés en appelant des fonctions auxiliaires, comme
+    <function>errmsg</>, à l'intérieur de l'appel à
+    <function>ereport</>.
+   </para>
+
+   <para>
+    Un appel typique à <function>ereport</> peut ressembler à ceci&nbsp;:
+<programlisting>
+    ereport(ERROR,
+            (errcode(ERRCODE_DIVISION_BY_ZERO),
+             errmsg("division by zero")));
+</programlisting>
+    Ceci met le niveau de sévérité de l'erreur à <literal>ERROR</>
+    (une erreur banale).  L'appel à <function>errcode</> spécifie le
+    code d'erreur SQLSTATE en utilisant une macro définie dans
+    <filename>src/include/utils/errcodes.h</>.  L'appel à
+    <function>errmsg</> fournit le message texte primaire.  Notez
+    l'ensemble supplémentaire de parenthèses entourant les appels aux
+    fonctions auxiliaires (cela est ennuyeux mais syntaxiquement
+    nécessaire).
+   </para>
+
+   <para>
+    Voici un exemple plus complexe&nbsp;:
+<programlisting>
+    ereport(ERROR,
+            (errcode(ERRCODE_AMBIGUOUS_FUNCTION),
+             errmsg("function %s is not unique",
+                    func_signature_string(funcname, nargs,
+                                          actual_arg_types)),
+             errhint("Unable to choose a best candidate function. "
+                     "You may need to add explicit typecasts.")));
+</programlisting>
+    Ceci illustre l'utilisation des codes de formatage pour intégrer
+    des valeurs d'exécution dans un message texte.  Un message
+    <quote>conseil</>, optionnel, est également fourni.
+   </para>
+
+   <para>
+    Les routines auxiliaires disponibles pour <function>ereport</>
+    sont&nbsp;:
+  <itemizedlist>
+   <listitem>
+    <para>
+     <function>errcode(sqlerrcode)</function> spécifie le code SQLSTATE de
+     l'identifiant de l'erreur pour la condition.  Si cette routine
+     n'est pas appelée, par défaut, l'identifiant de l'erreur sera
+     <literal>ERRCODE_INTERNAL_ERROR</> quand le niveau de sévérité de
+     l'erreur est <literal>ERROR</> ou plus haut,
+     <literal>ERRCODE_WARNING</> quand le niveau d'erreur est
+     <literal>WARNING</> et <literal>ERRCODE_SUCCESSFUL_COMPLETION</>
+     pour <literal>NOTICE</> et inférieur.  Bien que ces valeurs par
+     défaut soient souvent commodes, demandez-vous toujours si elles
+     sont appropriées avant d'omettre l'appel à
+     <function>errcode()</>.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     <function>errmsg(const char *msg, ...)</function> spécifie le message
+     texte primaire de l'erreur et les possibles valeurs d'exécutions
+     à insérer dedans.  Les insertions sont spécifiées par les codes
+     de formatage dans le style <function>sprintf</>. En plus des
+     codes de formatage standards acceptés par <function>sprintf</>,
+     le code <literal>%m</> peut être utilisé pour insérer le message
+     d'erreur retourné par <function>strerror</> pour la valeur
+     courante de <literal>errno</>.
+     <footnote>
+      <para>
+       C'est-à-dire que la valeur qui était courante quand l'appel à
+       <function>ereport</> a été atteinte&nbsp;; les changements
+       d'<literal>errno</> dans les routines auxiliaires de rapports
+       ne l'affecteront pas.  Cela ne sera pas vrai si vous devez
+       écrire explicitement <literal>strerror(errno)</> dans la liste
+       de paramètres de <function>errmsg</>&nbsp;; en conséquence ne faites
+       pas comme ça.
+      </para>
+     </footnote>
+     <literal>%m</> ne nécessite aucune entrée correspondante dans la
+     liste de paramètres pour <function>errmsg</>.  Notez que la
+     chaîne de caractères du message sera passée à travers
+     <function>gettext</> pour une possible adaptation linguistique
+     avant que les codes de formatage ne soient exécutés.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     <function>errmsg_internal(const char *msg, ...)</function> fait la même
+     chose que <function>errmsg</> à l'exception que la chaîne de
+     caractères du message ne sera pas inclue dans le dictionnaire
+     de messages d'internationalisation.  Cela devrait être utilisé
+     pour les cas qui <quote>ne peuvent pas arriver</> et pour
+     lesquels il n'est probablement pas intéressant de déployer un
+     effort de traduction.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     <function>errdetail(const char *msg, ...)</function> fournit un message
+     <quote>détail</> optionnel&nbsp;; cela est utilisé quand il y a des
+     informations supplémentaires qu'il semble inadéquat de mettre
+     dans le message primaire. La chaîne de caractères du message est
+     traitée de la même manière que celle de <function>errmsg</>.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+    <function>errhint(const char *msg, ...)</function> fournit un message
+     <quote>conseil</> optionnel&nbsp;; cela est utilisé pour offrir des
+     suggestions sur la façon de régler un problème, par opposition aux
+     détails effectifs au sujet de ce qui a mal tourné.  La chaîne de
+     caractères du message est traitée de la même manière que celle de
+     <function>errmsg</>.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     <function>errcontext(const char *msg, ...)</function> n'est normalement
+     pas appelée directement depuis un site de message de
+     <function>ereport</> mais plutôt elle est utilisée dans les
+     fonctions de rappels <literal>error_context_stack</> pour fournir
+     des informations à propos du contexte dans lequel une erreur
+     s'est produite, comme les endroits courants dans la fonction PL.
+     La chaîne de caractères du message est traitée de la même manière
+     que celle de <function>errmsg</>. À l'inverse des autres
+     fonctions auxiliaires, celle-ci peut être appelée plus d'une fois
+     dans un appel de <function>ereport</>&nbsp;; les chaînes successives
+     ainsi fournies sont concaténées et séparées pas des caractères
+     d'interlignes (NL).
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     <function>errposition(int cursorpos)</function> spécifie l'endroit
+     textuel d'une erreur dans la chaîne de caractères de la
+     requête. Actuellement, c'est seulement utile pour les erreurs
+     détectées dans les phases d'analyses lexicales et syntaxiques du
+     traitement de la requête.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     <function>errcode_for_file_access()</function> est une fonction commode
+     qui sélectionne l'identifiant d'erreur SQLSTATE approprié pour
+     une défaillance dans l'appel système relatif à l'accès d'un
+     fichier.  Elle utilise le <literal>errno</> sauvegardé pour
+     déterminer quel code d'erreur générer.  Habituellement cela
+     devrait être utilisé en combinaison avec <literal>%m</> dans le
+     texte du message d'erreur primaire.
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     <function>errcode_for_socket_access()</function> est une fonction commode
+     qui sélectionne l'identifiant d'erreur SQLSTATE approprié pour
+     une défaillance dans l'appel système relatif à une socket.
+    </para>
+   </listitem>
+  </itemizedlist>
+   </para>
+
+   <para>
+    Il y a une plus ancienne fonction nommée <function>elog</>, qui
+    est toujours largement utilisée.  Un appel à <function>elog</>
+<programlisting>
+    elog(niveau, "chaine format", ...);
+</programlisting>
+    est strictement équivalement à
+<programlisting>
+    ereport(level, (errmsg_internal("chaine format", ...)));
+</programlisting>
+    Notez que le code d'erreur SQLSTATE est toujours par défaut et que
+    la chaîne de caractères du message n'est pas inclue dans le
+    dictionnaire de messages d'internationalisation.  Par conséquent,
+    <function>elog</> devrait être utilisé seulement pour les erreurs
+    internes et l'enregistrement de trace de débogage de bas niveau.
+    N'importe quel message qui est susceptible d'être intéressant pour
+    les utilisateurs ordinaires devrait passer par
+    <function>ereport</>.  Néanmoins, il y a assez de contrôles
+    d'erreurs internes qui <quote>ne peuvent pas arriver</> dans le
+    système, que <function>elog</> est toujours largement utilisé&nbsp;;
+    pour ces messages, cela est préféré à cause de sa simplicité
+    d'écriture.
+   </para>
+
+   <para>
+    Des conseils sur l'écriture de bons messages d'erreurs peuvent
+    être trouvés dans la <xref linkend="error-style-guide">.
+   </para>
+  </sect1>
+
+  <sect1 id="error-style-guide">
+   <title>Guide de style des messages d'erreurs</title>
+
+   <para>
+    Ce guide de style est fournit dans l'espoir de maintenir une
+    cohérence et un style facile à comprendre dans tous les messages
+    générés par <productname>PostgreSQL</>.
+   </para>
+
+  <simplesect>
+   <title>Ce qui va où</title>
+
+   <para>
+    Le message primaire devrait être court, factuel et éviter les
+    références aux détails d'exécution comme le nom de fonction
+    spécifique. <quote>Court</quote> veut dire <quote>devrait tenir 
+    sur une ligne dans des conditions normales</quote>.  Utilisez un
+    message détail si nécessaire pour garder le message primaire court
+    ou si vous sentez le besoin de mentionner les détails de
+    l'implémentation comme un appel système particulier qui échoue.
+    Les messages primaires et détails doivent être factuels.  Utilisez
+    un message conseil pour les suggestions à propos de quoi faire
+    pour fixer le problème, spécialement si la suggestion ne pourrait
+    pas toujours être applicable.
+   </para>
+
+   <para>
+    Par exemple, au lieu de
+<programlisting>
+        IpcMemoryCreate: shmget(clé=%d, taille=%u, 0%o) a échoué : %m
+        (plus un long supplément qui est basiquement un conseil)
+</programlisting>
+écrivez
+<programlisting>
+        Primaire:    Ne peut pas créer un ségment en mémoire partagée : %m
+        Détail:      L'appel système qui a échoué était shmget(key=%d, size=%u, 0%o).
+        Astuce:     Le supplément
+</programlisting>
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: garder le message primaire court aide à le garder
+    au point et laisse les clients présenter un espace à l'écran sur
+    la supposition qu'une ligne est suffisante pour les messages
+    d'erreurs. Les messages détails et conseils peuvent être relégués
+    à un mode verbeux ou peut-être dans une fenêtre pop-up détaillant
+    l'erreur. De plus, les détails et les conseils devront
+    normalement être supprimés des traces du serveur pour gagner de
+    l'espace.  La référence aux détails d'implémentation est à éviter
+    puisque les utilisateurs n'en connaissent de toute façon pas les
+    détails.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Formatage</title>
+
+   <para>
+    N'émettez pas d'hypothèses spécifiques à propos du formatage dans
+    les messages textes.  Attendez-vous à ce que les clients et les traces
+    du serveur enveloppent les lignes pour correspondre à leurs
+    propres besoins.  Dans les messages longs, les caractères
+    d'interlignes (\n) peuvent être utilisés pour indiquer les
+    coupures suggérées d'un paragraphe.  Ne terminez pas un message
+    avec un caractère d'interlignes.  N'utilisez pas des tabulations
+    ou d'autres caractères de formatage.  (Dans les affichages des
+    contextes d'erreurs, les caractères d'interlignes sont
+    automatiquement ajoutés pour séparer les niveaux d'un contexte
+    comme dans les appels aux fonctions.)
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: les messages ne sont pas nécessairement affichés
+    dans un affichage de type terminal.  Dans les interfaces
+    graphiques ou les navigateurs, ces instructions de formatage sont,
+    au mieux, ignorées.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Guillemets</title>
+
+   <para>
+    Les textes en anglais devraient utiliser des guillemets doubles
+    quand la mise entre guillemets est appropriée.  Les textes dans
+    les autres langues devraient uniformément employer un genre de
+    guillemets qui est conforme aux coutumes de publication et à la
+    sortie visuelle des autres programmes.
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: le choix des guillemets doubles sur celui des
+    guillemets simples est quelque peu arbitraire mais tend à être
+    l'utilisation préférée.  Certains ont suggéré de choisir le type
+    de guillemets en fonction du type d'objets des conventions SQL
+    (notamment, les chaînes de caractères entre guillemets simples,
+    les identifiants entre guillemets doubles).  Mais ceci est un
+    point technique à l'intérieur du langage avec lequel beaucoup
+    d'utilisateurs ne sont pas familiers&nbsp;; les conventions SQL ne
+    prennent pas en compte les autres genres de termes entre
+    guillemets, ne sont pas traduites dans d'autres langues et
+    manquent un peu de sens aussi.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Utilisation des guillemets</title>
+
+   <para>
+    Utilisez toujours les guillemets pour délimiter les noms de 
+    fichiers, les identifiants fournis par les utilisateurs et les
+    autres variables qui peuvent contenir des mots.  Ne les utilisez
+    pas pour marquer des variables qui ne contiennent pas de mots (par
+    exemple, les noms d'opérateurs).
+   </para>
+
+   <para>
+    Il y a des fonctions au niveau du serveur qui vont, au besoin,
+    mettre entre guillemets leur propre flux de sortie (par exemple,
+    <function>format_type_be</>()).  Ne mettez pas de guillemets
+    supplémentaires autour du flux de sortie de ce genre de fonctions.
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: les objets peuvent avoir un nom qui crée une
+    ambiguïté une fois incorporé dans un message. Soyez prudent en
+    indiquant où un nom commence et fini.  Mais n'encombrez pas les
+    messages avec des guillemets qui ne sont pas nécessaires ou qui
+    sont dupliqués.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Grammaire et ponctuation</title>
+
+   <para>
+    Les régles sont différentes pour les messages d'erreurs primaires
+    et pour les messages détails/conseils&nbsp;:
+   </para>
+
+   <para>
+    Messages d'erreurs primaires&nbsp;: ne mettez pas en majuscule la
+    première lettre.  Ne terminez pas un message avec un point.  Ne
+    pensez même pas à finir un message avec un point d'exclamation.
+   </para>
+
+   <para>
+    Messages détails et conseils&nbsp;: utilisez des phrases complètes et
+    toutes terminées par des points. Mettez en majuscule le premier mot
+    des phrases.
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: éviter la ponctuation rend plus facile, pour les
+    applications clientes, l'intégration du message dans des contextes
+    grammaticaux variés. Souvent, les messages primaires ne sont de
+    toute façon pas des phrases complètes. (Et s'ils sont assez longs
+    pour être sur plusieurs phrases, ils devraient être divisés en une
+    partie primaire et une partie détail.) Cependant, les messages
+    détails et conseils sont longs et peuvent avoir besoin d'inclure
+    de nombreuses phrases. Pour la cohérence, ils devraient suivre le
+    style des phrases complètes même s'il y a seulement une phrase.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Majuscule contre minuscule</title>
+
+   <para>
+    Utilisez les minuscules pour les mots d'un message, inclus la
+    première lettre d'un message d'erreur primaire.  Utilisez les
+    majuscules pour les commandes et les mots-clé SQL s'ils
+    apparaissent dans le message.
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: il est plus facile de rendre toutes les choses plus
+    cohérentes au regard de cette façon, puisque certains messages
+    sont des phrases complètes et d'autres non.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Éviter la voix passive</title>
+
+   <para>
+    Utilisez la voix active. Utilisez des phrases complètes quand il
+    y a un sujet (<quote>A ne peut pas faire B</quote>). Utilisez le
+    style télégramme, sans sujet, si le sujet est le programme
+    lui-même&nbsp;; n'utilisez pas <quote>Je</quote> pour le programme.
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: le programme n'est pas humain. Ne prétendez pas
+    autre chose.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Présent contre passé</title>
+
+   <para>
+    Utilisez le passé si une tentative de faire quelque chose
+    échouait, mais pourrait peut-être réussir la prochaine fois
+    (peut-être après avoir corriger certains problèmes). Utilisez le
+    présent si l'échec est sans doute permanent.
+   </para>
+
+   <para>
+    Il y a une différence sémantique non triviale entre les phrases de
+    la forme
+<programlisting>
+        n'a pas pu ouvrir le fichier "%s": %m
+</programlisting>
+et
+<programlisting>
+        ne peut pas ouvrir le dossier "%s"
+</programlisting>
+    La première forme signifie que la tentative d'ouverture du fichier
+    a échoué.  Le message devrait donner une raison comme
+    <quote>disque plein</quote> ou
+    <quote>le fichier n'existe pas</quote>. Le passé est approprié
+    parce que la prochaine fois le disque peut ne plus être plein ou
+    le fichier en question peut exister.
+   </para>
+
+   <para>
+    La seconde forme indique que la fonctionnalité d'ouvrir le fichier
+    nommé n'existe pas du tout dans le programme ou que c'est
+    conceptuellement impossible.  Le présent est approprié car la
+    condition persistera indéfiniment.
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: d'accord, l'utilisateur moyen ne sera pas capable
+    de tirer de grandes conclusions simplement à partir du temps du
+    message mais, puisque la langue nous fournit une grammaire, nous
+    devons l'utiliser correctement.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Type de l'objet</title>
+
+   <para>
+    En citant le nom d'un objet, spécifiez quel genre d'objet c'est.
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: sinon personne ne saura ce qu'est
+    <quote>foo.bar.baz</quote>.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Crochets</title>
+
+   <para>
+    Les crochets sont uniquement utilisés (1) dans les synopsis des
+    commandes pour indiquer des arguments optionnels ou (2) pour
+    indiquer l'indice inférieur d'un tableau.
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: rien de ce qui ne correspond pas à l'utilisation
+    habituelle, largement connue troublera les gens.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Assembler les messages d'erreurs</title>
+
+   <para>
+   Quand un message inclut du texte qui est généré ailleurs,
+   intégrez-le dans ce style&nbsp;:
+<programlisting>
+        n'a pas pu ouvrir le fichier %s: %m
+</programlisting>
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: il serait difficile d'expliquer tous les codes
+    d'erreurs possibles pour coller ceci dans une unique phrase douce,
+    ainsi une certaine forme de ponctuation est nécessaire.  Mettre le
+    texte inclus entre parenthèses a été également suggéré, mais ce
+    n'est pas naturel si le texte inclus est susceptible d'être la
+    partie la plus importante du message, comme c'est souvent le cas.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Raisons pour les erreurs</title>
+
+   <para>
+    Les messages devraient toujours indiquer la raison pour laquelle
+    une erreur s'est produite. Par exemple&nbsp;:
+<programlisting>
+        MAUVAIS :  n'a pas pu ouvrir le fichier %s
+        MEILLEUR : n'a pas pu ouvrir le fichier %s (échec E/S)
+</programlisting>
+    Si aucune raison n'est connue, vous feriez mieux de corriger le code.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Nom des fonctions</title>
+
+   <para>
+    N'incluez pas le nom de la routine de rapport dans le texte de
+    l'erreur.  Nous avons d'autres mécanismes pour trouver cela quand
+    c'est nécessaire et, pour la plupart des utilisateurs, ce n'est pas
+    une information utile. Si le texte de l'erreur n'a plus beaucoup
+    de sens sans le nom de la fonction, reformulez-le.
+<programlisting>
+        MAUVAIS :  pg_atoi: erreur dans "z": ne peut pas analyser "z"
+        MEILLEUR : syntaxe en entrée invalide pour l'entier : "z"
+</programlisting>
+   </para>
+
+   <para>
+    Évitez de mentionner le nom des fonctions appelées, au lieu de
+    cela dites ce que le code essayait de faire&nbsp;:
+<programlisting>
+        MAUVAIS :  ouvrir() a échoué : %m
+        MEILLEUR : n'a pas pu ouvrir le fichier %s: %m
+</programlisting>
+    Si cela semble vraiment nécessaire, mentionnez l'appel système
+    dans le message détail. (Dans certains cas, fournir les valeurs
+    réelles passées à l'appel système pourrait être une information
+    appropriée pour le message détail.)
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: les utilisateurs ne savent pas tout ce que ces
+    fonctions font.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Mots délicats à éviter</title>
+
+  <formalpara>
+    <title>Incapable</title>
+   <para>
+    <quote>Incapable</quote> est presque la voix passive.  Une
+    meilleure utilisation est <quote>ne pouvait pas</quote> ou
+    <quote>ne pourrait pas</quote> selon les cas.
+   </para>
+  </formalpara>
+
+  <formalpara>
+    <title>Mauvais</title>
+   <para>
+    Les messages d'erreurs comme <quote>mauvais résultat</quote> sont
+    vraiment difficile à interpréter intelligemment. Cela est mieux
+    d'écrire pourquoi le résultat est <quote>mauvais</quote>, par
+    exemple, <quote>format invalide</quote>.
+   </para>
+  </formalpara>
+
+  <formalpara>
+    <title>Illégal</title>
+   <para>
+    <quote>Illégal</quote> représente une violation de la loi, le
+    reste est <quote>invalide</quote>. Meilleur encore, dites
+    pourquoi cela est invalide.
+   </para>
+  </formalpara>
+
+  <formalpara>
+   <title>Inconnu</title>
+   <para>
+    Essayez d'éviter <quote>inconnu</quote>.  Considérez
+    <quote>erreur : réponse inconnue</quote>.  Si vous ne savez pas
+    qu'elle est la réponse, comment savez-vous que cela est
+    incorrect&nbsp;? <quote>Non reconnu</quote> est souvent un meilleur
+    choix.  En outre, assurez-vous d'inclure la valeur pour laquelle il
+    y a un problème.
+<programlisting>
+        MAUVAIS :  type de n&oelig;ud inconnu
+        MEILLEUR : type de n&oelig;ud non reconnu : 42
+</programlisting>
+   </para>
+  </formalpara>
+
+  <formalpara>
+    <title>Trouver contre Exister</title>
+   <para>
+    Si le programme emploie un algorithme non trivial pour localiser
+    une ressource (par exemple, une recherche de chemin) et que
+    l'algorithme échoue, il est juste de dire que le programme n'a pas
+    pû <quote>trouver</quote> la ressource. D'un autre côté, si
+    l'endroit prévu pour la ressource est connu mais que le programme
+    ne peut pas accéder à celle-ci, alors dites que la ressource
+    n'<quote>existe</quote> pas. Utilisez <quote>trouvez</quote> dans
+    ce cas là semble faible et embrouille le problème.
+   </para>
+  </formalpara>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Orthographe appropriée</title>
+
+   <para>
+    Orthographiez les mots en entier.  Par exemple, évitez&nbsp;:
+  <itemizedlist>
+   <listitem>
+    <para>
+     spec (NdT&nbsp;: spécification)
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     stats (NdT&nbsp;: statistiques)
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     params (NdT&nbsp;: paramètres)
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     auth (NdT&nbsp;: authentification)
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     xact (NdT&nbsp;: transaction)
+    </para>
+   </listitem>
+  </itemizedlist>
+   </para>
+
+   <para>
+    Raisonnement&nbsp;: cela améliore la cohérence.
+   </para>
+
+  </simplesect>
+
+  <simplesect>
+   <title>Adaptation linguistique</title>
+
+   <para>
+    Gardez à l'esprit que les textes des messages d'erreurs ont besoin
+    d'être traduit en d'autres langues.  Suivez les directives dans la
+    <xref linkend="nls-guidelines"> pour éviter de rendre la vie
+    difficile aux traducteurs.
+   </para>
+  </simplesect>
+
+  </sect1>
+
+ </chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->
