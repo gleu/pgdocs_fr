@@ -1,0 +1,3051 @@
+<!--
+$Header: /var/lib/cvs/pgsql-fr/sgml/plpgsql.sgml,v 1.8 2005/01/30 22:59:24 guillaume Exp $
+-->
+
+<chapter id="plpgsql"> 
+  <title><application>PL/pgSQL</application> - <acronym>SQL</acronym> Procedural Language</title>
+
+ <indexterm zone="plpgsql">
+  <primary>PL/pgSQL</primary>
+ </indexterm>
+
+ <para>
+  <application>PL/pgSQL</application> est un langage procédural chargeable pour 
+  le système de bases de données <productname>PostgreSQL</productname>. 
+  Les objectifs de la conception de <application>PL/pgSQL</> ont été de créer un 
+  langage procédural chargeable qui 
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       peut être utilisé pour créer des procédures fonctions et déclencheurs,
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       ajoute des structures de contrôle au langage<acronym>SQL</acronym>,
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       peut effectuer des traitements complexes,
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       hérite de tous les types, fonctions et opérateurs définis par les utilisateurs,
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       peut être défini comme digne de confiance par le serveur,
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       est facile à utiliser.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+  <sect1 id="plpgsql-overview">
+   <title>Survol</title>
+
+   <para>
+    Le gestionnaire d'appel <application>PL/pgSQL</> découpe le texte source de la
+    fonction  et produit un arbre d'instructions binaires internes la première fois
+    que la fonction est appelée (au sein de chaque session).  L'arbre d'instructions
+    traduit complètement la structure de l'expression <application>PL/pgSQL</>,
+    mais les expressions <acronym>SQL</acronym> individuelles et les commandes 
+    <acronym>SQL</acronym> utilisées dans la fonction ne sont pas traduites
+    immédiatement.
+   </para>
+
+   <para>
+    Chaque expression et commande <acronym>SQL</acronym> étant d'abord utilisée
+    dans la fonction, l'interpréteur <application>PL/pgSQL</> crée 
+    un plan d'exécution élaboré (en utilisant les fonctions
+    <function>SPI_prepare</function> et	<function>SPI_saveplan</function> 
+    du gestionnaire <acronym>SPI</acronym>). <indexterm><primary>préparer une
+    requête</><secondary>en PL/pgSQL</></>Les visites suivantes à cette 
+    expression ou commande reutilisent le plan élaboré. Ainsi, une fonction avec du 
+    code conditionnel qui contient de nombreuses expressions pour lesquelles
+    des plans d'exécution pourraient être nécessaires ne feront que préparer
+    et sauvegarder ces plans, qui ne sont réellement utilisés que durant le temps
+    que la connexion à la base de données vivra. Ceci peut réduire substantiellement
+    le temps total nécessaire à l'analyse syntaxique, et générer des plans d'exécution
+    pour les expressions d'une fonction <application>PL/pgSQL</>. 
+    Un inconvénient est que les erreurs d'une expression ou commande particulière 
+    peuvent ne pas être détectée jusqu'à ce que cette partie de la fonction soit 
+    atteinte au cours de l'exécution.
+   </para>
+
+   <para>
+    Une fois que <application>PL/pgSQL</> a créé un plan d'exécution pour une commande
+    de fonction particulière, il réutilisera ce plan pour le temps que durera la
+    connexion à la base de données. C'est généralement un gain de performances, mais 
+    cela peut causer quelques problèmes si vous modifiez dynamiquement votre schéma 
+    de base de données. Par exemple
+
+<programlisting>
+CREATE FUNCTION populate() RETURNS integer AS '
+DECLARE
+    -- declarations
+BEGIN
+    PERFORM my_function();
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+
+    Si vous exécutez la fonction ci-dessus, l'OID de 
+    <function>my_function()</function> sera référencé dans le plan d'exécution produit
+    pour l'expression <command>PERFORM</command>. Par la suite, si vous détruisez
+    et recréez <function>my_function()</function>, <function>populate()</function> 
+    ne sera plus en mesure de trouver <function>my_function()</function>. 
+    Vous auriez alors à recréer <function>populate()</function>, ou au moins à
+    lancer une nouvelle connexion à la base de donnée pour faire en sorte de la
+    compiler à nouveau. Un autre moyen d'éviter ce probème est d'utiliser 
+    <command>CREATE OR REPLACE FUNCTION</command> lors de la mise à jour de la 
+    définition de <function>my_function</function> (quand une fonction est 
+    <quote>remplacée</quote>, son OID n'est pas changé).
+   </para>
+
+   <para>
+    Comme <application>PL/pgSQL</application> sauvegarde les plans d'exécution
+    de cette façon, les commandes SQL qui apparaissent directement dans une fonction
+    <application>PL/pgSQL</application> doivent se référer aux mêmes tables et colonnes
+    pour chaque exception; en fait, vous ne pouvez pas utiliser un paramètre tel que 
+    le nom d'une table ou d'une colonne dans une commande SQL. Pour contourner cette
+    restriction, vous pouvez construire des commandes dynamiques en utilisant
+    l'expression <application>PL/pgSQL</application> <command>EXECUTE</command>
+     ---- au prix de la construction d'un nouveau plan d'exécution pour chaque exécution.
+   </para>
+
+   <note>
+	<para>
+	 L'expression <application>PL/pgSQL</application> <command>EXECUTE</command> 
+	 n'a pas de rapport avec l'expression <command>EXECUTE</command> supportée par
+	 le serveur <productname>PostgreSQL</productname>. L'expression
+	 <command>EXECUTE</command> du serveur ne peut pas être utilisée au sein des
+	 fonctions <application>PL/pgSQL</> (et n'est pas nécessaire).
+	</para>
+   </note>
+
+   <para>
+    Exception faites des conversions d'entrées/sorties et des fonctions de traitement
+    pour des types définis par l'utlisateur, tout ce qui peut être défini dans les
+    fonctions du langage C peut aussi être fait avec <application>PL/pgSQL</application>.
+    Par exemple il est possible de créer des fonctions de traitement conditionnel
+    complexes et par la suite les utiliser pour définir des opérateurs ou les 
+    utiliser dans des expressions d'index.
+   </para>
+
+  <sect2 id="plpgsql-advantages">
+   <title>Avantages de l'Utilisation de <application>PL/pgSQL</application></title>
+
+    <para>
+     <acronym>SQL</acronym> est le langage que <productname>PostgreSQL</>
+     (et la plupart des autres bases de données relationnelles) utilise comme
+     langage de requête. Il est portable et facile à apprendre. Mais chaque
+     expression <acronym>SQL</acronym> doit être exécutée individuellement
+     par le serveur de bases de données.
+    </para>
+
+    <para>
+     Cela signifie que votre application client doit envoyer chaque requête 
+     au serveur de bases de données, attendre que celui-ci la traite, recevoir 
+     les résultats, faire quelques traitements, et enfin envoyer d'autres requêtes
+     au serveur. Tout ceci induit des communications interprocessus et peut aussi 
+     induire une surcharge du réseau si votre client est sur une machine différente
+     du serveur de bases de données.
+    </para>
+
+    <para>
+     Grâce à <application>PL/pgSQL</application> vous pouvez grouper un bloc
+     de traitement et une série de requêtes <emphasis>au sein</emphasis> du serveur 
+     de bases de données, et bénéficier ainsi de la puissance d'un langage 
+     procédural, tout en gagnant du temps puisque vous évitez toute la charge
+     de la communication client/serveur. Ceci peut permettre un gain de performances
+     considérable.
+    </para>
+
+    <para>
+     Ainsi, avec <application>PL/pgSQL</application> vous pouvez utiliser tous les 
+     types de données, opérateurs et fonctions du SQL.
+    </para>
+  </sect2>
+
+  <sect2 id="plpgsql-args-results">
+   <title>Arguments Supportés et Types de Données Résultats</title>
+
+    <para>
+     Les fonctions écrites en <application>PL/pgSQL</application> peuvent accepter
+     comme argument n'importe quel type de données supporté par le serveur, et 
+     peuvent renvoyer un résultat de n'importe lequel de ces types. Elles peuvent
+     aussi accepter ou renvoyer n'importe quel type composite (type ligne) spécifié
+     par nom. Il est aussi possible de déclarer une fonction 
+     <application>PL/pgSQL</application> renvoyant un type <type>record</>, 
+     signifiant que le résultat est un type ligne dont les colonnes sont déterminées
+     par spécification dans la requête appelante, comme traité dans 
+     <xref linkend="queries-tablefunctions">.
+    </para>
+
+    <para>
+     Les fonctions <application>PL/pgSQL</> peuvent aussi être déclarées comme
+     acceptant et renvoyant les types <quote>polymorphes</>,
+     <type>anyelement</type> et <type>anyarray</type>. Le type de données réel
+     géré par une fonction polymorphe peut varier d'appel en appel, comme 
+     traité dans <xref linkend="types-polymorphic">.
+     Voir l'exemple dans <xref linkend="plpgsql-declaration-aliases">.
+    </para>
+
+    <para>
+     Les fonctions <application>PL/pgSQL</> peuvent aussi être déclarées comme
+     devant renvoyer un <quote>set</> ou une table de n'importe lequel des 
+     type de données dont elles peuvent renvoyer une instance unique. De telles 
+     fonctions génèrent leur sortie en exécutant <literal>RETURN NEXT</> 
+     pour chaque élément désiré de l'ensemble résultat.
+    </para>
+
+    <para>
+     Enfin, une fonction <application>PL/pgSQL</> peut être déclarée comme renvoyant 
+     <type>void</> si elle n'a pas de valeur de retour utile.
+    </para>
+  </sect2>
+ </sect1>
+
+ <sect1 id="plpgsql-development-tips">
+  <title>Astuces pour Développer en <application>PL/pgSQL</application></title>
+
+   <para>
+    Un bon moyen de développer en <application>PL/pgSQL</> est d'utiliser
+    l'éditeur de texte de votre choix pour créer vos fonctions, et d'utiliser 
+    <application>psql</application> dans une autre fenêtre pour charger et tester
+    ces fonctions. Si vous procédez ainsi, une bonne idée est d'écrire la fonction 
+    en utilisant <command>CREATE OR REPLACE FUNCTION</>. De cette façon vous pouvez
+    recharger le fichier seulement pour mettre à jour la définition de la fonction.
+    Par exemple&nbsp;:
+<programlisting>
+CREATE OR REPLACE FUNCTION testfunc(integer) RETURNS integer AS '
+	  ....
+end;
+' LANGUAGE plpgsql;
+</programlisting>
+   </para>
+
+   <para>
+    Pendant que <application>psql</application> tourne, vous pouvez charger
+    ou recharger de telles définitions de fonction avec
+    <programlisting>
+\i filename.sql
+</programlisting>
+    et alors immédiatement soumettre des commandes SQL pour tester la fonction.
+   </para>
+
+   <para>
+    Un autre bon moyen de développer en <application>PL/pgSQL</> est d'utiliser
+    un outil d'accès à la base de données muni d'une interface graphique qui facilite le
+    développement dans un langage procédural. Un exemple d'un tel outil est
+    <application>PgAccess</>, bien que d'autres existent. Ces outils fournissent 
+    souvent des fonctionnalités pratiques telles que la détection des guillemets ouverts
+    et facilitent la re-création et le déboguegage des fonctions.
+   </para>
+
+  <sect2 id="plpgsql-quote-tips">
+   <title>Utilisation des guillemets simples (quotes)</title>
+
+  <para>
+  
+   Puisque le code d'une fonction <application>PL/pgSQL</> est spécifié dans la commande <command>CREATE FUNCTION</command> comme une chaîne de caractèreas,
+   chaque guillemet simple (quote) à l'intérieur de la fonction doit être précédé d'un autre guillemet simple (caractère d'échappeemnt).
+   Ceci peut conduire parfois à un code assez compliqué, surtout si vous
+   écrivez une fonction générant d'autres fonctions comme dans l'exemple
+   <xref linkend="plpgsql-statements-executing-dyn">.  Ce tableau peut être utile
+   comme résumé du nombre de quotes nécessaire dans diverses situations.
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term>1 guillemet simple</term>
+    <listitem>
+     <para>
+      Pour commencer et terminer le corps de la fonction, par exemple&nbsp;:
+<programlisting>
+CREATE FUNCTION foo() RETURNS integer AS '...'
+    LANGUAGE plpgsql;
+</programlisting>
+      Partout au sein du corps de la fonction, les guillemets simples<emphasis>doivent</> aller
+      par paires.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>2 guillemets simples</term>
+    <listitem>
+     <para>
+      Pour les chaînes de caractères à l'intérieur du corps de la fonction, par
+      exemple&nbsp;:
+<programlisting>
+a_output := ''Blah'';
+SELECT * FROM users WHERE f_name=''foobar'';
+</programlisting>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>4 guillemets simples</term>
+    <listitem>
+     <para>
+      Quand vous avez besoin d'un guillemet simple dans une chaîne constante 
+      à l'interieur du corps de la fonction , par exemple&nbsp;:
+<programlisting>
+a_output := a_output || '' AND name LIKE ''''foobar'''' AND xyz''
+</programlisting>
+      La valeur effectivement concaténée à <literal>a_output</literal> 
+      est&nbsp;:
+      <literal> AND name LIKE 'foobar' AND xyz</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>6 guillemets simples</term>
+    <listitem>
+     <para>
+      Quand un simple guillemet dans une chaîne à l'interieur du corps d'une fonction
+      est adjacent à la fin de cette chaîne constante, par exemple&nbsp;:
+<programlisting>
+a_output := a_output || '' AND name LIKE ''''foobar''''''
+</programlisting>
+      La valeur effectivement concaténée à <literal>a_output</literal> est
+alors&nbsp;:
+      <literal> AND name LIKE 'foobar'</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>10 guillemets simples</term>
+    <listitem>
+     <para>
+      Lorsque vous voulez 2 guillemets simples dans une chaîne constante (qui compte 
+      pour 8 guillemets simples) et qu'elle est adjacente à la fin de cette chaîne constante
+      (2 de plus). Vous n'aurez probablement besoin de ceci que si vous écrivez une 
+      fonction qui génère d'autres fonctions. Par exemple&nbsp;:
+      <programlisting>
+a_output := a_output || '' if v_'' || 
+    referrer_keys.kind || '' like '''''''''' 
+    || referrer_keys.key_string || '''''''''' 
+    then return ''''''  || referrer_keys.referrer_type 
+    || ''''''; end if;''; 
+</programlisting>
+      La valeur de <literal>a_output</literal> sera alors&nbsp;:
+<programlisting>
+if v_... like ''...'' then return ''...''; end if;
+</programlisting>
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+   <para>
+    Une approche différente est d'échapper les guillemets du corps de la fonction
+    avec un backslash plutôt qu'en les doublant. Avec cette méthode, vous vous verrez
+    écrire des choses telles que <literal>\'\'</> au lieu de <literal>''''</>.  
+    Certains trouveront ceci plus lisible, d'autres non.
+    </para>
+  </sect2>
+ </sect1>
+
+ <sect1 id="plpgsql-structure">
+  <title>Structure de <application>PL/pgSQL</application></title>
+
+  <para>
+   <application>PL/pgSQL</application> est un langage structuré en blocs.
+   Le texte complet de la définition d'une fonction doit être un 
+   <firstterm>bloc</>. Un bloc est défini comme&nbsp;: 
+
+<synopsis>
+<optional> &lt;&lt;<replaceable>label</replaceable>&gt;&gt; </optional>
+<optional> DECLARE
+    <replaceable>déclarations</replaceable> </optional>
+BEGIN
+    <replaceable>instructions</replaceable>
+END;
+</synopsis>
+    </para>
+
+    <para>
+     Chaque déclaration et chaque expression au sein du bloc est terminé par un
+     point-virgule.
+    </para>
+
+    <para>
+     Tous les mots clés et identifiants peuvent être écrits en majuscules et minuscules 
+     mélangées. Les identifiants sont implicitement convertis en minuscule à moins
+     d'être entourés de guillemets doubles.
+    </para>
+
+    <para>
+     Il y a deux types de commentaires dans <application>PL/pgSQL</>. Un double
+     tiret (<literal>--</literal>) débute une ligne de commentaire qui s'étend
+     jusqu'à la fin de la ligne. Un <literal>/*</literal> débute un bloc de commentaire
+     qui s'étend jusqu'à la prochaîne occurence de <literal>*/</literal>.
+     Les blocs de commentaires ne peuvent pas être imbriqués, mais les commentaires de 
+     lignes (double tiret) peuvent être contenus dans un bloc de commentaire et un 
+     double tiret peut cacher les délimiteurs du bloc de commentaire
+     <literal>/*</literal> and <literal>*/</literal>.
+    </para>
+
+    <para>
+     Chaque expression de la section expression d'un bloc peut être un
+     <firstterm>sous-bloc</>.  Les sous-blocs peuvent être utilisés pour
+     des groupements logiques ou pour localiser des variables locales à un petit groupe
+     d'instructions.
+     </para>
+
+    <para>
+     Les variables déclarées dans la section déclaration précédant un bloc sont
+     initialisées à leur valeur par défaut chaque fois qu'on entre dans un bloc
+     et pas seulement une fois à chaque appel de fonction. Par exemple&nbsp;:
+<programlisting>
+CREATE FUNCTION somefunc() RETURNS integer AS '
+DECLARE
+    quantity integer := 30;
+BEGIN
+    RAISE NOTICE ''Quantity here is %'', quantity;  -- Quantity here is 30
+    quantity := 50;
+    --
+    -- Crée un sous-bloc
+    --
+    DECLARE
+        quantity integer := 80;
+    BEGIN
+        RAISE NOTICE ''Quantity here is %'', quantity;  -- Quantity here is 80
+    END;
+
+    RAISE NOTICE ''Quantity here is %'', quantity;  -- Quantity here is 50
+
+    RETURN quantity;
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+    </para>
+
+    <para>
+     Il est important de ne pas confondre l'utilisation de
+     <command>BEGIN</>/<command>END</> pour grouper les instructions dans 
+     <application>PL/pgSQL</> avec les commandes de bases de données pour le contrôle 
+     des transactions. Les <command>BEGIN</>/<command>END</> de <application>PL/pgSQL</>
+     ne servent qu'au groupement; ils ne débutent ni ne terminent une transaction.
+     Les procédures fonctions et déclencheurs sont toujours exécutées à l'intérieur d'une
+     transaction établie par une requête extérieure -- ils ne peuvent pas être utilisés pour commencer
+     ou effectuer un commit sur une transaction puisque <productname>PostgreSQL</productname> 
+     ne gère pas les transactions imbriquées.
+    </para>
+  </sect1>
+
+  <sect1 id="plpgsql-declarations">
+    <title>Déclarations</title>
+
+    <para>
+     Toutes les variables utilisées dans un bloc doivent être déclarées 
+     dans la section déclaration du bloc.
+     (La seule exception est que la variable de boucle d'une boucle <literal>FOR</>
+     effectuant une itération sur des valeurs entières est automatiquement déclarée
+     comme variable entière.
+     </para>
+
+    <para>
+     Les variables <application>PL/pgSQL</> peuvent être de n'importe quel type de données
+     tels que <type>integer</type>, <type>varchar</type>, et
+     <type>char</type>.
+    </para>
+
+    <para>
+     Voici quelques exemples de déclarations de variables&nbsp;:
+<programlisting>
+user_id integer;
+quantity numeric(5);
+url varchar;
+myrow tablename%ROWTYPE;
+myfield tablename.columnname%TYPE;
+arow RECORD;
+</programlisting>
+    </para>
+
+    <para>
+     La syntaxe générale d'une déclaration de variable est&nbsp;:
+<synopsis>
+<replaceable>name</replaceable> <optional> CONSTANT </optional> <replaceable>type</replaceable> <optional> NOT NULL </optional> <optional> { DEFAULT | := } <replaceable>expression</replaceable> </optional>;
+</synopsis>
+      La clause <literal>DEFAULT</>, si indiquée, spécifie la valeur initiale
+      assignée à la variable quand on entre dans le bloc. 
+      Si la clause <literal>DEFAULT</> n'est pas indiquée, la variable est initialisée
+      à la valeur <acronym>SQL</acronym> null. 
+      L'option <literal>CONSTANT</> empèche l'assignation de la variable, de sorte que
+      sa valeur reste constante pour la durée du bloc.
+      Si <literal>NOT NULL</> est spécifié, l'assignement d'une valeur null aboutira à
+      une erreur d'exécution. Les valeurs par défaut de toutes les variables déclarées
+      <literal>NOT NULL</> doivent être spécifiées non null.
+     </para>
+
+     <para>
+      La valeur par défaut est evaluée à chaque entrée du bloc. Ainsi, par exemple,
+      l'assignation de <literal>'now'</literal> à une variable de type 
+      <type>timestamp</type> donnera à la variable l'heure de l'appel de la fonction
+      courante, et non l'heure au moment où la fonction a été précompilée.
+      </para>
+
+     <para>
+      Exemples&nbsp;:
+<programlisting>
+quantity integer DEFAULT 32;
+url varchar := ''http://mysite.com'';
+user_id CONSTANT integer := 10;
+</programlisting>
+     </para>
+
+    <sect2 id="plpgsql-declaration-aliases">
+     <title>Alias de Paramètres de Fonctions</title>
+
+<synopsis>
+<replaceable>nom</replaceable> ALIAS FOR $<replaceable>n</replaceable>;
+</synopsis>
+
+     <para>
+      Les paramètres passés aux fonctions sont nommés par les identifiants 
+      <literal>$1</literal>, <literal>$2</literal>,
+      etc.  Eventuellement, des alias peuvent être déclarés pour les noms de paramètres
+      de type <literal>$<replaceable>n</replaceable></literal> afin d'améliorer la
+      lisibilité. L'alias ou l'identifiant numérique peuvent être utilisés indifféremment
+      pour se référer à la valeur du paramètre. Quelques exemples&nbsp;: 
+
+<programlisting>
+CREATE FUNCTION sales_tax(real) RETURNS real AS '
+DECLARE
+    subtotal ALIAS FOR $1;
+BEGIN
+    RETURN subtotal * 0.06;
+END;
+' LANGUAGE plpgsql;
+
+
+CREATE FUNCTION instr(varchar, integer) RETURNS integer AS '
+DECLARE
+    v_string ALIAS FOR $1;
+    index ALIAS FOR $2;
+BEGIN
+    -- quelques traitements
+END;
+' LANGUAGE plpgsql;
+
+
+CREATE FUNCTION concat_selected_fields(tablename) RETURNS text AS '
+DECLARE
+    in_t ALIAS FOR $1;
+BEGIN
+    RETURN in_t.f1 || in_t.f3 || in_t.f5 || in_t.f7;
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+     </para>
+
+     <para>
+      Lorsque le type de retour d'une fonction <application>PL/pgSQL</application> est déclaré comme type polymorphe (<type>anyelement</type>
+      ou <type>anyarray</type>), un paramètre spécial <literal>$0</literal> est crée.
+      Son type de donnée est le type effectif de retour de la fonction, déduit d'après
+      les types d'entrée (voir <xref linkend="types-polymorphic">).
+      Ceci permet à la fonction d'accéder à son type de retour réel comme on le voit ici
+      <xref linkend="plpgsql-declaration-type">.
+      <literal>$0</literal> est initialisé à NULL et peut être modifié par la fonction,
+      de sorte qu'il peut être utilisé pour contenir la variable de retour si besoin est,
+      bien que ca ne soit pas requis. On peut aussi donner à <literal>$0</literal>
+      un alias. Par exemple, cette fonction fonctionne comme un opérateur <literal>+</> pour
+      n'importe quel type de données. 
+<programlisting>
+CREATE FUNCTION add_three_values(anyelement, anyelement, anyelement)
+RETURNS anyelement AS '
+DECLARE
+    result ALIAS FOR $0;
+    first ALIAS FOR $1;
+    second ALIAS FOR $2;
+    third ALIAS FOR $3;
+BEGIN
+    result := first + second + third;
+    RETURN result;
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+     </para>
+    </sect2>
+
+  <sect2 id="plpgsql-declaration-type">
+   <title>Copie de Types</title>
+
+<synopsis>
+<replaceable>variable</replaceable>%TYPE
+</synopsis>
+
+   <para>
+    <literal>%TYPE</literal> fournit le type de données d'une variable ou d'une colonne de
+    table. Vous pouvez l'utiliser pour déclarer des variables qui contiendront
+    des valeurs de bases de données. Par exemple, disons que vous avez une colonne nommée
+    <literal>user_id</literal> dans votre table <literal>users</literal>. Pour déclarer une variable du meme type de données que <literal>users.user_id</> 
+    vous pouvez écrire&nbsp;:
+<programlisting>
+user_id users.user_id%TYPE;
+</programlisting>
+   </para>
+
+   <para>
+    En utilisant <literal>%TYPE</literal> vous n'avez pas besoin de connaître 
+    le type de données de la structure à laquelle vous faites référence, et plus
+    important, si le type de données de l'objet référencé change dans le futur (par
+    exemple&nbsp;: vous changez le type de <literal>user_id</> de
+<type>integer</type>
+    à <type>real</type>), vous pouvez ne pas avoir besoin de changer votre définition de
+    fonction.
+   </para>
+
+   <para>
+    <literal>%TYPE</literal> est particulièrement utile dans le cas de fonctions
+    polymorphes, puisque les types de données nécessaires aux variables internes
+    peuvent changer d'un appel à l'autre. Des variables appropriées peuvent être 
+    créées en appliquant <literal>%TYPE</literal> aux arguments de la fonction ou à la
+    la variable fictive de résultat.
+   </para>
+
+  </sect2>
+
+    <sect2 id="plpgsql-declaration-rowtypes">
+     <title>Types ligne</title>
+
+<synopsis>
+<replaceable>name</replaceable> <replaceable>table_name</replaceable><literal>%ROWTYPE</literal>;
+<replaceable>name</replaceable> <replaceable>composite_type_name</replaceable>;
+</synopsis>
+
+   <para>
+    Une variable de type composite est appelée variable <firstterm>ligne</> (ou 
+    variable <firstterm>row-type</>). Une telle variable peut contenir une ligne entière
+    de résultat de requête <command>SELECT</> ou <command>FOR</>, du moment
+    que l'ensemble de colonnes de la requête correspond au type déclaré de la variable.
+    Les champs individuels de la valeur row sont accessibles en utilisant la notation
+    pointée, par exemple <literal>rowvar.field</literal>.
+   </para>
+
+   <para>
+    Une variable ligne peut être déclarée de façon à avoir le même type que les lignes 
+    d'une table ou vue existante, en utilisant la notation
+    <replaceable>table_name</replaceable><literal>%ROWTYPE</literal>
+    ou elle peut être déclarée en donnant un nom de type composite. (Chaque table
+    ayant un type de données associé du même nom, il importe peu dans 
+    <productname>PostgreSQL</> que vous écriviez <literal>%ROWTYPE</literal> ou pas.  
+    Cependant la forme utilisant <literal>%ROWTYPE</literal> est plus portable.)
+   </para>
+
+   <para>
+    Les paramètres d'une fonction peuvent être des types composites 
+    (lignes complètes de tables). En ce cas, l'identifiant correspondant
+    <literal>$<replaceable>n</replaceable></> sera une variable ligne, à partir de laquelle
+    les champs peuvent être sélectionnés, par exemple <literal>$1.user_id</literal>.
+   </para>
+
+   <para>
+    Seules les colonnes définies par l'utilisateur d'une ligne de table sont accessibles 
+    dans une variable de type ligne, et non l'OID ou d'autres colonnes systèmes (parce que
+    la ligne pourrait être issue d'une vue). Les champs du type ligne héritent des tailles
+    des champs de la table ou de leur précision pour les types de données tels que
+    <type>char(<replaceable>n</>)</type>.
+   </para>
+
+   <para>
+    Voici un exemple d'utilisation des types composites &nbsp;:
+<programlisting>
+CREATE FUNCTION use_two_tables(tablename) RETURNS text AS '
+DECLARE
+    in_t ALIAS FOR $1;
+    use_t table2name%ROWTYPE;
+BEGIN
+    SELECT * INTO use_t FROM table2name WHERE ... ;
+    RETURN in_t.f1 || use_t.f3 || in_t.f5 || use_t.f7;
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+   </para>
+  </sect2>
+
+    <sect2 id="plpgsql-declaration-records">
+     <title>Types Record</title>
+
+    <para>
+<synopsis>
+<replaceable>nom</replaceable> RECORD;
+</synopsis>
+    </para>
+
+   <para>
+    Les variables record sont similaires aux variables de type ligne, mais n'ont pas de 
+    structure prédéfinie. Elles empruntent la structure effective de type ligne 
+    dela ligne à laquelle elles sont assignées durant une commande <command>SELECT</> or <command>FOR</>. 
+    La sous-structure d'une variable record peut changer à chaque fois qu'on l'assigne.
+    Une conséquence de cela est que jusqu'à ce qu'elle ait été assignée, elle n'a pas de
+    sous-structure, et toutes les tentatives pour accéder à un de ses champs
+    entraineront une erreur d'exécution.
+   </para>
+
+   <para>
+    Notez que <literal>RECORD</> n'est pas un vrai type de données mais seulement un
+    paramètre fictif (placeholder). Il faut aussi realiser que quand une fonction 
+    <application>PL/pgSQL</application> est déclarée renvoyer un type <type>record</>, 
+    il ne s'agit pas tout à fait du même concept qu'une variable record, même si 
+    une telle fonction peut aussi utiliser une variable record pour contenir son 
+    résultat. Dans les deux cas la structure réelle de la ligne n'est pas connue quand
+    la fonction est écrite, mais dans le cas d'une fonction renvoyant un type
+    <type>record</> la structure réelle est déterminée quand la requête appelante est
+    analysée, alors qu'une variable record peut changer sa structure de ligne à la volée.   </para>
+  </sect2>
+
+    <sect2 id="plpgsql-declaration-renaming-vars">
+     <title><literal>RENAME</></title>
+
+<synopsis>
+RENAME <replaceable>ancien nom</replaceable> TO <replaceable>nouveau nom</replaceable>;
+</synopsis>
+
+     <para>
+      En utilisant la déclaration <literal>RENAME</literal>, vous pouvez changer le nom d'une variable,
+      d'un record ou d'un row (ligne). C'est particulièrement utile si
+      <literal>NEW</literal> ou <literal>OLD</literal> doivent
+      être référencés par un autre nom dans une procédure déclencheur. Voir
+      aussi <literal>ALIAS</literal>.
+     </para>
+
+     <para>
+      Exemples&nbsp;:
+<programlisting>
+RENAME id TO user_id;
+RENAME this_var TO that_var;
+</programlisting>
+     </para>
+
+    <note>
+    <para>
+	  <literal>RENAME</literal> semble ne pas fonctionner dans <productname>PostgreSQL</> 7.3. Cette
+	  correction est de faible priorité, <literal>ALIAS</literal> couvrant la plupart des utilisations
+	  partiques de <literal>RENAME</literal>. 
+    </para>
+    </note>
+
+    </sect2>
+  </sect1>
+
+  <sect1 id="plpgsql-expressions">
+  <title>Expressions</title>
+
+    <para>
+     Toutes les expressions utilisées dans les instructions
+     <application>PL/pgSQL</application> sont traitées par l'exécuteur 
+     <acronym>SQL</acronym> classique du serveur. Les expressions qui apparaissent 
+     contenir des constantes peuvent en fait nécessiter une évaluation pendant l'exécution
+     (par exemple, <literal>'now'</literal> pour le type <type>timestamp</type>)
+     ainsi il est impossible pour l'analyseur syntaxique 
+     <application>PL/pgSQL</application> d'identifier les valeurs réelles des constantes
+     autres que le mot clé <literal>NULL</>. Toutes les expressions sont evaluées 
+     de façon interne en exécutant une requête
+<synopsis>
+SELECT <replaceable>expression</replaceable>
+</synopsis>
+     en utilisant le gestionnaire <acronym>SPI</acronym>. Pour l'évaluation, les 
+     ocurrences des identifiants de variables<application>PL/pgSQL</application>
+     sont remplacées par des paramètres, et les valeurs réelles des variables sont
+     passées à l'exécuteur dans le tableau des paramètres. 
+     Ceci permet au plan de requêtes pour le <command>SELECT</command> de n'être 
+     élaboré qu'une fois et réutilisé pour les évaluations postérieures.
+     </para>
+
+    <para>
+     L'évaluation faite par l'analyseur syntaxique principal de 
+     <productname>PostgreSQL</productname> a quelques effets de bord sur l'interprétation
+     des valeurs constantes. Plus précisément, il y a une différence entre ce que font 
+     ces deux fonctions&nbsp;:
+<programlisting>
+CREATE FUNCTION logfunc1(text) RETURNS timestamp AS '
+    DECLARE
+        logtxt ALIAS FOR $1;
+    BEGIN
+        INSERT INTO logtable VALUES (logtxt, ''now'');
+        RETURN ''now'';
+    END;
+' LANGUAGE plpgsql;
+</programlisting>
+
+     et
+
+<programlisting>
+CREATE FUNCTION logfunc2(text) RETURNS timestamp AS '
+    DECLARE
+        logtxt ALIAS FOR $1;
+        curtime timestamp;
+    BEGIN
+        curtime := ''now'';
+        INSERT INTO logtable VALUES (logtxt, curtime);
+        RETURN curtime;
+    END;
+' LANGUAGE plpgsql;
+</programlisting>
+    </para>
+
+    <para>
+     Dans le cas de <function>logfunc1</function>, l'analyseur syntaxique principal de
+     <productname>PostgreSQL</productname> sait, quand il élabore le plan pour l'
+     <command>INSERT</command>, que la chaîne <literal>'now'</literal>
+     doit être interprétée comme un <type>timestamp</type> parce que la colonne cible
+      de <classname>logtable</classname> est de ce type. Ainsi, il en fera une constante
+     à ce moment et cette valeur constante sera alors utilisée dans toutes les invocations
+     de <function>logfunc1</function> pendant le temps que durera la session. Il va
+     sans dire que ce n'est pas ce que le programmeur voulait.
+    </para>
+
+    <para>
+     Dans le cas de <function>logfunc2</function>, l'analyseur principal de 
+     <productname>PostgreSQL</productname> ne sait pas quel type <literal>'now'</literal>
+     doit devenir, et par conséquent, il renvoie une valeur de type <type>text</type>
+     contenant la chaîne <literal>now</literal>. Durant l'assignation consécutive de la
+     variable locale <varname>curtime</varname>, l'interpréteur
+     <application>PL/pgSQL</application> transtype cette chaîne en type 
+     <type>timestamp</type> en appelant les fonctions <function>text_out</function>
+     et <function>timestamp_in</function> pour la conversion.
+     Ainsi, l'horodateur est mis à jour à chaque exécution comme l'attend le programmeur.
+    </para>
+
+    <para>
+     La nature modifiable des variables record présente un problème 
+     lors de cette connexion. Quand les champs d'une variable record sont utilisés
+     dans les expressions ou les instructions, les types de données des champs ne doivent
+     pas changer entre les appels de deux expressions identiques, puisque  l'expression
+     sera planifiée en utilisant le type de données présent quand l'expression
+     est atteinte pour la première fois. Gardez ceci à l'esprit quand vous écrivez
+     des procédures déclencheurs qui gèrent des évènements pour plus d'une table.
+     (<command>EXECUTE</command> peut être utilisé pour contourner le problème si
+     nécessaire).
+     </para>
+  </sect1>
+
+  <sect1 id="plpgsql-statements">
+  <title>Instructions de base</title>
+
+   <para>
+    Dans cette section ainsi que les suivantes, nous décrirons tous les types 
+    d'instructions explicitement compris par 
+    <application>PL/pgSQL</application>.
+    Tout ce qui n'est pas reconnu comme l'un de ces types d'instruction est présumé
+    être une commande SQL et est envoyé au moteur principal de bases de données pour 
+    être exécutée (après substitution de chaque variable 
+    <application>PL/pgSQL</application> utilisée dans l'instruction). Ainsi, par 
+    exemple, les commandes SQL <command>INSERT</>, <command>UPDATE</>, et
+    <command>DELETE</> peuvent être considérées comme des instructions de 
+    <application>PL/pgSQL</application>, mais ne sont pas spécifiquement listées ici.
+   </para>
+   
+   <sect2 id="plpgsql-statements-assignment">
+    <title>Assignation</title>
+
+    <para>
+     L'assignation d'une valeur à une variable ou à un champ row/record est
+     écrite ainsi&nbsp;:
+<synopsis>
+<replaceable>identifiant</replaceable> := <replaceable>expression</replaceable>;
+</synopsis>
+     Comme expliqué plus haut, l'expression dans un telle instruction est évaluée au 
+     moyen de la commande SQL <command>SELECT</> envoyée au moteur principal de
+     bases de données. L'expression ne doit manier qu'une seule valeur.
+    </para>
+
+    <para>
+     Si le type de données du résultat de l'expression ne correspond pas au type de donnée
+     de la variable, ou que la variable a une taille ou une précision 
+     (comme <type>char(20)</type>), la valeur résulat sera implicitement convertie
+     par l'interpréteur <application>PL/pgSQL</application> en utilisant la fonction 
+     d'écriture (output-function) du type du résultat, et la fonction d'entrée
+     (input-function) du type de la variable. Notez que cela pourrait potentiellement 
+     conduire des erreurs d'exécution générées par la fonction d'entrée, si la forme
+     de la chaîne de la valeur résultat n'est pas acceptable par la fonction d'entrée.
+     </para>
+
+    <para>
+     Exemples&nbsp;:
+<programlisting>
+user_id := 20;
+tax := subtotal * 0.06;
+</programlisting>
+    </para>
+   </sect2>
+
+   <sect2 id="plpgsql-select-into">
+    <title><command>SELECT INTO</command></title>
+
+    <indexterm zone="plpgsql-select-into">
+     <primary>SELECT INTO</primary>
+     <secondary>in PL/pgSQL</secondary>
+    </indexterm>
+
+    <para>
+     Le résultat d'une commande <command>SELECT</command> manipulant plusieurs colonnes
+     (mais une seule ligne) peut être assignée à une variable de type record ou ligne, ou une
+     liste de valeurs scalaires. Ceci est fait via&nbsp;:
+<synopsis>
+SELECT INTO <replaceable>cible</replaceable> <replaceable>expressions</replaceable> FROM ...;
+</synopsis>
+
+     où <replaceable>cible</replaceable> peut être une variable record, une variable 
+     ligne, ou une liste, séparées de virgules, de simples variables de champs 
+     record/ligne. L'expression <replaceable>select_expressions</replaceable>
+     et le reste de la commande sont identiques à du SQL standard.
+    </para>
+
+    <para>
+     Notez que cela est assez différent de l'interprétation normale par 
+     <productname>PostgreSQL</> de <command>SELECT INTO</command>, où la cible de
+     <literal>INTO</> est une table nouvellement créée. Si vous voulez créer une
+     table à partir du résultat d'un <command>SELECT</> d'une fonction
+     <application>PL/pgSQL</application>, utilisez la syntaxe 
+     <command>CREATE TABLE ... AS SELECT</command>.
+    </para>
+
+    <para>
+     Si une ligne ou une liste de variable est utilisée comme cible, les valeurs
+     sélectionnées doivent correspondre exactement à la structure de la cible, ou une
+     erreur d'exécution se produira. Quand une variable record est la cible, elle se 
+     configure seule automatiquement au type ligne formé par les colonnes résultant de la requête.
+     </para>
+
+    <para>
+     A l'exception de la clause <literal>INTO</>, l'instruction <command>SELECT</>
+     est identique à la commande SQL <command>SELECT</> normale et peut en utiliser
+     toute la puissance.
+    </para>
+
+    <para>
+     Si la requête ne renvoie aucune ligne, des valeurs null sont assignées au(x)
+     cibles(s). Si la requête renvoie plusieurs lignes, la première ligne
+     est assignées au(x) cible(s) et le reste est rejeté. (Notez que 
+     <quote>la première ligne</> n'est pas correctement définie à moins d'utiliser
+     <literal>ORDER BY</>.)
+    </para>
+
+    <para>
+     Actuellement, la clause <literal>INTO</> peut apparaître presque n'importe où
+     dans l'instruction <command>SELECT</command>, mais il est recommandé de la placer
+     immédiatement apres le mot clé <literal>SELECT</literal> comme décrit plus haut.
+     Les version futures de <application>PL/pgSQL</application> pourront être moins
+     laxistes sur le placement de la clause <literal>INTO</literal>.
+    </para>
+
+    <para>
+     Vous pouvez utiliser <literal>FOUND</literal> immédiatement après une instruction
+     <command>SELECT INTO</command> pour déterminer si l'assignation a réussi
+     (c'est à dire qu'au moins une ligne a été renvoyée par la requête). Par
+exemple&nbsp;:  
+<programlisting>
+SELECT INTO myrec * FROM emp WHERE empname = myname;
+IF NOT FOUND THEN
+    RAISE EXCEPTION ''employee % not found'', myname;
+END IF;
+</programlisting>
+    </para>
+
+    <para>
+     Pour tester si un résultat record/ligne est null, vous pouvez utiliser
+     la conditionelle <literal>IS NULL</literal>. Il n'y a cependant aucun
+     moyen de dire si une ou plusieurs lignes additionnelles ont été rejetées. Voici
+     un exemple qui traite le cas où aucune ligne n'a été renvoyée.
+<programlisting>
+DECLARE
+    users_rec RECORD;
+    full_name varchar;
+BEGIN
+    SELECT INTO users_rec * FROM users WHERE user_id=3;
+
+    IF users_rec.homepage IS NULL THEN
+        -- l'utilisateur n'a entré aucune page, renvoyer "http://"
+        RETURN ''http://'';
+    END IF;
+END;
+</programlisting>
+    </para>
+   </sect2>
+
+   <sect2 id="plpgsql-statements-perform">
+    <title>Exécuter une Expression ou Requête Sans Résultat</title>
+
+    <para>
+     Quelquefois l'on souhaite évaluer une expression ou une requête mais rejeter le 
+     résultat (généralement parce que l'on appelle une fonction qui a des effets de 
+     bords utiles mais pas de résultat utile). Pour ce faire dans 
+     <application>PL/pgSQL</application>, utilisez l'instruction 
+     <command>PERFORM</command>&nbsp;:
+
+<synopsis>
+PERFORM <replaceable>requête</replaceable>;
+</synopsis>
+
+     Ceci exécute <replaceable>requête</replaceable>, qui doit être une
+     instruction <command>SELECT</command>, et rejette le résultat. Les variables 
+     <application>PL/pgSQL</application> sont normalement remplacées dans la requête. 
+     Par ailleurs, la variable spéciale <literal>FOUND</literal> est positionnée
+     à true si la requête produit au moins une ligne ou false si elle n'en produit
+     aucune.
+    </para>
+
+    <note>
+     <para>
+      On pourrait s'attendre à ce qu'un <command>SELECT</command> sans clause
+      <literal>INTO</> aboutisse à ce résultat, mais en réalité la seule façon
+      acceptée de faire cela est <command>PERFORM</command>.
+     </para>
+    </note>
+
+    <para>
+     Un exemple&nbsp;:
+<programlisting>
+PERFORM create_mv(''cs_session_page_requests_mv'', my_query);
+</programlisting>
+    </para>
+   </sect2>
+   
+   <sect2 id="plpgsql-statements-executing-dyn">
+    <title>Exécuter des Commandes Dynamiques</title>
+    
+    <para>
+     Souvent vous voudrez générer des commandes dynamiques dans vos fonctions 
+     <application>PL/pgSQL</application>, c'est à dire, des commandes
+     qui impliquent différentes tables ou différents types de données à chaque fois 
+     qu'elles sont exécutées. Les tentatives normales de
+     <application>PL/pgSQL</application> pour garder en cache les planification des 
+     commandes ne fonctionneront pas dans de tels scénarios. Pour gérer ce type
+     de problème, l'instruction <command>EXECUTE</command> est fournie&nbsp;:
+
+<synopsis>
+EXECUTE <replaceable class="command">chaîne-commande</replaceable>;
+</synopsis>
+
+     où <replaceable>chaîne-commande</replaceable> est une expression manipulant
+     une chaîne (de type <type>text</type>) contenant la commande à être exécutée.
+     Cette chaîne est littéralement donnée à manger au moteur SQL.
+    </para>
+
+    <para>
+     Notez en particulier qu'aucune substitution de variable <application>PL/pgSQL</>
+     n'est faite sur la chaîne-commande.  Les valeurs des variables doivent être
+     insérées dans la chaîne de commande lors de sa construction.
+    </para>
+
+    <para>
+    Lorsque vous travaillez avec des commandes dynamiques vous avez à faire face
+    à l'échappement des guillemets simples dans <application>PL/pgSQL</>. 
+    Référez vous au survol dans <xref linkend="plpgsql-quote-tips">, qui peut
+    vous épargner quelque effort.
+    </para>
+     
+    <para>
+     A la différence de toutes les autres commandes dans <application>PL/pgSQL</>, 
+     une commande lancée par une instruction <command>EXECUTE</command> n'est pas préparée
+     ni sauvée une seule fois pendant la durée de la session. A la place, la commande
+     est préparée à chaque fois que l'instruction est lancée. La chaîne-commande peut
+     être dynamiquement créée à l'interieur de la fonction pour agir sur des variables 
+     tables ou colonnes.
+    </para>
+  
+    <para>
+     Les résultats des commandes  <command>SELECT</command> sont rejetés par 
+     <command>EXECUTE</command>, et <command>SELECT INTO</command> n'est pas
+     actuellement géré à l'intérieur d'une instruction <command>EXECUTE</command>.
+     Il existe deux façons d'extraire un résultat d'un <command>SELECT</command>
+     créé dynamiquement&nbsp;: la première est d'utiliser la boucle <command>FOR-IN-EXECUTE</>
+     décrite dans <xref linkend="plpgsql-records-iterating">, et la deuxième est
+     d'utiliser un curseur avec <command>OPEN-FOR-EXECUTE</>, comme décrit dans
+     <xref linkend="plpgsql-cursor-opening">.
+    </para>
+
+    <para>
+     Exemple&nbsp;:
+<programlisting>
+EXECUTE ''UPDATE tbl SET ''
+        || quote_ident(colname)
+        || '' = ''
+        || quote_literal(newvalue)
+        || '' WHERE ...'';
+</programlisting>
+    </para>
+
+    <para>
+     Cet exemple montre l'utilisation des fonctions
+     <function>quote_ident(<type>text</type>)</function> et
+     <function>quote_literal(<type>text</type>)</function>.<indexterm><primary>quote_ident</><secondary>utilisé
+     dans PL/pgSQL</></indexterm><indexterm><primary>quote_literal</><secondary>utilisé
+     dans PL/pgSQL</></indexterm> Pour plus de sûreté, les variables contenant
+     les identifiants des colonnes et des tables doivent être passés à la
+     fonction <function>quote_ident</function>. Les variables contenant les
+     valeurs devant être des chaînes dans la commande construite devraient être
+     passées à <function>quote_literal</function>. Les deux font les étapes
+     appropriées pour renvoyer le texte en entrée entouré par des guillemets 
+     doubles ou simples respectivement, avec tout caractère intégré spécial
+     proprement échappé.
+    </para>
+
+    <para>
+     Voici un exemple beaucoup plus important de commande dynamique et d'utilisation
+     d'<command>EXECUTE</command>&nbsp;:
+<programlisting>
+CREATE FUNCTION cs_update_referrer_type_proc() RETURNS integer AS '
+DECLARE
+    referrer_keys RECORD;  -- déclare un record générique à utiliser dans un FOR
+    a_output varchar(4000);
+BEGIN 
+    a_output := ''CREATE FUNCTION cs_find_referrer_type(varchar, varchar, varchar) 
+                  RETURNS varchar AS '''' 
+                     DECLARE 
+                         v_host ALIAS FOR $1; 
+                         v_domain ALIAS FOR $2; 
+                         v_url ALIAS FOR $3;
+                     BEGIN ''; 
+
+    -- Notez comment nous scannons les résultats d'une requête dans une boucle FOR
+    -- en utilisant la construction FOR &lt;record&gt;.
+
+    FOR referrer_keys IN SELECT * FROM cs_referrer_keys ORDER BY try_order LOOP
+        a_output := a_output || '' IF v_'' || referrer_keys.kind || '' LIKE '''''''''' 
+                 || referrer_keys.key_string || '''''''''' THEN RETURN '''''' 
+                 || referrer_keys.referrer_type || ''''''; END IF;''; 
+    END LOOP; 
+  
+    a_output := a_output || '' RETURN NULL; END; '''' LANGUAGE plpgsql;''; 
+ 
+    EXECUTE a_output; 
+END; 
+' LANGUAGE plpgsql;
+</programlisting>
+    </para>
+   </sect2>
+
+   <sect2 id="plpgsql-statements-diagnostics">
+    <title>Obtention du Statut du Résultat</title>
+
+    <para>
+	 Il y a plusieurs moyen de déterminer l'effet d'une commande. La première méthode
+	 est d'utiliser <command>GET DIAGNOSTICS</command>, qui a la forme
+suivante&nbsp;:
+
+<synopsis>
+GET DIAGNOSTICS <replaceable>variable</replaceable> = <replaceable>item</replaceable> <optional> , ... </optional> ;
+</synopsis>
+
+     Cette commande permet la récupération des indicateurs de l'état du système. Chaque
+     <replaceable>item</replaceable> est un mot clé identifiant une valeur d'état devant
+     être assignée à la variable indiquée (qui devrait être du bon type de donnée 
+     pour pouvoir la recevoir.) Les items d'état actuellement disponibles sont
+     <varname>ROW_COUNT</>, le nombre de lignes traitées par la dernière commande
+     <acronym>SQL</acronym> envoyée au moteur <acronym>SQL</acronym>, et 
+     <varname>RESULT_OID</>, l'OID de la dernière ligne insérée par la commande 
+     <acronym>SQL</acronym> la plus récente.  Notez que <varname>RESULT_OID</>
+     n'est utile qu'après une commande <command>INSERT</command>.
+    </para>
+
+    <para>
+     Exemple&nbsp;:
+<programlisting>
+GET DIAGNOSTICS var_integer = ROW_COUNT;
+</programlisting>
+    </para>
+
+    <para>
+     La seconde méthode pour déterminer les effets d'une commande est la variable 
+     spéciale nommée <literal>FOUND</literal>  de type <type>boolean</type>.  
+     <literal>FOUND</literal> commence par être false dans chaque fonction 
+     <application>PL/pgSQL</application>. Elle est positionnée par chacune des types
+     d'instructions suivants.
+	 <itemizedlist>
+	  <listitem>
+	   <para>
+		Une instruction <command>SELECT INTO</command> positionne
+		<literal>FOUND</literal> à true si elle renvoie une ligne, false
+		si aucune ligne n'est renvoyée.
+	   </para>
+	  </listitem>
+	  <listitem>
+	   <para>
+		Une instruction <command>PERFORM</> positionne <literal>FOUND</literal>
+		à true si elle produit (rejette) une ligne, faux si aucune ligne n'est
+		produite.
+	   </para>
+	  </listitem>
+	  <listitem>
+	   <para>
+		Les instructions <command>UPDATE</>, <command>INSERT</>, et
+		<command>DELETE</> positionnent  <literal>FOUND</literal> à true 
+		si au moins une ligne est affectée, false si aucune ligne n'est affectée.
+	   </para>
+	  </listitem>
+	  <listitem>
+	   <para>
+		Une instruction <command>FETCH</> positionne <literal>FOUND</literal>
+		à true si elle renvoie une ligne, false si aucune ligne n'est renvoyée.
+	   </para>
+	  </listitem>
+	  <listitem>
+	   <para>
+		La commande <command>FOR</> positionne <literal>FOUND</literal> à true
+		si elle effectue une itération une ou plusieurs fois, sinon elle renvoie
+		false. Ceci s'applique aux trois variantes de l'instruction 
+		<command>FOR</> (boucles <command>FOR</> integer,
+		<command>FOR</> record-set,
+		et <command>FOR</> record-set dynamique). <literal>FOUND</literal>
+		n'est positionné que quand la boucle <command>FOR</>
+s'achève&nbsp;:
+		dans l'exécution de la chaîne, <literal>FOUND</literal> 
+		n'est pas modifiée par l'instruction <command>FOR</>, bien qu'il 
+		puisse être modifié par l'exécution d'autres instructions situées
+		dans le corps de la boucle.
+	   </para>
+	  </listitem>
+	 </itemizedlist>
+     <literal>FOUND</literal> est une variable locale; chaque changement qui y est fait
+     n'affecte que la fonction <application>PL/pgSQL</application> courante.
+    </para>
+
+   </sect2>
+  </sect1>
+
+  <sect1 id="plpgsql-control-structures">
+   <title>Structures de Contrôle</title>
+
+   <para>
+    Les structures de contrôle sont probablement la partie la plus utile (et importante)
+    de <application>PL/pgSQL</>. Grâce aux structures de contrôle de
+    <application>PL/pgSQL</>, vous pouvez manipuler les données 
+    <productname>PostgreSQL</> de façons très flexible et puissante.
+   </para>
+   
+   <sect2 id="plpgsql-statements-returning">
+    <title>Retour d'une Fonction</title>
+
+    <para>
+     Il y a deux commandes disponibles qui vous permettent de renvoyer des données
+     d'une fonction&nbsp;: <command>RETURN</command> et <command>RETURN
+     NEXT</command>.
+    </para>
+
+    <sect3>
+     <title><command>RETURN</></title>
+
+<synopsis>
+RETURN <replaceable>expression</replaceable>;
+</synopsis>
+
+     <para>
+      <command>RETURN</command> accompagné d'une expression termine la fonction et 
+      renvoie le valeur d'<replaceable>expression</replaceable> à l'appelant.
+      Cette forme est à utiliser avec des fonctions <application>PL/pgSQL</>
+      qui ne renvoient pas d'ensemble de valeurs.
+     </para>
+
+     <para>
+      Lorsqu'elle renvoie un type scalaire, n'importe quelle expression peut être 
+      utilisée. Le résultat de l'expression sera automatiquement transtypé vers le type
+      de retour de la fonction, comme décrit pour les assignations. Pour renvoyer une 
+      valeur composite (ligne), vous devez écrire une variable record ou ligne comme 
+      <replaceable>expression</replaceable>.
+     </para>
+
+     <para>
+      La valeur de retour d'une fonction ne peut pas être laissée indéfinie.
+      Si le contrôle atteint la fin du bloc de premier niveau sans avoir rencontré
+      d'instruction <command>RETURN</command> une erreur d'éxécution sera lancée. 
+    </para>
+
+    <para>
+      Notez que si vous avez déclaré la fonction comme renvoyant 
+      <type>void</type>, une instruction <command>RETURN</command> doit être
+      quand même spécifiée; l'expression suivant la commande <command>RETURN</command>
+      est cependant optionnelle et sera ignorée dans tous les cas.
+     </para>
+    </sect3>
+
+    <sect3>
+     <title><command>RETURN NEXT</></title>
+
+<synopsis>
+RETURN NEXT <replaceable>expression</replaceable>;
+</synopsis>
+
+     <para>
+      Lorsqu'une fonction <application>PL/pgSQL</> est déclarée renvoyer 
+      <literal>SETOF <replaceable>type quelconque</></literal>, la procédure à suivre est 
+      légèrement différente. Dans ce cas, les items individuels à renvoyer sont 
+      spécifiés dans les commandes <command>RETURN NEXT</command>,
+      et ensuite une commande <command>RETURN</command> finale, sans arguments
+      est utilisée pour indiquer que la fonction a terminé son exécution. 
+      <command>RETURN NEXT</command> peut être utilisé avec des types scalaires
+      et des types composites de données; dans ce dernier cas, une 
+      <quote>table</quote> entière de résultats sera renvoyée.
+     </para>
+
+     <para>
+      Les fonctions qui utilisent <command>RETURN NEXT</command> devraient être
+      appelées d'après le modèle suivant&nbsp;:
+<programlisting>
+SELECT * FROM some_func();
+</programlisting>
+
+      En fait la fonction est utilisée comme table source dans une clause 
+      <literal>FROM</literal>
+     </para>
+
+     <para>
+      <command>RETURN NEXT</command> n'effectue pas vraiment de renvoi; il sauvegarde 
+      simplement les valeurs des expressions (ou variables de type record ou ligne,
+      d'après le type approprié au type de données renvoyé). L'exécution continue
+      alors avec la prochaîne instruction dans la fonction 
+      <application>PL/pgSQL</>. Lorsque des commandes <command>RETURN NEXT</command>
+      successives sont renvoyées, l'ensemble des résultats est élaboré. Un 
+      <command>RETURN</command> final, qui ne devrait pas avoir d'argument, provoque la 
+      sortie du contrôle de la fonction.
+     </para>
+
+     <note>
+      <para>
+       L'implémentation actuelle de <command>RETURN NEXT</command> pour
+       <application>PL/pgSQL</> emmagasine la totalité de l'ensemble des
+       résultats avant 
+       d'effectuer le retour de la fonction, comme vu plus haut. Cela signifie que
+       si une fonction <application>PL/pgSQL</> produit une structure résultat
+       très grande, les performances peuvent être faibles: les données seront écrites
+       sur le disque pour éviter un épuisement de la mémoire, mais la fonction
+       en elle-même ne renverra rien jusqu'a ce que l'ensemble des résultats
+       entier soit généré. Une version future de  <application>PL/pgSQL</> pourra
+       permettre aux utilisateurs de définir des fonctions renvoyant des ensembles qui
+       n'auront pas cette limitation. Actuellement le point auquel les données commencent
+       à être écrites sur le disque est controlé par la variable de configuration 
+       <varname>sort_mem</>.  Les administrateurs ayant une mémoire suffisante pour 
+       enregistrer des ensembles de résultats plus importants en mémoire devraient 
+       envisager l'augmentation de ce paramètre.
+      </para>
+     </note>
+    </sect3>
+   </sect2>
+    
+   <sect2 id="plpgsql-conditionals">
+    <title>Contrôles Conditionnels</title>
+
+    <para>
+     Les instructions <literal>IF</> vous permettent d'exécuter des commandes basées sur
+     certaines conditions. <application>PL/pgSQL</> a quatre formes de 
+     <literal>IF</>:
+    <itemizedlist>
+     <listitem>
+      <para><literal>IF ... THEN</></>
+     </listitem>
+     <listitem>
+      <para><literal>IF ... THEN ... ELSE</></>
+     </listitem>
+     <listitem>
+      <para><literal>IF ... THEN ... ELSE IF</></>
+     </listitem>
+     <listitem>
+      <para><literal>IF ... THEN ... ELSIF ... THEN ... ELSE</></>
+     </listitem>
+    </itemizedlist>
+    </para>
+
+    <sect3>
+     <title><literal>IF-THEN</></title>
+
+<synopsis>
+IF <replaceable>expression-booleenne</replaceable> THEN
+    <replaceable>instructions</replaceable>
+END IF;
+</synopsis>
+
+       <para>
+        Les instructions <literal>IF-THEN</literal> sont la forme la plus simple de 
+	<literal>IF</literal>. Les instructions entre <literal>THEN</literal> et 
+	<literal>END IF</literal> seront exécutées si la condition est true. Autrement,
+	ils seront négligés.
+       </para>
+
+       <para>
+        Exemple&nbsp;:
+<programlisting>
+IF v_user_id &lt;&gt; 0 THEN
+    UPDATE users SET email = v_email WHERE user_id = v_user_id;
+END IF;
+</programlisting>
+       </para>
+     </sect3>
+
+     <sect3>
+      <title><literal>IF-THEN-ELSE</></title>
+
+<synopsis>
+IF <replaceable>expression-booleenne</replaceable> THEN
+    <replaceable>instructions</replaceable>
+ELSE
+    <replaceable>instructions</replaceable>
+END IF;
+</synopsis>
+
+       <para>
+        Les instructions <literal>IF-THEN-ELSE</literal> s'ajoutent au
+        <literal>IF-THEN</literal> en vous permettant de spécifier un ensemble
+	d'instructions alternatif à exécuter si la condition est evaluée à false.
+	</para>
+
+       <para>
+        Exemples&nbsp;:
+<programlisting>
+IF parentid IS NULL OR parentid = ''''
+THEN
+    RETURN fullname;
+ELSE
+    RETURN hp_true_filename(parentid) || ''/'' || fullname;
+END IF;
+</programlisting>
+
+<programlisting>
+IF v_count > 0 THEN 
+    INSERT INTO users_count (count) VALUES (v_count);
+    RETURN ''t'';
+ELSE
+    RETURN ''f'';
+END IF;
+</programlisting>
+     </para>
+    </sect3>
+
+     <sect3>
+      <title><literal>IF-THEN-ELSE IF</></title>
+
+       <para>
+        Les instructions <literal>IF</literal> peuvent être imbriquées, comme dans 
+	l'exemple suivant&nbsp;: 
+<programlisting>
+IF demo_row.sex = ''m'' THEN
+    pretty_sex := ''man'';
+ELSE
+    IF demo_row.sex = ''f'' THEN
+        pretty_sex := ''woman'';
+    END IF;
+END IF;
+</programlisting>
+       </para>
+
+       <para>
+        Lorsque vous utilisez cette forme, vous imbriquez une instruction
+        <literal>IF</literal> dans la partie <literal>ELSE</literal> d'une
+	instruction <literal>IF</literal> extérieure. Ansi vous avez besoin
+	d'une instruction <literal>END IF</literal> pour chaque <literal>IF</literal>
+	imbriqué et une pour le <literal>IF-ELSE</literal> parent. Ceci fonctionne mais
+	devient fastidieux quand il y a de nombreuses alternatives à traiter.
+	Considérez alors la forme suivante.
+       </para>
+     </sect3>
+
+     <sect3>
+      <title><literal>IF-THEN-ELSIF-ELSE</></title>
+
+<synopsis>
+IF <replaceable>expression-booleenne</replaceable> THEN
+    <replaceable>instructions</replaceable>
+<optional> ELSIF <replaceable>expression-booleenne</replaceable> THEN
+    <replaceable>instructions</replaceable>
+<optional> ELSIF <replaceable>expression-booleenne</replaceable> THEN
+    <replaceable>instructions</replaceable>
+    ...
+</optional>
+</optional>
+<optional> ELSE
+    <replaceable>instructions</replaceable> </optional>
+END IF;
+</synopsis>
+
+       <para>
+        <literal>IF-THEN-ELSIF-ELSE</> fournit une méthode plus pratique pour vérifier 
+	de nombreuses alternatives en une instruction. Elle est équivalente formellement
+	aux commandes <literal>IF-THEN-ELSE-IF-THEN</> imbriquées, mais un seul
+        <literal>END IF</> est nécessaire.
+       </para>
+
+       <para>
+        Voici un exemple&nbsp;: 
+
+<programlisting>
+IF number = 0 THEN
+    result := ''zero'';
+ELSIF number &gt; 0 THEN 
+    result := ''positif'';
+ELSIF number &lt; 0 THEN
+    result := ''negatif'';
+ELSE
+    -- hmm, la seule possibilité est que le nombre soit null
+    result := ''NULL'';
+END IF;
+</programlisting>
+       </para>
+     </sect3>
+   </sect2>
+
+   <sect2 id="plpgsql-control-structures-loops">
+    <title>Boucles Simples</title>
+
+    <indexterm zone="plpgsql-control-structures-loops">
+     <primary>boucle</primary>
+     <secondary>en PL/pgSQL</secondary>
+    </indexterm>
+
+    <para>
+     Grâce aux instructions <literal>LOOP</>, <literal>EXIT</>, <literal>WHILE</>,
+     and <literal>FOR</> vous pouvez faire en sorte que vos fonctions 
+     <application>PL/pgSQL</application> répètent une série de commandes.
+    </para>
+
+    <sect3>
+     <title><literal>LOOP</></title>
+
+<synopsis>
+<optional>&lt;&lt;<replaceable>label</replaceable>&gt;&gt;</optional>
+LOOP
+    <replaceable>instructions</replaceable>
+END LOOP;
+</synopsis>
+
+     <para>
+      <literal>LOOP</> définit une boucle inconditionnelle répétée indéfiniement 
+      jusqu'a ce qu'elle soit terminée par une instruction <literal>EXIT</> ou
+      <command>RETURN</command>.  Le label optionnel peut être utilisé par les instructions
+      <literal>EXIT</> dans le cas de boucles imbriquées pour définir quel niveau
+      d'imbrication doit s'achever.
+     </para>
+    </sect3>
+
+     <sect3>
+      <title><literal>EXIT</></title>
+
+<synopsis>
+EXIT <optional> <replaceable>label</replaceable> </optional> <optional> WHEN <replaceable>expression</replaceable> </optional>;
+</synopsis>
+
+       <para>
+        SI aucun <replaceable>label</replaceable> n'est donné la boucle la plus 
+	imbriquée se termine et l'instruction suivant <literal>END LOOP</> est 
+	exécutée ensuite.
+        Si un <replaceable>label</replaceable> est donné, ce doit être 
+	le label de la boucle ou du bloc courant ou d'un niveau moins imbriqué.
+	La boucle ou le bloc nommé se termine alors et le contrôle continue
+	avec l'instruction située après le <literal>END</> de la boucle ou du bloc
+	correspondant.
+       </para>
+
+       <para>
+        Si <literal>WHEN</> est présent, la sortie de boucle ne s'effectue que si les 
+	conditions spécifiées sont true, autrement le contrôle passe à l'instruction
+	suivant le <literal>EXIT</>.
+       </para>
+
+       <para>
+        Exemples&nbsp;:
+<programlisting>
+LOOP
+    -- quelques traitements
+    IF count > 0 THEN
+        EXIT;  -- sortie de boucle
+    END IF;
+END LOOP;
+
+LOOP
+    -- quelques traitements
+    EXIT WHEN count > 0;
+END LOOP;
+
+BEGIN
+    -- quelques traitements
+    IF stocks > 100000 THEN
+        EXIT;  -- invalide; on ne peut pas utiliser EXIT hors d'un LOOP
+    END IF;
+END;
+</programlisting>
+       </para>
+     </sect3>
+
+     <sect3>
+      <title><literal>WHILE</></title>
+
+<synopsis>
+<optional>&lt;&lt;<replaceable>label</replaceable>&gt;&gt;</optional>
+WHILE <replaceable>expression</replaceable> LOOP
+    <replaceable>instructions</replaceable>
+END LOOP;
+</synopsis>
+
+       <para>
+        L'instruction <literal>WHILE</> repète une séquence d'instructions aussi longtemps
+	que l'expression conditionnelle est évaluée à vrai. La condition est vérifée juste
+	avant chaque entrée dans le corps de la boucle.
+       </para>
+
+       <para>
+        Par exemple&nbsp;:
+<programlisting>
+WHILE amount_owed > 0 AND gift_certificate_balance > 0 LOOP
+    -- quelques traitements ici
+END LOOP;
+
+WHILE NOT boolean_expression LOOP
+    -- quelques traitements ici
+END LOOP;
+</programlisting>
+       </para>
+     </sect3>
+
+     <sect3>
+      <title><literal>FOR</> (variante avec entier)</title>
+
+<synopsis>
+<optional>&lt;&lt;<replaceable>label</replaceable>&gt;&gt;</optional>
+FOR <replaceable>nom</replaceable> IN <optional> REVERSE </optional> <replaceable>expression</replaceable> .. <replaceable>expression</replaceable> LOOP
+    <replaceable>instruction</replaceable>
+END LOOP;
+</synopsis>
+
+       <para>
+        Cette forme de <literal>FOR</> crée une boucle qui effectue une itération 
+	sur une plage de valeurs entières. La variable <replaceable>nom</replaceable>
+	est automatiquement définie comme un type <type>integer</> et n'existe 
+	que dans la boucle. Les deux expressions donnant les limites inférieures et 
+	supérieures de la plage sont evaluées une fois en entrant dans la boucle.
+	Le pas de l'itération est normalement de 1, mais est -1 quand 
+	<literal>REVERSE</> is spécifié.
+       </para>
+
+       <para>
+        Quelques exemples de boucles <literal>FOR</> avec entiers&nbsp;:
+<programlisting>
+FOR i IN 1..10 LOOP
+    -- quelques calculs ici
+    RAISE NOTICE ''i is %'', i;
+END LOOP;
+
+FOR i IN REVERSE 10..1 LOOP
+    -- quelques calculs ici
+END LOOP;
+</programlisting>
+       </para>
+
+       <para>
+        Si la limite basse est plus grande que la limite haute (ou moins grande
+        que, dans le cas du <literal>REVERSE</> case), le corps de la boucle
+        n'est pas exécuté du tout. Aucune erreur n'est renvoyée.
+       </para>
+
+     </sect3>
+   </sect2>
+
+   <sect2 id="plpgsql-records-iterating">
+    <title>Boucler Dans les Résultats de Requêtes</title>
+
+    <para>
+     En utilisant un type de <literal>FOR</> différent, vous pouvez itérer au travers
+     des résultats d'une requête et par là-même manipuler ces données. La 
+     syntaxe est la suivante&nbsp;: 
+<synopsis>
+<optional>&lt;&lt;<replaceable>label</replaceable>&gt;&gt;</optional>
+FOR <replaceable>record_ou_ligne</replaceable> IN <replaceable>requête</replaceable> LOOP
+    <replaceable>instructions</replaceable>
+END LOOP;
+</synopsis>
+     La variable record ou ligne est successivement assignée à chaque ligne résultant de la 
+     requête (une commande <command>SELECT</command>) et le corps de la boucle et exécuté
+     pour chaque ligne. Voici un exemple&nbsp;: 
+<programlisting>
+CREATE FUNCTION cs_refresh_mviews() RETURNS integer AS '
+DECLARE
+    mviews RECORD;
+BEGIN
+    PERFORM cs_log(''Refreshing materialized views...'');
+
+    FOR mviews IN SELECT * FROM cs_materialized_views ORDER BY sort_key LOOP
+
+        -- A présent "mviews" contient un enregistrement de cs_materialized_views
+
+        PERFORM cs_log(''Refreshing materialized view '' || quote_ident(mviews.mv_name) || ''...'');
+        EXECUTE ''TRUNCATE TABLE  '' || quote_ident(mviews.mv_name);
+        EXECUTE ''INSERT INTO '' || quote_ident(mviews.mv_name) || '' '' || mviews.mv_query;
+    END LOOP;
+
+    PERFORM cs_log(''Done refreshing materialized views.'');
+    RETURN 1;
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+
+     Si la boucle est terminée par une instruction <literal>EXIT</>, la dernière valeur
+     ligne assignée est toujours accessible apres la boucle.
+    </para>
+
+    <para>
+     L'instruction <literal>FOR-IN-EXECUTE</> est un moyen d'itérer sur des 
+     enregistrements&nbsp;:
+<synopsis>
+<optional>&lt;&lt;<replaceable>label</replaceable>&gt;&gt;</optional>
+FOR <replaceable>record_ou_ligne</replaceable> IN EXECUTE <replaceable>expression_texte</replaceable> LOOP 
+    <replaceable>instructions</replaceable>
+END LOOP;
+</synopsis>
+     Ceci est identique à la forme précédente, à ceci près que l'expression 
+     <command>SELECT</command> source est spécifiée comme une expression chaîne,
+     évaluée et replanifiée à chaque entrée dans la boucle <literal>FOR</>. Ceci 
+     permet au programmeur de choisir la vitesse d'une requête préplanifiée, ou la 
+     flexibilité d'une requête dynamique, uniquement avec la simple instruction 
+     <command>EXECUTE</command>.
+    </para>
+
+    <note>
+    <para>
+     L'analyseur <application>PL/pgSQL</> fait actuellement la distinction entre les
+     deux sortes de boucles <literal>FOR</> (avec entier ou résultat de requête) en 
+     verifiant si la variable cible mentionnée juste apres le  <literal>FOR</> a été
+     déclarée comme une variable record ou ligne.  Si non, elle est présumée être 
+     une boucle <literal>FOR</> avec entier. Ceci peut produire des messages d'erreurs 
+     asser peu intuitifs quand le vrai problème est, disons, que l'on a mal orthographié
+     le nom de la variable suivant le <literal>FOR</>. Typiquement, la
+     complainte ressemblera à <literal>missing ".." at end of SQL
+     expression</>.
+    </para>
+    </note>
+  </sect2>
+  </sect1>
+
+  <sect1 id="plpgsql-cursors">
+   <title>Curseurs</title>
+
+   <indexterm zone="plpgsql-cursors">
+    <primary>curseur</primary>
+    <secondary>en PL/pgSQL</secondary>
+   </indexterm>
+
+   <para>
+    Plutôt que d'exécuter la totalité d'une requête à la fois, il est possible de 
+    créer un <firstterm>curseur</> qui encapsule la requête, puis en lit le résultat
+    quelques lignes à la fois. Une des raisons pour faire de la sorte est d'éviter les
+    surcharges de mémoire quand le résultat contient un grand nombre de lignes. (Cependant,
+    les utilisateurs <application>PL/pgSQL</> n'ont généralement pas besoin de se 
+    préoccupper de cela, puisque les boucles <literal>FOR</> utilisent automatiquement un
+    curseur en interne pour éviter les problèmes de mémoire). Un usage plus intéressant est
+    de renvoyer une référence à un curseur qu'elle a créé, permettant à l'appelant de
+    lire les lignes. Ceci fournit un moyen efficace de renvoyer de grands ensembles de
+    lignes à partir des fonctions.
+   </para>
+   
+   <sect2 id="plpgsql-cursor-declarations">
+    <title>Déclaration de Variables Curseur</title>
+
+    <para>
+     Tous les accès aux curseurs dans <application>PL/pgSQL</> se font par les variables
+     curseur, qui sont toujours du type de données spécial <type>refcursor</>. Un des 
+     moyens de créer une variable curseur est de simplement la déclarer comme une variable
+     de type <type>refcursor</>. Un autre moyen est d'utiliser la syntaxe de déclaration
+     de curseur qui est en général&nbsp;:
+
+<synopsis>
+<replaceable>nom</replaceable> CURSOR <optional> ( <replaceable>arguments</replaceable> ) </optional> FOR <replaceable>requête</replaceable> ;
+</synopsis>
+     (<literal>FOR</> peut être remplacé par <literal>IS</> pour la compatibilité avec
+     <productname>Oracle</productname>.)
+     <replaceable>arguments</replaceable>, si spécifié, est une liste de paires de
+     <literal><replaceable>nom</replaceable> <replaceable>type-de-donnée</replaceable></literal>
+     qui définit les noms devant être remplacés par les valeurs des paramètres dans la requête donnée. 
+     La valeur effective à subsituer pour ces noms sera spécifiée plus tard, lors de 
+     l'ouverture du curseur.
+    </para>
+    <para>
+     Quelques exemples&nbsp;:
+<programlisting>
+DECLARE
+    curs1 refcursor;
+    curs2 CURSOR FOR SELECT * FROM tenk1;
+    curs3 CURSOR (key integer) IS SELECT * FROM tenk1 WHERE unique1 = key;
+</programlisting>
+     Ces variables sont toutes trois du type de données <type>refcursor</>,
+     mais la première peut être utilisées avec n'importe quelle requête, alors que
+     la seconde a une requête completement spécifiée qui lui est déjà 
+     <firstterm>liée</>, et la dernière est liée à une requête paramétrée. 
+     (<literal>key</> sera remplacée par un paramètre de valeur entière lors de
+     l'ouverture du curseur.)
+     La variable <literal>curs1</> est dite <firstterm>non liée</> puiqu'elle n'est pas
+     liée a une requête particulière.
+      </para>
+   </sect2>
+
+   <sect2 id="plpgsql-cursor-opening">
+    <title>Ouverture De Curseurs</title>
+
+    <para>
+     Avant qu'un curseur puisse être utilsé pour rapatrier des lignes, il doit être
+     <firstterm>ouvert</>. (C'est l'action equivalente de la commande SQL 
+     <command>DECLARE CURSOR</>.) <application>PL/pgSQL</> a trois formes pour
+     l'instruction <command>OPEN</>, dont deux utilisent des variables curseur non liées
+     et les autres utilisent une variable curseur liée.
+    </para>
+
+    <sect3>
+     <title><command>OPEN FOR SELECT</command></title>
+
+<synopsis>
+OPEN <replaceable>curseur-non-lié</replaceable> FOR SELECT ...;
+</synopsis>
+
+       <para>
+    	La variable curseur est ouverte et reçoit la requête spécifiée à exécuter.
+	Le curseur ne peut pas être déjà ouvert, et il doit avoir été déclaré
+	comme curseur non lié. (c'est à dire comme une simple variable
+	<type>refcursor</>).  La requête <command>SELECT</command> est traitée 
+	de la même facon que les autres instructions<command>SELECT</command>
+	dans <application>PL/pgSQL</>&nbsp;: les noms de variables
+<application>PL/pgSQL</>
+	sont remplacés, et le plan de requête est mis en cache pour une possible
+	réutilisation.
+       </para>
+
+       <para>
+        Exemple&nbsp;:
+<programlisting>
+OPEN curs1 FOR SELECT * FROM foo WHERE key = mykey;
+</programlisting>
+       </para>
+     </sect3>
+
+    <sect3>
+     <title><command>OPEN FOR EXECUTE</command></title>
+
+<synopsis>
+OPEN <replaceable>curseur-non-lié</replaceable> FOR EXECUTE <replaceable class="command">chaîne-requête</replaceable>;
+</synopsis>
+
+	 <para>
+	  La variable curseur est ouverte et reçoit la requête spécifiée à exécuter. 
+	  Le curseur ne peut pas être déjà ouvert, et il doit avoir été déclaré comme
+	  curseur non-lié (c'est a dire comme une simple variable <type>refcursor</>.  
+	  La requête est spécifiée comme une expression chaîne de la même facon que
+	  dans une commande <command>EXECUTE</command>. Comme d'habitude, ceci donne
+	  assez de flexibilité pour que la requête puisse changer d'une exécution à 
+	  l'autre.
+       </para>
+
+       <para>
+       Exemple&nbsp;:
+<programlisting>
+OPEN curs1 FOR EXECUTE ''SELECT * FROM '' || quote_ident($1);
+</programlisting>
+       </para>
+     </sect3>
+
+    <sect3>
+     <title>Ouverture d'un Curseur Lié</title>
+
+<synopsis>
+OPEN <replaceable>curseur-lié</replaceable> <optional> ( <replaceable>arguments</replaceable> ) </optional>;
+</synopsis>
+
+	 <para>
+	  Cette forme d'<command>OPEN</command> est utilisée pour ouvrir une variable
+	  curseur à laquelle la requête est liée au moment de la déclaration.
+	  Le curseur ne peut pas être déjà ouvert. Une liste des expressions arguments
+	  doit apparaître si et seulement si le curseur a été déclaré comme acceptant 
+	  des arguments. Ces valeurs seront remplacées dans la requête. Le plan de
+	  requête pour un curseur lié est toujours considéré comme pouvant être mis 
+	  en cache; il n'y a pas d'équivalent de la commande <command>EXECUTE</command> 
+	  dans ce cas.
+         </para>
+
+    <para>
+     Exemples&nbsp;:
+<programlisting>
+OPEN curs2;
+OPEN curs3(42);
+</programlisting>
+       </para>
+     </sect3>
+   </sect2>
+
+   <sect2 id="plpgsql-cursor-using">
+    <title>Utilisation des Curseurs</title>
+
+    <para>
+     Une fois qu'un curseur a été ouvert, il peut être manipulé grâce aux instructions
+     décrites ci-dessous.
+    </para>
+
+    <para>
+     Ces manipulations n'ont pas besoin de se dérouler dans la même fonction que celle
+     qui a ouvert le curseur. Vous pouvez renvoyer une valeur <type>refcursor</>
+     à partir d'une fonction et laisser l'appelant opérer sur le curseur.
+     (D'un point de vue interne, une valeur <type>refcursor</> est simplement
+     la chaîne de caractères du nom d'un portail contenant la requête active 
+     pour le curseur. Ce nom peut être passé à d'autres, assigné à d'autres variables
+     <type>refcursor</> et ainsi de suite, sans déranger le portail.)
+    </para>
+
+    <para>
+     Tous les portails sont implicitement fermés à la fin de la transaction. C'est pourquoi
+     une valeur <type>refcursor</> est utilisable pour référencer un cuseur ouvert
+     seulement jusqu'à la fin de la transaction. 
+    </para>
+
+    <sect3>
+     <title><literal>FETCH</></title>
+
+<synopsis>
+FETCH <replaceable>curseur</replaceable> INTO <replaceable>target</replaceable>;
+</synopsis>
+
+	 <para>
+	  <command>FETCH</command> rapatrie le rang suivant depuis le curseur
+	  dans une cible, qui peut être une variable ligne, une variable record, ou 
+	  une liste de simples variables séparées d'une virgule, exactement comme 
+	  <command>SELECT INTO</command>.  Comme pour <command>SELECT
+	   INTO</command>, la variable spéciale <literal>FOUND</literal> peut être 
+	   verifiée pour voir si une ligne a été obtenue ou pas.
+         </para>
+
+    <para>
+      Exemple&nbsp;:
+<programlisting>
+FETCH curs1 INTO rowvar;
+FETCH curs2 INTO foo, bar, baz;
+</programlisting>
+       </para>
+     </sect3>
+
+    <sect3>
+     <title><literal>CLOSE</></title>
+
+<synopsis>
+CLOSE <replaceable>curseur</replaceable>;
+</synopsis>
+
+       <para>
+    <command>CLOSE</command> ferme le portail sous-tendant un curseur ouvert. Ceci peut
+    être utilisé pour libérer des ressources avant la fin de la transaction, ou de
+    libérer la variable cuseur pour pouvoir la réouvrir.
+       </para>
+
+       <para>
+        Exemple&nbsp;:
+<programlisting>
+CLOSE curs1;
+</programlisting>
+       </para>
+     </sect3>
+ 
+    <sect3>
+     <title>Le Renvoi de Curseurs</title>
+
+       <para>
+        <application>PL/pgSQL</> functions can return cursors to the
+        caller. This is useful to return multiple rows or columns,
+        especially with very large result sets.  To do this, the function
+        opens the cursor and returns the cursor name to the caller (or simply
+        opens the cursor using a portal name specified by or otherwise known
+        to the caller).  The caller can then fetch rows from the cursor. The
+        cursor can be closed by the caller, or it will be closed automatically
+        when the transaction closes.
+       </para>
+
+       <para>
+        The portal name used for a cursor can be specified by the
+        programmer or automatically generated.  To specify a portal name,
+        simply assign a string to the <type>refcursor</> variable before
+        opening it.  The string value of the <type>refcursor</> variable
+        will be used by <command>OPEN</> as the name of the underlying portal.
+        However, if the <type>refcursor</> variable is null,
+        <command>OPEN</> automatically generates a name that does not
+        conflict with any existing portal, and assigns it to the
+        <type>refcursor</> variable.
+       </para>
+
+       <note>
+        <para>
+         A bound cursor variable is initialized to the string value
+         representing its name, so that the portal name is the same as
+         the cursor variable name, unless the programmer overrides it
+         by assignment before opening the cursor.  But an unbound cursor
+         variable defaults to the null value initially , so it will receive
+         an automatically-generated unique name, unless overridden.
+        </para>
+       </note>
+
+       <para>
+        The following example shows one way a cursor name can be supplied by
+        the caller:
+
+<programlisting>
+CREATE TABLE test (col text);
+INSERT INTO test VALUES ('123');
+
+CREATE FUNCTION reffunc(refcursor) RETURNS refcursor AS '
+BEGIN
+    OPEN $1 FOR SELECT col FROM test;
+    RETURN $1;
+END;
+' LANGUAGE plpgsql;
+
+BEGIN;
+SELECT reffunc('funccursor');
+FETCH ALL IN funccursor;
+COMMIT;
+</programlisting>
+       </para>
+
+       <para>
+        L'exemple suivant utilise la génération automatique du nom du
+curseur&nbsp;:
+         
+<programlisting>
+CREATE FUNCTION reffunc2() RETURNS refcursor AS '
+DECLARE
+    ref refcursor;
+BEGIN
+    OPEN ref FOR SELECT col FROM test;
+    RETURN ref;
+END;
+' LANGUAGE plpgsql;
+
+BEGIN;
+SELECT reffunc2();
+  
+      reffunc2      
+--------------------
+ &lt;unnamed cursor 1&gt;
+(1 row)
+
+FETCH ALL IN "&lt;unnamed cursor 1&gt;";
+COMMIT;
+</programlisting>
+       </para>
+     </sect3>
+   </sect2>
+  </sect1>
+
+  <sect1 id="plpgsql-errors-and-messages">
+   <title>Erreurs et Messages</title>
+
+   <para>
+    Utilisez l'instruction <command>RAISE</command> pour rapporter des messages et 
+    lever des erreurs.
+
+<synopsis>
+RAISE <replaceable class="parameter">niveau</replaceable> '<replaceable class="parameter">format</replaceable>' <optional>, <replaceable class="parameter">variable</replaceable> <optional>, ...</optional></optional>;
+</synopsis>
+
+    Possible levels are <literal>DEBUG</literal>,
+    <literal>LOG</literal>, <literal>INFO</literal>,
+    <literal>NOTICE</literal>, <literal>WARNING</literal>,
+    and <literal>EXCEPTION</literal>.
+    <literal>EXCEPTION</literal> raises an error and aborts the current
+    transaction; the other levels only generate messages of different
+    priority levels.
+    Whether messages of a particular priority are reported to the client,
+    written to the server log, or both is controlled by the
+    <varname>log_min_messages</varname> and
+    <varname>client_min_messages</varname> configuration
+    variables. See <xref linkend="runtime-config"> for more
+    information.
+
+    Les niveaux possibles sont <literal>DEBUG</literal>
+    <literal>LOG</literal>, <literal>INFO</literal>, <literal>NOTICE</literal>,
+    <literal>WARNING</literal>  et <literal>EXCEPTION</literal>.
+    <literal>EXCEPTION</literal> lève une erreur et interrompt la transaction
+    courante). Les autres niveaux ne font que générer des messages aux
+    différents niveaux de priorité. Quand les messages d'une priorité
+    particulière sont indiqués par le client, écrit dans les traces du serveur,
+    ou à la fois contrôlé par les variables de configuration 
+    <varname>log_min_messages</varname> et
+    <varname>client_min_messages</varname>. Voir
+    <xref linkend="runtime-config"> pour plus d'informations.
+   </para>
+
+   <para>
+    Au sein de la chaîne de formatage, <literal>%</literal> est remplacé par
+    la représentation de la chaîne argument optionnelle suivante. Écrivez
+    <literal>%%</literal> pour signifier un caractère <literal>%</literal>. Notez
+    que les arguments optionnels doivent actuellement être de simples variables, non des
+    expressions et que le format doit être une simple chaîne de caractères.
+   </para>
+
+   <!--
+   Cet exemple devrait fonctionner mais ce n'est pas le cas&nbsp;:
+   	RAISE NOTICE ''Id number '' || key || '' not found!'';
+   Remettez le quand nous permettront les formats autres que chaînes de caractères.
+    -->
+
+   <para>
+    Dans cet exemple, la valeur de <literal>v_job_id</> remplacera le <literal>%</literal>
+    dans la chaîne.
+<programlisting>
+RAISE NOTICE ''Calling cs_create_job(%)'', v_job_id;
+</programlisting>
+   </para>
+
+   <para>
+    Cet exemple interrompra la transaction avec le message d'erreur donné.
+<programlisting>
+RAISE EXCEPTION ''Inexistent ID --> %'', user_id;
+</programlisting>
+   </para>
+
+    <para>
+     <productname>PostgreSQL</productname> n'a pas un modèle d'exceptions très malin.
+     Lorsque l'analyseur, planificateur/optimiseur ou exécuteur décide qu'une instruction
+     ne peux pas continuer à être traitée, l'entière transaction s'interrompt et le
+     système renvient à la boucle principale pour reçevoir la prochaîne commande
+     de l'application client.
+    </para>
+
+    <para>
+     Il est possible de faire un crochet par le mécanisme d'erreurs pour examiner ce qui 
+     se passe. Mais actuellement il est impossible de dire ce qui a causé réellement 
+     l'interruption (erreur de format de type de données, erreur de virgule flottante,
+     erreur de syntaxe, etc.). Et il est possible que le serveur de base de données soit
+     dans un état inconscient à ce point, et que renvoyer à l'exécuteur supérieur ou
+     traiter d'autres commandes puisse corrompre la base de données entière.
+    </para>
+
+    <para>
+     Ainsi, la seule chose que <application>PL/pgSQL</application>
+     fait actuellement quand il rencontre une interruption dans une procédure fonction 
+     ou déclencheur est d'ajouter quelques champs au message indiquant à quelle
+     fonction et à quel endroit (numéro de ligne et type d'instruction) l'erreur
+     s'est produite. L"rreur stoppe à chaque fois l'exécution de la fonction.
+    </para>
+ </sect1>
+
+ <sect1 id="plpgsql-trigger">
+  <title>Procédures Déclencheur</title>
+
+  <indexterm zone="plpgsql-trigger">
+   <primary>déclencheur (trigger)</primary>
+   <secondary>in PL/pgSQL</secondary>
+  </indexterm>
+
+  <para>
+	<application>PL/pgSQL</application> peut être utilisé pour définir des 
+	procédures déclencheur. Une procédure déclencheur est créée grâce à la commande
+	<command>CREATE FUNCTION</> utilisée comme fonction sans arguments
+	ayant un type de retour <type>trigger</type>.  Notez que la fonction 
+	doit être déclarée avec aucun argument même si elle s'attend à recevoir
+	les arguments spécifiés dans <command>CREATE TRIGGER</> ---
+	les arguments trigger sont passés via <varname>TG_ARGV</>, comme décrit plus
+	loin.
+  </para>
+
+  <para>
+   Quand une fonction <application>PL/pgSQL</application> est appelée en tant que
+   trigger, plusieurs variables spéciales sont créées automatiquement dans le bloc de 
+   plus haut niveau. Ce sont&nbsp;:
+   
+   <variablelist>
+    <varlistentry>
+     <term><varname>NEW</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>RECORD</type>; variable contenant la nouvelle ligne 
+       de base de données pour les opérations <command>INSERT</>/<command>UPDATE</> 
+       dans les déclencheurs de niveau ligne. Cette variable est null dans un trigger
+       de niveau instruction.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>OLD</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>RECORD</type>; variable contenant l'ancienne ligne de 
+       base de données pour les opérations <command>UPDATE</>/<command>DELETE</> 
+       dans les triggers de niveau ligne. Cette variable est null dans les triggers de
+       niveau instruction.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_NAME</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>name</type>; variable qui contient le nom du trigger réellement
+       lancé.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_WHEN</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>text</type>; une chaîne, soit  <literal>BEFORE</literal>
+       soit <literal>AFTER</literal> selon la définition du déclencheur.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_LEVEL</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>text</type>; une chaîne, soit <literal>ROW</literal> soit
+       <literal>STATEMENT</literal> selon la définition du déclencheur.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_OP</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>text</type>; une chaîne, <literal>INSERT</literal>,
+       <literal>UPDATE</literal>, ou <literal>DELETE</literal> indiquant
+       pour quelle opération le déclencheur a été lancé.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_RELID</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>oid</type>; l'ID de l'objet de la table qui a causé 
+       l'invocation du trigger.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_RELNAME</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>name</type>; le nom de la table qui a causé l'invocation du
+       trigger.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_NARGS</varname></term>
+     <listitem>
+      <para>
+       Type de données <type>integer</type>; le nombre d'arguments donnés à la procédure 
+       déclencheur dans l'instruction <command>CREATE TRIGGER</command>.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_ARGV[]</varname></term>
+     <listitem>
+      <para>
+       Type de donnée <type>text</type>; les arguments de l'instruction 
+       <command>CREATE TRIGGER</command>.
+       L'index débute à 0. Les indices invalides (inférieurs à 0 ou supérieurs ou égaux
+       à <varname>tg_nargs</>) auront une valeur nulle.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+
+   <para>
+    Une fonction déclencheur doit renvoyer soit null soit une valeur record/ligne ayant
+    exactement la structure de la table pour laquelle le déclencheur a été lancé.
+    </para>
+
+   <para>
+    Les déclencheurs de niveau ligne lancés <literal>BEFORE</> peuvent renvoyer null 
+    pour indiquer au gestionnaire de déclencheur de sauter le reste de l'opération pour
+    cette ligne (les déclencheurs suivants ne sont pas lancés, et les
+    <command>INSERT</>/<command>UPDATE</>/<command>DELETE</> ne se font pas pour cette 
+    ligne). Si une valeur non null est renvoyée alors l'opération se déroule avec cette
+    valeur ligne. Renvoyer une valeur ligne différente de la valeur originale de 
+    <varname>NEW</> modifie la ligne qui sera insérée ou mise à jour (mais n'a
+    pas d'effet sur le cas <command>DELETE</>). Pour modifier la ligne à
+    stocker, il est possible de remplacer des valeurs seules directement dans
+    <varname>NEW</> et de renvoyer <varname>NEW</>, ou de construire un nouveau
+    record/ligne à renvoyer.
+   </para>
+
+   <para>
+    La valeur de retour d'un déclencheur de niveau ligne <literal>BEFORE</> ou
+    <literal>AFTER</> ou un déclencheur de niveau ligne <literal>AFTER</> est
+    toujours ignoré&nbsp;; il pourrait aussi bien être null. Néanmoins, tous les
+    types de déclencheurs peuvent toujours annuler l'opération complète en
+    envoyant une erreur.
+   </para>
+
+   <para>
+    <xref linkend="plpgsql-trigger-example"> montre un exemple d'une procédure
+    déclencheur dans <application>PL/pgSQL</application>.
+   </para>
+
+   <example id="plpgsql-trigger-example">
+    <title>Une Procédure Déclencheur <application>PL/pgSQL</application> </title>
+
+    <para>
+     Cet exemple de déclencheur assure qu'à chaque moment où une ligne est insérée ou 
+     mise à jour dans la table, le nom d'utilisater courant et l'heure sont estampillés 
+     dans la ligne. Et cela assure qu'un nom d'employé est donné et que le salaire
+     est une valeur positive.
+    </para>
+
+<programlisting>
+CREATE TABLE emp (
+    empname text,
+    salary integer,
+    last_date timestamp,
+    last_user text
+);
+
+CREATE FUNCTION emp_stamp() RETURNS trigger AS '
+    BEGIN
+        -- Verifie que empname et salary sont donnés
+        IF NEW.empname IS NULL THEN
+            RAISE EXCEPTION ''empname cannot be null'';
+        END IF;
+        IF NEW.salary IS NULL THEN
+            RAISE EXCEPTION ''% cannot have null salary'', NEW.empname;
+        END IF;
+
+        -- Qui travaille pour nous quand elle doit payer pour cela ?
+        IF NEW.salary &lt; 0 THEN
+            RAISE EXCEPTION ''% cannot have a negative salary'', NEW.empname;
+        END IF;
+
+        -- Rappelons nous qui a changé le payroll quand 
+        NEW.last_date := ''now'';
+        NEW.last_user := current_user;
+        RETURN NEW;
+    END;
+' LANGUAGE plpgsql;
+
+CREATE TRIGGER emp_stamp BEFORE INSERT OR UPDATE ON emp
+    FOR EACH ROW EXECUTE PROCEDURE emp_stamp();
+</programlisting>
+   </example>
+  </sect1>
+
+  <!-- **** Porting from Oracle PL/SQL **** -->
+
+ <sect1 id="plpgsql-porting">
+  <title>Portage d'<productname>Oracle</productname> PL/SQL</title>
+
+  <indexterm zone="plpgsql-porting">
+   <primary>Oracle</primary>
+   <secondary>porter de PL/SQL vers PL/pgSQL</secondary>
+  </indexterm>
+
+  <indexterm zone="plpgsql-porting">
+   <primary>PL/SQL</primary>
+   <secondary>porter vers PL/pgSQL</secondary>
+  </indexterm>
+
+  <para>
+   Cette section explicite les différences entre le <application>PL/pgSQL</application>
+   de <productname>PostgreSQL</> et le langage <application>PL/SQL</application>
+   d'Oracle, afin d'aider les développeurs qui portent des applications d'Oracle vers
+   <productname>PostgreSQL</>.
+  </para>
+
+  <para>
+   <application>PL/pgSQL</application> est similaire à PL/SQL sur de nombreux aspects.
+   C'est un langage impératif structuré en blocs et toutes les variables doivent
+   être déclarées. Les assignations, boucles, conditionnelles sont similaires. Les 
+   principales différences que vous devez garder à l'esprit quand vous portez de 
+   <application>PL/SQL</> vers <application>PL/pgSQL</application> sont:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       Il n'y a pas de valeurs par défaut pour les paramètres dans <productname>PostgreSQL</>.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Vous pouvez surcharger les fonctions dans <productname>PostgreSQL</>. C'est souvent
+       utilisé pour contourner le manque de paramètres par défaut.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Pas besoin de curseurs dans <application>PL/pgSQL</>, mettez juste la requête 
+       dans l'instruction <literal>FOR</literal>.  (Voir <xref
+       linkend="plpgsql-porting-ex2">.)
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Dans <productname>PostgreSQL</> vous avez besoin d'échapper les guillemets simples
+       dans le corps des fonctions. Voir <xref linkend="plpgsql-quote-tips">.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       A la place des packages, utilisez des schémas pour organiser vos fonctions en 
+       groupes.
+       </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+  <sect2>
+   <title>Exemples de Portages</title>
+
+   <para>
+    <xref linkend="pgsql-porting-ex1"> montre comment porter une simple fonction
+    de <application>PL/SQL</> vers <application>PL/pgSQL</>.
+   </para>
+
+   <example id="pgsql-porting-ex1">
+    <title>Portage d'une Fonction Simple de <application>PL/SQL</> vers <application>PL/pgSQL</></title>
+
+    <para>
+     Voici une fonction en <application>PL/SQL</>
+     <productname>Oracle</productname>&nbsp;:
+<programlisting>
+CREATE OR REPLACE FUNCTION cs_fmt_browser_version(v_name IN varchar, v_version IN varchar)
+RETURN varchar IS
+BEGIN
+    IF v_version IS NULL THEN
+        RETURN v_name;
+    END IF;
+    RETURN v_name || '/' || v_version;
+END;
+/
+show errors;
+</programlisting>
+    </para>
+
+    <para>
+     Parcourons cette fonction et voyons les différences avec
+<application>PL/pgSQL</>&nbsp;:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+        <productname>PostgreSQL</productname> n'a pas de paramètres nommés. Vous 
+	devez les expliciter ou les aliaser dans votre fonction.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        <productname>Oracle</productname> peut avoir des paramètres
+        <literal>IN</literal>, <literal>OUT</literal>, et
+        <literal>INOUT</literal> passées aux fonctions.
+        <literal>INOUT</literal>, par exemple, signifie que le paramètre recevra une 
+	valeur et en renverra une autre. <productname>PostgreSQL</> n'a que 
+	les paramètres <literal>IN</literal>.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Le mot clé <literal>RETURN</literal> dans le prototype de la fonction (pas dans
+	le corps de la fonction) devient <literal>RETURNS</literal> dans PostgreSQL.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Dans <productname>PostgreSQL</>, les fonctions sont créées en utilisant 
+	des guillemets simples comme délimiteurs du corps de la fonction, vous devez donc
+	échapper les guillemets simples dans le corps de la fonction.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        La commande <literal>/show errors</literal> n'existe pas dans <productname>PostgreSQL</>.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+
+    <para>
+     Voici de quoi aurait l'air cette fonction portée sous 
+     <productname>PostgreSQL</>&nbsp;:
+
+<programlisting>
+CREATE OR REPLACE FUNCTION cs_fmt_browser_version(varchar, varchar)
+RETURNS varchar AS '
+DECLARE
+    v_name ALIAS FOR $1;
+    v_version ALIAS FOR $2;
+BEGIN
+    IF v_version IS NULL THEN
+        return v_name;
+    END IF;
+    RETURN v_name || ''/'' || v_version;
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+    </para>
+   </example>
+
+   <para>
+    <xref linkend="plpgsql-porting-ex2"> montre comment porter une fonction qui crée une
+    autre fonction et comment gérer les problèmes de quotes résultants.
+   </para>
+ 
+   <example id="plpgsql-porting-ex2">
+    <title>Portage d'une Fonction qui Crée une Autre Fonction de <application>PL/SQL</> vers <application>PL/pgSQL</></title>
+
+    <para>
+     La procédure suivante récupère des lignes d'une instruction <command>SELECT</command>
+     et construit une grande fonction dont les résultats sont dans une instruction
+     <literal>IF</literal> pour favoriser l'efficacité. Notez particulièrement les 
+     différences dans le curseur et la boucle <literal>FOR</literal>.
+    </para>
+
+    <para>
+     Voici la version Oracle&nbsp;:
+<programlisting>
+CREATE OR REPLACE PROCEDURE cs_update_referrer_type_proc IS
+    CURSOR referrer_keys IS 
+        SELECT * FROM cs_referrer_keys 
+        ORDER BY try_order;
+
+    a_output VARCHAR(4000); 
+BEGIN 
+    a_output := 'CREATE OR REPLACE FUNCTION cs_find_referrer_type(v_host IN VARCHAR, v_domain IN VARCHAR, 
+v_url IN VARCHAR) RETURN VARCHAR IS BEGIN'; 
+
+    FOR referrer_key IN referrer_keys LOOP 
+        a_output := a_output || ' IF v_' || referrer_key.kind || ' LIKE ''' || 
+referrer_key.key_string || ''' THEN RETURN ''' || referrer_key.referrer_type || 
+'''; END IF;'; 
+    END LOOP; 
+
+    a_output := a_output || ' RETURN NULL; END;'; 
+    EXECUTE IMMEDIATE a_output; 
+END; 
+/ 
+show errors;
+</programlisting>
+    </para>
+
+    <para>
+     Voici comment la fonction serait dans <productname>PostgreSQL</>&nbsp;:
+
+<programlisting>
+CREATE FUNCTION cs_update_referrer_type_proc() RETURNS integer AS '
+DECLARE
+    referrer_keys RECORD;  -- Declare a generic record to be used in a FOR
+    a_output varchar(4000);
+BEGIN 
+    a_output := ''CREATE FUNCTION cs_find_referrer_type(varchar, varchar, varchar) 
+                  RETURNS varchar AS '''' 
+                     DECLARE 
+                         v_host ALIAS FOR $1; 
+                         v_domain ALIAS FOR $2; 
+                         v_url ALIAS FOR $3;
+                     BEGIN ''; 
+
+    -- Remarquez comment nous parcourons les résultats d'une requête dans une boucle FOR
+    -- en utilisant la construction FOR &lt;record&gt;.
+
+    FOR referrer_keys IN SELECT * FROM cs_referrer_keys ORDER BY try_order LOOP
+        a_output := a_output || '' IF v_'' || referrer_keys.kind || '' LIKE '''''''''' 
+                 || referrer_keys.key_string || '''''''''' THEN RETURN '''''' 
+                 || referrer_keys.referrer_type || ''''''; END IF;''; 
+    END LOOP; 
+  
+    a_output := a_output || '' RETURN NULL; END; '''' LANGUAGE plpgsql;''; 
+ 
+    -- EXECUTE fonctionnera parce que nous ne substituons aucune variable.
+    -- Autrement cela échouerait.  Regardez PERFORM pour d'autres facons d'exécuter une fonction.
+    
+    EXECUTE a_output; 
+END; 
+' LANGUAGE plpgsql;
+</programlisting>
+    </para>
+   </example>
+ 
+   <para>
+    <xref linkend="plpgsql-porting-ex3"> montre comment porter une fonction ayant des
+    paramètres <literal>OUT</> et effectuant des manipulations de chaînes.
+    <indexterm><primary>instr</></indexterm>
+    <productname>PostgreSQL</> n'a pas de fonction <function>instr</function>, mais 
+    vous pouvez contourner cela en utilisant une combinaison d'autres fonctions. Dans <xref
+    linkend="plpgsql-porting-appendix"> il y a une implémentation 
+    <application>PL/pgSQL</application> d'<function>instr</function> que vous pouvez
+    utiliser pour faciliter votre portage.
+   </para>
+
+   <example id="plpgsql-porting-ex3">
+    <title>Portage d'une Procédure avec Manipulation de Chaînes et Paramètres 
+    <literal>OUT</> de <application>PL/SQL</> vers
+    <application>PL/pgSQL</></title>
+
+    <para>
+     La procédure <productname>Oracle</productname> suivante est utilisées pour 
+     analyser une URL et renvoyer plusieurs éléments (hôte, chemin et requête). 
+     Les fonctions <application>PL/pgSQL</application> ne peuvent renvoyer 
+     qu'une seule valeur. Dans <productname>PostgreSQL</>, un moyen de contourner cela 
+     est de décomposer la procédure en trois fonctions différentes&nbsp;: la
+première pour 
+     renvoyer l'hôte, une autre pour le chemin et la denière pour la requête.
+    </para>
+
+    <para>
+     Voici la version Oracle&nbsp;:
+<programlisting>
+CREATE OR REPLACE PROCEDURE cs_parse_url(
+    v_url IN VARCHAR,
+    v_host OUT VARCHAR,  -- Celle ci sera passée en retour
+    v_path OUT VARCHAR,  -- Celle la aussi
+    v_query OUT VARCHAR) -- Et celle la
+IS
+    a_pos1 INTEGER;
+    a_pos2 INTEGER;
+BEGIN
+    v_host := NULL;
+    v_path := NULL;
+    v_query := NULL;
+    a_pos1 := instr(v_url, '//');
+
+    IF a_pos1 = 0 THEN
+        RETURN;
+    END IF;
+    a_pos2 := instr(v_url, '/', a_pos1 + 2);
+    IF a_pos2 = 0 THEN
+        v_host := substr(v_url, a_pos1 + 2);
+        v_path := '/';
+        RETURN;
+    END IF;
+
+    v_host := substr(v_url, a_pos1 + 2, a_pos2 - a_pos1 - 2);
+    a_pos1 := instr(v_url, '?', a_pos2 + 1);
+
+    IF a_pos1 = 0 THEN
+        v_path := substr(v_url, a_pos2);
+        RETURN;
+    END IF;
+
+    v_path := substr(v_url, a_pos2, a_pos1 - a_pos2);
+    v_query := substr(v_url, a_pos1 + 1);
+END;
+/
+show errors;
+</programlisting>
+    </para>
+
+    <para>
+     Voici à quoi ressemble la fonction <application>PL/pgSQL</> renvoyant la
+partie hôte&nbsp;:
+
+<programlisting>
+CREATE OR REPLACE FUNCTION cs_parse_url_host(varchar) RETURNS varchar AS '
+DECLARE
+    v_url ALIAS FOR $1;
+    v_host varchar;
+    v_path varchar;
+    a_pos1 integer;
+    a_pos2 integer;
+    a_pos3 integer;
+BEGIN 
+    v_host := NULL; 
+    a_pos1 := instr(v_url, ''//'');
+
+    IF a_pos1 = 0 THEN 
+        RETURN '''';  -- Renvoie un blanc
+    END IF; 
+
+    a_pos2 := instr(v_url,''/'',a_pos1 + 2);
+    IF a_pos2 = 0 THEN 
+        v_host := substr(v_url, a_pos1 + 2); 
+        v_path := ''/''; 
+        RETURN v_host; 
+    END IF; 
+
+    v_host := substr(v_url, a_pos1 + 2, a_pos2 - a_pos1 - 2 ); 
+    RETURN v_host; 
+END; 
+' LANGUAGE plpgsql;
+</programlisting>
+    </para>
+   </example>
+
+   <para>
+    <xref linkend="plpgsql-porting-ex4"> montre comment porter une procédure qui utilise
+    de nombreuses fonctionnalités spécifiques à Oracle.
+   </para>
+
+   <example id="plpgsql-porting-ex4">
+    <title>Portage d'une Procédure de <application>PL/SQL</> vers <application>PL/pgSQL</></title>
+
+    <para>
+     La version Oracle&nbsp;:
+
+<programlisting>
+CREATE OR REPLACE PROCEDURE cs_create_job(v_job_id IN INTEGER) IS
+    a_running_job_count INTEGER;
+    PRAGMA AUTONOMOUS_TRANSACTION;<co id="co.plpgsql-porting-pragma">
+BEGIN
+    LOCK TABLE cs_jobs IN EXCLUSIVE MODE;<co id="co.plpgsql-porting-locktable">
+
+    SELECT count(*) INTO a_running_job_count FROM cs_jobs WHERE end_stamp IS NULL;
+
+    IF a_running_job_count > 0 THEN
+        COMMIT; -- free lock<co id="co.plpgsql-porting-commit">
+        raise_application_error(-20000, 'Unable to create a new job: a job is currently running.');
+    END IF;
+
+    DELETE FROM cs_active_job;
+    INSERT INTO cs_active_job(job_id) VALUES (v_job_id);
+
+    BEGIN
+        INSERT INTO cs_jobs (job_id, start_stamp) VALUES (v_job_id, sysdate);
+        EXCEPTION WHEN dup_val_on_index THEN NULL; -- ne vous inquietez pas si cela existe déjà<co id="co.plpgsql-porting-exception">
+    END;
+    COMMIT;
+END;
+/
+show errors
+</programlisting>
+   </para>
+
+   <para>
+    Les procédures comme celles-ci peuvent être aisément converties en 
+    fonctions <productname>PostgreSQL</> renvoyant un <type>integer</type>. Cette
+    procédure en particulier est intéressante parce qu'elle peut nous apprendre diverses
+    choses&nbsp;:
+
+    <calloutlist>
+     <callout arearefs="co.plpgsql-porting-pragma">
+      <para>
+       Il n'y a pas d'instruction <literal>PRAGMA</literal> dans <productname>PostgreSQL</>.
+      </para>
+     </callout>
+
+     <callout arearefs="co.plpgsql-porting-locktable">
+      <para>
+       Si vous faites un <command>LOCK TABLE</command> dans <application>PL/pgSQL</>, 
+       le verrou ne sera pas libéré jusqu'à ce que la transaction appelante soit 
+       terminée.
+      </para>
+     </callout>
+
+     <callout arearefs="co.plpgsql-porting-commit">
+      <para>
+       Vous pouvez aussi avoir des transactions dans des fonctions 
+      <application>PL/pgSQL</application>. La fonction entière (et d'autres
+      fonctions appelées de l'intérieur) est exécutée en une transaction et 
+      <productname>PostgreSQL</> annule la transaction si quelque chose se passe mal.
+      </para>
+     </callout>
+
+     <callout arearefs="co.plpgsql-porting-exception">
+      <para>
+       L'exception when devra être remplacée par une instruction 
+       <literal>IF</literal>.
+      </para>
+     </callout>
+    </calloutlist>
+   </para>
+
+   <para>
+    Voici comment nous pourrions porter cette procédure vers
+<application>PL/pgSQL</>&nbsp;:
+
+<programlisting>
+CREATE OR REPLACE FUNCTION cs_create_job(integer) RETURNS integer AS '
+DECLARE
+    v_job_id ALIAS FOR $1;
+    a_running_job_count integer;
+    a_num integer;
+BEGIN
+    LOCK TABLE cs_jobs IN EXCLUSIVE MODE;
+    SELECT count(*) INTO a_running_job_count FROM cs_jobs WHERE end_stamp IS NULL;
+
+    IF a_running_job_count > 0
+    THEN
+        RAISE EXCEPTION ''Unable to create a new job: a job is currently running.'';
+    END IF;
+
+    DELETE FROM cs_active_job;
+    INSERT INTO cs_active_job(job_id) VALUES (v_job_id);
+
+    SELECT count(*) INTO a_num FROM cs_jobs WHERE job_id=v_job_id;
+    IF NOT FOUND THEN  -- If nothing was returned in the last query
+        -- This job is not in the table so lets insert it.
+        INSERT INTO cs_jobs(job_id, start_stamp) VALUES (v_job_id, current_timestamp);
+        RETURN 1;
+    ELSE
+        RAISE NOTICE ''Job already running.'';<co id="co.plpgsql-porting-raise">
+    END IF;
+
+    RETURN 0;
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+
+    <calloutlist>
+     <callout arearefs="co.plpgsql-porting-raise">
+      <para>
+       Notez que vous pouvez lever des notices (ou erreurs) dans <application>PL/pgSQL</>.
+      </para>
+     </callout>
+    </calloutlist>
+   </para>
+   </example>
+  </sect2>
+
+  <sect2 id="plpgsql-porting-other">
+   <title>Autres Choses A Surveiller</title>
+
+   <para>
+    Cette section explique quelques autres choses à surveiller quand on effectue
+    un portage de fonctions <application>PL/SQL</> Oracle vers PostgreSQL.
+   </para>
+
+   <sect3>
+    <title><command>EXECUTE</command></title>
+
+    <para>
+     La version <application>PL/pgSQL</> d'<command>EXECUTE</command> fonctionne de façon
+     similaire à la version <application>PL/SQL</>, mais vous devez vous rappeler
+     d'utiliser <function>quote_literal(text)</function> et 
+     <function>quote_string(text)</function> comme décrit dans <xref
+     linkend="plpgsql-statements-executing-dyn">.  Les constructions de type
+     <literal>EXECUTE ''SELECT * FROM $1'';</literal> ne fonctionneront pas à
+     moins d'utiliser ces fonctions.
+    </para>
+   </sect3>
+
+   <sect3 id="plpgsql-porting-optimization">
+    <title>Optimisation des Fonctions <application>PL/pgSQL</application></title>
+
+    <para>
+     <productname>PostgreSQL</> vous donne deux modificateurs de création de fonctions
+     pour optimiser l'exécution&nbsp;: la volatilité (la fonction renvoie
+toujours le même
+     résultat quand on lui donne les mêmes arguments) et la <quote>rigueur</quote> (une 
+     fonction renvoie null si tous ses arguments sont null).  Consultez la description
+     de <command>CREATE FUNCTION</command> pour les détails.
+    </para>
+
+    <para>
+     Pour faire usage de ces attributs d'optimisation, votre instruction 
+     <command>CREATE FUNCTION</command> devrait ressembler a ceci:
+
+<programlisting>
+CREATE FUNCTION foo(...) RETURNS integer AS '
+...
+' LANGUAGE plpgsql STRICT IMMUTABLE;
+</programlisting>
+    </para>
+   </sect3>
+  </sect2>
+
+  <sect2 id="plpgsql-porting-appendix">
+   <title>Annexe</title>
+
+   <para>
+    Cette section contient le code d'une fonction <function>instr</function> 
+    compatible Oracle que vous pouver utiliser pour simplifier vos efforts de portage.
+   </para>
+
+<programlisting>
+--
+-- fonctions instr qui reproduisent la contrepartie Oracle
+-- Syntaxe: instr(string1, string2, [n], [m]) où [] signifie paramètre optionnel.
+-- 
+-- Cherche string1 en commencant par le  n-ième caractère pour la m-ième occurrence
+-- de string2.  Si n est négatif, cherche en sens inverse. Si m n'est pas fourni
+-- suppose 1 (la recherche commence au premier caractère).
+--
+
+CREATE FUNCTION instr(varchar, varchar) RETURNS integer AS '
+DECLARE
+    pos integer;
+BEGIN
+    pos:= instr($1, $2, 1);
+    RETURN pos;
+END;
+' LANGUAGE plpgsql;
+
+
+CREATE FUNCTION instr(varchar, varchar, varchar) RETURNS integer AS '
+DECLARE
+    string ALIAS FOR $1;
+    string_to_search ALIAS FOR $2;
+    beg_index ALIAS FOR $3;
+    pos integer NOT NULL DEFAULT 0;
+    temp_str varchar;
+    beg integer;
+    length integer;
+    ss_length integer;
+BEGIN
+    IF beg_index > 0 THEN
+        temp_str := substring(string FROM beg_index);
+        pos := position(string_to_search IN temp_str);
+
+        IF pos = 0 THEN
+            RETURN 0;
+        ELSE
+            RETURN pos + beg_index - 1;
+        END IF;
+    ELSE
+        ss_length := char_length(string_to_search);
+        length := char_length(string);
+        beg := length + beg_index - ss_length + 2;
+
+        WHILE beg > 0 LOOP
+            temp_str := substring(string FROM beg FOR ss_length);
+            pos := position(string_to_search IN temp_str);
+
+            IF pos > 0 THEN
+                RETURN beg;
+            END IF;
+
+            beg := beg - 1;
+        END LOOP;
+
+        RETURN 0;
+    END IF;
+END;
+' LANGUAGE plpgsql;
+
+
+CREATE FUNCTION instr(varchar, varchar, integer, integer) RETURNS integer AS '
+DECLARE
+    string ALIAS FOR $1;
+    string_to_search ALIAS FOR $2;
+    beg_index ALIAS FOR $3;
+    occur_index ALIAS FOR $4;
+    pos integer NOT NULL DEFAULT 0;
+    occur_number integer NOT NULL DEFAULT 0;
+    occur_number integer NOT NULL DEFAULT 0;
+    temp_str varchar;
+    beg integer;
+    i integer;
+    length integer;
+    ss_length integer;
+BEGIN
+    IF beg_index > 0 THEN
+        beg := beg_index;
+        temp_str := substring(string FROM beg_index);
+
+        FOR i IN 1..occur_index LOOP
+            pos := position(string_to_search IN temp_str);
+
+            IF i = 1 THEN
+                beg := beg + pos - 1;
+            ELSE
+                beg := beg + pos;
+            END IF;
+
+            temp_str := substring(string FROM beg + 1);
+        END LOOP;
+
+        IF pos = 0 THEN
+            RETURN 0;
+        ELSE
+            RETURN beg;
+        END IF;
+    ELSE
+        ss_length := char_length(string_to_search);
+        length := char_length(string);
+        beg := length + beg_index - ss_length + 2;
+    occur_number integer NOT NULL DEFAULT 0;
+    temp_str varchar;
+    beg integer;
+    i integer;
+    length integer;
+    ss_length integer;
+BEGIN
+    IF beg_index > 0 THEN
+        beg := beg_index;
+        temp_str := substring(string FROM beg_index);
+
+        FOR i IN 1..occur_index LOOP
+            pos := position(string_to_search IN temp_str);
+
+            IF i = 1 THEN
+                beg := beg + pos - 1;
+            ELSE
+                beg := beg + pos;
+            END IF;
+
+            temp_str := substring(string FROM beg + 1);
+        END LOOP;
+
+        IF pos = 0 THEN
+            RETURN 0;
+        ELSE
+            RETURN beg;
+        END IF;
+    ELSE
+        ss_length := char_length(string_to_search);
+        length := char_length(string);
+        beg := length + beg_index - ss_length + 2;
+
+        WHILE beg > 0 LOOP
+            temp_str := substring(string FROM beg FOR ss_length);
+            pos := position(string_to_search IN temp_str);
+
+            IF pos > 0 THEN
+                occur_number := occur_number + 1;
+
+                IF occur_number = occur_index THEN
+                    RETURN beg;
+                END IF;
+            END IF;
+
+            beg := beg - 1;
+        END LOOP;
+
+        RETURN 0;
+    END IF;
+END;
+' LANGUAGE plpgsql;
+</programlisting>
+  </sect2>
+  
+ </sect1>
+
+</chapter>
+
+<!-- Keep this comment at the end of the file
+Local variables:
+mode:sgml
+sgml-omittag:nil
+sgml-shorttag:t
+sgml-minimize-attributes:nil
+sgml-always-quote-attributes:t
+sgml-indent-step:1
+sgml-indent-data:t
+sgml-parent-document:nil
+sgml-default-dtd-file:"./reference.ced"
+sgml-exposed-tags:nil
+sgml-local-catalogs:("/usr/lib/sgml/catalog")
+sgml-local-ecat-files:nil
+End:
+-->

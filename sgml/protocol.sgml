@@ -1,0 +1,4043 @@
+<!-- $Header: /var/lib/cvs/pgsql-fr/sgml/protocol.sgml,v 1.6.2.1 2005/05/09 21:46:49 guillaume Exp $ -->
+
+<chapter id="protocol">
+ <title>Protocole d'interface et de moteur</title>
+
+ <para>
+  <productname>PostgreSQL</productname> utilie un protocole basé sur les
+  messages pour la communication entre les interfaces et le moteur (clients et
+  serveurs). Le protocole passe sur <acronym>TCP/IP</acronym> mais aussi via des
+  sockets de domaine Unix. Le numéro de port 5432 a été enregistré par l'IANA
+  comme numéro de port TCP personnalisé pour les serveurs supportant ce
+  protocole mais en pratique tout numéro de port non privilégié pourrait être
+  utilisé.
+ </para>
+
+ <para>
+  Ce document décrit la version 3.0 de ce protocole, implémentée dans
+  <productname>PostgreSQL</productname> 7.4 et ultérieure. Pour des
+  descriptions des versions de protocoles précédentes, voir les précédentes
+  versions de la documentation de <productname>PostgreSQL</productname>. Un
+  serveur seul peur supporter plusieurs versions du protocole. Le message
+  initial de demande de lancement indique au serveur la version du protocole que
+  le client souhaite utiliser, ensuite le serveur suit ce protocole s'il en est
+  capable.
+ </para>
+
+ <para>
+  Les fonctionnalités de haut niveau construites sur ce protocole
+  (par exemple, la façon dont <application>libpq</application> passe certaines
+  variables d'environnement lorsque la connexion est établie) sont couvertes
+  ailleurs.
+ </para>
+
+  <para>
+   Pour répondre à de multiple clients de façon efficace, le serveur lance un
+   nouveau serveur (<quote>backend</>) pour chaque client. Dans l'implémentation
+   actuelle, un nouveau processus fils est créé immédiatement après qu'une
+   connexion entrante est détectée. Néanmoins, ceci est transparent dans le
+   protocole. Pour le but du protocole, les termes <quote>backend</> et
+   <quote>serveur</> sont interchangeables&nbsp;; comme <quote>frontend</>,
+   <quote>interface</> et <quote>client</>.
+  </para>
+
+ <sect1 id="protocol-overview">
+  <title>Aperçu</title>
+
+  <para>
+   Le protocole a différentes phases pour le lancement et les opérations
+   normales. Dans la phase de lancement, le client ouvre une connexion au
+   serveur et s'authentifie lui-même à la satisfaction du serveur. (Ceci
+   pourrait impliquer un message simple ou plusieurs messages suivant la méthode
+   d'authentification utilisée.) Si tout se passe bien, le serveur envoie alors
+   une information de statut au client et entre finalement en mode d'opérations
+   normales. Sauf en ce qui concernen le message de demande de lancement, cette
+   partie du protocole est conduite par le serveur.
+  </para>
+
+  <para>
+   Lors des opérations normales, le client envoie des requêtes et autres
+   commandes au serveur et celui-ci renvoie les résultats des requêtes ainsi que
+   d'autres réponses. Il existe quelque cas (comme <command>NOTIFY</>) où le
+   serveur enverra des messages non sollicités mais pour la plupart cette partie
+   de la session est conduite par les requêtes du client.
+  </para>
+
+  <para>
+   La fin de la session est normalement au choix du client mais peut être forcé
+   par le moteur dans certains cas. Dans tous les cas, lorsque le serveur
+   termine la connexion, il annulera toute transaction ouverte (non terminée)
+   avant de quitter.
+  </para>
+
+  <para>
+   Pendant les opérations normales, les commandes SQL peuvent être exécutées
+   via deux sous-protocoles. Dans le protocole des <quote>requêtes simples</>,
+   le client envoie juste une chaîne, la requête, qui est analysée et exécutée
+   immédiatement par le serveur. Dans le protocole des <quote>requêtes
+   étendues</>, le traitement des requêtes est séparé dans de nombreuses
+   étapes&nbsp;: l'analyse, le lien avec les valeurs de paramètres et
+   l'exécution. Ceci offre une flexibilité et bénéfices au nioveau performance
+   au prix d'une complexité supplémentaire.
+  </para>
+
+  <para>
+   Les opérations normales ont des sous-protocoles supplémentaires pour
+   certaines opérations comme <command>COPY</>.
+  </para>
+
+ <sect2 id="protocol-message-concepts">
+  <title>Aperçu des messages</title>
+
+  <para>
+   Toute la communication se base sur un flux de messages. Le premier octet
+   d'un message identifie le type de message et les quatre prochains octets
+   spécifient la longueur du reste du message (cette longueur s'inclut
+   elle-même, mais pas l'octet du type de message). Le contenu restant du
+   message est déterminé par le type de message. Pour des raisons historiques,
+   le tout premier message envoyé par le client (le message de lancement) n'a
+   pas d'octet initial du type de message.
+  </para>
+
+  <para>
+   Pour éviter de perdre la synchronisation avec le flux de messages, le
+   serveur et le client lisent typiquement un message entier dans un tampon
+   (en utilisant le nombre d'octets) avant de tenter de traiter son contenu.
+   Ceci permet une récupération simple si une erreur est détectée lors du
+   traitement du contenu. Dans les situations extrêmes (telles que ne pas avoir
+   assez de mémoire pour placer le message dans le tampon), le récepteur
+   pourrait utiliser le nombre d'octets pour déterminer l'entrée à passer avant
+   de continuer la lecture des messages.
+  </para>
+
+  <para>
+   Sinon, les serveurs et les clients doivent faire attention à ne pas envoyer
+   un message incomplet. Ceci se fait habituellement en plaçant le message 
+   entier dans un tampon avant de commencer à l'envoyer. Su un échec de
+   communications survient pendant l'envoi ou la réception d'un message, la
+   seule réponse sensible est d'abandonner la connexion car il y a peu d'espoir
+   de récupérer la ssynchronisation des messages.
+  </para>
+ </sect2>
+
+  <sect2 id="protocol-query-concepts">
+   <title>Aperçu des requêtes étendues</title>
+
+   <para>
+    Dans le protocole des requêtes étendues, l'exécution de commandes SQL est
+    divisée en plusieurs étapes. L'état retenu entre les étapes est représenté
+    par deux types d'objets&nbsp;: les <firstterm>instructions préparées</> et
+    les <firstterm>portails</>. Une instruction préparée représente le résultat
+    de l'analyse, de l'analyse de la sémantique et de la planification d'une
+    chaîne de requête. Une instruction préparée n'est pas nécessairement prête à
+    être exécutée parce qu'elle pourrait ne pas avoir certaines valeurs pour les
+    <firstterm>paramètres</>. Un portail représente une instruction prête à être
+    exécutée ou déjà-partiellement-exécutée, dont toutes les valeurs de
+    paramètres manquantes sont connues. (Pour les instructions
+    <command>SELECT</>, un portail est équivalent un curseur ouvert mais nous
+    choisissons d'utiliser un terme différent car les curseurs ne gèrent pas les
+    instructions autres que <command>SELECT</>.)
+   </para>
+
+   <para>
+    Le cycle d'exécution complet consiste en une étape d'<firstterm>analyse</>,
+    qui crée une instruction préparée à partir d'une chaîne de requêtes&nbsp;;
+    une étape de <firstterm>liens</>, qui crée un portail à partir d'une
+    instruction préparée et des valeurs pour les paramètres nécessaires&nbsp;;
+    et une étape d'<firstterm>exécution</> qui exécute une requête du portail.
+    Dans le cas d'une requête qui renvoie des lignes (<command>SELECT</>,
+    <command>SHOW</>, etc), l'étape d'exécution doit savoir s'il doit récupérer
+    qu'un nombre limité de lignes, pour que des étapes d'exécution multipless
+    soient nécessaires pour terminer l'opération.
+   </para>
+
+   <para>
+    Le serveur peut garder trace de plusieurs instructions préparées et de
+    portails (mais notez qu'elles existent seulement à l'intérieur d'une
+    session, et ne sont jamais partagées entre les sessions). Les instructions
+    préparées et les portails existants sont référencés par les noms affectés
+    lors de leur création. En plus, une instruction préparée et un portail
+    <quote>sans nom</> existent. Bien qu'ils se comportent largement comme les
+    objets nommés, les opérations sur eux sont optimisées dans le cas une
+    requête est exécutée une seule fois puis est annulée, alors que les
+    opérations sur les objets nommés sont optimisés pour être utilisés de
+    nombreuses fois.
+   </para>
+  </sect2>
+
+  <sect2 id="protocol-format-codes">
+   <title>Formats et codes de format</title>
+
+   <para>
+    La donnée d'un type de donnée particulier pourrait être transmis dans
+    plusieurs <firstterm>formats</> différents. À partir de 
+    <productname>PostgreSQL</> 7.4, les seuls formats supportés sont le
+    <quote>texte</> et le <quote>binaire</> mais le protocole fait provision des
+    extensions futures. Le format désiré pour toute valeur est spécifié par un
+    <firstterm>code de format</>. Les clients pourraient spécifier un code de
+    format pour chaque valeur de paramètre transmise et pour chaque colonne du
+    résultat d'une requête. Le texte a le code de format zéro, le binaire a le
+    code un et tous les autres codes de format sont réservés pour des
+    définitions futures.
+   </para>
+
+   <para>
+    Le représentation texte des valeurs est toute chaîne produite et acceptée
+    par les fonctions de conversion en entrée/sortie pour le type de données 
+    particulier. Dans la représentation transmise, il n'y a pas de caractère nul
+    à la fin&nbsp;; le client doit en ajouter un pour les valeurs reçues si il
+    souhaite les traiter comme des chaînes C. (Le format texte n'autorise pas
+    les valeurs nulles intégrées.)
+   </para>
+
+   <para>
+    Les représentations binaires pour les entiers utilisent l'ordre d'octet
+    réseau (octet le plus significatif en premier). Pour les autres types de
+    données, consultez la documentation ou le code source pour en apprendre sur
+    la représentation binaire. Gardez en tête que les représentations binaires
+    pour les types de données complexes pourraient changer entre les versions du
+    serveur&nbsp;; le format texte est habituellement le choix le plus portable.
+   </para>
+  </sect2>
+ </sect1>
+
+ <sect1 id="protocol-flow">
+  <title>Flux de messages</title>
+
+  <para>
+   Cette section décrit le flux des messages et la sémantique de chaque type
+   de message. (Les détails sur la représentation exacte de chaque message
+   apparaît dans <xref linkend="protocol-message-formats">.) Il existe
+   différents sous-protocoles suivant l'état de la connexion&nbsp;: lancement,
+   requête, appel de fonction, COPY et fin. Il existe aussi des provisions
+   spéciales pour les opérations asynchrones (incluant les réponses aux
+   notifications et les annulations de commande), qui peuvent arriver à tout
+   moment après la phase de lancement.
+  </para>
+
+  <sect2>
+   <title>Lancement</Title>
+
+   <para>
+    Pour commencer une session, un client ouvre une connexion au serveur et
+    envoie un message de lancement. Ce message inclut les noms de l'utilisateur
+    et de la base de données où le client souhaite se connecter&nbsp;; il
+    identifie aussi la version particulière du protocole à utiliser. (De façon
+    optionnelle, le message de lancement peut inclure des configurations
+    supplémentaires pour des paramètres en exécution.) Le serveur utiliser
+    ensuite cette information et le contenu de ces fichiers de configuration
+    (tels que <filename>pg_hba.conf</filename>) pour déterminer si la connexion
+    est acceptable et quelle authentification supplémentaire est requis (si
+    nécessaire).
+   </para>
+
+   <para>
+    Ensuite, le serveur envoie un message de demande d'authentification
+    approprié, auquel le client doit répondre avec un message de réponse
+    d'authentification approprié (tel qu'un mot de passe). En principe, le cycle
+    demande/réponse d'authentification pourrait requérir plusieurs itérations
+    mais aucune des méthodes d'authentification présentes utilisent plus d'un
+    cycle demande/réponse. Avec d'autres méthodes, aucune réponse n'est
+    nécessaire de la part du client et donc aucune demande d'authentification
+    n'intervient.
+   </para>
+
+   <para>
+    Le cycle d'authentification se termine lorque le serveur rejete la tentative
+    de connexion (ErrorResponse) ou l'accepte en envoyant AuthenticationOk.
+   </para>
+
+   <para>
+    Les messages possibles du serveur dans cette phase sont&nbsp;:
+
+    <variablelist>
+     <varlistentry>
+      <term>ErrorResponse</term>
+      <listitem>
+       <para>
+        La tentative de connexion a été rejetée.
+        Le serveur ferme immédiatement la connexion.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>AuthenticationOk</term>
+      <listitem>
+       <para>
+        L'échange d'authentification s'est terminé avec succès.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>AuthenticationKerberosV4</Term>
+      <listitem>
+           <para>
+        Le client doit maintenant prendre part à un dialogue
+d'authentification Kerberos V4 (non décrit ici, car faisant parti de la
+spécification Kerberos) avec le serveur. Si cela résulte en un succès, le
+serveur répond avec un AuthenticationOk, sinon il répond avec un ErrorResponse.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <Term>AuthenticationKerberosV5</Term>
+      <ListItem>
+       <Para>
+        Le client doit maintenant prendre part à un dialogue d'authentification
+Kerberos V5 (non décrit ici car faisant parti de la spécification Kerberos)
+avec le serveur. Si cela résulte en un succès, le serveur répond avec un
+AuthenticationOk, sinon il répond avec un ErrorResponse.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>AuthenticationCleartextPassword</Term>
+      <ListItem>
+       <Para>
+        Le client doit maintenant envoyer un PasswordMessage contenant le mot
+de passe en clair. Si le mot de passe est le bon, le serveur répond avec un
+AuthenticationOk, sinon il répond avec un ErrorResponse.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>AuthenticationCryptPassword</Term>
+      <ListItem>
+       <Para>
+        Le client doit maintenant envoyer un PasswordMessage contenant le mot
+de passe crypté avec crypt(3) en utilisant le composant salt à deux caractères
+spécifié dans le message AuthenticationCryptPassword. Si le mot de passe est
+correct, le serveur répond avec un AuthenticationOk, sinon il répond avec un
+ErrorResponse.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>AuthenticationMD5Password</Term>
+      <ListItem>
+       <Para>
+        Le client doit maintenant envoyer un PasswordMessage contenant le mot
+de passe crypté avec MD5 en utilisant le composant salt de quatre caractères
+donné dans le message AuthenticationMD5Password. Si le mot de passe est
+correct, le serveur répond avec un AuthenticationOk, sinon il répond avec un
+ErrorResponse.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>AuthenticationSCMCredential</Term>
+      <ListItem>
+       <Para>
+        Cette réponse est seulement possible pour les connexions locales en
+ domaine Unix sur les plateformes qui supportent les messages crédentielles
+SCM. Le client doit envoyer un message crédentiel SCM, puis envoyer un seul
+octet de données. (Le contenu de cet octet n'est pas intéressant&nbsp;; il est
+utilisé pour s'assurer que le serveur attend assez longtemps pour recevoir le
+message crédentiel.) Si la crédence est acceptable, le serveur répond avec un
+AuthenticationOk, sinon il répond avec un ErrorResponse.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+    </VariableList>
+   </Para>
+
+   <para>
+    Si le client ne supporte pas la méhode d'authentification demandée par le
+serveur, alors il devrait immédiatement fermer la connexion.
+   </para>
+
+   <para>
+    Après avoir reçu AuthenticationOk, le client doit attendre d'autres
+messages du serveur. Dans cette phase, un processu serveur est en cours de
+lancement et le client est simplement en attente. Il est encore possible que la
+tentative de lancement échoue (ErrorResponse) mais, dans le cas de base, le
+serveur enverra quelques messages ParameterStatus, BackendKeyData et enfin
+ReadyForQuery.
+   </para>
+
+   <para>
+    Pendant cette phase, le serveur tentera d'appliquer tous les paramètres
+supplémentaires en exécution qui sont donnés dans le message de lancement. En
+cas de succès, ces valeurs deviennent les valeurs par défaut de la session.
+Une erreur génère un ErrorResponse et quitte.
+   </para>
+
+   <para>
+    Les messages possibles du serveur dans cette phase sont&nbsp;:
+
+    <VariableList>
+     <VarListEntry>
+      <Term>BackendKeyData</Term>
+      <ListItem>
+       <Para>
+        Ce message fournit une donnée secrète de type clé que le client doit
+conserver s'il souhaite être capable d'envoyer des annulations de requêtes plus
+tard. Le client ne devrait pas répondre à ce message mais devrait continuer à
+attendre un message ReadyForQuery.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>ParameterStatus</Term>
+      <ListItem>
+       <Para>
+        Ce message informe le client sur la configuration actuelle (initiale)
+des paramètres du serveur, comme <varname>client_encoding</> ou
+<varname>DateStyle</>. Le client peut ignorer ce message ou enregistrer la
+configuration pour ses besoins futurs&nbsp;; voir <xref
+linkend="protocol-async"> pour plus de détails. Le client ne devrait pas
+répondre à ce message mais continuer à attendre un message ReadyForQuery.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>ReadyForQuery</Term>
+      <ListItem>
+       <Para>
+        Le lancement est terminé. Le client pourrait envoyer dès maintenant des
+commandes.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>ErrorResponse</Term>
+      <ListItem>
+       <Para>
+        Le lancement a échoué. La connexion est fermée après avoir envoyé ce
+message.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>NoticeResponse</Term>
+      <ListItem>
+       <Para>
+        Un message d'avertissement a été envoyé. Le client devrait afficher ce
+message mais doit continuer à attendre un ReadyForQuery ou un ErrorResponse.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+    </VariableList>
+   </Para>
+
+   <para>
+    Le message ReadyForQuery est le même que celui que le serveur envoie à a
+chaque cycle de commande. Suivant les besoins de codage du client, il est
+raisonnable de considérer ReadyForQuery comme le début d'un cycle de commande
+et de considérer ReadyForQuery comme la fin de la phase de lancement et de
+chaque cycle de commande.
+   </para>
+  </sect2>
+
+  <Sect2>
+   <Title>Requête simple</Title>
+
+   <Para>
+    Un cycle de requête simple est initié par le client en envoyant un message
+Query au serveur. Le message inclut une commande SQL (ou des commandes)
+exprimée comme une chaîne texte. Ensuite, le serveur envoie un ou plusieurs
+messages en réponse suivant le contenu de la chaîne représentant la requête et
+enfin un message ReadyForQuery. ReadyForQuery informe le client qu'il peut
+envoyer une nouvelle commande. (Il n'est pas réellement nécessaire que le
+client attende ReadyForQuery avant de lancer une autre commande mais le client
+doit alors prendre la responsabilité de savoir ce qui arrive si la commande
+précédente échoue et que les commandes suivantes, déjà lancées, réussissent.)
+   </para>
+
+   <Para>
+    Les messages de réponse du serveur sont&nbsp;:
+
+    <VariableList>
+     <VarListEntry>
+      <Term>CommandComplete</Term>
+      <ListItem>
+       <Para>
+        Commande SQL terminée normalement.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>CopyInResponse</Term>
+      <ListItem>
+       <Para>
+        Le serveur est prêt à copier des données du client vers une table&nbsp;
+voir <xref linkend="protocol-copy">.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>CopyOutResponse</Term>
+      <ListItem>
+       <Para>
+        Le serveur est prêt à copier des données d'une table vers le
+client&nbsp;; voir <xref linkend="protocol-copy">.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>RowDescription</Term>
+      <ListItem>
+       <Para>
+        Indique que les lignes sont prêtes à être renvoyées en réponse à une
+ requête <command>SELECT</command>, <command>FETCH</command>, etc. Le contenu
+de ce message décrit le placement des colonnes dans les lignes. Il sera suivi
+d'un message DataRow pour chaque ligne renvoyée par le client.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>DataRow</Term>
+      <ListItem>
+       <Para>
+        Un des ensembles de lignes renvoyés par une requête
+<command>SELECT</command>, <command>FETCH</command>, etc.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>EmptyQueryResponse</Term>
+      <ListItem>
+       <Para>
+        Une chaîne de requête vide a été reconnue.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>ErrorResponse</Term>
+      <ListItem>
+       <Para>
+        Une erreur est survenue.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>ReadyForQuery</Term>
+      <ListItem>
+       <Para>
+        Le traitement de la requête est terminé. Un message séparé est envoyé
+pour indiquer ceci parce que la chaîne de la requête pourrait contenir
+plusieurs commandes SQL. (CommandComplete marque la fin du traitement d'une
+commande SQL, pas de la chaîne complète.) ReadyForQuery sera toujours envoyé
+que le traitement se termine avec un succès ou avec une erreur.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>NoticeResponse</Term>
+      <ListItem>
+       <Para>
+        Un message d'avertissement a été envoyé concernant la requête. Les
+avertissements sont en plus des autres réponses, c'est-à-dire que le serveur
+continuera à traiter la commande.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+    </VariableList>
+   </Para>
+
+   <Para>
+    La réponse à une requête <command>SELECT</> (ou à d'autres requêtes qui
+renvoient des ensembles de données tels que <command>EXPLAIN</> ou
+<command>SHOW</>) consiste normalement en un RowDescription, zéro ou plus de
+messages DataRow messages et enfin un CommandComplete. <command>COPY</> vers ou
+du client demande un protocole spécial décrit dans <xref
+linkend="protocol-copy">. Toutes les autres types de requêtes produisent
+seulement un message CommandComplete.
+   </Para>
+
+   <Para>
+    Comme une chaîne de requête pourrait contenir plusieurs requêtes (séparées
+par des points virgules), il pourrait y avoir plusieurs séquences de réponses 
+avant que le serveur finisse de traiter la chaîne de requête. ReadyForQuery est
+lancé quand la chaîne complète a été traitée et que le serveur est prêt à
+accepter une nouvelle chaîne de requêtes.
+   </Para>
+
+   <Para>
+    Si une chaîne de requêtes complètement vide est reçu (aucun contenu autre
+que des espaces blancs), la réponse est EmptyQueryResponse suivi par
+ReadyForQuery.
+   </Para>
+
+   <Para>
+    Dans le cas d'une erreur, ErrorResponse est lancé suivi par ReadyForQuery. 
+Tous les traitements suivants de la chaîne de requêtes sont annulés par
+ErrorResponse (même si un grand nombre de requêtes restent à traiter). Notez
+que ceci pourrait survenir en plein milieu de la séquence des messages générés
+par une requête individuelle.
+   </Para>
+
+   <para>
+    En mode simple requête, le format des valeurs récupérées est toujours du
+texte, sauf si la commande donnée est un <command>FETCH</> à partir d'un curseur
+déclaré avec l'option <literal>BINARY</>. Dans ce cas, les valeurs récupérées
+sont au format binaire. Les codes de format donnés dans le message
+RowDescription indiquent le format utilisé.
+   </para>
+
+   <para>
+    Un client doit être préparé à accepter des messages ErrorResponse et
+NoticeResponse à chaque fois qu'il s'attend à tout autre type de message. Voir
+aussi <xref linkend="protocol-async"> concernant les messages que le client
+pourrait générer à cause d'événements extérieurs.
+   </para>
+
+   <para>
+    La pratique recommandée est de coder les clients dans un style de machine-
+état qui acceptera tout type de message à n'importe quel moment où cela aurait
+un sens, plutôt que de coder en dur les suppositions sur la séquence exacte des
+messages.
+   </para>
+  </sect2>
+
+  <Sect2>
+   <Title>Requête étendue</Title>
+
+   <para>
+    Le protocole de requête étendu casse le protocole de requête simple
+décrit ci-dessus en plusieurs étapes. Les résultats des étapes de préparation
+peuvent être utilisées de nouveau de nombreuses fois pour une efficacité
+améliorée. De plus, des fonctionnalités supplémentaires sont disponibles,
+telles que la possibilité de fournir des valeurs de données comme des
+paramètres séparés au lieu d'avoir à les insérer directement dans une chaîne de
+requêtes.
+   </para>
+
+   <para>
+    Dans le protocole étendu, le client envoie tout d'abord un message Parse
+qui contient une chaîne de requête, optionnellement quelques informations sur
+les types de données des emplacements des paramètres et le nom d'un objet d'une
+instruction préparée nommée (une chaîne vide sélectionne l'instruction préparée
+sans nom). La réponse est soit ParseComplete soit ErrorResponse. Les types de
+données des paramètres pourraient être spécifiés par l'OID&nbsp;; si non
+donnés, l'analyseur tente d'inférer les types de données de la même façon comme
+il pourrait faire pour les constantes de chaîne littérale non typées.
+   </para>
+
+   <note>
+    <para>
+     La chaîne contenue dans un message Parse ne peut pas inclure plus d'une
+instruction SQL&nbsp;; sinon une erreur de syntaxe est rapportée. Cette
+restriction n'existe pas dans le protocole de requête simple mais il existe dans
+le protocole étendu parce permettre aux instructions préparées ou portails de
+contenir de multiples commandes compliquerait le procotole indumment.
+    </para>
+   </note>
+
+   <para>
+    Si créée avec succès, une instruction préparée nommée dure jusqu'à la fin de
+la session actuelle, sauf si détruit explicitement. Une instruction préparée non
+nommée dure uniquement jusqu'à la prochaine instruction Parse spécifiant que
+l'instruction non nommée est lancée comme destination. (Notez qu'un simple
+message Query détruit aussi l'instruction non nommée.) Les instructions
+préparées nommées doivent être explicitement fermées avant qu'ils puissent être
+redéfinis par un message Parse mais ceci n'est pas requis pour l'instruction
+non nommée. Les instructions préparées non nommées peuvent aussi être créées et
+accédées au niveau de commande SQL en utilisant <command>PREPARE</> et
+<command>EXECUTE</>.
+   </para>
+
+   <para>
+    Une fois qu'une instruction préparée existe, il peut être prêt à
+l'exécution en utilisant un message Bind. Le message Bind donne le nom de
+l'instruction préparée source (une chaîne vide dénote l'instruction préparée
+non nommée), le nom du portail destination (une chaîne vide dénote le portail
+non nommé) et les valeurs à utiliser pour tout emplacement de paramètres
+présent dans l'instruction préparée. L'ensemble de paramètres fournis doit
+correspondre à ceux nécessaire pour l'instruction préparée. Bind spécifie aussi
+le format à utiliser pour toutes les données renvoyées par la requête&nbsp;; le
+format peut être spécifié complètement ou par colonne. La réponse est soit
+BindComplete soit ErrorResponse.
+   </para>
+
+   <note>
+    <para>
+     Le choix entre la sortie texte et binaire est déterminé par les codes
+de format donnés dans Bind, quelque soit la commande SQL impliquée. L'attribut
+<literal>BINARY</> dans les déclarations du curseur n'est pas relevant à
+l'utilisation du protocole de requête étendue.
+    </para>
+   </note>
+
+   <para>
+    Si créé avec succès, un objet portail nommé dure jusqu'à la fin de la
+transaction actuelle sauf si elle est explicitement détruite. Un portail non
+nommé est détruite à la fin de la transaction ou aussi tôt que la prochaine
+instruction Bind spécifiant le portail non nommé de destination est lancée.
+(Notez qu'un simple message Query détruit aussi le portail non nommé.) Les
+portails nommés doivent être explicitement fermés avant qu'ils ne puissent être
+redéfinis par un message Bind mais ceci n'est pas requis pour le portail non
+nommé. Les portails nommés peuvent aussi être créés et accédés à ce niveau de
+commande SQL en utilisant <command>DECLARE CURSOR</> et <command>FETCH</>.
+   </para>
+
+   <para>
+    Une fois qu'un portail existe, il peut être exécuté en utilisant un message
+Execute. Ce message spécifie le nom du portail (une chaîne vide dénote le
+portail non nommé) et un nombre maximum de lignes de résultat (zéro signifiant
+<quote>récupère toutes les lignes</>). Le nombre de lignes résultat a
+seulement un sens pour les portails contenant des commandes qui renvoient des
+ensembles de lignes&nbsp;; dans d'autres cas, la commande est toujours exécutée
+jusqu'à la fin et le nombre de lignes est ignoré. Les réponses possibles
+d'Execute sont le même que celles décrites ci-dessus pour les requêtes lancées
+ via le protocole de requête simple, sauf qu'Execute ne cause pas l'envoi de
+ReadyForQuery.
+   </para>
+
+   <para>
+    Si Execute se termine avant la fin de l'exécution d'un portail (dû à
+l'arrivée d'un nombre de lignes de résultats différent de zéro), il enverra un
+message PortalSuspended&nbsp;; l'apparence de ce message indique au client
+qu'un autre Execute devrait être lancé contre le même portail pour terminer
+l'opération. Le message CommandComplete indiquant la fin de la commande source
+SQL n'est pas envoyée jusqu'à la fin de l'exécution du portail. Donc, une phase
+Execute est toujours terminée par l'apparence d'exactement un de ces
+messages&nbsp;: CommandComplete, EmptyQueryResponse (si le portail était créé à
+partir d'une chaîne de requête vive), ErrorResponse ou PortalSuspended.
+   </para>
+
+   <para>
+    À la fin de chaque série de messages de requêtes étendues, le client
+devrait lancer un message Sync. Ce message sans paramètre fait que le serveur
+ferme la transaction actuelle s'il n'est pas à l'intérieur d'un bloc de
+transaction <command>BEGIN</>/<command>COMMIT</> (<quote>fermer</> signifiant
+valider s'il n'y a pas d'erreurs, ou annuler dans le cas contraire). Alors une
+réponse ReadyForQuery est lancée. Le but de Sync est de fournir un point de
+resynchronisation pour les récupérations d'erreurs. Quand une erreur est
+détectée lors du traitement d'un message de requête étendu, le serveur lance
+ErrorResponse, puis lit et annule les messages jusqu'à ce qu'un Sync soit
+atteint, puis lance ReadyForQuery et renvoie le traitement de messages normaux.
+(Mais notez qu'aucun échappement ne survient si une erreur est détectée
+<emphasis>tout en</> traitant Sync --- ceci nous assure qu'il y a un et
+seulement un ReadyForQuery envoyé pour chaque Sync.)
+   </para>
+
+   <note>
+    <para>
+     Sync ne cause pas un bloc de transactions ouvert avec un <command>BEGIN</>
+à fermer. Il est possible de détecter cette situation car le message
+ReadyForQuery inclut une information de statut de transaction.
+    </para>
+   </note>
+
+   <para>
+    En plus de ces opérations fondamentales, requis, il y a plusieurs opérations
+optionnelles qui peut être utilisé avec le protocole de requête étendue.
+   </para>
+
+   <para>
+    Le message Describe (variante d'un portail) spécifie le nom d'un portail
+existant (ou une chaîne vide pour le portail non nommé). La réponse est un
+message RowDescription décrivant les lignes qui sera renvoyé en exécutant le
+portail&nbsp;; ou un message NoData si le portail ne contient pas une requête
+qui renvoie des lignes&nbsp;; ou ErrorResponse s'il n'existe pas un tel portail.
+   </para>
+
+   <para>
+    Le message Describe (variante de l'instruction) spécifie le nom d'une
+instruction préparée existante (ou une chaîne vide pour l'instruction préparée
+non nommée). La réponse est un message ParameterDescription décrivant les
+paramètres nécessaires à l'instruction, suivies par un message RowDescription
+décrivant les lignes qui seront renvoyées lorsque l'instrution est
+éventuellement exécutée (ou un message NoData si l'instruction ne renvoie pas
+de lignes). ErrorResponse est lancé s'il n'y a pas de telle instruction
+préparée. Notez que comme Bind n'a pas encore été lancé, les formats à utiliser
+pour les lignes renvoyées ne sont pas encore connues du serveur&nbsp;; les
+champs du code de format dans le message RowDescription seront à zéro dans
+ ce cas.
+   </para>
+
+   <tip>
+    <para>
+     Dans la plupart des scénarios, le client devrait lancer une variante ou 
+une autre de Describe avant de lancer Execute pour vous assurer qu'il sait
+comment interpréter les résultats qu'il récupèrera.
+    </para>
+   </tip>
+
+   <para>
+    Le message Close forme une instruction préparée ou un portail existant et
+libère les ressources. S'il ne s'agit pas d'une erreur pour lancer Close sur
+une instruction ou un portail inexistant. La réponse est normalement
+CloseComplete mais pourrait être ErrorResponse si une quelconque difficulté est
+rencontrée lors de la libération des ressources. Notez que fermer une
+instruction préparée ferme implicitement d'autres portails ouverts qui ont été
+construit à partir de cette instruction.
+   </para>
+
+   <para>
+    Le message Flush ne cause pas une sortie spécifique à être généré mais
+force le serveur à délivrer toutes données restantes dans les tampons de
+sortie. Un Flush doit être envoyé après qu'une commande de requête étendue 
+sauf Sync, si le client souhaite examiner le résultat de cette commande 
+avant de lancer plus de commandes. Sans Flush, les messages renvoyés par le
+serveur seront combinés dans le nombre minimum possible de paquets pour
+minimiser la surcharge réseau.
+   </para>
+
+   <note>
+    <para>
+     Le simple message Query est approximativement équivalent aux séries Parse,
+     Bind, au portail Describe, Execute, Close, Sync en utilisant les
+objets de l'instruction préparée non nommée et du portail, sans paramètres. Une
+différence est qu'il acceptera plusieurs instructions SQL dans la chaîne de
+requêtes, réalisant automatiquement la séquence bind/describe/execute pour
+chacune en succession. Une autre différence est qu'il ne renvoie pas les
+messages ParseComplete, BindComplete, CloseComplete ou NoData.
+    </para>
+   </note>
+  </sect2>
+
+  <Sect2>
+   <Title>Appel de fonction</Title>
+
+   <para>
+    Le sous-protocole de l'appel de fonction permet au client de demander un
+appel direct de toute fonction qui existe dans le catalogue système
+<structname>pg_proc</structname> de la base de données. Le client doit avoir le
+droit d'exécution pour la fonction.
+   </para>
+
+   <note>
+    <para>
+     Le sous-protocole d'appel de la fonction est une fonctionnalité qui est
+probablement mieux évitée dans le nouveau code. Des résultats similaires
+peuvent être accomplis en initialisant une instruction préparée qui lance
+<literal>SELECT function($1, ...)</>. Le cycle de l'appel de fonction peut
+alors être remplacé avec Bind/Execute.
+    </para>
+   </note>
+
+   <para>
+    Un cycle d'appel de fonction est initié par le client envoyant un message
+FunctionCall au serveur. Ensuite, le serveur envoie un ou plusieurs messages de
+réponse suivant les résultats de l'appel de la fonction et finalement un
+message de réponse ReadyForQuery. ReadyForQuery informe le client qu'il
+pourrait envoyer en toute sécurité une nouvelle requête ou un nouvel appel de
+fonction.
+   </para>
+
+   <para>
+    Les messages de réponse possibles du serveur sont&nbsp;:
+
+    <VariableList>
+     <VarListEntry>
+      <Term>ErrorResponse</Term>
+      <ListItem>
+       <Para>
+        Une erreur est survenue.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>FunctionCallResponse</Term>
+      <ListItem>
+       <Para>
+        L'appel de la fonction est terminé et a renvoyé le résultat
+donné dans le message. (Notez que le protocole d'appel de fonction peut
+seulement gérer un résultat scalaire simple, pas un type de ligne ou un
+ensemble de résultats.)
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>ReadyForQuery</Term>
+      <ListItem>
+       <Para>
+        Le traitement de l'appel de fonction est terminé. ReadyForQuery sera
+toujours envoyé, que le traitement se termine avec succès ou avec une erreur.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+
+     <VarListEntry>
+      <Term>NoticeResponse</Term>
+      <ListItem>
+       <Para>
+        Un message d'avertissement a été envoyé en relation avec l'appel de
+fonction. Les avertissements sont en supplément des autres réponses,
+c'est-à-dire que le seveur continuera à traiter la commande.
+       </Para>
+      </ListItem>
+     </VarListEntry>
+    </VariableList>
+   </Para>
+  </sect2>
+
+  <sect2 id="protocol-copy">
+   <title>Opérations COPY</title>
+
+   <para>
+    La commande <command>COPY</> permet des transferts de données en lot vers
+ou du serveur. Les opérations Copy-in et copy-out basculent chacune la
+connexion dans un sous-protocole distinct, durant jusqu'à la fin de l'opération.
+   </para>
+
+   <para>
+    Le mode Copy-in (transfert de données vers le serveur) est initié quand le
+serveur exécute une instruction SQL <command>COPY FROM STDIN</>. Le serveur
+envoie une message CopyInResponse au client. Le client devrait alors envoyer
+zéro ou plus de messages CopyData, formant un flux de données en entrée. (Les
+limites du message ne doivent pas avoir quoi que ce soit avec les limites de la
+ligne, bien que cela soit souvent un choix raisonnable.) Le client peut
+terminer le mode copy-in en envoyant soit un message CopyDone (permettant une
+fin avec succès) ou un message CopyFail (qui causera l'instruction SQL
+<command>COPY</> pour échouer avec une erreur). Alors, le serveur retourne au
+mode de traitement de la commande qu'il était avant le début de
+<command>COPY</>, qui sera le protocole de requête simple ou étendu. Ensuite, il
+enverra soit CommandComplete (en cas de succès) soit ErrorResponse (sinon).
+   </para>
+
+   <para>
+    Dans l'événement d'une erreur détectée par le moteur lors d'un mode copy-in
+(incluant la réception d'un message CopyFail), le serveur lancer un message
+ErrorResponse. Si la commande <command>COPY</> a été lancée via un message de
+requête étendue, le serveur annulera maintenant des messages du client jusqu'à
+ce qu'un message Sync soit reçu, puis il enverra ReadyForQuery et retournera le
+traitement normal. Si la commande <command>COPY</> a été lancée dans un message
+simple Query, le reste de ce message est annulé et ReadyForQuery est lancé.
+Dans ce cas, tous les messages conséquents à CopyData, CopyDone ou CopyFail
+lancés par l'interface seront simplement annulés.
+   </para>
+
+   <para>
+    Le serveur ignorera les messages Flush et Sync reçus lors d'un mode
+copy-in. La réception d'un autre type de message sans copie constitue une
+erreur qui annulera l'état copy-in décrite ci-dessus. (L'exception pour Flush
+et Sync est dans l'intérêt des bibliothèques clientes qui enverront toujours
+Flush ou Sync après un message Execute sans vérification si la commande 
+à exécuter est un <command>COPY FROM STDIN</>.)
+   </para>
+
+   <para>
+    Le mode Copy-out (transfert de données à partir du serveur) est initié
+lorsque le moteur exécute une instruction SQL <command>COPY TO STDOUT</>. Le
+moteur envoie un message CopyOutResponse vers le client suivi par zéro ou
+plusieurs messages CopyData (toujours une par ligne), suivi par CopyDone.
+Ensuite, le serveur retourne au mode de traitement de la commande dans lequel il
+était avant le lancement de <command>COPY</> et envoie CommandComplete. Le
+client ne peut pas annuler le tranfert (sauf en fermant la connexion ou en
+lançant une requête d'annulation), mais il peut annuler les messages CopyData
+et CopyDone non voulus.
+   </para>
+
+   <para>
+    Dans l'événement d'une erreur détectée du serveur lors du mode copy-out, le
+serveur lancera un message ErrorResponse et retournera dans le traitement
+normal. Le client pourrait traiter la réception d'un ErrorResponse (ou à la
+place tout type de message autre que CopyData ou CopyDone) en terminant le mode
+copy-out.
+   </para>
+
+   <para>
+    Les messages CopyInResponse et CopyOutResponse incluent les champs qui
+informent le client du nombre de colonnes par ligne et les codes de format en
+cas d'utilisation pour chaque colonne. (Comme l'implémentation en cours, toutes
+les colonnes dans une opération <command>COPY</> donnée utilisera le même format
+mais la conception du message ne suppose pas ceci.)
+   </para>
+  </sect2>
+
+  <sect2 id="protocol-async">
+   <title>Opérations asynchrones</title>
+
+   <para>
+    Il existe plusieurs cas dans lequel le serveur enverra les messages qui ne
+sont pas spécifiquement demandés par le flux de commande du client. Les clients
+doivent être préparés à gérer ces messages à tout moment même s'ils ne sont pas
+la suite d'une requête. Au minimum, vous devriez vérifier ces cas avant de
+commencer à lire la réponse d'une requête.
+   </para>
+
+   <para>
+    Il est possible que les messages NoticeResponse soient générés en dehors de
+toute activité&nbsp;; par exemple, si l'administrateur de la base de don
+nées commande un arrêt <quote>rapide</> de la base de données, le serveur
+enverra un NoticeResponse indiquant ce fait avant de fermer la connexion.
+Ainsi, les clients devraient toujours être préparés avant de fermer la connxion
+et afficher les messages NoticeResponse, même si la connexion est sans activité.
+   </para>
+
+   <para>
+    Les messages ParameterStatus seront générés quand la valeur active modifie
+pour tous les paramètres que le serveur croit que le client devrait connaître.
+Plus habituellement, ceci survient en réponse à une commande SQL
+<command>SET</> exécutée par le client et ce cas est effectivement synchrone
+--- mais il est aussi possible pour que les changements de statut du paramètre
+survient à cause de l'administrateur a changé un fichier de configuration et
+envoie ensuite le signal <systemitem>SIGHUP</systemitem> au postmaster. De
+plus, si une commande SET est annulée, un message approprié ParameterStatus
+sera généré pour rapporter la valeur effective actuelle.
+   </para>
+
+   <para>
+    À  présent, il y a un ensemble de paramètres codé en dur pour lesquels des
+ParameterStatus seront générés&nbsp;: il y a
+    <literal>server_version</> (un pseudo paramètre qui ne peut pas changer 
+après le lancement)&nbsp;;
+    <literal>client_encoding</>,
+    <literal>is_superuser</>,
+    <literal>session_authorization</literal> et
+    <literal>DateStyle</>.
+    Cet ensemble pourrait changer dans le futur ou même devenir configurable.
+De façon accordée, un client pourrait simplement ignorer un ParameterStatus
+pour les paramètres qu'il ne comprend pas ou ne fait pas attention.
+   </para>
+
+   <para>
+    Si un client lance une commande <command>LISTEN</command>, alors le serveur
+enverra un message NotificationResponse (à ne pas être confondu avec
+NoticeResponse&nbsp;!) quand une commande <command>NOTIFY</command> est
+exécutée pour le même nom de notification.
+   </para>
+
+   <note>
+    <para>
+     Actuellement, NotificationResponse peut seulement être envoyé à l'extérieur
+d'une transaction et, du coup, il ne surviendra pas dans le milieu d'une série
+de réponse de commande bien qu'il pourrait survenir juste avant ReadyForQuery.
+Néanmoins, il est déconseillé de concevoir la logique du client qui assume
+cela. Une bonne pratique est d'être capable d'accepter NotificationResponse en
+tout point du protocole.
+    </para>
+   </note>
+  </sect2>
+
+  <Sect2>
+   <Title>Annulation de requêtes en cours</Title>
+
+   <Para>
+    Pendant le traitement d'une requête, le client pourrait demander
+l'annulation de la requête. La requête d'annulation n'est pas envoyée
+directement sur la connexion ouverte vers le serveur pour des raisons
+d'efficacité de l'implémentation&nbsp;: nous ne voulons pas avoir le serveur
+vérifier constamment les nouvelles entrées à partir du client lors du
+traitement des requêtes. Les requêtes d'annulation devraient être relativement
+inhabituelles, donc nous les faisons simplement pour éviter une pénalité dans
+le cas normal.
+   </para>
+
+   <Para>
+    Pour lancer une requête d'annulation, le client ouvre une nouvelle
+connexion vers le serveur et envoie un message CancelRequest plutôt que le
+message StartupMessage qui serait envoyé ordinairement vers une nouvelle
+connexion. Le serveur traitera cette requête, puis fermera la connexion. Pour
+les raisons de sécurité, aucune réponse directe n'est faite pour le message de
+requête d'annulation.
+   </para>
+
+   <Para>
+    Un message CancelRequest sera ignoré sauf s'il contient le même donnée clé
+(PID et clé secrète) passé au client lors du lancement de la connexion. Si la
+requête correspond au PID et à la clé secrète pour un serveur exécuté en cours,
+le traitement de la requête en cours est annulé. (Dans l'implémentation
+existante, ceci se fait en envoyant un signal spécial au processus serveur qui
+traite la requête.)
+   </para>
+
+   <Para>
+    Le signal d'annulation pourrait ou ne pourrait avoir aucun effet --- par
+exemple, s'il arrive après que le serveur a terminé le traitement de la
+requête, alors il n'aura aucun effet. Si l'annulation est réelle, il résulte
+dans la commande bientôt terminée avec un message d'erreur.
+   </para>
+
+   <Para>
+    The upshot of all this is that for reasons of both security and
+    efficiency, the frontend has no direct way to tell whether a
+    cancel request has succeeded.  It must continue to wait for the
+    backend to respond to the query.  Issuing a cancel simply improves
+    the odds that the current query will finish soon, and improves the
+    odds that it will fail with an error message instead of
+    succeeding.
+   </para>
+
+   <Para>
+    Comme la requête d'annulation est envoyée via une nouvelle connexion au
+serveur et non pas au travers du lien de communication client/serveur, il est
+possible que la requête d'annulation soit lancée par un autre processus, pas
+seulement le client pour lequel la requête doit être annulée. Ceci pourrait
+avoir quelques bénéfices de flexibilité dans la construction d'applications
+multi-processus. Il introduit aussi un risque de sécurité dans le fait que des
+personnes non autorisées pourraient essayer d'annuler des requêtes. Le risque
+de sécurité est adressé en réclamant une clé secrète générée dynamiquement pour
+récupérer les requêtes d'annulation.
+   </para>
+  </sect2>
+
+  <Sect2>
+   <Title>Fin</Title>
+
+   <para>
+    La procédure normale de fin est que le client envoie un message Terminate
+et ferme immédiatement la connexion. Sur la réception de ce message, le serveur
+ferme la connexion et se termine.
+   </para>
+
+   <para>
+    Dans les cas rares (tels qu'un arrêt de la base de données commandé par
+l'administrateur), le serveur pourrait se déconnecter sans requête du client de
+le faire. Dans de tels cas, le serveur tentera d'envoyer un message d'erreur
+ou d'avertissement en donnant la raison pour la déconnexion avant de fermer la
+connexion.
+   </para>
+
+   <para>
+    D'autres scénarios de fin surviennent à partir de différents cas d'échecs,
+tels qu'un <quote>core dump</quote> à un moment ou à un autre, perte du lien de
+connexion, perte de synchronisation des limites du message, etc. Si soit
+le client soit le serveur s'aperçoit d'une fermeture de la connexion, il
+devrait nettoyer et terminer. Le client a l'option de lancer un nouveau serveur
+en recontactant le serveur s'il ne veut pas se terminer lui-même. Fermer la
+connexion est aussi conseillable si un type de message non reconnu est reçu car
+ceci indique probablement la perte de synchronisation de limite des messages.
+   </para>
+
+   <para>
+    Pour une fin soit normale soit anormale, toute transaction ouverte est
+annulée, et non pas validée. Vous devriez néanmoins noté que si un client se
+déconnecte alors qu'une requête non SELECT est en cours de traitement, le
+serveur terminera probablement la requête avant de noter la déconnexion. Si la
+requête est en dehors d'un bloc de transaction (séquence <command>BEGIN</> ...
+<command>COMMIT</>), alors les résultats pourraient être validés avant que la
+connexion soit reconnue.
+   </para>
+  </sect2>
+
+  <Sect2>
+   <Title>Cryptage de la session SSL</Title>
+
+   <Para>
+    Si <productname>PostgreSQL</> a été construit avec le support de SSL, les
+communications client/serveur peuvent être cryptées en utilisant SSL. Ceci
+fournit la sécurité de la communication dans les environnements où les
+attaquants pourraient être capable de capturer le trafic de la session.
+   </para>
+
+   <para>
+    Pour initier une connexion cryptée via SSL, le client envoie initialement
+un message SSLRequest plutôt qu'un StartupMessage. Ensuite, le serveur répond
+avec un seul octet contenant <literal>S</> ou <literal>N</> indiquant s'il
+souhaite ou non traiter SSL. Le client pourrait fermer la connexion à ce point
+s'il n'est pas satisfait de la réponse. Pour continuer avec <literal>S</>,
+réalisez un cycle de lancement SSL (non décrit ici car faisant partie de la
+spécification SSL) avec le serveur. En cas de succès, continuez avec l'envoi du
+StartupMessage habituel. Dans ce cas, StartupMessage et toutes les données
+suivantes seront cryptés avec SSL. Pour continuer après <literal>N</>, envoyez
+le StartupMessage habituel et continuez sans cryptage.
+   </para>
+
+   <para>
+    Le client devrait aussi être préparé à gérer une réponse ErrorMessage à un
+SSLRequest provenant du serveur. Ceci pourrait seulement survenir si le serveur
+ne dispose pas du support de SSL dans <productname>PostgreSQL</>. Dans ce cas,
+la connexion doit être fermée, mais le client pourrait choisir d'ouvrir une
+nouvelle connexion et procéder sans demander SSL.
+   </para>
+
+   <para>
+    Un SSLRequest initial pourrait être utilisé dans une connexion en cours
+d'ouverture pour envoyer un message CancelRequest.
+   </para>
+
+   <para>
+    Alors que le protocole lui-même ne fournit pas au serveur de façon de
+forcer le cryptage SSL, l'administrateur pourrait configuer le serveur pour
+rejeter les sessions non cryptées comme autre façon de vérifier
+l'authentification.
+   </para>
+  </sect2>
+ </sect1>
+
+<Sect1 id="protocol-message-types">
+<Title>Types de données de message</Title>
+
+<Para>
+Cette section décrit les types de données de base utilisés dans les messages.
+
+<VariableList>
+
+<VarListEntry>
+<Term>
+        Int<Replaceable>n</Replaceable>(<Replaceable>i</Replaceable>)
+</Term>
+<ListItem>
+<Para>
+                Un entier sur <Replaceable>n</Replaceable> bits dans l'odre des
+octets réseau (octet le plus significatif en premier). Si
+<Replaceable>i</Replaceable> est spécifié, c'est exactement la même valeur que
+celle qui apparaîtra, sinon la valeur est variable. C'est-à-dire Int16,
+Int32(42).
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+        Int<Replaceable>n</Replaceable>[<Replaceable>k</Replaceable>]
+</Term>
+<ListItem>
+<Para>
+		Un tableau de <Replaceable>k</Replaceable> entiers sur
+                <Replaceable>n</Replaceable> bits, chacun en ordre d'octets
+réseau. La longueur <Replaceable>k</Replaceable> du tableau est toujours
+déterminée par un champ précédent dans le message. C'est-à-dire Int16[M].
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+        String(<Replaceable>s</Replaceable>)
+</Term>
+<ListItem>
+<Para>
+                Une chaîne terminée avec un octet nul (chaîne style C). Il n'y
+a pas de limitations sur la longueur des chaînes. Si
+<Replaceable>s</Replaceable> est spécifié, la valeur exacte apparaîtra, sinon 
+la valeur est variable. C'est-à-dire String, String("utilisateur").
+</Para>
+                
+<Note>
+<Para>
+<Emphasis>Il n'y a aucune limite prédéfinie</Emphasis> sur la longueur d'une
+chaîne qui pourrait être renvoyée par le serveur. Une bonne stratégie de codage
+pour un client est d'utiliser un tampon dont la taille peut grandir de façon à
+ce que tout ce qui peut tenir en mémoire puisse être accepté. Si c'est
+faisable, lisez la chaîne complète et désactivez les caractères de fin qui ne
+correspondent plus à votre tampon en taille fixe.
+</Para>
+</Note>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+        Byte<Replaceable>n</Replaceable>(<Replaceable>c</Replaceable>)
+</Term>
+<ListItem>
+<Para>
+                Exactement <Replaceable>n</Replaceable> octets. Si la largeur
+		<Replaceable>n</Replaceable> du champ n'est pas une constante,
+il semble toujours déterminé à partir d'un champ précédent dans le message. Si
+<Replaceable>c</Replaceable> est spécifié, c'est la valeur exacte. C'est-à-dire
+Byte2, Byte1('\n').
+</Para>
+</ListItem>
+</VarListEntry>
+
+</VariableList>
+</Para>
+</sect1>
+
+<Sect1 id="protocol-message-formats">
+<Title>Formats de message</Title>
+
+<Para>
+Cette section décrit le format détaille pour chaque message. Chaque message est
+marqué pour indiquer qu'il pourrait être envoyé par un client (F pour
+<foreignphrase>Frontend</foreignphrase>), un serveur (B pour
+<foreignphrase>Backend</foreignphrase>) ou les deux (F &amp; B). Notez que bien
+que chaque message inclut un nombre d'octets au début, le format du message est
+défini de façon à ce que la fin du message peut se trouver sans référence au
+nombre d'octets. Ceci aide la vérification de la validité. (Le message CopyData
+est une exception car il forme une partie du flux de données&nbsp;; le contenu
+de chaque message CopyData individuel pourrait ne pas être interprétable en
+eux-même.)
+</para>
+
+<VariableList>
+
+
+<VarListEntry>
+<Term>
+AuthenticationOk (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('R')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme demande d'authentification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(8)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(0)
+</Term>
+<ListItem>
+<Para>
+                Spécifie que l'authentification a été réussie.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+AuthenticationKerberosV4 (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('R')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une demande d'authentification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(8)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(1)
+</Term>
+<ListItem>
+<Para>
+                Spécifie que l'authentification Kerberos V4 est requise.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+AuthenticationKerberosV5 (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('R')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme demande d'authentification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(8)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(2)
+</Term>
+<ListItem>
+<Para>
+                Spécifie que l'authentification Kerberos V5 est requise.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+AuthenticationCleartextPassword (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('R')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme demande d'authentification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(8)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu des messages en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(3)
+</Term>
+<ListItem>
+<Para>
+                Spécifie qu'un mot de passe en clair est requis.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+AuthenticationCryptPassword (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('R')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une demande d'authentification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(10)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Spécifie que le mot de passe crypté via crypt() est requis.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte2
+</Term>
+<ListItem>
+<Para>
+                Le composant (salt) pour utiliser lors du cryptage du mot de
+passe.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+AuthenticationMD5Password (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('R')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une demande d'authentification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(12)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu d'un message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(5)
+</Term>
+<ListItem>
+<Para>
+                Spécifie qu'un mot de passe crypté MD5 est requis.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte4
+</Term>
+<ListItem>
+<Para>
+                Le composant (salt) à utiliser lors du cryptage du mot de passe.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+AuthenticationSCMCredential (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('R')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme demande d'authentification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(8)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(6)
+</Term>
+<ListItem>
+<Para>
+                Spécifie qu'un message crédentiel SCM est requis.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+BackendKeyData (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('K')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une donnée clé d'annulation. Le
+client doit sauvegarder ces valeurs si il souhaite être capable de lancer des
+messages CancelRequest plus tard.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(12)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                L'ID du processus de ce serveur.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                La clé secrète de ce serveur.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Bind (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('B')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une commande Bind.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom du portail de destination 
+		(une chaîne vide sélectionne le portail sans nom).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom de l'instruction source préparée
+		(une chaîne vide sélectionne l'instruction préparée sans nom).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+		Le nombre de codes de format de paramètres qui suivent (dénotés
+<replaceable>C</> ci-dessous). Ceci peut être un zéro pour indiquer qu'il n'y a
+aucun paramètre ou que tous les paramètres utilisent le format par défaut
+(texte)&nbsp;; ou une, auquel cas le code de format spécifié est appliqué à
+tous les paramètres&nbsp;; ou il peut être égal au nombre actuel des paramètres.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16[<replaceable>C</>]
+</Term>
+<ListItem>
+<Para>
+                Les codes de format du paramètre. Tous doivent être exactement
+de zéro (texte) ou un (binaire).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Le nombre de valeurs en paramètre qui suivent (zéro à priori).
+Ceci doit correspondre au nombre de paramètres nécessaires par la requête.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Ensuite, la paire de champs suivante apparaît dans chaque
+paramètre&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                La longueur de la valeur du paramètre, en octets (ce nombre ne
+s'inclut pas lui-même). Peut valoir zéro. Dans un cas spécial, -1 indique une
+valeur de paramètre NULL. Aucun octet représentant une valeur suit le cas NULL.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte<Replaceable>n</Replaceable>
+</Term>
+<ListItem>
+<Para>
+                La valeur du paramètre dans le format indiqué par le code de
+format associé. <Replaceable>n</Replaceable> est la longueur ci-dessus.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Après le dernier paramètre, les champs suivants apparaissent&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+		Le nombre des codes de format des colonnes de résultat qui
+suivent (dénoté <replaceable>R</> ci-dessous). Ceci peut être zéro pour
+indiquer qu'il n'y a pas de colonnes de résultat ou que les colonnes de
+résultat devraient toujours utiliser le format par défaut (texte)&nbsp;; ou
+une, auquel cas le code de format spécifié est appliqué à toutes les colonnes
+de résultat (si c'est le cas)&nbsp;; ou il peut valoir le nombre actuel de
+colonnes de résultat de la requête.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16[<replaceable>R</>]
+</Term>
+<ListItem>
+<Para>
+                Les codes de format des colonnes de résultat. Tous doivent être
+soit zéro (texte) soit un (binaire).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+BindComplete (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('2')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un indicateur Bind.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu des message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+CancelRequest (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Int32(16)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(80877102)
+</Term>
+<ListItem>
+<Para>
+                Le code d'annulation de requête. La valeur est choisie pour
+contenir <literal>1234</> dans les 16 bits les plus significatifs et
+<literal>5678</> dans les 16 bits les moins significatifs. (Pour éviter la
+confusion, ce code ne doit pas être le même qu'un numéro de version du
+protocole.)
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                L'ID du processus du serveur cible.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                La clé secrète pour le serveur cible.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Close (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('C')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message en tant que commande Close.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte1
+</Term>
+<ListItem>
+<Para>
+                '<literal>S</>' pour fermer une instruction préparée&nbsp;; ou
+                '<literal>P</>' pour fermer un portail.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom de l'instruction préparée ou du portail à fermer (une
+chaîne vide sélectionne l'instruction préparée sans nom ou le portail).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+CloseComplete (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('3')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un indicateur de fin du Close.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+CommandComplete (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('C')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une réponse de fin de commande.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+        La balise de la commande. Ceci est un simple mot qui identifie quelle
+commande SQL est terminée.
+       </Para>
+
+       <Para>
+        Pour une commande <command>INSERT</command>, la balise est
+        <literal>INSERT <replaceable>oid</replaceable>
+        <replaceable>lignes</replaceable></literal> où les
+        <replaceable>lignes</replaceable> est le nombre de lignes insérées.
+        <replaceable>oid</replaceable> est l'ID de l'objet d'une ligne insérée
+        si <Replaceable>lignes</Replaceable> est 1 et que la table cible a des
+	OIDs&nbsp;; sinon <Replaceable>oid</Replaceable> vaut 0.
+       </Para>
+
+       <Para>
+        Pour une commande <command>DELETE</command>, la balise est
+	<literal>DELETE <Replaceable>lignes</Replaceable></literal> où
+        <Replaceable>lignes</Replaceable> est le nombre de lignes supprimées.
+       </Para>
+
+       <Para>
+        Pour une commande <command>UPDATE</command>, la balise est
+	<literal>UPDATE <Replaceable>lignes</Replaceable></literal> où
+        <Replaceable>lignes</Replaceable> est le nombre de lignes mises à jour.
+       </Para>
+
+       <para>
+        Pour une commande <command>MOVE</command>, la balise est
+        <literal>MOVE <replaceable>lignes</replaceable></literal> où
+        <replaceable>lignes</replaceable> est le nombre de lignes où la
+	position du curseur a été modifiée.
+       </para>
+
+       <para>
+        Pour une commande <command>FETCH</command>, la balise est
+        <literal>FETCH <replaceable>lignes</replaceable></literal> où
+        <replaceable>lignes</replaceable> est le nombre de lignes qui a été
+        récupéré à partir du curseur.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+CopyData (F &amp; B)
+</Term>
+<ListItem>
+<Para>
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('d')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme données du COPY.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte<Replaceable>n</Replaceable>
+</Term>
+<ListItem>
+<Para>
+                Les données qui forment une partie d'un flux de données
+<command>COPY</command>. Les messages envoyées à partir du serveur
+correspondront toujours aux lignes de données mais les messages envoyés par les
+clients pourraient diviser le flux de données de façon arbitraire.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+CopyDone (F &amp; B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('c')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un indicateur de fin de COPY.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+CopyFail (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('f')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un indicateur en tant qu'
+échec de COPY.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Un message d'erreur à rapporter comme cause d'un échec.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+CopyInResponse (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('G')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une réponse de Start Copy In.
+                Le client doit maintenant envoyer des données de copie (si non
+préparé pour faire cela, envoyez un message CopyFail).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int8
+</Term>
+<ListItem>
+<Para>
+                0 indique que le format de copie complet est textuel (les
+lignes séparées par des retours chariot, des colonnes séparées par des
+caractères de séparation, etc). 1 indique que le format de copie complet est
+binaire (similaire au format DataRow). Voir <xref linkend="sql-copy"
+endterm="sql-copy-title"> pour plus d'informations.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+		Le nombre de colonnes dans les données à copier (dénotées
+<replaceable>N</> ci-dessous).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16[<replaceable>N</>]
+</Term>
+<ListItem>
+<Para>
+                Les codes de format à utiliser pour chaque colonne. Chacun doit
+être réellement zéro (texte) ou un (binaire). Tous doivent être zéro si le
+format de copie complet est de type texte.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+CopyOutResponse (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('H')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une réponse Start Copy Out.
+                Ce message sera suivi par des données copy-out.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                La longueur du contenu du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int8
+</Term>
+<ListItem>
+<Para>
+                0 indique le format de copie complet est textuel (lignes
+séparées par des retours chariots, colonnes séparées par des caractères
+séparateur, etc). 1 indique que le format de copie complet est binaire
+(similaire au format DataRow). Voir <xref linkend="sql-copy"
+endterm="sql-copy-title"> pour plus d'informations.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+		Le nombre de colonnes de données à copier (dénotées
+<replaceable>N</> ci-dessous).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16[<replaceable>N</>]
+</Term>
+<ListItem>
+<Para>
+                Les codes de format à utiliser pour chaque colonne. Chacun
+doit être soit zéro (texte) ou un (binaire). Tous doivent être zéro si le
+format de copie complet est de type texte.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+DataRow (B)
+</Term>
+<ListItem>
+<Para>
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('D')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une ligne de données.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Le nombre de valeurs de colonnes qui suivent (peut valoir zéro).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Ensuite, la paire de champs suivante apparaît pour chaque colonne&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                La longueur de la valeur de la colonne, en octets (ce nombre ne
+s'inclut pas lui-même). Peut valoir zéro. Comme cas spécial, -A indique une
+valeur NULL dans la colonne. Aucun octet de valeur ne suit dans la cas d'un
+NULL.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte<Replaceable>n</Replaceable>
+</Term>
+<ListItem>
+<Para>
+                La valeur de la colonne dans le format indiqué par le code de
+format associé. <Replaceable>n</Replaceable> est la longueur ci-dessus.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Describe (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('D')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une commande Describe.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte1
+</Term>
+<ListItem>
+<Para>
+                '<literal>S</>' pour décrire une instruction préparée&nbsp;; ou
+                '<literal>P</>' pour décrire un portail.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom de l'instruction préparée ou du portail à décrire (une
+chaîne vide sélectionne l'instruction préparée sans nom ou le portail).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+EmptyQueryResponse (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('I')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message commme une réponse à une chaîne de requête
+vide string. (Ceci est un substitue à CommandComplete.)
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+ErrorResponse (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('E')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une erreur.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Le corps du message consiste de un ou plus de champs identifiés, suivis
+par un octet zéro comme terminateur. Les champs pourraient apparaître dans 
+n'importe quel ordre. Pour chaque champ, il y a ce qui suit&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1
+</Term>
+<ListItem>
+<Para>
+                Un code identifiant le type de champ&nbsp;; s'il vaut zéro,
+c'est la fin du message et aucune chaîne ne suit. Les types de champs définis
+sont listés dans <xref linkend="protocol-error-fields">. Comme des types de
+champs pourraient être ajoutés dans le futur, les clients devraient ignorer
+silencieusement de type non reconnus.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                La valeur du champ.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Execute (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('E')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une commande Execute.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom du portail à exécuter (une chaîne vide sélectionne le
+portail sans nom).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Nombre maximum de lignes à renvoyer, si le portail contient une
+requête qui renvoie des lignes (ignoré sinon). Zéro signifie <quote>aucune
+limite</>.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Flush (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('H')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une commande Flush.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+FunctionCall (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('F')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un appel de fonction.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Spécifie l'ID de l'objet représentant la fonction à appeller.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+		Le nombre de codes de format de l'argument qui suivent
+		(dénoté <replaceable>C</> ci-dessous). Cela peut être zéro pour
+indiquer qu'il n'y a pas d'arguments our que tous les arguments utilisent le
+format par défaut (texte)&nbsp;; ou un, auquel cas le code de format est
+appliqué à tous les arguments&nbsp;; ou il peut valoir le nombre réel
+d'arguments.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16[<replaceable>C</>]
+</Term>
+<ListItem>
+<Para>
+                Les codes de format d'argument. Chacun doit être soit zéro
+(texte) soit un (binaire).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Spécifie le nombre d'arguments fournis à la fonction.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Ensuite, la paire de champs suivante apparaît pour chaque
+argument&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                La longueur de la valeur de l'argument en octets (ce nombre
+ne s'inclut pas lui-même). Peut valoir zéro. Comme cas spécial, -1 indique une
+valeur NULL de l'argument. Aucun octet de valeur ne suit dans le cas NULL.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte<Replaceable>n</Replaceable>
+</Term>
+<ListItem>
+<Para>
+                La valeur de l'argument dans le format indiqué par le code de
+format associé. <Replaceable>n</Replaceable> est la longueur ci-dessus.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Après le dernier argument, le champ suivant apparaît&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Le code du format pour le résultat de la fonction. Doit être
+soit zéro (texte) soit un (binaire).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+FunctionCallResponse (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('V')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme le résultat d'un appel de fonction.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                La longueur de la valeur du résultat de la fonction, en octets
+(ce nombre ne s'inclut pas lui-même). Peut valoir zéro. Comme cas spécial, -1
+indique NULL comme résultat d'une fonction. Aucun octet de valeur ne suit dans
+ce cas.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte<Replaceable>n</Replaceable>
+</Term>
+<ListItem>
+<Para>
+                La valeur du résultat de la fonction, dans le format indiqué
+par le code de format associé. <Replaceable>n</Replaceable> est la longueur
+ci-dessus.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+NoData (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('n')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un indicateur d'absence de
+données.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+NoticeResponse (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('N')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un avertissement.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Le corps du message consiste en un ou plusieurs champs identifiés,
+suivis par un octet zéro comme terminateur. Les champs pourraient apparaître
+dans n'importe quel ordre. Pour chaque champ, il existe ce qui suit&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1
+</Term>
+<ListItem>
+<Para>
+                Un code identifiant le type de champ&nbsp;; s'il vaut zéro,
+c'est la fin du message et aucune chaîne ne suit. Les types de champs déjà
+définis sont listés dans <xref linkend="protocol-error-fields">. Comme plus de
+types de champs pourraient être ajoutés dans le futur, les clients devraient
+ignorer silencieusement les champs de type non reconnus.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                La valeur du champ.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+NotificationResponse (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('A')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une réponse de notification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                L'ID du processus serveur ayant lancé la notification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom de la condition qui a lancé la notification.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Une information supplémentaire à partir du processus de
+notification. (Actuellement, cette fonctionnalité n'est pas implémentée donc le
+champ est toujours une chaîne vide.)
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+ParameterDescription (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('t')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme description du paramètre.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Le nombre de paramètres utilisé par l'instruction (pourrait
+valoir zéro).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Ensuite, pour chaque paramètre, voici ce qui suit&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Spécifie l'ID de l'objet du type de données du paramètre.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+ParameterStatus (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('S')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un rapport de statut du paramètre en
+exécution.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom du paramètre en exécution en cours de rapport.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                La valeur actuelle du paramètre.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Parse (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('P')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une commande Parse.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom de l'instruction préparée de destination (une chaîne
+vide sélectionne l'instruction préparée sans nom).
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                La chaîne de requête à analyser.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Le nombre de types de données en paramètre spécifié (pourrait
+valoir zéro). Notez que ceci n'est pas une indication du nombre de paramètres
+qui pourrait apparaître dans la chaîne de requête, seulement le nombre que le
+client veut pour les types pré-spécifiés.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Ensuite, pour chaque paramètre, voici ce qui suit&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Spécifie l'ID de l'objet du type de données en paramètre.
+Placer un zéro ici est équivalent à laisser le type non spécifié.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+ParseComplete (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('1')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme un indicateur de fin de
+Parse.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+PasswordMessage (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('p')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une réponse de mot de passe.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le mot de passe (crypté si nécessaire).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+PortalSuspended (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('s')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une indicateur de suspension du
+portail. Notez que ceci apparaît seulement si la limite du nombre de lignes d'un
+message Execute a été atteint.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Query (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('Q')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une simple requête.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                La chaîne de requête lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+ReadyForQuery (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('Z')
+</Term>
+<ListItem>
+<Para>
+                Identifie le type de message. ReadyForQuery est envoyé quand le
+serveur est prêt pour un nouveau cycle de requêtes.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(5)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Byte1
+</Term>
+<ListItem>
+<Para>
+                Indicateur de l'état actuel de la transaction du serveur. Les
+valeurs possibles sont '<literal>I</>' si en pause (pas dans un bloc de
+transaction)&nbsp;; '<literal>T</>' si dans un bloc de transaction&nbsp;; ou
+'<literal>E</>' dans un bloc de transaction échouée (les requêtes seront
+réjetées une fois le bloc terminé).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+RowDescription (B)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('T')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une description de ligne.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Spécifie le nombre de champs dans une ligne (pourrait valoir
+zéro).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Ensuite, pour chaque champ, voici ce qui suit&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom du champ.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Si le champ peut être identifié comme une colone d'une table
+spécifique, l'ID de l'objet de la table&nbsp;; sinon zéro.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Si le champ peut être identifié comme une colonne d'une table 
+spécifique, le numéro d'attribut de la colonne&nbsp;; sinon zéro.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                L'ID de l'objet du type de données du champ.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                La taille du type de données (voir <varname>pg_type.typlen</>).
+		Notez que les valeurs négatives dénotent des types de largeur
+		variable.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Le modifieur de type (voir <varname>pg_attribute.atttypmod</>).
+		La signification du modifieur est spécifique au type.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int16
+</Term>
+<ListItem>
+<Para>
+                Le code de format en cours d'utilisation pour le champ.
+Actuellement, sera zéro (texte) ou un (binaire). Dans un RowDescription renvoyé
+à partir de la variante de l'instruction de Describe, le code du format n'est
+pas encore connu et sera toujours zéro.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+SSLRequest (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Int32(8)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(80877103)
+</Term>
+<ListItem>
+<Para>
+                Le code de requête SSL. La valeur est choisie pour contenir
+<literal>1234</> dans les 16 bits les plus significatifs, et <literal>5679</>
+dans les 16 bits les moins significatifs. (Pour éviter la confusion, ce code ne
+doit pas être le même que celui du numéro de version du protocole.)
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+StartupMessage (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Int32
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(196608)
+</Term>
+<ListItem>
+<Para>
+                Le numéro de version du protocole. Les 16 bits les plus
+significatifs sont le numéro de version majeure (3 pour le protocole décrit
+ici). Les 16 bits les moins significatifs sont le numéro de version mineure (0
+pour le protocole décrit ici).
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+        Le numéro de version du protocole est suivi par une ou plusieurs
+paires de nom de paramètre ou de chaînes de valeur. Un octet zéro est requis
+comme un terminateur après la dernière paire nom/valeur. Les paramètres peuvent
+apparaître dans n'importe quel ordre. <literal>user</> est requis, les autres
+sont en option. Chaque paramètre est spécifié comme&nbsp;:
+<VariableList>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                Le nom du paramètre. Les noms actuellement reconnus sont&nbsp;:
+
+<VariableList>
+<VarListEntry>
+<Term>
+                <literal>user</>
+</Term>
+<ListItem>
+<Para>
+                        Le nom de l'utilisateur de la base de données pour se
+connecter. Requis&nbsp;; il n'y a pas de valeur par défaut.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+                <literal>database</>
+</Term>
+<ListItem>
+<Para>
+                        La base de données où se connecter. Par défaut le nom
+de l'utilisateur.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+                <literal>options</>
+</Term>
+<ListItem>
+<Para>
+                        Arguments en ligne de commande pour le serveur. (Ceci
+est obsolète en faveur des paramètres individuels en exécution.)
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+                En plus de ce qui est au-dessus, tout paramètre en exécution 
+qui peut être initialisé au lancement du serveur pourrait être listé. Ces
+paramètres seront appliqués lors du lancement du serveur (après analyse 
+des options en ligne de commande s'il y en a). Les valeurs agiront comme
+valeurs par défaut de la session.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        String
+</Term>
+<ListItem>
+<Para>
+                La valeur du paramètre.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Sync (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('S')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une commande Sync.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+<VarListEntry>
+<Term>
+Terminate (F)
+</Term>
+<ListItem>
+<Para>
+
+<VariableList>
+<VarListEntry>
+<Term>
+        Byte1('X')
+</Term>
+<ListItem>
+<Para>
+                Identifie le message comme une fin.
+</Para>
+</ListItem>
+</VarListEntry>
+<VarListEntry>
+<Term>
+        Int32(4)
+</Term>
+<ListItem>
+<Para>
+                Longueur du message en octets, incluant lui-même.
+</Para>
+</ListItem>
+</VarListEntry>
+</VariableList>
+
+</Para>
+</ListItem>
+</VarListEntry>
+
+
+</VariableList>
+
+</sect1>
+
+
+<Sect1 id="protocol-error-fields">
+<Title>Champs des messages d'erreur et d'avertissement</Title>
+
+<para>
+Cette section décrit les champs qui pourraient apparaître dans les messages
+ErrorResponse et NoticeResponse. Chaque type de champ a un jeton
+d'identification sur un seul octet. Notez que le type de champ donné devrait
+apparaître au moins une fois par message.
+</para>
+
+<VariableList>
+
+<VarListEntry>
+<Term>
+<literal>S</>
+</Term>
+<ListItem>
+<Para>
+        Sévérité&nbsp;: le contenu du champ peut être soit
+        <literal>ERROR</>, <literal>FATAL</> ou
+        <literal>PANIC</> (dans un message d'erreur), soit
+	<literal>WARNING</>, <literal>NOTICE</>, <literal>DEBUG</>,
+	<literal>INFO</> ou <literal>LOG</> (dans un message d'avertissement),
+	ou une traduction localisée pour un de ceux-ci. Toujours présent.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>C</>
+</Term>
+<ListItem>
+<Para>
+        Code&nbsp;: le code SQLSTATE pour l'erreur (voir <xref
+	linkend="errcodes-appendix">). Non localisable. Toujours présent.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>M</>
+</Term>
+<ListItem>
+<Para>
+        Message&nbsp;: le message d'erreur principal lisible par un humain.
+Ceci pourrait être précis mais court (typiquement une ligne). Toujours présent.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>D</>
+</Term>
+<ListItem>
+<Para>
+        Détail&nbsp;: un message d'erreur secondaire et optionnel. Pourrait
+être sur plusieurs lignes.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>H</>
+</Term>
+<ListItem>
+<Para>
+        Astuce&nbsp;: une suggestion optionnelle de ce qu'il faut faire pour
+le problème. Ceci a pour but de différer du Détail dans le fait qu'il offre un
+conseil (potentiellement inapproprié) plutôt que des faits réels. Pourrait être
+sur plusieurs lignes.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>P</>
+</Term>
+<ListItem>
+<Para>
+        Position&nbsp;: la valeur du champ est un entier décimal ASCII,
+indiquant la position du curseur en erreur comme index dans la chaîne de requête
+originale. Le premier caractère a l'index 1 et les positions sont mesurées en
+caractères et non pas en octets.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>W</>
+</Term>
+<ListItem>
+<Para>
+        Où&nbsp;: une indication du contexte dans lequel l'erreur est
+survenue. Actuellement, ceci inclut une trace de la pile des appels des
+fonctions PL actives. Cette trace a une entrée par ligne, la plus récente en
+premier.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>F</>
+</Term>
+<ListItem>
+<Para>
+        Fichier&nbsp;: le nom du fichier du code source où l'erreur est
+rapportée.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>L</>
+</Term>
+<ListItem>
+<Para>
+        Ligne&nbsp;: le numéro de ligne du code source où l'erreur a été
+rapportée.
+</Para>
+</ListItem>
+</VarListEntry>
+
+<VarListEntry>
+<Term>
+<literal>R</>
+</Term>
+<ListItem>
+<Para>
+        Routine&nbsp;: le nom de la routine dans le code source rapportant
+l'erreur.
+</Para>
+</ListItem>
+</VarListEntry>
+
+</VariableList>
+
+<para>
+Le client est responsable de formater l'information affichée d'une façon
+convenant à ses besoins&nbsp;; en particulier en ajoutant des retours chariots
+sur les longues lignes si nécessaire. Les caractères de retour chariot
+apparaissant dans les champs de messages d'erreur devraient être traités comme
+des changements de paragraphes, pas comme des changements de lignes.
+</para>
+
+</sect1>
+
+
+<Sect1 id="protocol-changes">
+<Title>Résumé des modifications depuis le protocole 2.0</Title>
+
+<para>
+Cette section fournit une liste rapide des modifications au bénéfice des
+développeurs essayant de mettre à jour les bibliothèques clients vers le
+protocole 3.0.
+</para>
+
+<para>
+Le paquet de lancement initial utilise un format flexible de liste de chaînes
+au lieu d'un format fixe. Notez que les valeurs par défaut d'une session pour
+les paramètres en exécution peuvent même être spécifiés directement dans le
+paquet de lancement. (En fait, vous pouviez le faire avant en utilisant le champ
+<literal>options</> mais étant donné la largeur limitée d'<literal>options</>
+et le manque d'un autre moyen de mettre entre guillemets les espaces blancs
+dans les valeurs, la technique n'était pas très sûre.)
+</para>
+
+<para>
+Tous les messages ont maintenant une longueur suivant immédiatement l'octet du
+type de message (sauf pour les paquets de lancement qui n'ont pas d'octet de
+type). Notez aussi que PasswordMessage a maintenant un octet de type.
+</para>
+
+<para>
+Les messages ErrorResponse et NoticeResponse ('<literal>E</>' et
+'<literal>N</>') contiennent maintenant plusieurs champs, à partir duquel le
+code client pourrait assembler un message d'erreur du niveau désiré de
+verbosité. Notez que des champs individuels ne se termineraient pas typiquement
+avec un retour chariot alors que la chaîne seule envoyée dans l'ancien
+protocole le faisait toujours.
+</para>
+
+<para>
+Le message ReadyForQuery ('<literal>Z</>') inclut un indicateur de statut pour
+la transaction.
+</para>
+
+<para>
+La distinction entre les types de messages BinaryRow et DataRow est finie&nbsp;;
+le seul type de message DataRow sert pour les données renvoyées dans tous les
+ formats. Notez que la disposition de DataRow a changé pour le rendre plus
+simple à analyser. Aussi, la représentation des valeurs binaires a
+changée&nbsp;: elle n'est plus liée directement à la représentation interne du
+serveur.
+</para>
+
+<para>
+Il existe un nouveau sous-protocole pour les <quote>requêtes étendues</> qui
+ajoute les types de messages client Parse, Bind, Execute, Describe, Close,
+Flush et Sync et les types de messages serveur ParseComplete, BindComplete,
+PortalSuspended, ParameterDescription, NoData et CloseComplete. Les clients
+existant ne concernent pas eux-mêmes avec ce sous-protocole mais son
+utilisation pourrait autoriser des améliorations en performance ou en
+fonctionnalité.
+</para>
+
+<para>
+Les données de COPY sont maintenant encapsulées dans les messages CopyData et
+CopyDone. Il y a une façon bien définie de récupérer les erreurs lors du COPY.
+La dernière ligne spéciale <quote><literal>\.</></quote> n'est plus nécessaire
+et n'est pas envoyée lors de COPY OUT. (C'est toujours reconnu comme un
+indicateur de fin lors du COPY IN mais son utilisation est obsolète et sera
+éventuellement supprimée.) Le COPY binaire est supporté. Les messages
+CopyInResponse et CopyOutResponse incluent les champs indiquant le nombre de
+colonnes et le format de chaque colonne.
+</para>
+
+<para>
+La disposition des messages FunctionCall et FunctionCallResponse a changé.
+FunctionCall supporte maintenant le passage d'arguments NULL aux fonctions. Il
+peut aussi gérer le passage de paramètres et la récupération des résul
+tats soit au format texte soit au format binaire. Il n'y a plus aucune raison
+de considérer FunctionCall comme une faille potentielle de sécurité car il
+n'offre plus d'accès direct aux représentations internes des données du
+serveur.
+</para>
+
+<para>
+Le serveur envoie des messages ParameterStatus ('<literal>S</>') lors du
+lancement de la connexion pour tous les paramètres qu'il considère int
+éressant pour la bibliothèque cliente. En conséquence, un message
+ParameterStatus est envoyé à chaque fois que la valeur active change pour
+n'importe quel paramètre.
+</para>
+
+<para>
+Le message RowDescription ('<literal>T</>') emporte les nouveaux champs de l'OID
+de la table et le numéro de colonne pour chaque colonne de la ligne décrite. Il
+affiche aussi le code de format pour chaque colonne.
+</para>
+
+<para>
+Le message CursorResponse ('<literal>P</>') n'est plus généré par le serveur.
+</para>
+
+<para>
+Le message NotificationResponse ('<literal>A</>') a un champ de type chaîne
+supplémentaire, qui est actuellement vide mais pourrait transporter des
+données supplémentaires à partir du processus envoyant l'événement NOTIFY.
+</para>
+
+<para>
+Le message EmptyQueryResponse ('<literal>I</>') utilisé pour inclure une
+paramètre de chaîne vide a été supprimé.
+</para>
+
+</sect1>
+
+
+</Chapter>
