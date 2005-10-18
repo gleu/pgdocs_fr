@@ -10,7 +10,7 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
 
    <note>
     <title>Release date</title>
-    <simpara>2005-1?-??, Current as of 2005-09-15</simpara>
+    <simpara>2005-1?-??, Current as of 2005-10-11</simpara>
    </note>
 
    <sect2>
@@ -207,6 +207,27 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
       </listitem>
      </varlistentry>
 
+     <varlistentry>
+      <term>
+       Improve performance for partitioned tables (Simon)
+      </term>
+
+      <listitem>
+       <para>
+        The new <varname>constraint_exclusion</varname> configuration
+        parameter avoids lookups on child tables where constraints indicate
+        that no matching rows exist in the child table.
+       </para>
+       <para>
+        This allows for a basic type of table partitioning. If child tables
+        store separate key ranges and this is enforced using appropriate
+        <command>CHECK</> constraints, the optimizer will skip child
+        table accesses when the constraint guarantees no matching rows
+        exist in the child table.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
    </sect2>
  
@@ -347,6 +368,81 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
 
      <listitem>
       <para>
+       Read-only large object descriptors now obey MVCC snapshot semantics
+      </para>
+      <para>
+       When a large object is opened with <literal>INV_READ</> (and not
+       <literal>INV_WRITE</>), the data read from the descriptor will now
+       reflect a <quote>snapshot</> of the large object's state at the
+       time of the transaction snapshot in use by the query that called
+       <function>lo_open()</>.  To obtain the old behavior of always
+       returning the latest committed data, include <literal>INV_WRITE</>
+       in the mode flags for <function>lo_open()</>.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Add proper dependencies for arguments of sequence functions (Tom)
+      </para>
+      <para>
+       In previous releases, sequence names passed to <function>nextval()</>,
+       <function>currval()</>, and <function>setval()</> were stored as
+       simple text strings, meaning that renaming or dropping a
+       sequence used in a <literal>DEFAULT</> clause made the clause
+       invalid. This release stores all newly-created sequence function
+       arguments as internal OIDs, allowing them to track sequence
+       renaming, and adding dependency information that prevents
+       improper sequence removal. It also makes such <literal>DEFAULT</>
+       clauses immune to schema renaming and search path changes.
+      </para>
+      <para>
+       Some applications might rely on the old behavior of
+       run-time lookup for sequence names. This can still be done by
+       explicitly casting the argument to <type>text</>, for example
+       <literal>nextval('myseq'::text)</>.
+      </para>
+      <para>
+       Pre-8.1 database dumps loaded into 8.1 will use the old text-based
+       representation and therefore will not have the features of
+       OID-stored arguments. However, it is possible to update a
+       database containing text-based <literal>DEFAULT</> clauses.
+       First, save this query into a file, such as <filename>fixseq.sql</>:
+<programlisting>
+SELECT  'ALTER TABLE ' ||
+    pg_catalog.quote_ident(n.nspname) || '.' ||
+    pg_catalog.quote_ident(c.relname) ||
+    ' ALTER COLUMN ' || pg_catalog.quote_ident(a.attname) ||
+    ' SET DEFAULT ' ||
+    regexp_replace(d.adsrc,
+                   $$val\(\(('[^']*')::text\)::regclass$$,
+                   $$val\(\1$$,
+                   'g') ||
+    ';'
+FROM    pg_namespace n, pg_class c, pg_attribute a, pg_attrdef d
+WHERE   n.oid = c.relnamespace AND
+    c.oid = a.attrelid AND
+    a.attrelid = d.adrelid AND
+    a.attnum = d.adnum AND
+    d.adsrc ~ $$val\(\('[^']*'::text\)::regclass$$;
+</programlisting>
+       Next, run the query against a database to find what
+       adjustments are required, like this for database <literal>db1</>:
+<programlisting>
+psql -t -f fixseq.sql db1
+</programlisting>
+       This will show the <command>ALTER TABLE</> commands needed to
+       convert the database to the newer OID-based representation.
+       If the commands look reasonable, run this to update the database:
+<programlisting>
+psql -t -f fixseq.sql db1 | psql -e db1
+</programlisting>
+       This process must be repeated in each database to be updated.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
        In <application>psql</application>, treat unquoted
        <literal>\{digit}+</> sequences as octal (Bruce)
       </para>
@@ -457,6 +553,12 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
 
       <listitem>
        <para>
+        Improve spinlock behavior on SMP machines, particularly Opterons (Tom)
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
         Allow non-consecutive index columns to be used in a multi-column
         index (Tom)
        </para>
@@ -497,21 +599,6 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
         after a checkpoint. This option turns off that functionality for more
         speed.  This is safe to use with battery-backed disk caches where
         partial page writes cannot happen.
-       </para>
-      </listitem>
-
-      <listitem>
-       <para>
-        Add <varname>constraint_exclusion</varname> configuration
-        parameter to restrict child table lookups based on table
-        constraints (Simon)
-       </para>
-       <para>
-        This allows for a type of table partitioning. If child tables
-        store separate key ranges and this is enforced using appropriate
-        <command>CHECK</> constraints, the optimizer will skip child
-        table accesses when the constraint guarantees no matching rows
-        exist in the child table.
        </para>
       </listitem>
 
@@ -596,7 +683,16 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
 
       <listitem>
        <para>
-        Enhance <literal>pg_locks</> display (Tom)
+        Adjust <literal>pg_stat</> views for bitmap scans (Tom)
+       </para>
+       <para>
+        The meanings of some of the fields have changed slightly.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Enhance <literal>pg_locks</> view (Tom)
        </para>
       </listitem>
 
@@ -979,19 +1075,6 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
 
       <listitem>
        <para>
-        Fix <type>CHAR()</> to properly pad spaces to the specified
-        length when using a multiple-byte character set (Yoshiyuki
-        Asaba)
-       </para>
-       <para>
-        In prior releases, the padding of <type>CHAR()</> was incorrect
-        because it only padded to the specified number of bytes without
-        considering how many characters were stored.
-       </para>
-      </listitem>
-
-      <listitem>
-       <para>
         Add support for <command>numeric ^ numeric</> based on
         <function>power(numeric, numeric)</>
        </para>
@@ -1026,7 +1109,7 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
 
       <listitem>
        <para>
-        Add <function>to_timestamp(DOUBLE PRECISION)</>
+        Add <function>to_timestamp(DOUBLE PRECISION) (Michael Glaesemann)</>
        </para>
        <para>
         Converts Unix seconds since 1970 to a <type>TIMESTAMP WITH
@@ -1075,8 +1158,7 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
         Add <function>pg_column_size()</> (Mark Kirkwood)
        </para>
        <para>
-        This returns storage size of a column, including any
-        compression used.
+        This returns storage size of a column, which might be compressed.
        </para>
       </listitem>
 
@@ -1099,6 +1181,16 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
         Previous versions sometimes returned unjustified results, like
         <command>'4 months'::interval / 5</> returning <command>'1 mon
         -6 days'</>.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Fix roundoff behavior in timestamp, time, and interval output (Tom)
+       </para>
+       <para>
+        This fixes some cases in which the seconds field would be shown as
+        <literal>60</> instead of incrementing the higher-order fields.
        </para>
       </listitem>
 
@@ -1287,13 +1379,13 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
 
       <listitem>
        <para>
-        Add support for 3 and 4-byte <literal>UTF8</> characters (John
+        Add support for four-byte <literal>UTF8</> characters (John
         Hansen)
        </para>
        <para>
-        Previously only one and two-byte <literal>UTF8</> characters
+        Previously only one, two, and three-byte <literal>UTF8</> characters
         were supported. This is particularly important for support for
-        some Chinese characters.
+        some Chinese character sets.
        </para>
       </listitem>
 
@@ -1750,6 +1842,13 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
   
       <listitem>
        <para>
+        Fix <application>pgxs</> to support building against a relocated
+        installation
+       </para>
+      </listitem>
+  
+      <listitem>
+       <para>
         Add spinlock support for the Itanium processor using Intel
         compiler (Vikram Kalsi)
        </para>
@@ -1928,6 +2027,16 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
 
       <listitem>
        <para>
+        Improve <filename>/contrib/pgbench</> (Tatsuo)
+       </para>
+       <para>
+        There is now a facility for testing with SQL command scripts given
+        by the user, instead of only a hard-wired command sequence.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
         Improve <filename>/contrib/pgcrypto</> (Marko Kreen)
        </para>
 
@@ -1975,6 +2084,101 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/release.sgml,v 1.19 2005/09/22 18:34:42 guil
      </itemizedlist>
     </sect3>
   
+   </sect2>
+  </sect1>
+ 
+  <sect1 id="release-8-0-4">
+   <title>Version 8.0.4</title>
+
+   <note>
+   <title>Date de sortie</title>
+   <simpara>2005-10-04</simpara>
+   </note>
+
+   <para>
+    Cette version contient quelques corrections de la 8.0.3.
+   </para>
+
+   <sect2>
+    <title>Migration vers la version 8.0.4</title>
+
+    <para>
+     Une sauvegarde/restauration n'est pas requise pour ceux utilisant une
+     version 8.0.X. Néanmoins, si vous mettez à jour à partir d'une version
+     antérieure à la 8.0.3, voir les notes de sortie de la 8.0.3.
+    </para>
+   </sect2>
+
+   <sect2>
+    <title>Modifications</title>
+
+<itemizedlist>
+<listitem><para>Fix error that allowed <command>VACUUM</> to remove
+<literal>ctid</> chains too soon, and add more checking in code that follows
+<literal>ctid</> links</para>
+<para>This fixes a long-standing problem that could cause crashes in very rare
+circumstances.</para></listitem>
+<listitem><para>Fix <type>CHAR()</> to properly pad spaces to the specified
+length when using a multiple-byte character set (Yoshiyuki Asaba)</para>
+<para>In prior releases, the padding of <type>CHAR()</> was incorrect
+because it only padded to the specified number of bytes without
+considering how many characters were stored.</para></listitem>
+<listitem><para>Force a checkpoint before committing <command>CREATE
+DATABASE</></para>
+<para>This should fix recent reports of <quote>index is not a btree</>
+failures when a crash occurs shortly after <command>CREATE
+DATABASE</>.</para></listitem>
+<listitem><para>Fix the sense of the test for read-only transaction
+in <command>COPY</></para>
+<para>The code formerly prohibited <command>COPY TO</>, where it should
+prohibit <command>COPY FROM</>.
+</para></listitem>
+<listitem><para>Handle consecutive embedded newlines in <command>COPY</>
+CSV-mode input</para></listitem>
+<listitem><para>Fix <function>date_trunc(week)</> for dates near year
+end</para></listitem>
+<listitem><para>Fix planning problem with outer-join ON clauses that reference
+only the inner-side relation</para></listitem>
+<listitem><para>Further fixes for <literal>x FULL JOIN y ON true</> corner
+cases</para></listitem>
+<listitem><para>Fix overenthusiastic optimization of <literal>x IN (SELECT
+DISTINCT ...)</> and related cases</para></listitem>
+<listitem><para>Fix mis-planning of queries with small <literal>LIMIT</>
+values due to poorly thought out <quote>fuzzy</> cost
+comparison</para></listitem>
+<listitem><para>Make <function>array_in</> and <function>array_recv</> more
+paranoid about validating their OID parameter</para></listitem>
+<listitem><para>Fix missing rows in queries like <literal>UPDATE a=... WHERE
+a...</> with GiST index on column <literal>a</></para></listitem>
+<listitem><para>Improve robustness of datetime parsing</para></listitem>
+<listitem><para>Improve checking for partially-written WAL
+pages</para></listitem>
+<listitem><para>Improve robustness of signal handling when SSL is
+enabled</para></listitem>
+<listitem><para>Improve MIPS and M68K spinlock code</para></listitem>
+<listitem><para>Don't try to open more than <literal>max_files_per_process</>
+files during postmaster startup</para></listitem>
+<listitem><para>Various memory leakage fixes</para></listitem>
+<listitem><para>Various portability improvements</para></listitem>
+<listitem><para>Update timezone data files</para></listitem>
+<listitem><para>Improve handling of DLL load failures on Windows</para></listitem>
+<listitem><para>Improve random-number generation on Windows</para></listitem>
+<listitem><para>Make <literal>psql -f filename</> return a nonzero exit code
+when opening the file fails</para></listitem>
+<listitem><para>Change <application>pg_dump</> to handle inherited check
+constraints more reliably</para></listitem>
+<listitem><para>Fix password prompting in <application>pg_restore</> on
+Windows</para></listitem>
+<listitem><para>Fix PL/PgSQL to handle <literal>var := var</> correctly when
+the variable is of pass-by-reference type</para></listitem>
+<listitem><para>Fix PL/Perl <literal>%_SHARED</> so it's actually
+shared</para></listitem>
+<listitem><para>Fix <filename>contrib/pg_autovacuum</> to allow sleep
+intervals over 2000 sec</para></listitem>
+<listitem><para>Update <filename>contrib/tsearch2</> to use current Snowball
+code</para></listitem>
+</itemizedlist>
+
    </sect2>
   </sect1>
  
@@ -4700,6 +4904,79 @@ Page)
   </sect2>
  </sect1>
 
+  <sect1 id="release-7-4-9">
+   <title>Version 7.4.9</title>
+
+   <note>
+   <title>Date de sortie</title>
+   <simpara>2005-10-04</simpara>
+   </note>
+
+   <para>
+    Cette version contient quelques corrections de la 7.4.8.
+   </para>
+
+   <sect2>
+    <title>Migration à partir de la version 7.4.9</title>
+
+    <para>
+     Une sauvegarde/restauration n'est pas requise pour ceux utilisant une
+     version 7.4.X. Néanmoins, si vous mettez à jour à partir d'une version
+     antérieure à la 7.4.8, voir les notes de sortie de la 7.4.8.
+    </para>
+   </sect2>
+
+   <sect2>
+    <title>Modifications</title>
+
+     <itemizedlist>
+      <listitem><para>Correction d'une erreur qui permettait au <command>VACUUM</>
+       de supprimer les chaînes <literal>ctid</> trop tôt, et ajout de
+       vérification supplémentaire dans le code qui suit les liens
+       <literal>ctid</></para>
+       <para>Ceci corrige un vieux problème qui pourrait causer des arrêt
+       brutaux dans de rares circonstances.</para></listitem>
+      <listitem><para>Correction de <type>CHAR()</> pour ajouter le nom
+       d'espaces spécifié lors de l'utilisation d'un ensemble de caractères
+       multi-octets (Yoshiyuki Asaba)</para>
+       <para>Dans les versions précédentes, l'ajout pour <type>CHAR()</> était
+       incorrect car il ajoutait seulement le nombre d'octets spécifiés sans
+       prendre en considération la façon dont les caractères étaient stockés.
+       </para></listitem>
+      <listitem><para>Correction du sens du test pour les transactions
+       en lecture seule dans <command>COPY</></para>
+       <para>Le code empêchait <command>COPY TO</> alors qu'il aurait dû interdire
+       <command>COPY FROM</>.</para></listitem>
+      <listitem><para>Correction du problème de planification avec les clauses
+       ON des jointures externes qui référencent seulement la relation du côté
+       interne</para></listitem>
+      <listitem><para>Autres corrections sur les cas particuliers du <literal>x
+       FULL JOIN y ON true</></para></listitem>
+      <listitem><para>Rend <function>array_in</> et <function>array_recv</> plus
+       paranoïaque sur la validation de leur paramètre OID</para></listitem>
+      <listitem><para>Correction des lignes manquantes dans les requêtes
+       du type <literal>UPDATE a=... WHERE a...</> avec un index GiST sur la
+       colonne <literal>a</></para></listitem>
+      <listitem><para>Amélioration de la stabilité de l'analyse des valeurs du
+       type datetime</para></listitem>
+      <listitem><para>Amélioration de la vérification pour les pages WAL
+       partiellement écrites</para></listitem>
+      <listitem><para>Amélioration de la solidité de la gestion des signaux
+       lorsque SSL est activé</para></listitem>
+      <listitem><para>Empêche l'ouverture de plus de <literal>max_files_per_process</>
+       fichiers lors du démarrage de postmaster</para></listitem>
+      <listitem><para>Plusieurs corrections de perte mémoire</para></listitem>
+      <listitem><para>Quelques améliorations sur la portabilité</para></listitem>
+      <listitem><para>Correction de PL/PgSQL pour gérer correctement
+       <literal>var := var</> quand la variable est passée par
+       référence</para></listitem>
+      <listitem><para>Mise à jour de <filename>contrib/tsearch2</> pour utiliser
+       le code Snowball actuel</para></listitem>
+     </itemizedlist>
+
+   </sect2>
+  </sect1>
+ 
   <sect1 id="release-7-4-8">
    <title>Version 7.4.8</title>
 
@@ -7562,6 +7839,62 @@ maintenant incluent par défaut (Joe)</para></listitem>
   </sect3>
   </sect2>
  </sect1>
+
+  <sect1 id="release-7-3-11">
+   <title>Version 7.3.11</title>
+
+   <note>
+   <title>Date de sortie</title>
+   <simpara>2005-10-04</simpara>
+   </note>
+
+   <para>
+    Cette version contient quelques correctifs par rapport à la 7.3.10.
+   </para>
+
+   <sect2>
+    <title>Migration vers la version 7.3.11</title>
+
+    <para>
+     Une sauvegarde/restauration n'est pas requise pour ceux utilisant une
+     version 7.3.X. Néanmoins, si vous mettez à jour à partir d'une version
+     antérieure à la 7.3.10, voir les notes de sortie de la 7.3.10.
+    </para>
+   </sect2>
+
+   <sect2>
+    <title>Modifications</title>
+
+    <itemizedlist>
+      <listitem><para>Correction d'une erreur qui permettait au <command>VACUUM</>
+       de supprimer les chaînes <literal>ctid</> trop tôt, et ajout de
+       vérification supplémentaire dans le code qui suit les liens
+       <literal>ctid</></para>
+       <para>Ceci corrige un vieux problème qui pourrait causer des arrêt
+       brutaux dans de rares circonstances.</para></listitem>
+      <listitem><para>Correction de <type>CHAR()</> pour ajouter le nom
+       d'espaces spécifié lors de l'utilisation d'un ensemble de caractères
+       multi-octets (Yoshiyuki Asaba)</para>
+       <para>Dans les versions précédentes, l'ajout pour <type>CHAR()</> était
+       incorrect car il ajoutait seulement le nombre d'octets spécifiés sans
+       prendre en considération la façon dont les caractères étaient stockés.
+       </para></listitem>
+      <listitem><para>Correction des lignes manquantes dans les requêtes
+       du type <literal>UPDATE a=... WHERE a...</> avec un index GiST sur la
+       colonne <literal>a</></para></listitem>
+      <listitem><para>Amélioration de la vérification pour les pages WAL
+       partiellement écrites</para></listitem>
+      <listitem><para>Amélioration de la solidité de la gestion des signaux
+       lorsque SSL est activé</para></listitem>
+      <listitem><para>Plusieurs corrections de perte mémoire</para></listitem>
+      <listitem><para>Quelques améliorations sur la portabilité</para></listitem>
+      <listitem><para>Correction de PL/PgSQL pour gérer correctement
+       <literal>var := var</> quand la variable est passée par
+       référence</para></listitem>
+     </itemizedlist>
+
+   </sect2>
+  </sect1>
 
   <sect1 id="release-7-3-10">
    <title>Version 7.3.10</title>
