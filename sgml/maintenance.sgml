@@ -494,82 +494,95 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
     autovacuum exécute un <command>VACUUM</command> sur la base complète ou un
     <command>VACUUM FREEZE</command> s'il s'agit d'une base de données modèle.
     Puis, il quitte. Si aucune base de données ne remplit ce critère, celle qui
-    a été traitée le moins récemment par autovacuum lui-même est choisie. Dans
-    ce mode, chaque table de la base de données est vérifiée au niveau des
-    lignes nouvelles et obsolètes suivant les paramètres applicables
-    d'autovacuum. Si une ligne concernant cette table est trouvée dans <link
-    linkend="catalog-pg-autovacuum"><structname>pg_autovacuum</structname></link>,
-    ces paramètrages sont appliqués&nbsp;; sinon, les valeurs globales de
-    <filename>postgresql.conf</filename> sont utilisées. Voir <xref
-    linkend="runtime-config-autovacuum"> pour plus de détails sur les paramètres
-    globaux.
+    a été traitée le moins récemment par autovacuum est choisie. Dans
+    ce cas, chaque table de la base de données sélectionnée, and individual
+    <command>VACUUM</command> or <command>ANALYZE</command> commands are
+    issued as needed.
    </para>
 
    <para>
     Pour chaque table, deux conditions sont utilisées pour déterminer quel
     opération appliquer. Si le nombre de lignes obsolètes depuis le dernier
     <command>VACUUM</command> dépasse une <quote>limite de vacuum</quote>, la
-    table bénéficie d'un VACUUM et d'un ANALYZE. La limite est définie
+    table bénéficie d'un VACUUM. La limite est définie
     ainsi&nbsp;:
 <programlisting>
 limite du vacuum = limite de base du vacuum + facteur d'échelle du vacuum * nombre de lignes
 </programlisting>
     où la limite de base du vacuum est
-    <structname>pg_autovacuum</structname>.<structfield>vac_base_thresh</structfield>,
+    <xref linkend="guc-autovacuum-vacuum-threshold">,
     le facteur d'échelle du vacuum est
-    <structname>pg_autovacuum</structname>.<structfield>vac_scale_factor</structfield>
+    <xref linkend="guc-autovacuum-vacuum-scale-factor">
     et le nombre de lignes est
     <structname>pg_class</structname>.<structfield>reltuples</structfield>.
-    Le nombre de lignes obsolètes est pris à partir du récupérateur de
-    statistiques qui est un nombre à peu près précis, mis à jour après chaque
-    instruction <command>UPDATE</command> et <command>DELETE</command>. (Il est
-    seulement à peu près précis car certaines informations pourraient être
-    perdues en cas de grosse charge.) Pour ANALYZE, une condition similaire
-    est utilisée&nbsp;: la limite, calculée avec une équation équivalente de
-    celle ci-dessus, est comparée au nombre de nouvelles lignes, c'est-à-dire
-    celles créées par les commandes <command>INSERT</command> et
-    <command>COPY</command>.
+    Le nombre de lignes obsolètes est obtenu à partir du récupérateur de
+    statistiques&nbsp;; c'est un nombre à peu près précis, mis à jour après
+    chaque instruction <command>UPDATE</command> et <command>DELETE</command>
+    (il estseulement à peu près précis car certaines informations pourraient
+    être perdues en cas de grosse charge). Pour ANALYZE, une condition similaire
+    est utilisée&nbsp;: la limite, définie comme
+<programlisting>
+limite du analyze = limite de base du analyze + facteur d'échelle du analyze * nombre de lignes
+</programlisting>
+    est comparée au nombre de lignes insérées, mises à jour ou supprimées depuis
+    le dernier <command>ANALYZE</command>.
    </para>
 
    <para>
-    Notez que si une des valeurs dans <structname>pg_autovacuum</structname>
-    est configurée avec un nombre négatif ou si une ligne est absente de
-    <structname>pg_autovacuum</structname> pour une table particulière, la
-    valeur équivalente de <filename>postgresql.conf</filename> est utilisée.
+    The default thresholds and scale factors are taken from
+    <filename>postgresql.conf</filename>, but it is possible to override them
+    on a table-by-table basis by making entries in the system catalog
+    <link
+    linkend="catalog-pg-autovacuum"><structname>pg_autovacuum</></link>.
+    If a <structname>pg_autovacuum</structname> row exists for a particular
+    table, the settings it specifies are applied; otherwise the global
+    settings are used.  See <xref linkend="runtime-config-autovacuum"> for
+    more details on the global settings.
    </para>
 
    <para>
     En plus des valeurs de la limite de base et des facteurs d'échelle, il
-    existe trois paramètres pouvant être configurés pour chaque table dans
-    <structname>pg_autovacuum</structname>. Le premier paramètre,
-    <structname>pg_autovacuum</>.<structfield>enabled</>, peut être utilisé pour
-    indiquer au démon autovacuum de laisser certaines tables à
-    <literal>false</literal>. Les deux autres, le délai du
-    coût du VACUUM
+    existe trois autres paramètres pouvant être configurés pour chaque table
+    dans <structname>pg_autovacuum</structname>. Le premier,
+    <structname>pg_autovacuum</>.<structfield>enabled</>,
+    can be set to <literal>false</literal> to instruct the autovacuum daemon
+    to skip that particular table entirely. In this case
+    autovacuum will only touch the table when it vacuums the entire database
+    to prevent transaction ID wraparound. Les deux autres paramètres, le délai
+    du coût du VACUUM
     (<structname>pg_autovacuum</structname>.<structfield>vac_cost_delay</structfield>)
     et la limite du coût du VACUUM
     (<structname>pg_autovacuum</structname>.<structfield>vac_cost_limit</structfield>),
     sont utilisés pour configurer des valeurs spécifiques aux tables pour
     la fonctionnalité <xref linkend="runtime-config-resource-vacuum-cost"
-    endterm="runtime-config-resource-vacuum-cost-title">. La note ci-dessus sur
-    les valeurs négatives s'applique ici aussi mais notez aussi que si les
-    variables <varname>autovacuum_vacuum_cost_limit</varname> et
-    <varname>autovacuum_vacuum_cost_delay</varname> de
-    <filename>postgresql.conf</filename> sont configurées avec des valeurs
-    négatives, les valeurs globales de <varname>vacuum_cost_limit</varname> et
-    <varname>vacuum_cost_delay</varname> seront utilisées à la place.
+    endterm="runtime-config-resource-vacuum-cost-title">.
    </para>
 
-   <note>
+   <para>
+    If any of the values in <structname>pg_autovacuum</structname>
+    are set to a negative number, or if a row is not present at all in
+    <structname>pg_autovacuum</structname> for any particular table, the
+    corresponding values from <filename>postgresql.conf</filename> are used.
+   </para>
+
+   <para>
+    There is not currently any support for making
+    <structname>pg_autovacuum</structname> entries, except by doing
+    manual <command>INSERT</>s into the catalog.  This feature will be
+    improved in future releases, and it is likely that the catalog
+    definition will change.
+   </para>
+
+   <caution>
     <para>
      Le contenu du catalogue système <structname>pg_autovacuum</structname>
      n'est actuellement pas pris en compte dans les sauvegardes de bases de
      données créées par les outils <command>pg_dump</command> et
-     <command>pg_dumpall</command>. Si vous avez besoin de les préserver après
+     <command>pg_dumpall</command>. Si vous voulez les préserver après
      un cycle sauvegarde/restauration, assurez-vous que vous avez sauvegardé
      manuellement le catalogue.
     </para>
-   </note>
+   </caution>
 
   </sect2>
  </sect1>
@@ -585,8 +598,42 @@ limite du vacuum = limite de base du vacuum + facteur d'échelle du vacuum * nomb
   <para>
    Dans certains cas, cela vaut la peine de reconstruire périodiquement les
    index par la commande <command>REINDEX</>.
-   Quoiqu'il en soit, <productname>PostgreSQL</> 7.4 réduit nettement le besoin
-   de cette maintenance en comparaison des versions précédentes.
+  </para>
+
+  <para>
+   In <productname>PostgreSQL</> releases before 7.4, periodic reindexing
+   was frequently necessary to avoid <quote>index bloat</>, due to lack of
+   internal space reclamation in btree indexes.  Any situation in which the
+   range of index keys changed over time &mdash; for example, an index on
+   timestamps in a table where old entries are eventually deleted &mdash;
+   would result in bloat, because index pages for no-longer-needed portions
+   of the key range were not reclaimed for re-use.  Over time, the index size
+   could become indefinitely much larger than the amount of useful data in it.
+  </para>
+
+  <para>
+   In <productname>PostgreSQL</> 7.4 and later, index pages that have become
+   completely empty are reclaimed for re-use.  There is still a possibility
+   for inefficient use of space: if all but a few index keys on a page have
+   been deleted, the page remains allocated.  So a usage pattern in which all
+   but a few keys in each range are eventually deleted will see poor use of
+   space.  The potential for bloat is not indefinite &mdash; at worst there
+   will be one key per page &mdash; but it may still be worthwhile to schedule
+   periodic reindexing for indexes that have such usage patterns.
+  </para>
+
+  <para>
+   The potential for bloat in non-btree indexes has not been well
+   characterized.  It is a good idea to keep an eye on the index's physical
+   size when using any non-btree index type.
+  </para>
+
+  <para>
+   Also, for btree indexes a freshly-constructed index is somewhat faster to
+   access than one that has been updated many times, because logically
+   adjacent pages are usually also physically adjacent in a newly built index.
+   (This consideration does not currently apply to non-btree indexes.)  It
+   might be worthwhile to reindex periodically just to improve access speed.
   </para>
  </sect1>
 
