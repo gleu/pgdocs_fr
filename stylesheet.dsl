@@ -37,7 +37,7 @@
 
 ;; Don't use graphics for callouts.  (We could probably do that, but
 ;; it needs extra work.)
-(define %callout-graphics%      #f)
+(define %callout-graphics%      #t)
 
 ;; Show comments during the development stage.
 (define %show-comments%         draft-mode)
