@@ -7,25 +7,19 @@
 <!--
 <xsl:import href="http://docbook.sourceforge.net/release/xsl/current/xhtml/chunk.xsl"/>
 -->
-<!--
 <xsl:import href="/usr/share/sgml/docbook/stylesheet/xsl/nwalsh/xhtml/chunk.xsl"/>
--->
-<xsl:import href="/usr/share/sgml/docbook/stylesheet/xsl/nwalsh/fo/docbook.xsl"/>
-<xsl:param name="fop.extensions" select="1"/>
-
 
 <!-- Parameters -->
 
+<xsl:param name="pg.version" select="'8.1.3'"/>
 <xsl:param name="pg.fast" select="'0'"/>
 
-<!--
 <xsl:param name="draft.mode">
   <xsl:choose>
     <xsl:when test="contains($pg.version, 'devel')">yes</xsl:when>
     <xsl:otherwise>no</xsl:otherwise>
   </xsl:choose>
 </xsl:param>
--->
 
 <xsl:param name="show.comments">
   <xsl:choose>
