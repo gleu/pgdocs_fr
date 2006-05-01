@@ -30,7 +30,7 @@
 
     <!-- Printing Style -->
   <xsl:param name="double.sided" select="0"/>
-  <xsl:param name="hyphenate">false</xsl:param>
+  <xsl:param name="hyphenate">true</xsl:param>
   <xsl:param name="alignment">justify</xsl:param>
 
     <!-- Font size -->
