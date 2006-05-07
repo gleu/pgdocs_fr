@@ -5,17 +5,17 @@
                 version="1.0">
 
     <!-- We use XHTML -->
-  <xsl:import href="http://docbook.sourceforge.net/release/xsl/1.69.1/xhtml/profile-docbook.xsl"/>
+  <xsl:import href="/usr/share/sgml/docbook/stylesheet/xsl/nwalsh/xhtml/profile-docbook.xsl"/>
 
     <!-- Fix encoding issues with default UTF-8 output of the xhtml stylesheet -->
   <xsl:output method="html" encoding="ISO-8859-1" indent="no" />
 
    <!-- Including our others customized templates -->
-  <xsl:include href="xhtml/lfs-index.xsl"/>
-  <xsl:include href="xhtml/lfs-mixed.xsl"/>
-  <xsl:include href="xhtml/lfs-sections.xsl"/>
-  <xsl:include href="xhtml/lfs-toc.xsl"/>
-  <xsl:include href="xhtml/lfs-xref.xsl"/>
+  <xsl:include href="xhtml/pg-index.xsl"/>
+  <xsl:include href="xhtml/pg-mixed.xsl"/>
+  <xsl:include href="xhtml/pg-sections.xsl"/>
+  <xsl:include href="xhtml/pg-toc.xsl"/>
+  <xsl:include href="xhtml/pg-xref.xsl"/>
 
     <!-- Dropping some unwanted style attributes -->
   <xsl:param name="ulink.target" select="''"></xsl:param>
@@ -38,7 +38,7 @@
     </div>
   </xsl:template>
 
-    <!-- To drop the remainig dot when title is empty (from lfs-titles.xsl)-->
+    <!-- To drop the remainig dot when title is empty (from pg-titles.xsl)-->
   <xsl:template name="sect2.titlepage">
     <xsl:choose>
       <xsl:when test="string-length(title) = 0"/>
@@ -58,7 +58,7 @@
   </xsl:template>
 
     <!-- Added the role param for proper punctuation in xref calls
-            (from lfs-titles.xsl). -->
+            (from pg-titles.xsl). -->
   <xsl:template match="*" mode="insert.title.markup">
     <xsl:param name="purpose"/>
     <xsl:param name="xrefstyle"/>

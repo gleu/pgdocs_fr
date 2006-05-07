@@ -6,6 +6,7 @@ XSLROOTDIR=/usr/share/xml/docbook/stylesheet/nwalsh
 
 html:
 	xsltproc --xinclude --nonet -stringparam profile.condition html \
+                -stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
 		-stringparam chunk.quietly $(CHUNK_QUIET) \
 		-stringparam base.dir $(BASEDIR)/ \
 		stylesheets/pg-chunked.xsl postgres.xml
@@ -33,6 +34,7 @@ html:
 
 pdf:
 	xsltproc --xinclude --nonet --stringparam profile.condition pdf \
+                -stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
 		--output $(BASEDIR)/pg-pdf.xml stylesheets/pg-profile.xsl postgres.xml
 	xsltproc --nonet --output $(BASEDIR)/pg-pdf.fo stylesheets/pg-pdf.xsl \
 		$(BASEDIR)/pg-pdf.xml
@@ -52,4 +54,15 @@ nochunks:
 
 validate:
 	xmllint --noout --nonet --xinclude --postvalid postgres.xml
+
+installation:
+	xsltproc --xinclude --nonet -stringparam profile.condition html \
+                --stringparam  profile.attribute  "standalone" --stringparam  profile.value  "yes" \
+		--output $(BASEDIR)/standalone-install.html \
+		stylesheets/pg-nochunks.xsl standalone-install.xml
+
+	tidy -config tidy.conf $(BASEDIR)/standalone-install.html || true
+
+	sed -i -e "s@text/html@application/xhtml+xml@g"  \
+	  $(BASEDIR)/standalone-install.html
 
