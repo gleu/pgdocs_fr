@@ -55,14 +55,18 @@ nochunks:
 validate:
 	xmllint --noout --nonet --xinclude --postvalid postgres.xml
 
-installation:
+INSTALL.html:
 	xsltproc --xinclude --nonet -stringparam profile.condition html \
                 --stringparam  profile.attribute  "standalone" --stringparam  profile.value  "yes" \
-		--output $(BASEDIR)/standalone-install.html \
+		--output $(BASEDIR)/INSTALL.html \
 		stylesheets/pg-nochunks.xsl standalone-install.xml
 
-	tidy -config tidy.conf $(BASEDIR)/standalone-install.html || true
+	tidy -config tidy.conf $(BASEDIR)/INSTALL.html || true
 
 	sed -i -e "s@text/html@application/xhtml+xml@g"  \
-	  $(BASEDIR)/standalone-install.html
+	  $(BASEDIR)/INSTALL.html
 
+INSTALL.txt:
+	make INSTALL.html
+	html2text -nobs -style pretty $(BASEDIR)/INSTALL.html > $(BASEDIR)/INSTALL.txt
+	recode iso-8859-1..utf-8 $(BASEDIR)/INSTALL.txt
