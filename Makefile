@@ -70,3 +70,10 @@ INSTALL.txt:
 	make INSTALL.html
 	html2text -nobs -style pretty $(BASEDIR)/INSTALL.html > $(BASEDIR)/INSTALL.txt
 	recode iso-8859-1..utf-8 $(BASEDIR)/INSTALL.txt
+
+manpages:
+	xsltproc /usr/share/xml/docbook/stylesheet/nwalsh/manpages/docbook.xsl \
+		standalone-manpages.xml
+	mkdir $(BASEDIR)/ref
+	mv *.1 $(BASEDIR)/ref
+	recode iso-8859-1..utf-8 $(BASEDIR)/ref/*
