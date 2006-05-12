@@ -6,8 +6,8 @@ HTM_OUTPUT := pgsql-$(VERSION)-fr
 TGZ_OUTPUT := pg$(VER).tar.gz
 ZIP_OUTPUT := pg$(VER).zip
 PDF_OUTPUT := pg$(VER).pdf
-MAN_OUTPUT := pg$(VER)_man.tar.gz
-CHM_OUTPUT := pg$(VER)_chm.tar.gz
+MAN_OUTPUT := pg$(VER).man.tar.gz
+CHM_OUTPUT := pg$(VER).chm.tar.gz
 NOCHUNKS_OUTPUT := pg$(VER).html
 
 CHUNK_QUIET=0
