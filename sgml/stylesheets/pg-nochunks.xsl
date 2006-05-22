@@ -5,7 +5,7 @@
                 version="1.0">
 
     <!-- We use XHTML -->
-  <xsl:import href="/usr/share/sgml/docbook/stylesheet/xsl/nwalsh/xhtml/profile-docbook.xsl"/>
+  <xsl:import href="/opt/docbook-xsl-1.69.1/xhtml/profile-docbook.xsl"/>
 
     <!-- Fix encoding issues with default UTF-8 output of the xhtml stylesheet -->
   <xsl:output method="html" encoding="ISO-8859-1" indent="no" />
