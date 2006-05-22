@@ -6,12 +6,13 @@ HTM_OUTPUT := pgsql-$(VERSION)-fr
 TGZ_OUTPUT := pg$(VER).tar.gz
 ZIP_OUTPUT := pg$(VER).zip
 PDF_OUTPUT := pg$(VER).pdf
+QUICKPDF_OUTPUT := quickpg$(VER).pdf
 MAN_OUTPUT := pg$(VER).man.tar.gz
 CHM_OUTPUT := pg$(VER).chm.tar.gz
 NOCHUNKS_OUTPUT := pg$(VER).html
 
 CHUNK_QUIET=0
-XSLROOTDIR=/usr/share/xml/docbook/stylesheet/nwalsh
+XSLROOTDIR=/opt/docbook-xsl-1.69.1
 VPATH = $(BASEDIR):$(BASEDIR)/ref
 src = *.xml ref/*.xml
 
@@ -55,6 +56,18 @@ $(PDF_OUTPUT): $(src)
 	sed -i -e "s/inherit/all/" $(BASEDIR)/pg-pdf.fo
 	fop.sh $(BASEDIR)/pg-pdf.fo $(BASEDIR)/$(HTM_OUTPUT)/$(PDF_OUTPUT)
 	rm $(BASEDIR)/pg-pdf.xml $(BASEDIR)/pg-pdf.fo
+
+quickpdf: $(QUICKPDF_OUTPUT)
+$(QUICKPDF_OUTPUT): $(src)
+	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
+	xsltproc --xinclude --nonet --stringparam profile.condition pdf \
+                -stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
+		--output $(BASEDIR)/pg-pdf.xml stylesheets/pg-profile.xsl gettingstarted.xml
+	xsltproc --nonet --output $(BASEDIR)/pg-pdf.fo stylesheets/quickpg-pdf.xsl \
+		$(BASEDIR)/pg-pdf.xml
+	sed -i -e "s/inherit/all/" $(BASEDIR)/pg-pdf.fo
+	fop.sh $(BASEDIR)/pg-pdf.fo $(BASEDIR)/$(HTM_OUTPUT)/$(PDF_OUTPUT)
+	#rm $(BASEDIR)/pg-pdf.xml $(BASEDIR)/pg-pdf.fo
 
 nochunks: $(NOCHUNKS_OUTPUT)
 $(NOCHUNKS_OUTPUT): $(src)
