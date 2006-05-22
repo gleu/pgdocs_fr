@@ -24,6 +24,7 @@ index.html: $(src)
 	xsltproc --xinclude --nonet -stringparam profile.condition html \
 		-stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
 		-stringparam chunk.quietly $(CHUNK_QUIET) \
+		-stringparam use.id.as.filename "yes" \
 		-stringparam base.dir $(BASEDIR)/$(HTM_OUTPUT)/ \
 		stylesheets/pg-chunked.xsl postgres.xml
 
