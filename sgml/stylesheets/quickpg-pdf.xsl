@@ -4,7 +4,7 @@
                 xmlns:fo="http://www.w3.org/1999/XSL/Format"
                 version="1.0">
     <!-- We use FO and FOP as the processor -->
-  <xsl:import href="/opt/docbook-xsl-1.69.1/fo/docbook.xsl"/>
+  <xsl:import href="/opt/docbook-xsl/fo/docbook.xsl"/>
   <xsl:param name="fop.extensions" select="1"/>
   <xsl:param name="draft.mode" select="'no'"/>
 
@@ -28,7 +28,7 @@
 
     <!-- Including callout images -->
   <xsl:param name="callout.graphics.path"
-        select="'/opt/docbook-xsl-1.69.1/images/callouts/'"/>
+        select="'/opt/docbook-xsl/images/callouts/'"/>
 
     <!-- Wrapping -->
   <xsl:attribute-set name="monospace.verbatim.properties">
