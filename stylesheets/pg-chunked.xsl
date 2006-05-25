@@ -5,8 +5,8 @@
                 version="1.0">
 
   <xsl:import href="pg-chunked2.xsl"/>
-  <xsl:import href="/opt/docbook-xsl-1.69.1/xhtml/chunk-common.xsl"/>
-  <xsl:import href="/opt/docbook-xsl-1.69.1/xhtml/manifest.xsl"/>
+  <xsl:import href="/opt/docbook-xsl/xhtml/chunk-common.xsl"/>
+  <xsl:import href="/opt/docbook-xsl/xhtml/manifest.xsl"/>
 
 
     <!--  From the original chunk.xsl file:
@@ -25,7 +25,7 @@
 
     Voila! (Man I hope we can do this better in XSLT 2.0)  -->
 
-  <xsl:import href="/opt/docbook-xsl-1.69.1/xhtml/profile-chunk-code.xsl"/>
+  <xsl:import href="/opt/docbook-xsl/xhtml/profile-chunk-code.xsl"/>
 
     <!-- Including our others customized chunks templates -->
   <xsl:include href="xhtml/pg-legalnotice.xsl"/>
