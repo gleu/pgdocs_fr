@@ -12,7 +12,7 @@ CHM_OUTPUT := pg$(VER).chm.tar.gz
 NOCHUNKS_OUTPUT := pg$(VER).html
 
 CHUNK_QUIET=0
-XSLROOTDIR=/opt/docbook-xsl-1.69.1
+XSLROOTDIR=/opt/docbook-xsl
 VPATH = $(BASEDIR):$(BASEDIR)/ref
 src = *.xml ref/*.xml
 
@@ -115,9 +115,9 @@ psql.1: $(src)
 
 htmlhelp:
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	xsltproc $(XSLROOTDIR)/htmlhelp/htmlhelp.xsl \
-		postgres.xml
 	mkdir chm
+	xsltproc stylesheets/pg-chm.xsl \
+		postgres.xml
 	mv *.html *.h?? chm
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(CHM_OUTPUT) chm
 	rm -r chm
