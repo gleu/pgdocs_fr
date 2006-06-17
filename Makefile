@@ -32,7 +32,7 @@ index.html: $(src)
 	cp stylesheets/*.css $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
 
 	[ -d $(BASEDIR)/$(HTM_OUTPUT)/images ] || mkdir $(BASEDIR)/$(HTM_OUTPUT)/images
-	cp $(XSLROOTDIR)/images/*.png $(BASEDIR)/$(HTM_OUTPUT)/images
+	cp img/*.png $(BASEDIR)/$(HTM_OUTPUT)/images
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
 
