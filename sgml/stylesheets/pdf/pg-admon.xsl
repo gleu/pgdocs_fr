@@ -8,7 +8,7 @@
     <!-- Graphics in admonitions -->
   <xsl:param name="admon.graphics" select="1"/>
   <xsl:param name="admon.graphics.path"
-        select="'/usr/share/xml/docbook/stylesheet/nwalsh/images/'"/>
+        select="'img/'"/>
 
     <!-- Admonition block properties -->
   <xsl:template match="important|warning|caution">
