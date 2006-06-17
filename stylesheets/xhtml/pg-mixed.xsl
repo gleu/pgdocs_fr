@@ -73,7 +73,7 @@
     <!-- Body attributes -->
   <xsl:template name="body.attributes">
     <xsl:attribute name="id">
-      <xsl:text>lfs</xsl:text>
+      <xsl:text>pgfr</xsl:text>
     </xsl:attribute>
     <xsl:attribute name="class">
       <xsl:value-of select="substring-after(/book/bookinfo/subtitle, ' ')"/>
