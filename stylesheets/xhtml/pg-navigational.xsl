@@ -148,11 +148,11 @@
             or count($next) &gt; 0 or generate-id($home) != generate-id(.)"/>
     <xsl:if test="$row">
       <div class="navfooter">
-        <table>
+        <table summary="Barre de navigation">
           <tr>
           <!-- Précédent -->
+          <td class="left">
           <xsl:if test="count($prev)&gt;0 and $prev != $home">
-            <td class="left">
               <a accesskey="p">
                 <xsl:attribute name="href">
                   <xsl:call-template name="href.target">
@@ -162,11 +162,11 @@
                 <xsl:attribute name="title">
                   <xsl:value-of select="$prev/title"/>
                 </xsl:attribute>
-              <img src="images/prev.png" />
+              <img src="images/prev.png" alt="Précédent" />
               </a>
               <xsl:value-of select="$prev/title"/>
-            </td>
           </xsl:if>
+          </td>
           	<!-- Home et niveau supérieur-->
             <td class="center">
               <xsl:if test="count($up)&gt;0 and $up != $home">
@@ -179,7 +179,7 @@
                   <xsl:attribute name="title">
                     <xsl:apply-templates select="$up" mode="object.title.markup"/>
                   </xsl:attribute>
-									<img src="images/home.png" />
+									<img src="images/home.png" alt="Sommaire" />
                 </a>
               </xsl:if>
               <xsl:if  test="$home != .">
@@ -194,13 +194,13 @@
                     <xsl:text> - </xsl:text>
                     <xsl:value-of select="$home/bookinfo/subtitle"/>
                   </xsl:attribute>
-									<img src="images/up.png" />
+									<img src="images/up.png" alt="Niveau supérieur" />
                 </a>
               </xsl:if>
             </td>
             <!-- Suivant -->
-            <xsl:if test="count($next)&gt;0">
             <td class="right">
+            <xsl:if test="count($next)&gt;0">
               <xsl:choose>
                 <xsl:when test="local-name($next)='index'">
                   <xsl:call-template name="gentext">
@@ -229,10 +229,10 @@
                     </xsl:otherwise>
                   </xsl:choose>
                 </xsl:attribute>
-								<img src="images/next.png" />
+								<img src="images/next.png" alt="Suivant" />
               </a>
-            </td>
-          </xsl:if>
+          	</xsl:if>
+          	</td>
           </tr>
         </table>
       </div>
