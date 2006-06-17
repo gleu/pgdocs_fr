@@ -182,7 +182,6 @@
 									<img src="images/home.png" />
                 </a>
               </xsl:if>
-              <xsl:text>.</xsl:text>
               <xsl:if  test="$home != .">
                 <a accesskey="h">
                   <xsl:attribute name="href">
@@ -198,7 +197,6 @@
 									<img src="images/up.png" />
                 </a>
               </xsl:if>
-              <xsl:text>.</xsl:text>
             </td>
             <!-- Suivant -->
             <xsl:if test="count($next)&gt;0">
