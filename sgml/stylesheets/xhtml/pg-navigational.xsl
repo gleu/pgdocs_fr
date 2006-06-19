@@ -200,18 +200,8 @@
             </td>
             <!-- Suivant -->
             <td class="right">
-            <xsl:if test="count($next)&gt;0">
-              <a accesskey="n">
-              <xsl:choose>
-                <xsl:when test="local-name($next)='index'">
-                  <xsl:call-template name="gentext">
-                    <xsl:with-param name="key">Index</xsl:with-param>
-                  </xsl:call-template>
-                </xsl:when>
-                <xsl:otherwise>
-                  <xsl:value-of select="$next/title"/>
-                </xsl:otherwise>
-              </xsl:choose>            
+            <xsl:if test="count($next)&gt;0">   
+              <a accesskey="n">              
                 <xsl:attribute name="href">
                   <xsl:call-template name="href.target">
                     <xsl:with-param name="object" select="$next"/>
@@ -229,6 +219,16 @@
                     </xsl:otherwise>
                   </xsl:choose>
                 </xsl:attribute>
+	              <xsl:choose>
+	                <xsl:when test="local-name($next)='index'">
+	                  <xsl:call-template name="gentext">
+	                    <xsl:with-param name="key">Index</xsl:with-param>
+	                  </xsl:call-template>
+	                </xsl:when>
+	                <xsl:otherwise>
+	                  <xsl:value-of select="$next/title"/>
+	                </xsl:otherwise>
+	              </xsl:choose>                        
 								<img src="images/next.png" alt="Suivant" />
               </a>
           	</xsl:if>
