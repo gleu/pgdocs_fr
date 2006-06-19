@@ -163,8 +163,8 @@
                   <xsl:value-of select="$prev/title"/>
                 </xsl:attribute>
               <img src="images/prev.png" alt="Précédent" />
-              </a>
               <xsl:value-of select="$prev/title"/>
+              </a>
           </xsl:if>
           </td>
           	<!-- Home et niveau supérieur-->
@@ -201,6 +201,7 @@
             <!-- Suivant -->
             <td class="right">
             <xsl:if test="count($next)&gt;0">
+              <a accesskey="n">
               <xsl:choose>
                 <xsl:when test="local-name($next)='index'">
                   <xsl:call-template name="gentext">
@@ -211,7 +212,6 @@
                   <xsl:value-of select="$next/title"/>
                 </xsl:otherwise>
               </xsl:choose>            
-              <a accesskey="n">
                 <xsl:attribute name="href">
                   <xsl:call-template name="href.target">
                     <xsl:with-param name="object" select="$next"/>
