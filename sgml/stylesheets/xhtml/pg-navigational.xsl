@@ -213,7 +213,7 @@
                   <xsl:attribute name="title">
                     <xsl:apply-templates select="$up" mode="object.title.markup"/>
                   </xsl:attribute>
-                <img src="images/home.png" alt="Sommaire" />
+                <img src="images/up.png" alt="Niveau supérieur" />
                 </a>
               </xsl:if>
               <xsl:if  test="$home != .">
@@ -228,7 +228,7 @@
                     <xsl:text> - </xsl:text>
                     <xsl:value-of select="$home/bookinfo/subtitle"/>
                   </xsl:attribute>
-                <img src="images/up.png" alt="Niveau supérieur" />
+                <img src="images/home.png" alt="Sommaire" />
                 </a>
               </xsl:if>
             </td>
