@@ -48,14 +48,28 @@
                   </xsl:call-template>
                 </xsl:attribute>
                 <xsl:attribute name="title">
-                  <xsl:value-of select="$prev/title"/>
+                  <xsl:choose>
+                    <xsl:when test="$prev/refmeta/refentrytitle != ''">
+                      <xsl:value-of select="$prev/refmeta/refentrytitle"/>
+                    </xsl:when>
+                    <xsl:otherwise>
+                      <xsl:value-of select="$prev/title"/>
+                    </xsl:otherwise>
+                  </xsl:choose>
                 </xsl:attribute>
                 <xsl:call-template name="navig.content">
                   <xsl:with-param name="direction" select="'prev'"/>
                 </xsl:call-template>
               </a>
               <p>
-                <xsl:value-of select="$prev/title"/>
+                <xsl:choose>
+                  <xsl:when test="$prev/refmeta/refentrytitle != ''">
+                    <xsl:value-of select="$prev/refmeta/refentrytitle"/>
+                  </xsl:when>
+                  <xsl:otherwise>
+                    <xsl:value-of select="$prev/title"/>
+                  </xsl:otherwise>
+                </xsl:choose>
               </p>
             </li>
           </xsl:if>
@@ -74,6 +88,9 @@
                         <xsl:with-param name="key">Index</xsl:with-param>
                       </xsl:call-template>
                     </xsl:when>
+                    <xsl:when test="$next/refmeta/refentrytitle != ''">
+                      <xsl:value-of select="$next/refmeta/refentrytitle"/>
+                    </xsl:when>
                     <xsl:otherwise>
                       <xsl:value-of select="$next/title"/>
                     </xsl:otherwise>
@@ -89,6 +106,9 @@
                     <xsl:call-template name="gentext">
                       <xsl:with-param name="key">Index</xsl:with-param>
                     </xsl:call-template>
+                  </xsl:when>
+                  <xsl:when test="$next/refmeta/refentrytitle != ''">
+                    <xsl:value-of select="$next/refmeta/refentrytitle"/>
                   </xsl:when>
                   <xsl:otherwise>
                     <xsl:value-of select="$next/title"/>
@@ -160,10 +180,24 @@
                   </xsl:call-template>
                 </xsl:attribute>
                 <xsl:attribute name="title">
-                  <xsl:value-of select="$prev/title"/>
+                  <xsl:choose>
+                    <xsl:when test="$prev/refmeta/refentrytitle != ''">
+                      <xsl:value-of select="$prev/refmeta/refentrytitle"/>
+                    </xsl:when>
+                    <xsl:otherwise>
+                      <xsl:value-of select="$prev/title"/>
+                    </xsl:otherwise>
+                  </xsl:choose>
                 </xsl:attribute>
               <img src="images/prev.png" alt="Précédent" />
-              <xsl:value-of select="$prev/title"/>
+              <xsl:choose>
+                <xsl:when test="$prev/refmeta/refentrytitle != ''">
+                  <xsl:value-of select="$prev/refmeta/refentrytitle"/>
+                </xsl:when>
+                <xsl:otherwise>
+                  <xsl:value-of select="$prev/title"/>
+                </xsl:otherwise>
+              </xsl:choose>
               </a>
           </xsl:if>
           </td>
@@ -179,7 +213,7 @@
                   <xsl:attribute name="title">
                     <xsl:apply-templates select="$up" mode="object.title.markup"/>
                   </xsl:attribute>
-									<img src="images/home.png" alt="Sommaire" />
+                <img src="images/home.png" alt="Sommaire" />
                 </a>
               </xsl:if>
               <xsl:if  test="$home != .">
@@ -194,14 +228,14 @@
                     <xsl:text> - </xsl:text>
                     <xsl:value-of select="$home/bookinfo/subtitle"/>
                   </xsl:attribute>
-									<img src="images/up.png" alt="Niveau supérieur" />
+                <img src="images/up.png" alt="Niveau supérieur" />
                 </a>
               </xsl:if>
             </td>
             <!-- Suivant -->
             <td class="right">
-            <xsl:if test="count($next)&gt;0">   
-              <a accesskey="n">              
+            <xsl:if test="count($next)&gt;0">
+              <a accesskey="n">
                 <xsl:attribute name="href">
                   <xsl:call-template name="href.target">
                     <xsl:with-param name="object" select="$next"/>
@@ -214,25 +248,31 @@
                         <xsl:with-param name="key">Index</xsl:with-param>
                       </xsl:call-template>
                     </xsl:when>
+                    <xsl:when test="$next/refmeta/refentrytitle != ''">
+                      <xsl:value-of select="$next/refmeta/refentrytitle"/>
+                    </xsl:when>
                     <xsl:otherwise>
                       <xsl:value-of select="$next/title"/>
                     </xsl:otherwise>
                   </xsl:choose>
                 </xsl:attribute>
-	              <xsl:choose>
-	                <xsl:when test="local-name($next)='index'">
-	                  <xsl:call-template name="gentext">
-	                    <xsl:with-param name="key">Index</xsl:with-param>
-	                  </xsl:call-template>
-	                </xsl:when>
-	                <xsl:otherwise>
-	                  <xsl:value-of select="$next/title"/>
-	                </xsl:otherwise>
-	              </xsl:choose>                        
-								<img src="images/next.png" alt="Suivant" />
-              </a>
-          	</xsl:if>
-          	</td>
+                <xsl:choose>
+                  <xsl:when test="local-name($next)='index'">
+                    <xsl:call-template name="gentext">
+                      <xsl:with-param name="key">Index</xsl:with-param>
+                    </xsl:call-template>
+                  </xsl:when>
+                  <xsl:when test="$next/refmeta/refentrytitle != ''">
+                    <xsl:value-of select="$next/refmeta/refentrytitle"/>
+                  </xsl:when>
+                  <xsl:otherwise>
+                    <xsl:value-of select="$next/title"/>
+                  </xsl:otherwise>
+                </xsl:choose>
+                <img src="images/next.png" alt="Suivant" />
+                </a>
+          </xsl:if>
+          </td>
           </tr>
         </table>
       </div>
@@ -240,5 +280,3 @@
   </xsl:template>
 
 </xsl:stylesheet>
-
-
