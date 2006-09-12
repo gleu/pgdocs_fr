@@ -8,7 +8,7 @@
   <xsl:param name="generate.toc">
     appendix  nop
     book      toc,title,figure,table,example,equation
-    chapter   nop
+    chapter   toc
     part      toc
     preface   nop
     qandadiv  nop
