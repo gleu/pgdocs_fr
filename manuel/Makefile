@@ -115,7 +115,6 @@ psql.1: $(src)
 
 htmlhelp:
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	mkdir chm
 	xsltproc stylesheets/pg-chm.xsl \
 		postgres.xml
 	mv *.html *.h?? chm
