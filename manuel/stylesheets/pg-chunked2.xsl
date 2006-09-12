@@ -15,7 +15,7 @@
   <xsl:include href="xhtml/pg-mixed.xsl"/>
   <xsl:include href="xhtml/pg-titles.xsl"/>
   <xsl:include href="xhtml/pg-toc.xsl"/>
-  <xsl:include href="xhtml/pg-xref.xsl"/>
+  <!--<xsl:include href="xhtml/pg-xref.xsl"/>-->
 
     <!-- The CSS Stylesheet -->
   <xsl:param name="html.stylesheet" select="'../stylesheets/pg.css'"/>
