@@ -103,6 +103,13 @@
   </para>
 
   <para>
+   To set an element of an array constant to NULL, write <literal>NULL</>
+   for the element value.  (Any upper- or lower-case variant of
+   <literal>NULL</> will do.)  If you want an actual string value
+   <quote>NULL</>, you must put double quotes around it.
+  </para>
+
+  <para>
    (Ces types de constantes de tableau sont en fait un cas particulier
    des constantes de type générique abordées dans la <xref
    linkend="sql-syntax-constants-generic"/>. La constante est traitée
@@ -117,35 +124,12 @@
 <programlisting>INSERT INTO sal_emp
     VALUES ('Bill',
     '{10000, 10000, 10000, 10000}',
-    '{{"rendez-vous", "repas"}, {}}');
-
-INSERT INTO sal_emp
-    VALUES ('Carol',
-    '{20000, 25000, 25000, 25000}',
-    '{{"rencontre", "repas"}, {"rencontre"}}');
-    ERROR:  multidimensional arrays must have array expressions with matching dimensions</programlisting>
-
-  Notez que les tableaux à plusieurs dimensions doivent avoir des limites
-  correspondantes pour chaque dimension. Une différence provoque une erreur à 
-  l'exécution.
-
-<programlisting>INSERT INTO sal_emp
-    VALUES ('Bill',
-    '{10000, 10000, 10000, 10000}',
     '{{"rencontre", "repas"}, {"entrainement", "présentation"}}');
 
 INSERT INTO sal_emp
     VALUES ('Carol',
     '{20000, 25000, 25000, 25000}',
     '{{"petit-déjeuner", "consulting"}, {"rencontre", "repas"}}');</programlisting>
- </para>
-
- <para>
-  Une limitation de l'implémentation actuelle des tableaux existe, les éléments
-  individuels d'un tableau ne peuvent avoir la valeur SQL NULL. Le tableau
-  entier peut être NULL mais vous ne pouvez pas avoir des éléments NULL dans
-  un tableau avec d'autres éléments non NULL (ceci est susceptible de changer
-  dans le futur).
  </para>
 
  <para>
@@ -178,6 +162,18 @@ INSERT INTO sal_emp
   linkend="sql-syntax-array-constructors"/>.
  </para>
 
+ <para>
+  Multidimensional arrays must have matching extents for each
+  dimension. A mismatch causes an error report, for example:
+
+<programlisting>
+INSERT INTO sal_emp
+    VALUES ('Bill',
+    '{10000, 10000, 10000, 10000}',
+    '{{"meeting", "lunch"}, {"meeting"}}');
+ERROR:  multidimensional arrays must have array expressions with matching dimensions
+</programlisting>
+ </para>
  </sect2>
 
  <sect2>
@@ -250,16 +246,24 @@ INSERT INTO sal_emp
  </para>
 
  <para>
-  Récupérer en dehors des limites actuelles d'un tableau amène une valeur SQL
-  NULL, pas une erreur. Par exemple, si <literal>planning</literal> a les dimensions
+  An array subscript expression will return null if either the array itself or
+  any of the subscript expressions are null.  Also, null is returned if a
+  subscript is outside the array bounds (this case does not raise an error).
+  Par exemple, si <literal>planning</literal> a les dimensions
   <literal>[1:3][1:2]</literal>, alors référencer <literal>planning[3][3]</literal> a un
   résultat NULL. De la même façon, une référence sur un tableau avec le mauvais
-  nombre d'indices amène une valeur NULL plutôt qu'une erreur. Récupérer une
-  partie d'un tableau complètement en dehors des limites actuelles renvoie un
-  tableau NULL&nbsp;; mais si la partie demandée est partiellement intégrée aux
-  limites du tableau, alors il est silencieusement réduit à la région
-  d'intersection.
-</para>
+  nombre d'indices amène une valeur NULL plutôt qu'une erreur.
+ </para>
+
+ <para>
+  An array slice expression likewise yields null if the array itself or
+  any of the subscript expressions are null.  However, in other corner
+  cases such as selecting an array slice that
+  is completely outside the current array bounds, a slice expression
+  yields an empty (zero-dimensional) array instead of null.
+  If the requested slice partially overlaps the array bounds, then it
+  is silently reduced to just the overlapping region.
+ </para>
 
  <para>
   Les dimensions actuelles de toute valeur d'un tableau sont disponibles avec la
@@ -355,12 +359,10 @@ SELECT ARRAY[5,6] || ARRAY[[1,2],[3,4]];
   </para>
 
  <para>
-  Lorsqu'un élément seul est placé au début d'un tableau à une dimension, le
-  résultat est un tableau disposant d'une limite inférieure égale à la limite
-  inférieure de l'opérande du côté droit moins un. Lorsqu'un élément est placé
-  à la fin d'un tableau à une dimension, le résultat est un tableau contenant la
-  limite inférieure de l'opérande gauche. Par exemple&nbsp;:
-<programlisting>SELECT array_dims(1 || ARRAY[2,3]);
+  When a single element is pushed on to either the beginning or end of a
+  one-dimensional array, the result is an array with the same lower bound
+  subscript as the array operand. For example:
+<programlisting>SELECT array_dims(1 || '[0:1]={2,3}'::int[]);
  array_dims
 ------------
  [0:2]
@@ -400,7 +402,7 @@ SELECT array_dims(ARRAY[[1,2],[3,4]] || ARRAY[[5,6],[7,8],[9,0]]);
 <programlisting>SELECT array_dims(ARRAY[1,2] || ARRAY[[3,4],[5,6]]);
  array_dims
 ------------
- [0:2][1:2]
+ [1:3][1:2]
 (1 row)</programlisting>
  </para>
 
@@ -412,7 +414,7 @@ SELECT array_dims(ARRAY[[1,2],[3,4]] || ARRAY[[5,6],[7,8],[9,0]]);
   tableaux multidimensionnels.
 
   Notez que l'opérateur de concaténation vu ci-dessus est préféré à
-  l'utilisation directe de ces fonctions. En fait, les fonctions sont utilisées
+  l'utilisation directe de ces fonctions. En fait, les fonctions existent
   principalement pour l'implémentation de l'opérateur de concaténation.
   Néanmoins, elles pourraient être directement utiles dans la création
   d'agrégats définis par l'utilisateur. Quelques exemples&nbsp;:
@@ -509,53 +511,49 @@ SELECT array_cat(ARRAY[5,6], ARRAY[[1,2],[3,4]]);
 
   <para>
    La routine de sortie du tableau placera des guillemets doubles autour des
-   valeurs des éléments si elles sont des chaînes vides ou contiennent des
+   valeurs des éléments si elles sont des chaînes vides, contiennent des
    accolades, des caractères délimiteurs, des guillemets doubles, des antislashs
-   ou des espaces. Les guillemets doubles et les antislashs intégrés aux valeurs
+   ou des espaces, ou correspondent à <literal>NULL</literal>. Les guillemets
+   doubles et les antislashs intégrés aux valeurs
    des éléments seront échappés avec un antislash. Pour les types de données
    numériques, on peut supposer sans risque que les doubles guillemets
    n'apparaîtront jamais mais, pour les types de données texte, vous devez vous
-   préparer à gérer la présence et l'absence de guillemets (ceci est un
-   changement du comportement datant de la version pré-7.2 de
-   <productname>PostgreSQL</productname>).
+   préparer à gérer la présence et l'absence de guillemets.
   </para>
 
   <para>
    Par défaut, la valeur de la limite basse d'un tableau est initialisée à 1.
-   Si une des dimensions du tableau a une limite basse différente de 1, un
-   affichage supplémentaire indiquant les dimensions réelles du tableau
-   précède l'affichage de la structure du tableau. Cet affichage consiste
+   To represent arrays with other lower bounds, the array
+   subscript ranges can be specified explicitly before writing the
+   array contents.
+   Cet affichage consiste
    en des crochets (<literal>[]</literal>) autour de chaque limite basse et haute d'une
    dimension avec un délimiteur deux-points (<literal>:</literal>) entre chaque.
    L'affichage des dimensions du tableau est suivie par un signe d'égalité
    (<literal>=</literal>). Par exemple&nbsp;:
-<programlisting>SELECT 1 || ARRAY[2,3] AS array;
-
-    array
----------------
-[0:2]={1,2,3}
-(1 row)
-
-SELECT ARRAY[1,2] || ARRAY[[3,4]] AS array;
-
-          array
---------------------------
-[0:1][1:2]={{1,2},{3,4}}
-(1 row)</programlisting>
-  </para>
-
-  <para>
-   Cette syntaxe peut aussi être utilisée pour spécifier des indices de tableau
-   différents des indices par défaut. Par exemple&nbsp;:
-<programlisting>SELECT f1[1][-2][3] AS e1, f1[1][-1][5] AS e2
-FROM (SELECT '[1:1][-2:-1][3:5]={{{1,2,3},{4,5,6}}}'::int[] AS f1) AS ss;
+<programlisting>
+SELECT f1[1][-2][3] AS e1, f1[1][-1][5] AS e2
+ FROM (SELECT '[1:1][-2:-1][3:5]={{{1,2,3},{4,5,6}}}'::int[] AS f1) AS ss;
 
  e1 | e2
 ----+----
   1 |  6
-(1 row)</programlisting>
-</para>
+(1 row)
+</programlisting>
+   The array output routine will include explicit dimensions in its result
+   only when there are one or more lower bounds different from one.
+  </para>
 
+  <para>
+   If the value written for an element is <literal>NULL</literal> (in any case
+   variant), the element is taken to be NULL.  The presence of any quotes
+   or backslashes disables this and allows the literal string value
+   <quote>NULL</quote> to be entered.  Also, for backwards compatibility with
+   pre-8.2 versions of <productname>PostgreSQL</>, the <xref
+   linkend="guc-array-nulls"/> configuration parameter may be turned
+   <literal>off</literal> to suppress recognition of <literal>NULL</literal> as a NULL.
+  </para>
+  
   <para>
    Comme indiqué précédemment, lors de l'écriture d'une valeur de tableau, vous
    pourriez écrire des guillemets doubles autour de chaque élément individuel de
@@ -563,7 +561,8 @@ FROM (SELECT '[1:1][-2:-1][3:5]={{{1,2,3},{4,5,6}}}'::int[] AS f1) AS ss;
    induit en erreur l'analyseur de la valeur du tableau. Par exemple, les
    éléments contenant des crochets, virgules (ou un caractère délimiteur),
    guillemets doubles, antislashs ou espace (en début comme en fin) doivent
-   avoir des guillemets doubles. Pour placer un guillemet double ou un antislash
+   avoir des guillemets doubles. Les chaînes vides et les chaînes <literal>NULL</literal>
+   doivent aussi être entre guillemets. Pour placer un guillemet double ou un antislash
    dans une valeur d'élément d'un tableau, faites-le précéder d'un antislash.
    Autrement, vous pouvez échapper tous les caractères de données qui sont
    utilisés dans la syntaxe du tableau.
