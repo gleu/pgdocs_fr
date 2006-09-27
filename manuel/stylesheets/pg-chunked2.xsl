@@ -21,6 +21,9 @@
   <xsl:param name="html.stylesheet" select="'../stylesheets/pg.css'"/>
   <xsl:template name='user.head.content'>
      <link rel="stylesheet" href="../stylesheets/pg-print.css" type="text/css" media="print"/>
+     <!--[if lt IE 7.]>
+       <script defer type="text/javascript" src="stylesheets/pngfix.js"></script>
+     <![endif]-->     
   </xsl:template>
 
     <!-- Dropping some unwanted style attributes -->
