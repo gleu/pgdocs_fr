@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="ISO-8859-1"?>
-<!--
-$Header: /var/lib/cvs/pgsql-fr/sgml/plperl.sgml,v 1.12 2005/09/15 07:03:20 guillaume Exp $
--->
+<!-- $Header: /var/lib/cvs/pgsql-fr/sgml/plperl.sgml,v 1.12 2005/09/15 07:03:20 guillaume Exp $ -->
 
  <chapter id="plperl">
   <title>PL/Perl - Langage de procédures Perl</title>
@@ -20,6 +18,12 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/plperl.sgml,v 1.12 2005/09/15 07:03:20 guill
    url="http://www.perl.com">langage de programmation Perl</ulink>.
   </para>
 
+  <para> The usual advantage to using PL/Perl is that this allows use,
+   within stored functions, of the manyfold <quote>string
+    munging</quote> operators and functions available for Perl.  Parsing
+   complex strings may be be easier using Perl than it is with the
+   string functions and control structures provided in PL/pgsql.</para>
+  
   <para>
    Pour installer PL/Perl dans une base de données spécifique, utilisez la
    commande <literal>createlang plperl <replaceable>nom_base</replaceable></literal>.
@@ -243,15 +247,6 @@ SELECT * FROM perl_set();</programlisting>
   </para>
 
   <para>
-    <application>PL/Perl</application> n'a actuellement pas de support complet pour les
-    types domaine&nbsp;: il traite un domaine de la même façon qu'un type
-    scalaire sous-jacent. Ceci signifie que les contraintes associées au
-    domaine ne seront pas forcées. Ceci n'est pas un problème pour les
-    arguments d'une fonction mais c'est hasardeux de déclarer une fonction
-    <application>PL/Perl</application> renvoyant un type domaine.
-  </para>
-
-  <para>
    Si vous souhaitez utiliser le pragma <literal>strict</literal> dans votre code,
    la façon la plus simple de le faire est de configurer (<command>SET</command>)
    <literal>plperl.use_strict</literal> à true. Ce paramètre affecte les
@@ -296,15 +291,20 @@ SELECT * FROM perl_set();</programlisting>
   </para>
 
   <para>
-   Actuellement, PL/Perl fournit trois commandes Perl supplémentaires&nbsp;:
+   Actuellement, PL/Perl fournit les commandes Perl supplémentaires&nbsp;:
 
    <variablelist>
      <varlistentry>
 
      <term><literal><function>spi_exec_query</function>(<replaceable>query</replaceable> [, <replaceable>max-rows</replaceable>])</literal></term>
-     <term><literal><function>spi_exec_query</function>(<replaceable>command</replaceable>)</literal></term>
      <term><literal><function>spi_query</function>(<replaceable>command</replaceable>)</literal></term>
-     <term><literal><function>spi_fetchrow</function>(<replaceable>command</replaceable>)</literal></term>
+     <term><literal><function>spi_fetchrow</function>(<replaceable>cursor</replaceable>)</literal></term>
+     <term><literal><function>spi_prepare</function>(<replaceable>command</replaceable>, <replaceable>argument types</replaceable>)</literal></term>
+     <term><literal><function>spi_exec_prepared</function>(<replaceable>plan</replaceable>)</literal></term>
+     <term><literal><function>spi_query_prepared</function>(<replaceable>plan</replaceable> [, <replaceable>attributes</replaceable>], <replaceable>arguments</replaceable>)</literal></term>
+     <term><literal><function>spi_cursor_close</function>(<replaceable>cursor</replaceable>)</literal></term>
+     <term><literal><function>spi_freeplan</function>(<replaceable>plan</replaceable>)</literal></term>
+
 
    <listitem>
        <indexterm>
@@ -386,7 +386,7 @@ CREATE OR REPLACE FUNCTION lotsa_md5 (INTEGER) RETURNS SETOF foo_type AS $$
     my $t = localtime;
     elog(NOTICE, "opening file $file at $t" );
     open my $fh, '&lt;', $file # ooh, it's a file access!
-        or elog(ERROR, "Can't open $file for reading: $!");
+        or elog(ERROR, "can't open $file for reading: $!");
     my @words = &lt;$fh&gt;;
     close $fh;
     $t = localtime;
@@ -407,6 +407,64 @@ SELECT * from lotsa_md5(500);
 </programlisting>
     </para>
 
+    <para>
+    <literal>spi_prepare</literal>, <literal>spi_query_prepared</literal>, <literal>spi_exec_prepared</literal>, 
+    and <literal>spi_freeplan</literal> implement the same functionality but for prepared queries. Once
+    a query plan is prepared by a call to <literal>spi_prepare</literal>, the plan can be used instead
+    of the string query, either in <literal>spi_exec_prepared</literal>, where the result is the same as returned
+    by <literal>spi_exec_query</literal>, or in <literal>spi_query_prepared</literal> which returns a cursor
+    exactly as <literal>spi_query</literal> does, which can be later passed to <literal>spi_fetchrow</literal>.
+    </para>
+    
+    <para>
+    The advantage of prepared queries is that is it possible to use one prepared plan for more
+    than one query execution. After the plan is not needed anymore, it may be freed with 
+    <literal>spi_freeplan</literal>:
+    </para>
+
+    <para>
+    <programlisting>
+CREATE OR REPLACE FUNCTION init() RETURNS INTEGER AS $$
+        $_SHARED{my_plan} = spi_prepare( 'SELECT (now() + $1)::date AS now', 'INTERVAL');
+$$ LANGUAGE plperl;
+
+CREATE OR REPLACE FUNCTION add_time( INTERVAL ) RETURNS TEXT AS $$
+        return spi_exec_prepared( 
+                $_SHARED{my_plan},
+                $_[0],
+        )->{rows}->[0]->{now};
+$$ LANGUAGE plperl;
+
+CREATE OR REPLACE FUNCTION done() RETURNS INTEGER AS $$
+        spi_freeplan( $_SHARED{my_plan});
+        undef $_SHARED{my_plan};
+$$ LANGUAGE plperl;
+
+SELECT init();
+SELECT add_time('1 day'), add_time('2 days'), add_time('3 days');
+SELECT done();
+
+  add_time  |  add_time  |  add_time  
+------------+------------+------------
+ 2005-12-10 | 2005-12-11 | 2005-12-12
+    </programlisting>
+    </para>
+
+    <para>
+    Note that the parameter subscript in <literal>spi_prepare</literal> is defined via
+    $1, $2, $3, etc, so avoid declaring query strings in double quotes that might easily
+    lead to hard-to-catch bugs.
+    </para>
+
+    <para>
+     Normally, <function>spi_fetchrow</function> should be repeated until it
+     returns <literal>undef</literal>, indicating that there are no more
+     rows to read.  The cursor is automatically freed when
+     <function>spi_fetchrow</function> returns <literal>undef</literal>.
+     If you do not wish to read all the rows, instead call
+     <function>spi_cursor_close</function> to free the cursor.
+     Failure to do so will result in memory leaks.
+    </para>
    </listitem>
     </varlistentry>
 
@@ -539,9 +597,9 @@ $$ LANGUAGE plperl;</programlisting>
 <programlisting>CREATE FUNCTION badfunc() RETURNS integer AS $$
     my $tmpfile = "/tmp/badfile";
     open my $fh, '&gt;', $tmpfile
-        or elog(ERROR, qq{Could not open the file "$tmpfile": $!});
+        or elog(ERROR, qq{could not open the file "$tmpfile": $!});
     print $fh "Testing writing to a file\n";
-    close $fh or elog(ERROR, qq{Could not close the file "$tmpfile": $!});
+    close $fh or elog(ERROR, qq{could not close the file "$tmpfile": $!});
     return 1;
 $$ LANGUAGE plperl;
 </programlisting>
@@ -584,7 +642,9 @@ $$ LANGUAGE plperl;
      PL/Perl peut être utilisé pour écrire des fonctions pour déclencheurs.
      Dans une fonction déclencheur, la référence hachée 
      <varname>$_TD</varname> contient des informations sur l'événement du
-     déclencheur en cours. Les champs de la référence de hachage
+     déclencheur en cours. <varname>$_TD</varname> is a global variable, 
+     which gets a separate local value for each invocation of the trigger.
+     Les champs de la référence de hachage
      <varname>$_TD</varname> sont&nbsp;:
      
      <variablelist>
@@ -657,13 +717,33 @@ $$ LANGUAGE plperl;
        </varlistentry>
 
        <varlistentry>
-         <term><literal>$_TD-&gt;{relname}</literal></term>
+         <term><literal>$_TD-&gt;{table_name}</literal></term>
          <listitem>
            <para>
              Nom de la table sur lequel le déclencheur a été exécuté
            </para>
          </listitem>
        </varlistentry>
+
+    <varlistentry>
+     <term><literal>$_TD-&gt;{relname}</literal></term>
+     <listitem>
+      <para>
+       Name of the table on which the trigger fired. This has been deprecated,
+       and could be removed in a future release. 
+       Please use $_TD-&gt;{table_name} instead.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>$_TD-&gt;{table_schema}</literal></term>
+     <listitem>
+      <para>
+       Name of the schema in which the table on which the trigger fired, is
+      </para>
+     </listitem>
+    </varlistentry>
 
        <varlistentry>
          <term><literal>$_TD-&gt;{argc}</literal></term>
@@ -789,20 +869,3 @@ CREATE TRIGGER test_valid_id_trig
  </sect1>
 
 </chapter>
-
-<!-- Keep this comment at the end of the file
-Local variables:
-mode:sgml
-sgml-omittag:nil
-sgml-shorttag:t
-sgml-minimize-attributes:nil
-sgml-always-quote-attributes:t
-sgml-indent-step:1
-sgml-indent-data:t
-sgml-parent-document:nil
-sgml-default-dtd-file:"./reference.ced"
-sgml-exposed-tags:nil
-sgml-local-catalogs:("/usr/lib/sgml/catalog")
-sgml-local-ecat-files:nil
-End:
--->

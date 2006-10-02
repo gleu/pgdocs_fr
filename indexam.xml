@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="ISO-8859-1"?>
-<!--
-$PostgreSQL: pgsql/doc/src/sgml/indexam.sgml,v 2.7 2005/11/04 23:14:00 petere Exp $
--->
+<!-- $PostgreSQL: pgsql/doc/src/sgml/indexam.sgml,v 2.7 2005/11/04 23:14:00 petere Exp $ -->
 
 <chapter id="indexam">
  <title>Définition de l'interface des méthodes d'accès aux index</title>
@@ -100,8 +98,7 @@ $PostgreSQL: pgsql/doc/src/sgml/indexam.sgml,v 2.7 2005/11/04 23:14:00 petere Ex
   <para>
    Certaines des colonnes d'options de <structname>pg_am</structname> ont des
    obligations peu évidentes. Les besoins de <structfield>amcanunique</structfield>
-   sont discutés dans  <xref linkend="index-unique-checks"/>, et ceux de
-   <structfield>amconcurrent</structfield> dans <xref linkend="index-locking"/>.
+   sont discutés dans  <xref linkend="index-unique-checks"/>.
    L'option <structfield>amcanmulticol</structfield> assure que la méthode
    d'accès supporte les index multicolonnes alors que 
    <structfield>amoptionalkey</structfield> assure qu'il fera des parcours où
@@ -133,7 +130,7 @@ $PostgreSQL: pgsql/doc/src/sgml/indexam.sgml,v 2.7 2005/11/04 23:14:00 petere Ex
    4</literal>. Le système supposera que l'index peut être utilisé pour les lignes
    avec <literal>a = 4</literal>, ce qui est mauvais si l'index omet les lignes où
    <literal>b</literal> est null. Néanmoins, il est correct d'omettre les lignes où la
-   première colonne indexée est NULL (GiST le fait actuellement). Du coup,
+   première colonne indexée est NULL. Du coup,
    <structfield>amindexnulls</structfield> doit valoir true seulement si la
    méthode d'accès à l'index indexe toutes les lignes, ceci incluant les
    combinaisons arbitraires des valeurs NULL.
@@ -150,7 +147,7 @@ $PostgreSQL: pgsql/doc/src/sgml/indexam.sgml,v 2.7 2005/11/04 23:14:00 petere Ex
   </para>
 
   <para>
-<programlisting>void
+<programlisting>IndexBuildResult *
 ambuild (Relation heapRelation,
          Relation indexRelation,
          IndexInfo *indexInfo);
@@ -161,7 +158,8 @@ ambuild (Relation heapRelation,
    déjà dans la table. D'habitude, la fonction <function>ambuild</function> appellera
    <function>IndexBuildHeapScan()</function> pour parcourir la table avec les lignes
    qui existent déjà et pour calculer les clés qui doivent être insérées dans
-   l'index.
+   l'index. La fonction doit renvoyer une structure allouée par palloc contenant
+   les statistiques sur le nouvel index.
   </para>
 
   <para>
@@ -189,39 +187,95 @@ aminsert (Relation indexRelation,
 
   <para>
 <programlisting>IndexBulkDeleteResult *
-ambulkdelete (Relation indexRelation,
+ambulkdelete (IndexVacuumInfo *info,
+              IndexBulkDeleteResult *stats,
               IndexBulkDeleteCallback callback,
               void *callback_state);
 </programlisting>
    Supprime le(s) ligne(s) de l'index. C'est une opération de <quote>suppression
    en flot</quote> qui a pour but d'être implémentée par le parcours complet de
    l'index et par la vérification de chaque entrée pour vérifier si elle
-   doit être supprimée. La fonction <literal>callback</literal> passée pourrait être
+   doit être supprimée. La fonction <literal>callback</literal> passée doit être
    appelée, dans le style <literal>callback(<replaceable>TID</replaceable>, callback_state)
    renvoie bool</literal>, pour déterminer si une entrée d'index particulière,
    identifiée par son TID référencé, est à supprimer. Doit renvoyer soit NULL
    soit une structure issue d'un palloc et contenant des statistiques sur les
    effets de l'opération de suppression.
+   It is OK to return NULL if no information needs to be passed on to
+   <function>amvacuumcleanup</function>.
+  </para>
+
+  <para>
+   Because of limited <varname>maintenance_work_mem</varname>,
+   <function>ambulkdelete</function> may need to be called more than once when many
+   tuples are to be deleted.  The <literal>stats</literal> argument is the result
+   of the previous call for this index (it is NULL for the first call within a
+   <command>VACUUM</command> operation).  This allows the AM to accumulate statistics
+   across the whole operation.  Typically, <function>ambulkdelete</function> will
+   modify and return the same struct if the passed <literal>stats</literal> is not
+   null.
   </para>
 
   <para>
 <programlisting>IndexBulkDeleteResult *
-amvacuumcleanup (Relation indexRelation,
-                 IndexVacuumCleanupInfo *info,
+amvacuumcleanup (IndexVacuumInfo *info,
                  IndexBulkDeleteResult *stats);
 </programlisting>
-   Nettoie après une opération <command>VACUUM</command> (un ou plusieurs appels
-   à <function>ambulkdelete</function>). Une méthode d'accès à l'index n'a pas besoin de
-   fournir cette fonction (si oui, l'entrée dans <structname>pg_am</structname> doit valoir
-   zéro). Si elle est fournie, elle est typiquement utilisée pour un nettoyage en
-   masse comme pour réclamer des pages d'index vides. <literal>info</literal> fournit
-   quelques arguments supplémentaires comme un niveau de message pour des rapports
-   statistiques, et <literal>stats</literal> est tout ce que le dernier appel à
-   <function>ambulkdelete</function> a pu renvoyer.  <function>amvacuumcleanup</function>
-   pourrait remplacer ou modifier cette structure avant de la renvoyer. Si le
-   résultat est non NULL, il doit s'agir d'une structure issue d'un palloc. Les
-   statistiques qu'elle contient seront rapportées par <command>VACUUM</command> si
-   <literal>VERBOSE</literal> est donné.
+   Clean up after a <command>VACUUM</command> operation (zero or more
+   <function>ambulkdelete</function> calls).  This does not have to do anything
+   beyond returning index statistics, but it may perform bulk cleanup
+   such as reclaiming empty index pages.  <literal>stats</literal> is whatever the
+   last <function>ambulkdelete</function> call returned, or NULL if
+   <function>ambulkdelete</function> was not called because no tuples needed to be
+   deleted.  If the result is not NULL it must be a palloc'd struct.
+   The statistics it contains will be used to update <structname>pg_class</structname>,
+   and will be reported by <command>VACUUM</command> if <literal>VERBOSE</literal> is given.
+   It is OK to return NULL if the index was not changed at all during the
+   <command>VACUUM</command> operation, but otherwise correct stats should
+   be returned.
+  </para>
+
+  <para>
+<programlisting>
+void
+amcostestimate (PlannerInfo *root,
+                IndexOptInfo *index,
+                List *indexQuals,
+                RelOptInfo *outer_rel,
+                Cost *indexStartupCost,
+                Cost *indexTotalCost,
+                Selectivity *indexSelectivity,
+                double *indexCorrelation);
+</programlisting>
+   Estimate the costs of an index scan.  This function is described fully
+   in <xref linkend="index-cost-estimation"/>, below.
+  </para>
+
+  <para>
+<programlisting>
+bytea *
+amoptions (ArrayType *reloptions,
+           bool validate);
+</programlisting>
+   Parse and validate the reloptions array for an index.  This is called only
+   when a non-null reloptions array exists for the index.
+   <parameter>reloptions</parameter> is a <type>text</type> array containing entries of the
+   form <replaceable>name</replaceable><literal>=</literal><replaceable>value</replaceable>.
+   The function should construct a <type>bytea</type> value, which will be copied
+   into the <structfield>rd_options</structfield> field of the index's relcache entry.
+   The data contents of the <type>bytea</type> value are open for the access
+   method to define, but the standard access methods currently all use struct
+   <structname>StdRdOptions</structname>.
+   When <parameter>validate</parameter> is true, the function should report a suitable
+   error message if any of the options are unrecognized or have invalid
+   values; when <parameter>validate</parameter> is false, invalid entries should be
+   silently ignored.  (<parameter>validate</parameter> is false when loading options
+   already stored in <structname>pg_catalog</structname>; an invalid entry could only
+   be found if the access method has changed its rules for options, and in
+   that case ignoring obsolete entries is appropriate.)
+   It is OK to return NULL if default behavior is wanted.
+  </para>
+
   </para>
 
   <para>
@@ -327,20 +381,6 @@ amrestrpos (IndexScanDesc scan);
   </para>
 
   <para>
-<programlisting>void
-amcostestimate (PlannerInfo *root,
-                IndexOptInfo *index,
-                List *indexQuals,
-                Cost *indexStartupCost,
-                Cost *indexTotalCost,
-                Selectivity *indexSelectivity,
-                double *indexCorrelation);
-</programlisting>
-   Estime le coût d'un parcours d'index. Cette fonction est décrite complètement
-   dans <xref linkend="index-cost-estimation"/>, ci-dessous.
-  </para>
-
-  <para>
    Par convention, l'entrée <literal>pg_proc</literal> de toute fonction de
    méthode d'accès aux index devrait afficher le bon nombre d'arguments, mais
    les déclarer comme étant du type <type>internal</type> (car la plupart des
@@ -348,6 +388,10 @@ amcostestimate (PlannerInfo *root,
    pas que les utilisateurs appelent les fonctions directement). Le type
    renvoyé est déclaré comme <type>void</type>, <type>internal</type> ou <type>boolean</type>
    suivant le cas.
+   The only exception is <function>amoptions</function>, which should be correctly
+   declared as taking <type>text[]</type> and <type>bool</type> and returning
+   <type>bytea</type>.  This provision allows client code to execute
+   <function>amoptions</function> to test validity of options settings.
   </para>
 
  </sect1>
@@ -434,12 +478,7 @@ amcostestimate (PlannerInfo *root,
    la première fois. De façon similaire, une suppression concurrente pourrait ou
    non être réfléchie dans les résultats d'un parcours. Ce qui est important est
    que les insertions ou suppressions ne causent pas un manque ou un renvoi
-   multiple des entrées qui n'ont pas été insérées ou supprimées (pour un type
-   d'index qui ne configure pas <structname>pg_am</structname>.<structfield>amconcurrent</structfield>,
-   il est suffisant de gérer ces cas pour les insertions et suppressions
-   réalisées par le serveur qui effectue le parcours. Mais quand
-   <structfield>amconcurrent</structfield> vaut true, les insertions ou suppressions des
-   autres serveurs doivent aussi être gérées).
+   multiple des entrées qui n'ont pas été insérées ou supprimées.
   </para>
 
   <para>
@@ -468,33 +507,17 @@ amcostestimate (PlannerInfo *root,
   <title>Considérations pour le verrouillage d'index</title>
 
   <para>
-   Une méthode d'accès aux index peut choisir si elle supporte les mises à jour
-   concurrentes de l'index par plusieurs processus. Si le drapeau
-   <structname>pg_am</structname>.<structfield>amconcurrent</structfield> de la méthode vaut true,
-   alors le système principal <productname>PostgreSQL</productname> obtient
+   Les méthodes d'accès aux index doivent gérer des mises à jour
+   concurrentes de l'index par plusieurs processus.
+   Le système principal <productname>PostgreSQL</productname> obtient
    <literal>AccessShareLock</literal> sur l'index lors d'un parcours d'index et
-   <literal>RowExclusiveLock</literal> quand il le met à jour. Comme ces types de
+   <literal>RowExclusiveLock</literal> quand il le met à jour (ceci incluant le
+   <command>VACUUM</command> simple). Comme ces types de
    verrous ne sont pas en conflit, la méthode d'accès est responsable de la
    gestion d'un verrouillage plus précis si nécessaire. Un verrou exclusif sur
-   l'index entier sera seulement pris lors de la création, destruction de l'index
-   ou dans une opération <literal>REINDEX</literal>. Quand <structfield>amconcurrent</structfield>
-   vaut false, <productname>PostgreSQL</productname> obtient toujours
-   <literal>AccessShareLock</literal> lors des parcours d'index mais il obtient
-   <literal>AccessExclusiveLock</literal> pour une mise à jour. Ceci nous assure que
-   les processus mettant à jour ont l'utilisation exclusive de l'index. Notez
-   que ceci assume implicitement que les parcours d'index sont en lecture
-   seule&nbsp;; une méthode d'accès qui pourrait modifier l'index lors d'un
-   parcours devra toujours faire son propre verrouillage pour gérer les cas
-   des parcours concurrents.
-  </para>
-
-  <para>
-   Rappelez-vous que les verrous d'un processus ne sont jamais en conflit&nbsp;;
-   du coup, même un type d'index non concurrent doit être préparé à gérer le cas
-   où un moteur insère ou supprime des entrées dans un index qui est lui-même en
-   train de parcourir (bien sûr, ceci est nécessaire pour supporter un
-   <command>UPDATE</command> qui utilise l'index pour trouver les lignes à mettre à
-   jour).
+   l'index entier sera seulement pris lors de la création, destruction de l'index,
+   dans une opération <literal>REINDEX</literal> ou lors d'un <command>VACUUM
+   FULL</command>.
   </para>
 
   <para>
@@ -532,7 +555,7 @@ amcostestimate (PlannerInfo *root,
      </listitem>
      <listitem>
       <para>
-       Pour des types d'index concurrents, un parcours d'index doit maintenir
+       Un parcours d'index doit maintenir
        un lien sur la page d'index contenant le dernier élément renvoyé par
        <function>amgettuple</function>, et <function>ambulkdelete</function> ne peut pas
        supprimer les entrées de pages qui sont liées à d'autres processus. Le
@@ -541,12 +564,11 @@ amcostestimate (PlannerInfo *root,
      </listitem>
     </itemizedlist>
 
-   Si un index est concurrent alors il est possible qu'un lecteur d'index voit
+   Sans la troisième règle, il est possible qu'un lecteur d'index voit
    une entrée dans l'index juste avant qu'elle ne soit supprimée par un
-   <command>VACUUM</command>, puis d'arriver à l'entrée correspondante de l'en-tête
-   après qu'elle soit supprimée par le <command>VACUUM</command> (avec un index non
-   concurrent, ceci n'est pas possible à cause des verrous conflictuels au
-   niveau index). Ceci ne crée pas de problèmes sérieux si ce numéro d'élément
+   <command>VACUUM</command>, puis d'arriver à l'entrée correspondante de
+   l'en-tête après qu'elle soit supprimée par le <command>VACUUM</command>.
+   Ceci ne crée pas de problèmes sérieux si ce numéro d'élément
    est toujours inutilisé quand le lecteur l'atteint car un emplacement d'élément
    vide sera ignoré par <function>heap_fetch()</function>. Mais que se passe-t'il si
    un troisième moteur a déjà ré-utilisé l'emplacement de l'élément pour quelque
@@ -640,6 +662,16 @@ amcostestimate (PlannerInfo *root,
   </para>
 
   <para>
+   Furthermore, immediately before raising a uniqueness violation
+   according to the above rules, the access method must recheck the
+   liveness of the row being inserted.  If it is committed dead then
+   no error should be raised.  (This case cannot occur during the
+   ordinary scenario of inserting a row that's just been created by
+   the current transaction.  It can happen during
+   <command>CREATE UNIQUE INDEX CONCURRENTLY</>, however.) 
+  </para>
+
+  <para>
    Nous réclamons que la méthode d'accès à l'index applique ces tests eux-même,
    ce qui signifient qu'ils doivent attendre l'en-tête pour vérifier le
    statut de validation d'une ligne qui est affichée comme une clé dupliquée
@@ -682,6 +714,7 @@ amcostestimate (PlannerInfo *root,
 amcostestimate (PlannerInfo *root,
                 IndexOptInfo *index,
                 List *indexQuals,
+		RelOptInfo *outer_rel,
                 Cost *indexStartupCost,
                 Cost *indexTotalCost,
                 Selectivity *indexSelectivity,
@@ -716,6 +749,20 @@ amcostestimate (PlannerInfo *root,
        Liste des clauses qual d'index (implicitement assemblées avec des AND)&nbsp;;
        une liste NIL indique qu'aucun qualificateur n'est disponible.
        Notez que la liste contient des arbres d'expression, pas ScanKeys.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>outer_rel</term>
+     <listitem>
+      <para>
+       If the index is being considered for use in a join inner indexscan,
+       the planner's information about the outer side of the join.  Otherwise
+       NULL.  When non-NULL, some of the qual clauses will be join clauses
+       with this rel rather than being simple restriction clauses.  Also,
+       the cost estimator should expect that the index scan will be repeated
+       for each row of the outer rel.
       </para>
      </listitem>
     </varlistentry>
@@ -772,10 +819,10 @@ amcostestimate (PlannerInfo *root,
   </para>
 
   <para>
-   Les coûts d'accès aux index doivent être calculés dans les unités utilisées
-   par <filename>src/backend/optimizer/path/costsize.c</filename>&nbsp;: la
-   récupération d'un bloc disque séquentiel a un coût de 1.0, une récupération
-   non séquentielle a un coût de <varname>random_page_cost</varname>, et le coût de
+   Les coûts d'accès aux index doivent être calculés en utilisant les paramètres
+   utilisés par <filename>src/backend/optimizer/path/costsize.c</filename>&nbsp;: la
+   récupération d'un bloc disque séquentiel a un coût de <varname>seq_page_cost</varname>,
+   une récupération non séquentielle a un coût de <varname>random_page_cost</varname>, et le coût de
    traitement d'une ligne d'index doit habituellement être considéré comme
    <varname>cpu_index_tuple_cost</varname>. De plus, un multiple approprié de
    <varname>cpu_operator_cost</varname> doit être chargé pour tous les opérateurs
@@ -810,6 +857,11 @@ amcostestimate (PlannerInfo *root,
    -1,0 et 1,0) entre l'ordre de l'index et celui de la table. Cela permet
    d'ajuster l'estimation pour le coût de récupération des lignes de la table
    parent.
+  </para>
+
+  <para>
+   In the join case, the returned numbers should be averages expected for
+   any one scan of the index.
   </para>
 
   <procedure>
@@ -856,15 +908,18 @@ amcostestimate (PlannerInfo *root,
 
 <programlisting>    /*
      * Our generic assumption is that the index pages will be read
-     * sequentially, so they have cost 1.0 each, not random_page_cost.
+     * sequentially, so they have cost seq_page_cost each, not random_page_cost.
      * Also, we charge for evaluation of the indexquals at each index row.
      * All the costs are assumed to be paid incrementally during the scan.
      */
     cost_qual_eval(&amp;index_qual_cost, indexQuals);
     *indexStartupCost = index_qual_cost.startup;
-    *indexTotalCost = numIndexPages +
+    *indexTotalCost = seq_page_cost * numIndexPages +
         (cpu_index_tuple_cost + index_qual_cost.per_tuple) * numIndexTuples;
 </programlisting>
+
+     However, the above does not account for amortization of index reads
+     across repeated index scans in the join case.
     </para>
    </step>
 
@@ -883,20 +938,3 @@ amcostestimate (PlannerInfo *root,
   </para>
  </sect1>
 </chapter>
-
-<!-- Keep this comment at the end of the file
-Local variables:
-mode:sgml
-sgml-omittag:nil
-sgml-shorttag:t
-sgml-minimize-attributes:nil
-sgml-always-quote-attributes:t
-sgml-indent-step:1
-sgml-indent-data:t
-sgml-parent-document:nil
-sgml-default-dtd-file:"./reference.ced"
-sgml-exposed-tags:nil
-sgml-local-catalogs:("/usr/lib/sgml/catalog")
-sgml-local-ecat-files:nil
-End:
--->

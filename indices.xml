@@ -89,6 +89,18 @@
   </para>
 
   <para>
+   Creating an index on a large table can take a long time.  By default,
+   <productname>PostgreSQL</productname> allows reads (selects) to occur
+   on the table in parallel with creation of an index, but writes (inserts,
+   updates, deletes) are blocked until the index build is finished.
+   In production environments this is often unacceptable.
+   It is possible to allow writes to occur in parallel with index
+   creation, but there are several caveats to be aware of &mdash;
+   for more information see <xref linkend="SQL-CREATEINDEX-CONCURRENTLY"
+   endterm="SQL-CREATEINDEX-CONCURRENTLY-title"/>.
+  </para>
+
+  <para>
    Après la création d'un index, le système doit le maintenir synchronisé avec
    la table. Cela rend plus lourdes les opérations de manipulation de 
    données. C'est pourquoi les index qui sont peu, voire jamais, utilisés
@@ -102,7 +114,7 @@
 
   <para>
    <productname>PostgreSQL</productname> propose plusieurs types d'index&nbsp;:
-   B-tree, R-tree, Hash et GiST. Chaque type d'index utilise un algorithme
+   B-tree, Hash, GIN et GiST. Chaque type d'index utilise un algorithme
    différent qui convient à un type particulier de requêtes. Par défaut, la
    commande <command>CREATE INDEX</command> créera un index B-tree, ce qui
    convient dans la plupart des situations.
@@ -153,19 +165,51 @@
   <para>
    <indexterm>
     <primary>index</primary>
-    <secondary>R-tree</secondary>
+    <secondary>hash</secondary>
    </indexterm>
    <indexterm>
-    <primary>R-tree</primary>
+    <primary>hash</primary>
     <see>index</see>
    </indexterm>
-   Les index R-tree sont adaptés aux requêtes sur des données spatiales à deux
-   dimensions. Pour créer un index R-tree, utilisez une commande de la
-   forme&nbsp;:
-<synopsis>CREATE INDEX <replaceable>nom</replaceable> ON <replaceable>table</replaceable> USING RTREE (<replaceable>colonne</replaceable>);</synopsis>
-   L'optimiseur de requêtes de <productname>PostgreSQL</productname>
-   envisagera d'utiliser un index R-tree lorsqu'une colonne indexée fait
-   partie d'une comparaison utilisant l'un de ces opérateurs&nbsp;:
+   Hash indexes can only handle simple equality comparisons.
+   The query planner will consider using a hash index whenever an
+   indexed column is involved in a comparison using the
+   <literal>=</literal> operator.  The following command is used to
+   create a hash index:
+<synopsis>
+CREATE INDEX <replaceable>name</replaceable> ON <replaceable>table</replaceable> USING hash (<replaceable>column</replaceable>);
+</synopsis>
+  </para>
+
+  <note>
+   <para>
+    Testing has shown <productname>PostgreSQL</productname>'s hash
+    indexes to perform no better than B-tree indexes, and the
+    index size and build time for hash indexes is much worse.
+    Furthermore, hash index operations are not presently WAL-logged,
+    so hash indexes may need to be rebuilt with <command>REINDEX</command>
+    after a database crash.
+    For these reasons, hash index use is presently discouraged.
+   </para>
+  </note>  
+
+  <para>
+   <indexterm>
+    <primary>index</primary>
+    <secondary>GiST</secondary>
+   </indexterm>
+   <indexterm>
+    <primary>GiST</primary>
+    <see>index</see>
+   </indexterm>
+   GiST indexes are not a single kind of index, but rather an infrastructure
+   within which many different indexing strategies can be implemented.
+   Accordingly, the particular operators with which a GiST index can be
+   used vary depending on the indexing strategy (the <firstterm>operator
+   class</>).  As an example, the standard distribution of
+   <productname>PostgreSQL</productname> includes GiST operator classes
+   for several two-dimensional geometric data types, which support indexed
+   queries using these operators:
 
    <simplelist>
     <member><literal>&lt;&lt;</literal></member>
@@ -176,73 +220,50 @@
     <member><literal>&amp;&lt;|</literal></member>
     <member><literal>|&amp;&gt;</literal></member>
     <member><literal>|&gt;&gt;</literal></member>
-    <member><literal>~</literal></member>
-    <member><literal>@</literal></member>
+    <member><literal>@&gt;</literal></member>
+    <member><literal>&lt;@</literal></member>
     <member><literal>~=</literal></member>
     <member><literal>&amp;&amp;</literal></member>
    </simplelist>
 
    Voir la <xref linkend="functions-geometry"/> pour connaître la
    signification de ces opérateurs.
+   Many other GiST operator
+   classes are available in the <literal>contrib</literal> collection or as separate
+   projects.  For more information see <xref linkend="GiST"/>.
   </para>
 
   <para>
    <indexterm>
     <primary>index</primary>
-    <secondary>hash</secondary>
+    <secondary>GIN</secondary>
    </indexterm>
    <indexterm>
-    <primary>hash</primary>
+    <primary>GIN</primary>
     <see>index</see>
    </indexterm>
-   Les index hachés ne supportent que les simples comparaisons d'égalité.
-   L'optimiseur de requêtes envisagera d'utiliser un index haché lorsqu'une
-   colonne indexée fait partie d'une comparaison utilisant l'opérateur 
-   <literal>=</literal>. La commande suivante est utilisée pour créer un index
-   haché:
-<synopsis>CREATE INDEX <replaceable>nom</replaceable> ON <replaceable>table</replaceable> USING HASH (<replaceable>colonne</replaceable>);</synopsis>
+   GIN is a inverted index and it's usable for values which have more
+   than one key, arrays for example. Like GiST, GIN may support
+   many different user-defined indexing strategies and the particular 
+   operators with which a GIN index can be used vary depending on the 
+   indexing strategy.  
+   As an example, the standard distribution of
+   <productname>PostgreSQL</productname> includes GIN operator classes
+   for one-dimentional arrays, which support indexed
+   queries using these operators:
+
+   <simplelist>
+    <member><literal>&lt;@</literal></member>
+    <member><literal>@&gt;</literal></member>
+    <member><literal>=</literal></member>
+    <member><literal>&amp;&amp;</literal></member>
+   </simplelist>
+
+   (See <xref linkend="functions-array"/> for the meaning of
+   these operators.)
+   Other GIN operator classes are available in the <literal>contrib</literal>
+   tsearch2 and intarray modules. For more information see <xref linkend="GIN"/>.
   </para>
-
-  <para>
-   Les index GiST ne sont pas un seul genre d'index mais plutôt une
-   infrastructure à l'intérieur de laquelle plusieurs stratégies d'indexage
-   peuvent être implémentées. En accord, les opérateurs particuliers avec
-   lesquels un index GiST peut être utilisé varient suivant sur la stratégie
-   d'indexage (la <firstterm>classe d'opérateur</firstterm>). La distribution standard 
-   de <productname>PostgreSQL</productname> inclut des classes d'opérateur GiST
-   équivalentes à celles de l'opérateur R-tree, et un grand nombre d'autres
-   classes d'opérateurs GiST sont disponibles dans la collection
-   <literal>contrib</literal> ou via des projets séparés. Pour plus d'informations,
-   voir le <xref linkend="gist"/>.
-  </para>
-
-  <note>
-   <para>
-    Les tests ont montré que les index de hachage de
-    <productname>PostgreSQL</productname> ne sont pas plus performants que les
-    index B-tree, alors que la taille de ces index et que leur temps de
-    construction est bien pire. De plus, les opérations sur les index hachés
-    ne sont pas encore tracées dans les WAL, donc les index de hachage
-    pourraient avoir besoin d'être reconstruits avec <command>REINDEX</command>
-    après un arrêt brutal de la base de données. Pour ces raisons,
-    l'utilisation des index de hachage est actuellement déconseillée.
-   </para>
-
-   <para>
-    De façon similaire, les index R-tree ne semblent pas avoir un avantage
-    en terme de performance comparé aux opérations équivalentes sur les index
-    GiST. Comme les index de hachages, ils ne sont pas tracés sur les WAL et
-    pourraient nécessiter un <command>REINDEX</command> après un arrêt brutal de la
-    base de données.
-   </para>
-
-   <para>
-    Bien que les problèmes des index de hachage pourraient être corrigés
-    ultérieurement, il est probable que le type d'index R-tree soit supprimé
-    dans une prochaine version. Les utilisateurs sont encouragés à migrer les
-    applications qui utilisent les index R-tree pour qu'elles utilisent des
-    index GiST.
-   </para>
   </note>  
 
  </sect1>
@@ -306,13 +327,13 @@
   </para>
 
   <para>
-   Un index GiST multicolonne peut seulement être utilisé quand il existe une
-   condition de requête sur sa colonne de tête. Les conditions sur les
-   colonnes supplémentaires restreignent les entrées renvoyées par l'index mais
-   la condition sur la première colonne est la plus importante pour déterminer
-   à quel point l'index devra être parcouru. Un index GiSTsera relativement
-   inefficace si sa première colonne a seulement quelques valeurs distinctes
-   même s'il y a plein de valeurs distinctes dans les colonnes supplémentaires.
+   A multicolumn GiST index can be used with query conditions that
+   involve any subset of the index's columns. Conditions on additional 
+   columns restrict the entries returned by the index, but the condition on 
+   the first column is the most important one for determining how much of 
+   the index needs to be scanned.  A GiST index will be relatively 
+   ineffective if its first column has only a few distinct values, even if 
+   there are many distinct values in additional columns.
   </para>
 
   <para>
@@ -670,7 +691,12 @@
    exemple <quote>x &lt; 1</quote> implique <quote>x &lt; 2</quote>&nbsp;; sinon,
    la condition du prédicat doit correspondre exactement à une partie de la
    clause <literal>WHERE</literal> de la requête, sans quoi l'index ne sera pas
-   considéré comme utilisable.
+   considéré comme utilisable. Matching takes
+   place at query planning time, not at run time. As a result,
+   parameterized query clauses will not work with a partial index. For
+   example a prepared query with a parameter might specify 
+   <quote>x &lt; ?</quote> which will never imply 
+   <quote>x &lt; 2</quote> for all possible values of the parameter.
   </para>
 
   <para>
@@ -955,20 +981,3 @@ CREATE UNIQUE INDEX contrainte_tests_reussis ON tests (sujet, resultat)
   </itemizedlist>
  </sect1>
 </chapter>
-
-<!-- Keep this comment at the end of the file
-Local variables:
-mode:sgml
-sgml-omittag:nil
-sgml-shorttag:t
-sgml-minimize-attributes:nil
-sgml-always-quote-attributes:t
-sgml-indent-step:1
-sgml-indent-data:t
-sgml-parent-document:nil
-sgml-default-dtd-file:"./reference.ced"
-sgml-exposed-tags:nil
-sgml-local-catalogs:("/usr/lib/sgml/catalog")
-sgml-local-ecat-files:nil
-End:
--->

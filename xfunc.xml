@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="ISO-8859-1"?>
-<!--
-$Header: /var/lib/cvs/pgsql-fr/sgml/xfunc.sgml,v 1.18 2005/09/22 18:34:45 guillaume Exp $
--->
+<!-- $Header: /var/lib/cvs/pgsql-fr/sgml/xfunc.sgml,v 1.18 2005/09/22 18:34:45 guillaume Exp $ -->
 
  <sect1 id="xfunc">
   <title>Fonctions définies par l'utilisateur</title>
@@ -1132,6 +1130,15 @@ LANGUAGE internal    STRICT;
     nouveau tentée. En cas de nouvel échec, le chargement échoue. 
  </para>
 
+   <para>
+    It is recommended to locate shared libraries either relative to
+    <literal>$libdir</literal> or through the dynamic library path.
+    This simplifies version upgrades if the new installation is at a
+    different location.  The actual directory that
+    <literal>$libdir</literal> stands for can be found out with the
+    command <literal>pg_config --pkglibdir</literal>.
+   </para>
+
     <para>
      L'identifiant utilisateur sous lequel fonctionne le serveur
      <productname>PostgreSQL</productname> doit pouvoir suivre le chemin
@@ -1156,6 +1163,32 @@ LANGUAGE internal    STRICT;
    </para>
    </note>
 
+   <indexterm zone="xfunc-c-dynload">
+    <primary>magic block</primary>
+   </indexterm>
+
+   <para>
+    To ensure that a dynamically loaded object file is not loaded into an
+    incompatible server, <productname>PostgreSQL</productname> checks that the
+    file contains a <quote>magic block</quote> with the appropriate contents.
+    This allows the server to detect obvious incompatibilities, such as code
+    compiled for a different major version of
+    <productname>PostgreSQL</productname>.  A magic block is required as of
+    <productname>PostgreSQL</productname> 8.2.  To include a magic block,
+    write this in one (and only one) of the module source files, after having
+    included the header <filename>fmgr.h</filename>:
+
+<programlisting>
+#ifdef PG_MODULE_MAGIC
+PG_MODULE_MAGIC;
+#endif
+</programlisting>
+
+    The <literal>#ifdef</literal> test can be omitted if the code doesn't
+    need to compile against pre-8.2 <productname>PostgreSQL</productname>
+    releases.
+   </para>
+
    <para>
     Après avoir été utilisé pour la première fois, un fichier objet chargé
     dynamiquement est conservé en mémoire. Les futurs appels de fonction(s) dans
@@ -1167,23 +1200,32 @@ LANGUAGE internal    STRICT;
     nouvelle session.  
   </para>
 
-   <para>
-    Il est recommandé de localiser les bibliothèques dynamiques soit
-    relativement à <literal>$libdir</literal> soit au moyen du chemin des
-    bibliothèques dynamiques. Ceci simplifie la mise à jour dans le cas d'une
-    nouvelle installation dans un endroit différent. Le répertoire effectif
-    représenté par <literal>$libdir</literal> peut être retrouvé avec la
-    commande <literal>pg_config --pkglibdir</literal>.  
-   </para>
+   <indexterm zone="xfunc-c-dynload">
+    <primary>_PG_init</primary>
+   </indexterm>
+   <indexterm zone="xfunc-c-dynload">
+    <primary>_PG_fini</primary>
+   </indexterm>
+   <indexterm zone="xfunc-c-dynload">
+    <primary>library initialization function</primary>
+   </indexterm>
+   <indexterm zone="xfunc-c-dynload">
+    <primary>library finalization function</primary>
+   </indexterm>
 
    <para>
-    Avant la version 7.2 de <productname>PostgreSQL</productname>, seuls les
-    chemins absolus exacts pouvaient être spécifiés dans la commande
-    <command>CREATE FUNCTION</command>. Cette approche est maintenant déconseillée car
-    elle rend la définition de la fonction inutilement non portable. Il vaut
-    mieux seulement spécifier le nom de la bibliothèque partagée sans chemin ni
-    extension, et laisser le mécanisme de recherche générer cette information. 
-   </para> 
+    Optionally, a dynamically loaded file can contain initialization and
+    finalization functions.  If the file includes a function named
+    <literal>_PG_init</literal>, that function will be called immediately after
+    loading the file.  The function receives no parameters and should
+    return void.  If the file includes a function named
+    <literal>_PG_fini</literal>, that function will be called immediately before
+    unloading the file.  Likewise, the function receives no parameters and
+    should return void.  Note that <literal>_PG_fini</literal> will only be called
+    during an unload of the file, not during process termination.
+    (Presently, an unload only happens in the context of re-loading
+    the file due to an explicit <command>LOAD</command> command.)
+   </para>
 
   </sect2>
 
@@ -1903,14 +1945,24 @@ concat_text(PG_FUNCTION_ARGS)
         avec des fonctions C définies par l'utilisateur</secondary></indexterm> pour découvrir où
         sont installés les fichiers d'en-tête du serveur
         <productname>PostgreSQL</productname> sur votre système (ou sur le système de vos
-        utilisateurs). Cette option est apparue dans <productname>PostgreSQL</productname>
-        version 7.2. Pour <productname>PostgreSQL</productname> 7.1, vous devez utiliser
-        l'option <option>--includedir</option> (la commande
-        <command>pg_config</command> terminera avec un statut différent de zéro
-        si elle rencontre une option inconnue). Pour les versions antérieures à
-        la 7.1, vous devez deviner mais, puisque cela remonte avant
-        l'introduction des conventions d'appel actuelles, il y a peu de chance
-        que vous vouliez supporter ces versions.
+        utilisateurs).
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Compiling and linking your code so that it can be dynamically
+        loaded into <productname>PostgreSQL</productname> always
+        requires special flags.  See <xref linkend="dfunc"/> for a
+        detailed explanation of how to do it for your particular
+        operating system.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Remember to define a <quote>magic block</quote> for your shared library,
+        as described in <xref linkend="xfunc-c-dynload"/>.
        </para>
       </listitem>
 
@@ -1960,15 +2012,6 @@ concat_text(PG_FUNCTION_ARGS)
         conflit entre eux ou avec les symboles définis dans les exécutables du
         serveur <productname>PostgreSQL</productname>. Vous aurez à renommer vos
         fonctions ou variables si vous recevez un message d'erreur à cet effet.
-       </para>
-      </listitem>
-
-      <listitem>
-       <para>
-        Compiler ou lier votre code pour qu'il soit chargé dynamiquement dans 
-        <productname>PostgreSQL</productname> exige toujours des options
-        spéciales. Voir la <xref linkend="dfunc"/> pour une explication détaillée
-        sur la meilleure façon de le faire sur votre système particulier. 
        </para>
       </listitem>
      </itemizedlist>
@@ -2088,7 +2131,7 @@ include $(PGXS)
       <term><varname>REGRESS</varname></term>
       <listitem>
         <para>
-          liste des cas de tests de regression (sans suffixe)
+          liste des cas de tests de regression (sans suffixe), voir ci-dessous
         </para>
       </listitem>
     </varlistentry>
@@ -2172,6 +2215,36 @@ include $(PGXS)
     commande <command>pg_config</command> trouvée dans votre chemin.
   </para>
   
+
+   <para>
+    The scripts listed in the <varname>REGRESS</varname> variable are used for
+    regression testing of your module, just like <literal>make
+    installcheck</literal> is used for the main
+    <productname>PostgreSQL</productname> server.  For this to work you need
+    to have a subdirectory named <literal>sql/</literal> in your extension's
+    directory, within which you put one file for each group of tests you want
+    to run.  The files should have extension <literal>.sql</literal>, which
+    should not be included in the <varname>REGRESS</varname> list in the
+    makefile.  For each test there should be a file containing the expected
+    result in a subdirectory named <literal>expected/</literal>, with extension
+    <literal>.out</literal>.  The tests are run by executing <literal>make
+    installcheck</literal>, and the resulting output will be compared to the
+    expected files.  The differences will be written to the file
+    <literal>regression.diffs</literal> in <command>diff -c</command> format.
+    Note that trying to run a test which is missing the expected file will be
+    reported as <quote>trouble</quote>, so make sure you have all expected
+    files.
+   </para>
+
+   <tip>
+    <para>
+     The easiest way of creating the expected files is creating empty files,
+     then carefully inspecting the result files after a test run (to be found
+     in the <literal>results/</literal> directory), and copying them to
+     <literal>expected/</literal> if they match what you want from the test.
+    </para>
+   
+   </tip>
   </sect2>
 
 
@@ -2768,6 +2841,7 @@ make_array(PG_FUNCTION_ARGS)
     ArrayType  *result;
     Oid         element_type = get_fn_expr_argtype(fcinfo-&gt;flinfo, 0);
     Datum       element;
+    bool        isnull;
     int16       typlen;
     bool        typbyval;
     char        typalign;
@@ -2778,8 +2852,12 @@ make_array(PG_FUNCTION_ARGS)
     if (!OidIsValid(element_type))
         elog(ERROR, "could not determine data type of input");
 
-    /* get the provided element */
-    element = PG_GETARG_DATUM(0);
+    /* get the provided element, being careful in case it's NULL */
+    isnull = PG_ARGISNULL(0);
+    if (isnull)
+        element = (Datum) 0;
+    else
+        element = PG_GETARG_DATUM(0);
 
     /* we have one dimension */
     ndims = 1;
@@ -2793,7 +2871,7 @@ make_array(PG_FUNCTION_ARGS)
 &amp;typalign);
 
     /* now build the array */
-    result = construct_md_array(&amp;element, ndims, dims, lbs,
+    result = construct_md_array(&amp;element, &amp;isnull, ndims, dims, lbs,
                                 element_type, typlen, typbyval, typalign);
 
     PG_RETURN_ARRAYTYPE_P(result);
@@ -2808,7 +2886,7 @@ make_array(PG_FUNCTION_ARGS)
 <programlisting>CREATE FUNCTION make_array(anyelement) 
     RETURNS anyarray
     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'make_array'
-    LANGUAGE 'C' STRICT;
+    LANGUAGE 'C' IMMUTABLE;
 </programlisting>
 
      Notez l'utilisation de STRICT&nbsp;; ceci est primordial car le code ne se
@@ -2817,20 +2895,3 @@ make_array(PG_FUNCTION_ARGS)
    </sect2>
 
   </sect1>
-
-<!-- Keep this comment at the end of the file
-Local variables:
-mode:sgml
-sgml-omittag:nil
-sgml-shorttag:t
-sgml-minimize-attributes:nil
-sgml-always-guillemet-attributes:t
-sgml-indent-step:1
-sgml-indent-data:t
-sgml-parent-document:nil
-sgml-default-dtd-file:"./reference.ced"
-sgml-exposed-tags:nil
-sgml-local-catalogs:("/usr/lib/sgml/catalog")
-sgml-local-ecat-files:nil
-End:
--->
