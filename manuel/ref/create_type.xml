@@ -34,6 +34,8 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable> (
     [ , ELEMENT = <replaceable class="parameter">élément</replaceable> ]
     [ , DELIMITER = <replaceable class="parameter">délimiteur</replaceable> ]
 )
+
+CREATE TYPE <replaceable class="parameter">nom</replaceable>
 </synopsis>
  </refsynopsisdiv>
 
@@ -101,8 +103,16 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable> (
    argument est l'OID du type (sauf dans le cas des types tableau où il
    s'agit de l'OID du type de l'élément) et le troisième est le <literal>typmod</literal>
    de la colonne destination, s'il est connu (-1 sinon). La fonction entrée
-   doit renvoyer une valeur du nouveau type de données. La fonction sortie
-   doit prendre un argument du nouveau type de données, et retourner le type <type>cstring</type>.
+   doit renvoyer une valeur du nouveau type de données.
+   Usually, an input function should be declared STRICT; if it is not,
+   it will be called with a NULL first parameter when reading a NULL
+   input value.  The function must still return NULL in this case, unless
+   it raises an error.
+   (This case is mainly meant to support domain input functions, which
+   may need to reject NULL inputs.)
+   La fonction sortie doit prendre un argument du nouveau type de données, et
+   retourner le type <type>cstring</type>. Les fonctions sortie ne sont pas
+   appelées pour des valeurs NULL.
   </para>
 
   <para>
@@ -124,28 +134,35 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable> (
    argument est un pointeur vers un tampon <type>StringInfo</type>
    qui contient la chaîne d'octets reçue&nbsp;; les arguments optionnels sont les
    mêmes que pour la fonction entrée de type texte. La fonction de réception
-   retourne une valeur du type de données. De façon similaire, la
+   retourne une valeur du type de données.
+   Usually, a receive function should be declared STRICT; if it is not,
+   it will be called with a NULL first parameter when reading a NULL
+   input value.  The function must still return NULL in this case, unless
+   it raises an error.
+   (This case is mainly meant to support domain receive functions, which
+   may need to reject NULL inputs.)
+   De façon similaire, la
    <replaceable class="parameter">fonction_envoi</replaceable>, optionnelle,
    convertit la représentation interne en représentation
    binaire externe. Si cette fonction n'est pas fournie, le type
    <!-- participate in binary output -->
    n'accepte pas de sortie binaire. La fonction d'envoi doit être déclarée
    avec un argument du nouveau type de données et retourner le type <type>bytea</type>.
+   Les fonctions réception ne sont pas appelées pour des valeurs NULL.
   </para>
 
   <para>
-   À ce niveau, la question est de savoir comment déclarer les fonctions
-   d'entrée et de sortie avec des arguments et des résultats du nouveau type, alors
-   même qu'il n'est pas encore créé. Pour cela, il faut créer la fonction d'entrée
-   en premier, puis la fonction de sortie (et les fonctions binaires d'E/S si nécessaire)
-   et enfin le type de données. <productname>PostgreSQL</productname> considère
-   initialement le nom du nouveau type comme celui de retour de la fonction d'entrée.
-   Il crée alors un type <quote>coquille</quote> (<foreignphrase>shell type</foreignphrase>),
-   qui n'est qu'une entrée conteneur dans le catalogue système et lie la définition
-   de la fonction d'entrée au type coquille. De la même façon, les autres fonctions
-   sont liés au type coquille (qui maintenant existe). Enfin, <command>CREATE TYPE</command>
-   remplace la coquille par une définition complète du type. Le nouveau type peut alors
-   être utilisé.
+   You should at this point be wondering how the input and output functions
+   can be declared to have results or arguments of the new type, when they
+   have to be created before the new type can be created.  The answer is that
+   the type should first be defined as a <firstterm>shell type</firstterm>, which is a
+   placeholder type that has no properties except a name and an owner.  This
+   is done by issuing the command <literal>CREATE TYPE
+   <replaceable>name</replaceable></literal>, with no additional parameters.  Then the
+   I/O functions can be defined referencing the shell type.  Finally,
+   <command>CREATE TYPE</command> with a full definition replaces the shell entry
+   with a complete, valid type definition, after which the new type can be
+   used normally.
   </para>
 
   <para>
@@ -440,14 +457,41 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable> (
   </para>
 
   <para>
+   Because there are no restrictions on use of a data type once it's been
+   created, creating a base type is tantamount to granting public execute
+   permission on the functions mentioned in the type definition.  (The creator
+   of the type is therefore required to own these functions.)  This is usually
+   not an issue for the sorts of functions that are useful in a type
+   definition.  But you might want to think twice before designing a type
+   in a way that would require <quote>secret</quote> information to be used
+   while converting it to or from external form.
+  </para>
+
+  <para>
+   Before <productname>PostgreSQL</productname> version 8.2, the syntax
+   <literal>CREATE TYPE <replaceable>name</replaceable></literal> did not exist.
+   The way to create a new base type was to create its input function first.
+   In this approach, <productname>PostgreSQL</productname> will first see
+   the name of the new data type as the return type of the input function.
+   The shell type is implicitly created in this situation, and then it
+   can be referenced in the definitions of the remaining I/O functions.
+   This approach still works, but is deprecated and may be disallowed in
+   some future release.  Also, to avoid accidentally cluttering
+   the catalogs with shell types as a result of simple typos in function
+   definitions, a shell type will only be made this way when the input
+   function is written in C.
+  </para>
+
+  <para>
    Dans les versions de <productname>PostgreSQL</productname> antérieures à la
-   7.3, la création d'un type coquille était habituellement évitée en remplaçant les
-   références des fonctions au nom du type par le pseudotype <type>opaque</type>.
+   7.3, la création d'un type coquille était habituellement évitée en remplaçant
+   les références des fonctions au nom du type par le pseudotype <type>opaque</type>.
    Les arguments <type>cstring</type> et les résultats étaient également déclarés
    <type>opaque</type>. Pour supporter le chargement d'anciens
    fichiers de sauvegarde, <command>CREATE TYPE</command> accepte les fonctions
-   déclarées avec le pseudotype <type>opaque</type> mais un message d'avertissement
-   est affiché. La déclaration de la fonction est également modifiée pour utiliser les bons types.
+   d'entrées/sorties déclarées avec le pseudotype <type>opaque</type> mais un
+   message d'avertissement est affiché. La déclaration de la fonction est
+   également modifiée pour utiliser les bons types.
   </para>
  </refsect1>
 
@@ -468,7 +512,12 @@ $$ LANGUAGE SQL;
   <para>
    Créer le type de données basique <type>box</type> utilisé dans
    la définition d'une table&nbsp;:
-<programlisting>CREATE TYPE box (
+<programlisting>CREATE TYPE box;
+
+CREATE FUNCTION my_box_in_function(cstring) RETURNS box AS ... ;
+CREATE FUNCTION my_box_out_function(box) RETURNS cstring AS ... ;
+
+CREATE TYPE box (
     INTERNALLENGTH = 16,
     INPUT = ma_fonction_entree_box,
     OUTPUT = ma_fonction_sortie_box
@@ -532,25 +581,8 @@ CREATE TABLE big_objs (
    <member><xref linkend="sql-createfunction" endterm="sql-createfunction-title"/></member>
    <member><xref linkend="sql-droptype" endterm="sql-droptype-title"/></member>
    <member><xref linkend="sql-altertype" endterm="sql-altertype-title"/></member>
+   <member><xref linkend="sql-createdomain" endterm="sql-createdomain-title"/></member>
   </simplelist>
  </refsect1>
 
 </refentry>
-
-
-<!-- Keep this comment at the end of the file
-Local variables:
-mode: sgml
-sgml-omittag:nil
-sgml-shorttag:t
-sgml-minimize-attributes:nil
-sgml-always-quote-attributes:t
-sgml-indent-step:1
-sgml-indent-data:t
-sgml-parent-document:nil
-sgml-default-dtd-file:"../reference.ced"
-sgml-exposed-tags:nil
-sgml-local-catalogs:"/usr/lib/sgml/catalog"
-sgml-local-ecat-files:nil
-End:
--->

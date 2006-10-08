@@ -17,8 +17,9 @@ PostgreSQL documentation
  </refnamediv>
 
  <refsynopsisdiv>
-<synopsis>CREATE [ UNIQUE ] INDEX <replaceable class="parameter">nom</replaceable> ON <replaceable class="parameter">table</replaceable> [ USING <replaceable class="parameter">méthode</replaceable> ]
+<synopsis>CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] <replaceable class="parameter">nom</replaceable> ON <replaceable class="parameter">table</replaceable> [ USING <replaceable class="parameter">méthode</replaceable> ]
     ( { <replaceable class="parameter">colonne</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ <replaceable class="parameter">classeop</replaceable> ] [, ...] )
+    [ WITH ( <replaceable class="PARAMETER">parametre_stockage</replaceable> = <replaceable class="PARAMETER">valeur</replaceable> [, ... ] ) ]
     [ TABLESPACE <replaceable class="parameter">espacelogique</replaceable> ]
     [ WHERE <replaceable class="parameter">prédicat</replaceable> ]
 </synopsis>
@@ -35,7 +36,7 @@ PostgreSQL documentation
    <command>CREATE INDEX</command> construit un index
    <replaceable class="parameter">nom_index</replaceable> sur la table spécifiée. Les index
    sont principalement utilisés pour améliorer les performances de la base de
-   données (bien qu'une utilisation inappropriée puisse produir l'effet inverse).
+   données (bien qu'une utilisation inappropriée puisse produire l'effet inverse).
   </para>
 
   <para>
@@ -55,12 +56,9 @@ PostgreSQL documentation
 
   <para>
    <productname>PostgreSQL</productname> fournit les méthodes d'indexation
-   B-tree (NDT&nbsp;: arbres balancés), R-tree (NDT&nbsp;: arbres réels), hash (NDT&nbsp;: hachage)
-   et GiST (NDT&nbsp;: arbres de recherche généralisés). La méthode B-tree est une
-   implantation des arbres-B à haute concurrence de Lehman-Yao. La 
-   méthode R-tree implante les arbres-R à l'aide de l'algorithme
-   divisé quadratique de Guttman. La méthode hash est une
-   implémentation du hachage linaire de Litwin. Il est possible, bien que compliqué,
+   B-tree (NDT&nbsp;: arbres balancés), hash (NDT&nbsp;: hachage),
+   GiST (NDT&nbsp;: arbres de recherche généralisés) et GIN.
+   Il est possible, bien que compliqué,
    de définir des méthodes d'indexation utilisateur.
   </para>
 
@@ -116,6 +114,21 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><literal>CONCURRENTLY</literal></term>
+      <listitem>
+       <para>
+        When this option is used, <productname>PostgreSQL</productname> will build the
+        index without taking any locks that prevent concurrent inserts,
+        updates, or deletes on the table; whereas a standard index build
+        locks out writes (but not reads) on the table until it's done.
+        There are several caveats to be aware of when using this option
+        &mdash; see <xref linkend="SQL-CREATEINDEX-CONCURRENTLY"
+        endterm="SQL-CREATEINDEX-CONCURRENTLY-title"/>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><replaceable class="parameter">nom</replaceable></term>
       <listitem>
        <para>
@@ -141,7 +154,7 @@ PostgreSQL documentation
        <para>
         Le nom de la méthode à utiliser pour l'index. Les choix sont
         <literal>btree</literal>, <literal>hash</literal>,
-        <literal>rtree</literal> et <literal>gist</literal>. La méthode par
+	<literal>gist</literal> et <literal>gin</literal>. La méthode par
 	défaut est <literal>btree</literal>.
        </para>
       </listitem>
@@ -179,6 +192,16 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><replaceable class="parameter">storage_parameter</replaceable></term>
+      <listitem>
+       <para>
+        The name of an index-method-specific storage parameter.  See
+        below for details.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><replaceable class="parameter">espacelogique</replaceable></term>
       <listitem>
        <para>
@@ -199,7 +222,115 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
     </variablelist>
- </refsect1>
+ 
+  <refsect2 id="SQL-CREATEINDEX-storage-parameters">
+   <title id="SQL-CREATEINDEX-storage-parameters-title">Index Storage Parameters</title>
+
+   <para>
+    The <literal>WITH</literal> clause can specify <firstterm>storage parameters</firstterm>
+    for indexes.  Each index method can have its own set of allowed storage
+    parameters.  The built-in index methods all accept a single parameter:
+   </para>
+
+   <variablelist>
+
+   <varlistentry>
+    <term><literal>FILLFACTOR</literal></term>
+    <listitem>
+     <para>
+      The fillfactor for an index is a percentage that determines how full
+      the index method will try to pack index pages.  For B-trees, leaf pages
+      are filled to this percentage during initial index build, and also
+      when extending the index at the right (largest key values).  If pages
+      subsequently become completely full, they will be split, leading to
+      gradual degradation in the index's efficiency.  B-trees use a default
+      fillfactor of 90, but any value from 10 to 100 can be selected.
+      If the table is static then fillfactor 100 is best to minimize the
+      index's physical size, but for heavily updated tables a smaller
+      fillfactor is better to minimize the need for page splits.  The
+      other index methods use fillfactor in different but roughly analogous
+      ways; the default fillfactor varies between methods.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   </variablelist>
+
+  </refsect2>
+
+  <refsect2 id="SQL-CREATEINDEX-CONCURRENTLY">
+   <title id="SQL-CREATEINDEX-CONCURRENTLY-title">Building Indexes Concurrently</title>
+
+   <indexterm zone="SQL-CREATEINDEX-CONCURRENTLY">
+   <primary>index</primary>
+   <secondary>building concurrently</secondary>
+   </indexterm>
+
+   <para>
+    Creating an index can interfere with regular operation of a database.
+    Normally <productname>PostgreSQL</productname> locks the table to be indexed against
+    writes and performs the entire index build with a single scan of the
+    table. Other transactions can still read the table, but if they try to
+    insert, update, or delete rows in the table they will block until the
+    index build is finished. This could have a severe effect if the system is
+    a live production database. Large tables can take many hours to be
+    indexed, and even for smaller tables, an index build can lock out writers
+    for periods that are unacceptably long for a production system.
+   </para>
+
+   <para>
+    <productname>PostgreSQL</productname> supports building indexes without locking
+    out writes.  This method is invoked by specifying the
+    <literal>CONCURRENTLY</literal> option of <command>CREATE INDEX</command>.
+    When this option is used,
+    <productname>PostgreSQL</productname> must perform two scans of the table, and in
+    addition it must wait for all existing transactions to terminate.  Thus
+    this method requires more total work than a standard index build and takes
+    significantly longer to complete.  However, since it allows normal
+    operations to continue while the index is built, this method is useful for
+    adding new indexes in a production environment.  Of course, the extra CPU
+    and I/O load imposed by the index creation may slow other operations.
+   </para>
+
+   <para>
+    If a problem arises during the second scan of the table, such as a
+    uniqueness violation in a unique index, the <command>CREATE INDEX</command>
+    command will fail but leave behind an <quote>invalid</quote> index. This index
+    will be ignored for querying purposes because it may be incomplete;
+    however it will still consume update overhead.  The recommended recovery
+    method in such cases is to drop the index and try again to perform
+    <command>CREATE INDEX CONCURRENTLY</command>.  (Another possibility is to rebuild
+    the index with <command>REINDEX</command>.  However, since <command>REINDEX</command>
+    does not support concurrent builds, this option is unlikely to seem
+    attractive.)
+   </para>
+
+   <para>
+    Another caveat when building a unique index concurrently is that the
+    uniqueness constraint is already being enforced against other transactions
+    when the second table scan begins.  This means that constraint violations
+    could be reported in other queries prior to the index becoming available
+    for use, or even in cases where the index build eventually fails.  Also,
+    if a failure does occur in the second scan, the <quote>invalid</quote> index
+    continues to enforce its uniqueness constraint afterwards.
+   </para>
+
+   <para>
+    Concurrent builds of expression indexes and partial indexes are supported.
+    Errors occurring in the evaluation of these expressions could cause
+    behavior similar to that described above for unique constraint violations.
+   </para>
+
+   <para>
+    Regular index builds permit other regular index builds on the
+    same table to occur in parallel, but only one concurrent index build
+    can occur on a table at a time.  In both cases, no other types of schema
+    modification on the table are allowed meanwhile.  Another difference
+    is that a regular <command>CREATE INDEX</command> command can be performed within
+    a transaction block, but <command>CREATE INDEX CONCURRENTLY</command> cannot.
+   </para>
+  </refsect2>
+</refsect1>
 
  <refsect1>
   <title>Notes</title>
@@ -252,6 +383,15 @@ PostgreSQL documentation
    La meilleure façon d'utiliser des index dans de tels cas est de
    créer un index partiel qui utilise un prédicat <literal>IS NULL</literal>.
   </para>
+
+  <para>
+   Prior releases of <productname>PostgreSQL</productname> also had an
+   R-tree index method.  This method has been removed because
+   it had no significant advantages over the GiST method.
+   If <literal>USING rtree</literal> is specified, <command>CREATE INDEX</command>
+   will interpret it as <literal>USING gist</literal>, to simplify conversion
+   of old databases to GiST.
+  </para>
  </refsect1>
 
  <refsect1>
@@ -261,6 +401,21 @@ PostgreSQL documentation
    Créer un index B-tree sur la colonne <literal>titre</literal> dans la
    table <literal>films</literal>&nbsp;:
 <programlisting>CREATE UNIQUE INDEX title_idx ON films (title);
+</programlisting>
+  </para>
+
+  <para>
+   To create an index on the expression <literal>lower(title)</literal>,
+   allowing efficient case-insensitive searches:
+<programlisting>
+CREATE INDEX lower_title_idx ON films ((lower(title)));
+</programlisting>
+  </para>
+
+  <para>
+   To create an index with non-default fill factor:
+<programlisting>
+CREATE UNIQUE INDEX title_idx ON films (title) WITH (fillfactor = 70);
 </programlisting>
   </para>
 
@@ -277,16 +432,24 @@ PostgreSQL documentation
 Is this example correct?
 </comment>
   <para>
-   To create a R-tree index on a point attribute so that we
+   To create a GiST index on a point attribute so that we
    can efficiently use box operators on the result of the
    conversion function:
-  </para>
-  <programlisting>CREATE INDEX pointloc
-    ON points USING RTREE (point2box(location) box_ops);
+  <programlisting>
+CREATE INDEX pointloc
+    ON points USING GIST (point2box(location) box_ops);
 SELECT * FROM points
     WHERE point2box(points.pointloc) = boxes.box;
   </programlisting>
+  </para>
 -->
+
+  <para>
+   To create an index without locking out writes to the table:
+<programlisting>
+CREATE INDEX CONCURRENTLY sales_quantity_index ON sales_table (quantity);
+</programlisting>
+  </para>
 
  </refsect1>
  
@@ -310,20 +473,3 @@ SELECT * FROM points
   </simplelist>
  </refsect1>
 </refentry>
-
-<!-- Keep this comment at the end of the file
-Local variables:
-mode: sgml
-sgml-omittag:nil
-sgml-shorttag:t
-sgml-minimize-attributes:nil
-sgml-always-quote-attributes:t
-sgml-indent-step:1
-sgml-indent-data:t
-sgml-parent-document:nil
-sgml-default-dtd-file:"../reference.ced"
-sgml-exposed-tags:nil
-sgml-local-catalogs:"/usr/lib/sgml/catalog"
-sgml-local-ecat-files:nil
-End:
--->
