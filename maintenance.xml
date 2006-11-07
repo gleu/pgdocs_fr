@@ -96,10 +96,11 @@
    et <command>DELETE</command> continueront à fonctionner comme d'habitude
    mais vous ne pourrez pas modifier la définition d'une table avec des commandes
    comme <command>ALTER TABLE ADD COLUMN</command> lorsqu'elle est la cible du VACUUM.
-   À partir de la version 8.0 de <productname>PostgreSQL</productname>, certains
-   paramètres de configuration peuvent être ajustés pour réduire l'impact du
-   vacuum en tâche de fond sur les performances. Voir <xref
-   linkend="runtime-config-resource-vacuum-cost"/>.
+   Also, <command>VACUUM</command> requires a substantial amount of I/O
+   traffic, which can cause poor performance for other active sessions.
+   There are configuration parameters that can be adjusted to reduce the
+   performance impact of background vacuuming &mdash; see
+   <xref linkend="runtime-config-resource-vacuum-cost"/>.
   </para>
 
   <para>
@@ -184,7 +185,7 @@
     <command>VACUUM</command> général sur toute la base une fois par jour, en dehors
     des horaires normaux de production, accompagné si nécessaire de nettoyages
     plus fréquents pour les tables subissant d'intenses modifications.
-    (Quelques installations avec un taux extrêmement important de
+    (Quelques installations avec un taux extrêmement important des
     modifications de données lancent un <command>VACUUM</command> sur les
     tables très occupées jusqu'à une fois toutes les quelques minutes.) S'il y
     a plusieurs bases de données dans un cluster (groupe de bases de données),
@@ -303,30 +304,16 @@
     qui signifie qu'elles deviennent invisibles. En bref, perte de données
     totale. (En réalité, les données sont toujours là mais c'est un piètre
     réconfort puisqu'elles resteront inaccessibles.) Pour éviter ceci, il est
-    <emphasis>nécessaire d'exécuter un VACUUM sur chaque table de chaque base
-    au moins une fois à chaque milliard de transactions</emphasis>.
+    nécessaire d'exécuter un VACUUM sur chaque table de chaque base au moins
+    au moins une fois à chaque milliard de transactions.
    </para>
 
    <para>
-    Dans la pratique, cette exigence n'est pas onéreuse mais comme son
-    manquement aurait pour conséquence une perte totale des données (pas
-    seulement de l'espace disque perdu ou des performances moindres), des
-    dispositions ont été prises pour aider les administrateurs à éviter le
-    désastre. Pour chaque base de données du groupe,
-    <productname>PostgreSQL</productname> conserve la trace de l'heure du
-    dernier <command>VACUUM</command> sur toute la base. Quand une base approche du
-    problème dû au milliard de transactions, le système commence à émettre des
-    messages d'avertissement. Si rien n'est fait, il pourra en dernier lieu
-    stopper les opérations normales jusqu'à ce qu'une maintenance manuelle ne
-    soit effectuée. La suite de cette section en explique les détails.
-   </para>
-
-   <para>
-    La nouvelle approche pour la comparaison des XID distingue deux XID
-    spéciaux, numéros 1 et 2 (<literal>BootstrapXID</literal> et
-    <literal>FrozenXID</literal>). Ces deux XID sont toujours considérés comme plus
-    vieux que n'importe quel autre. Les XID normaux (ceux qui sont supérieurs à
-    deux) sont comparés sur une base modulo-2<superscript>31</superscript>. Cela signifie
+    The reason that periodic vacuuming solves the problem is that
+    <productname>PostgreSQL</productname> distinguishes a special XID
+    <literal>FrozenXID</literal>.  This XID is always considered older
+    than every normal XID. Les XID normaux sont comparés sur une base
+    modulo-2<superscript>31</superscript>. Cela signifie
     que pour chaque XID normal, il y en a deux milliards qui sont plus vieux et
     deux milliards qui sont plus récents. Une autre manière de le dire est que
     l'ensemble de définition des XID est circulaire et sans limite. De plus,
@@ -338,74 +325,127 @@
     se voir affecter le XID <literal>FrozenXID</literal> avant d'atteindre le seuil
     fatidique des deux milliards de transactions. Une fois qu'elles ont ce XID
     spécifique, elles appartiendront au passé pour toutes les transactions même
-    en cas de cycle. Cette affectation est réalisée par <command>VACUUM</command>.
+    en cas de cycle. Cette affectation des anciens XID est réalisée par
+    <command>VACUUM</command>.
    </para>
 
    <para>
-    La politique normale de <command>VACUUM</command> est d'affecter
-    <literal>FrozenXID</literal> à toute les lignes dont le XID se situe à plus de un
-    milliard de transactions dans le passé. Elle préserve le XID original tant
-    qu'il est utile. (En réalité, la plupart des lignes existeront et
-    disparaîtront avant d'être <quote>gelée</quote>. Avec cette méthode, l'intervalle
-    de sécurité maximum entre les exécutions de <command>VACUUM</command> pour une
-    table est d'exactement un milliard de transactions&nbsp;: en attendant plus
-    longtemps, on s'expose à conserver des versions qui n'étaient pas assez
-    vielles pour se voir affecter <literal>FrozenXID</literal> lors de la précédente
-    exécution et qui apparaissent maintenant dans le futur du fait d'un cycle -
-    c'est-à-dire que les données semblent perdues. (Bien sûr, elles
-    réapparaîtront après deux nouveaux milliards de transactions mais cela n'a
-    pas d'intérêt).
+    <command>VACUUM</command>'s behavior is controlled by the configuration parameter
+    <xref linkend="guc-vacuum-freeze-min-age"/>: any XID older than
+    <varname>vacuum_freeze_min_age</varname> transactions is replaced by
+    <literal>FrozenXID</literal>.  Larger values of <varname>vacuum_freeze_min_age</varname>
+    preserve transactional information longer, while smaller values increase
+    the number of transactions that can elapse before the table must be
+    vacuumed again.
    </para>
 
    <para>
-    Puisque des exécutions périodiques de <command>VACUUM</command> sont nécessaires de
-    toutes manières, pour les raisons évoquées ci-dessus, il est très peu
-    probable qu'une table ne soit pas nettoyée du tout durant un milliard de
-    transactions. Pour aider les administrateurs à assurer que cette exigence
-    est remplie, <command>VACUUM</command> conserve des statistiques sur les XID dans
-    la table système <literal>pg_database</literal>. Notamment, la table
-    <literal>pg_database</literal> contient, pour chaque base, une colonne
-    <literal>datfrozenxid</literal> qui est mise à jour après les <command>VACUUM</command> de
-    la base (c'est-à-dire <command>VACUUM</command> qui ne spécifie aucune table
-    particulière). La valeur qui est stockée est la limite en deçà de laquelle
-    cette exécution de <command>VACUUM</command> a marqué la ligne comme
-    <quote>gelée</quote>. Tous les XID plus vieux que ce XID limite ont reçu le XID
-    <literal>FrozenXID</literal> pour cette base. Pour obtenir cette information, il
-    suffit d'exécuter la requête&nbsp;:
-
-<programlisting>SELECT datname, age(datfrozenxid) FROM pg_database;</programlisting>
-
-    La colonne <literal>age</literal> calcule le nombre de transactions effectuées
-    entre le XID limite et le XID courant.
+    The maximum time that a table can go unvacuumed is two billion
+    transactions minus the <varname>vacuum_freeze_min_age</> that was used
+    when it was last vacuumed.
+    If it were to go unvacuumed for longer than that,
+    data loss could result.  To ensure that this does not
+    happen, the <firstterm>autovacuum</> facility described in
+    <xref linkend="autovacuum"> is invoked on any table
+    that might contain XIDs older than the age specified by the
+    configuration parameter
+    <xref linkend="guc-autovacuum-freeze-max-age">.  (This will happen
+    even if autovacuum is otherwise disabled.)
    </para>
 
    <para>
-    Avec la méthode standard de gel du XID, La colonne <literal>age</literal> démarre à
-    un milliard pour une base fraîchement nettoyée. Si l'<literal>age</literal>
-    approche des deux milliards, la base doit de nouveau être nettoyée pour
-    éviter les erreurs liées au cycle du XID. Il est recommandé d'exécuter un
-    <command>VACUUM</command> une fois tous les demi milliard de transactions pour
-    garder une marge de sécurité maximale. Pour aider à remplir cette
-    exigence, chaque <command>VACUUM</command> émet un message si n'importe lequel des
-    enregistrements de <literal>pg_database</literal> indique un <literal>age</literal> de
-    plus de 1,5 milliard de transactions, par exemple&nbsp;:
-
-<programlisting>play=# VACUUM;
-WARNING:  database "mabase" must be vacuumed within 177009986 transactions
-HINT:  To avoid a database shutdown, execute a full-database VACUUM in "mabase".
-VACUUM</programlisting>
+    This implies that if a table is not otherwise vacuumed,
+    autovacuum will be invoked on it approximately once every
+    <varname>autovacuum_freeze_max_age</varname> minus
+    <varname>vacuum_freeze_min_age</varname> transactions.
+    For tables that are regularly vacuumed for space reclamation purposes,
+    this is of little importance.  However, for static tables
+    (including tables that receive inserts, but no updates or deletes),
+    there is no need for vacuuming for space reclamation, and so it can
+    be useful to try to maximize the interval between forced autovacuums
+    on very large static tables.  Obviously one can do this either by
+    increasing <varname>autovacuum_freeze_max_age</varname> or by decreasing
+    <varname>vacuum_freeze_min_age</varname>.
    </para>
 
    <para>
-    Si les messages d'avertissement émits par <command>VACUUM</command> restent
-    ignorés, alors <productname>PostgreSQL</productname> commencera à émettre
-    un message d'avertissement comme ci-dessus à chaque lancement d'une
-    transaction une fois qu'il reste moins de 10 millions de transactions avant
-    le renouveau du cycle. Si ces messages sont aussi ignorés, le système
-    s'arrêtera et refusera d'exécuter de nouvelles transactions tant qu'il
-    restera moins de un million de transactions jusqu'au prochain cycle&nbsp;:
+    The sole disadvantage of increasing <varname>autovacuum_freeze_max_age</varname>
+    is that the <filename>pg_clog</filename> subdirectory of the database cluster
+    will take more space, because it must store the commit status for all
+    transactions back to the <varname>autovacuum_freeze_max_age</varname> horizon.
+    The commit status uses two bits per transaction, so if
+    <varname>autovacuum_freeze_max_age</varname> has its maximum allowed value of
+    a little less than two billion, <filename>pg_clog</filename> can be expected to
+    grow to about half a gigabyte.  If this is trivial compared to your
+    total database size, setting <varname>autovacuum_freeze_max_age</varname> to
+    its maximum allowed value is recommended.  Otherwise, set it depending
+    on what you are willing to allow for <filename>pg_clog</filename> storage.
+    (The default, 200 million transactions, translates to about 50MB of
+    <filename>pg_clog</filename> storage.)
+   </para>
 
-<programlisting>play=# select 2+2;
+   <para>
+    One disadvantage of decreasing <varname>vacuum_freeze_min_age</varname> is that
+    it may cause <command>VACUUM</command> to do useless work: changing a table row's
+    XID to <literal>FrozenXID</literal> is a waste of time if the row is modified
+    soon thereafter (causing it to acquire a new XID).  So the setting should
+    be large enough that rows are not frozen until they are unlikely to change
+    any more.  Another disadvantage of decreasing this setting is
+    that details about exactly which transaction inserted or modified a
+    row will be lost sooner.  This information sometimes comes in handy,
+    particularly when trying to analyze what went wrong after a database
+    failure.  For these two reasons, decreasing this setting is not
+    recommended except for completely static tables.
+   </para>
+
+   <para>
+    To track the age of the oldest XIDs in a database,
+    <command>VACUUM</command> stores XID
+    statistics in the system tables <structname>pg_class</structname> and
+    <structname>pg_database</structname>.  In particular,
+    the <structfield>relfrozenxid</structfield> column of a table's
+    <structname>pg_class</structname> row contains the freeze cutoff XID that was used
+    by the last <command>VACUUM</command> for that table.  All normal
+    XIDs older than this cutoff XID are guaranteed to have been replaced by
+    <literal>FrozenXID</literal> within the table.  Similarly,
+    the <structfield>datfrozenxid</structfield> column of a database's
+    <structname>pg_database</structname> row is a lower bound on the normal XIDs
+    appearing in that database &mdash; it is just the minimum of the
+    per-table <structfield>relfrozenxid</structfield> values within the database.
+    A convenient way to
+    examine this information is to execute queries such as
+
+<programlisting>
+SELECT relname, age(relfrozenxid) FROM pg_class WHERE relkind = 'r';
+SELECT datname, age(datfrozenxid) FROM pg_database;</programlisting>
+
+    The <literal>age</literal> column measures the number of transactions from the
+    cutoff XID to the current transaction's XID.  Immediately after a
+    <command>VACUUM</command>, <literal>age(relfrozenxid)</literal> should be a little
+    more than the <varname>vacuum_freeze_min_age</varname> setting that was used
+    (more by the number of transactions started since the <command>VACUUM</command>
+    started).  If <literal>age(relfrozenxid)</literal> exceeds
+    <varname>autovacuum_freeze_max_age</varname>, an autovacuum will soon be forced
+    for the table.
+   </para>
+
+   <para>
+    If for some reason autovacuum fails to clear old XIDs from a table,
+    the system will begin to emit warning messages like this when the
+    database's oldest XIDs reach ten million transactions from the wraparound
+    point:
+
+<programlisting>
+WARNING:  database "mydb" must be vacuumed within 177009986 transactions
+HINT:  To avoid a database shutdown, execute a full-database VACUUM in "mydb".
+</programlisting>
+
+    If these warnings are
+    ignored, the system will shut down and refuse to execute any new
+    transactions once there are fewer than 1 million transactions left
+    until wraparound:
+
+<programlisting>
 ERROR:  database is shut down to avoid wraparound data loss in database "mydb"
 HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</programlisting>
 
@@ -419,34 +459,6 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</pr
     simple utilisateur. Voir la page de référence de <xref linkend="app-postgres"/> pour
     des détails sur l'utilisation du moteur simple utilisateur.
    </para>
-
-   <para>
-    Avec l'option <command>FREEZE</command>, la commande <command>VACUUM</command> a un
-    comportement plus poussé&nbsp;: les versions des lignes sont gelées si elles
-    sont suffisamment vieilles pour être visibles de toutes les transactions en
-    cours. En particulier, sur une base en lecture seulement, <command>VACUUM
-    FREEZE</command> aura pour résultat de geler toutes les lignes de la base. Donc,
-    tant que la base n'est pas modifiée, aucun nettoyage supplémentaire n'est
-    nécessaire pour éviter les problèmes de cycle du XID. Cette technique est
-    notamment utilisée par <command>initdb</command> pour préparer la base
-    <literal>template0</literal>. Cela pourrait également être utilisé pour préparer
-    n'importe quelle base créée par l'administrateur avec
-    <literal>datallowconn</literal> = <literal>false</literal> dans <literal>pg_database</literal>,
-    puisqu'il n'y a pas moyen d'exécuter <command>VACUUM</command> sur une base
-    à laquelle on ne peut pas se connecter.
-   </para>
-
-   <warning>
-   <para>
-     Une base de données marquée <literal>datallowconn</literal> = <literal>false</literal>
-     dans <literal>pg_database</literal> est supposée être proprement gelé&nbsp;; les
-     messages automatique et l'arrêt de protection contre les cycles ne sont pas
-     pris en compte pour ces bases de données. Du coup, c'est à vous de vous
-     assurer que vous avez correctement gelé une base de données avant de la
-     marquer avec <literal>datallowconn</literal> = <literal>false</literal>.
-   </para>
-   </warning>
-
   </sect2>
 
   <sect2 id="autovacuum">
@@ -473,22 +485,19 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</pr
    </para>
 
    <para>
-    Une fois activé, le démon autovacuum s'exécute toutes les <xref
-    linkend="guc-autovacuum-naptime"/> secondes et détermine quelle base de
-    données traitée. Toute base de données proche de la réinitialisation de
-    l'identifiant de transaction est immédiatement traitée. Dans ce cas,
-    autovacuum exécute un <command>VACUUM</command> sur la base complète ou un
-    <command>VACUUM FREEZE</command> s'il s'agit d'une base de données modèle.
-    Puis, il quitte. Si aucune base de données ne remplit ce critère, celle qui
-    a été traitée le moins récemment par autovacuum est choisie. Dans
-    ce cas, chaque table de la base de données sélectionnée est vérifiée et des
-    commandes <command>VACUUM</command> ou <command>ANALYZE</command> individuelles
-    sont exécutées lorsque cela est nécessaire.
+    The autovacuum daemon, when enabled, runs every <xref
+    linkend="guc-autovacuum-naptime"/> seconds.  On each run, it selects
+    one database to process and checks each table within that database.
+    <command>VACUUM</command> or <command>ANALYZE</command> commands are
+    issued as needed.
    </para>
 
    <para>
-    Pour chaque table, deux conditions sont utilisées pour déterminer quel
-    opération appliquer. Si le nombre de lignes obsolètes depuis le dernier
+    Tables whose <structfield>relfrozenxid</> value is more than
+    <varname>autovacuum_freeze_max_age</> transactions old are always
+    vacuumed.  Otherwise,
+    two conditions are used to determine which operation(s)
+    to apply. Si le nombre de lignes obsolètes depuis le dernier
     <command>VACUUM</command> dépasse une <quote>limite de vacuum</quote>, la
     table bénéficie d'un VACUUM. La limite est définie
     ainsi&nbsp;:
@@ -523,20 +532,27 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</pr
 
    <para>
     En plus des valeurs de la limite de base et des facteurs d'échelle, il
-    existe trois autres paramètres pouvant être configurés pour chaque table
+    existe cinq autres paramètres pouvant être configurés pour chaque table
     dans <structname>pg_autovacuum</structname>. Le premier,
     <structname>pg_autovacuum</structname>.<structfield>enabled</structfield>,
     peut être configuré à <literal>false</literal> pour instruire le démon
     autovacuum de laisser cette table particulière. Dans ce cas, autovacuum
-    touchera seulement la table quand il lancera un VACUUM sur la base de données
-    complète pour prévenir la réinitialisation de l'ID de transaction. Les deux
-    autres paramètres, le délai du coût du VACUUM
+    touchera seulement la table quand il devra le faire pour prévenir la
+    réinitialisation de l'ID de transaction. Les deux paramètres suivants, le
+    délai du coût du VACUUM
     (<structname>pg_autovacuum</structname>.<structfield>vac_cost_delay</structfield>)
     et la limite du coût du VACUUM
     (<structname>pg_autovacuum</structname>.<structfield>vac_cost_limit</structfield>),
     sont utilisés pour configurer des valeurs spécifiques aux tables pour
     la fonctionnalité <xref linkend="runtime-config-resource-vacuum-cost"
     endterm="runtime-config-resource-vacuum-cost-title"/>.
+    The last two parameters,
+    (<structname>pg_autovacuum</structname>.<structfield>freeze_min_age</structfield>)
+    and
+    (<structname>pg_autovacuum</structname>.<structfield>freeze_max_age</structfield>), 
+    are used to set table-specific values for
+    <xref linkend="guc-vacuum-freeze-min-age"> and
+    <xref linkend="guc-autovacuum-freeze-max-age"> respectively.
    </para>
 
    <para>
