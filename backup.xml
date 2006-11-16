@@ -448,12 +448,11 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
      en tout point dans le temps depuis la dernière sauvegarde de base.
     </para>
    </listitem>
-<!-- ICI -->
    <listitem>
     <para>
      Si la série de fichiers WAL est fournie en continu à une autre
      machine chargée avec le même fichier de sauvegarde de base,
-     on obtient un système <quote>à jour en permanence</quote>
+     on obtient un système <quote>en veille active</quote>
      (<foreignphrase>hot standby</foreignphrase>)&nbsp;: à tout
      moment, la deuxième machine peut être montée et disposer d'une copie
      quasi-complète de la base de données.
@@ -463,23 +462,24 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
   </para>
 
   <para>
-   Comme avec la technique de sauvegarde standard du système de fichiers,
-   cette méthode supporte la restauration d'un groupe de bases de données
-   complet, pas un sous-ensemble. De plus, il requiert beaucoup d'espace
-   d'archivage&nbsp;: la sauvegarde de base peut être légère mais un système
-   très utilisé générera beaucoup de mégaoctets de trafic WAL qui seront à
-   archiver. Malgré tout, c'est la technique de sauvegarde préférée dans
-   beaucoup de situations où la haute fiabilité est nécessaire.
+   Tout comme la technique de sauvegarde standard du système de fichiers,
+   cette méthode ne supporte que la restauration d'un cluster de bases de données
+   complet, pas d'un sous-ensemble. De plus, un volumineux espace
+   d'archivage est requis&nbsp;: la sauvegarde de la base peut être
+   volumineuse et un système
+   très utilisé engendre un trafic WAL à archiver de plusieurs Mo. Malgré tout,
+   c'est la technique de sauvegarde préférée dans
+   de nombreuses situations où une haute fiabilité est requise.
   </para>
 
   <para>
-   Pour récupérer avec succès suite à l'utilisation de l'archivage continu
-   (aussi appelé sauvegarde à chaud par certains vendeurs de SGBD),
-   vous avez besoin d'une séquence continue de fichiers WAL archivés qui
-   s'étendent au moins jusqu'au point de départ de votre sauvegarde. Pour
-   commencer, vous devriez configurer et tester votre procédure d'archivage
-   des journaux WAL <emphasis>avant</emphasis> de faire votre première sauvegarde de
-   base. Il nous faut donc commencer par vous présenter les mécanismes
+   Une récupération fructueuse à partir de l'archivage continu
+   (aussi appelé sauvegarde à chaud par certains vendeurs de SGBD) nécessite
+   une séquence ininterrompue de fichiers WAL archivés qui
+   s'étend au moins jusqu'au point de départ de la sauvegarde. Pour
+   commencer, il faut configurer et tester la procédure d'archivage
+   des journaux WAL <emphasis>avant</emphasis> d'effectuer la première sauvegarde de
+   base. C'est pourquoi la suite du document commence par présenter les mécanismes
    d'archivage des fichiers WAL.
   </para>
 
@@ -487,163 +487,168 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
    <title>Configurer l'archivage WAL</title>
 
    <para>
-    Dans un sens abstrait, un système <productname>PostgreSQL</productname> fonctionnel
-    produit une séquence indéfiniment longue d'enregistrements WAL. Le système
-    divise physiquement cette séquence en <firstterm>fichiers segment</firstterm>
-    WAL, qui font normalement 16&nbsp;Mo chaque (bien que la taille puisse
+    Au sens abstrait, un système <productname>PostgreSQL</productname> fonctionnel
+    produit une séquence infinie d'enregistrements WAL. Le système
+    divise physiquement cette séquence en <firstterm>fichiers de segment</firstterm>
+    WAL de 16&nbsp;Mo chacun (en génral, mais cette taille peut
     être modifiée lors de la construction de <productname>PostgreSQL</productname>). Les
-    fichiers segment se voient donnés des noms numériques pour refléter leur
-    position dans la séquence abstraite des WAL. Lorsque le système n'utilise
-    pas l'archivage des WAL, il crée seulement quelques fichiers segment, puis
-    les <quote>recycle</quote> en renommant les fichiers segment devenus inutiles.
-    Il est supposé qu'un fichier segment dont le contenu précède le
-    dernier point de vérification n'a plus d'intérêt et peut être recyclé.
+    fichiers de segment reçoivent des noms numériques pour refléter leur
+    position dans la séquence abstraite des WAL.
+   </para>
+   <para>
+    Lorsque le système n'utilise
+    pas l'archivage des WAL, il ne crée que quelques fichiers de segment,
+    qu'il <quote>recycle</quote> en renommant les fichiers de segment devenus inutiles.
+    Un fichier segment dont le contenu précède le
+    dernier point de vérification est supposé inutile et peut être recyclé.
    </para>
 
    <para>
-    Lors de l'archivage des données WAL, nous voulons capturer le contenu de
-    chaque fichier segment une fois qu'il est rempli et sauvegarder les
-    données quelque part avant que le fichier segment ne soit recyclé pour
-    être réutilisé. Suivant l'application et le matériel disponible, 
-    <quote>sauvegarder les données quelque part</quote> peut se faire de plusieurs
-    façons&nbsp;: nous pouvons copier les fichiers segment dans un répertoire
-    NFS monté sur une autre machine, les écrire sur une cartouche (en vous
-    assurant que vous avez un moyen de restaurer le fichier avec son nom
-    d'origine) ou le grouper pour les graver sur un CD, ou encore autre chose.
+    Lors de l'archivage des données WAL, le contenu de
+    chaque fichier de segment doit être capturé dès qu'il est rempli pour
+    sauvegarder les données ailleurs avant son recyclage.
+    En fonction de l'application et de matériel disponible, 
+    <quote>sauvegarder les données ailleurs</quote> peut se faire de plusieurs
+    façons&nbsp;: les fichiers de segment peuvent être copiés dans un répertoire
+    NFS monté sur une autre machine, être écrits sur une cartouche (après
+    s'être assuré que le fichier peut être restauré avec son nom
+    d'origine) ou être groupés pour gravage sur un CD, ou tout à fait autre chose.
     Pour fournir autant de flexibilité que possible à l'administrateur de la
     base de données, <productname>PostgreSQL</productname> essaie de ne faire aucune
     supposition sur la façon dont l'archivage est réalisé. À la place,
-    <productname>PostgreSQL</productname> vous laisse spécifier une commande
-    shell à exécuter pour copier le fichier segment rempli là où vous le
-    souhaitez. La commande pourrait être aussi simple qu'un
-    <literal>cp</literal> ou il pourrait impliquer un shell complexe &mdash;
-    à vous de voir.
+    <productname>PostgreSQL</productname> permet de préciser la commande
+    shell à exécuter pour copier le fichier de segment rempli à l'endroit
+    désiré. La commande peut être aussi simple qu'un
+    <literal>cp</literal> ou impliquer un shell complexe &mdash;
+    à l'utilisateur de voir.
    </para>
 
    <para>
-    La commande shell à utiliser est spécifiée par le paramètre de
-    configuration <xref linkend="guc-archive-command"/> qui, en pratique, sera
+    La commande shell à utiliser est indiquée à l'aide du paramètre de
+    configuration <xref linkend="guc-archive-command"/> qui, en pratique, est
     toujours placé dans le fichier <filename>postgresql.conf</filename>. Dans
-    cette chaîne, tout <literal>%p</literal> est remplacé par le chemin de
-    l'archive alors que tout <literal>%f</literal> est remplacé seulement par le
+    cette chaîne, tout <literal>%p</literal> est remplacé par le chemin
+    absolu de
+    l'archive alors que tout <literal>%f</literal> n'est remplacé que par le
     nom du fichier. (Le nom du chemin est relatif au répertoire de travail du
     serveur, c'est-à-dire le répertoire des données du cluster.)
-    Écrivez <literal>%%</literal> si vous avez besoin d'écrire le
-    vrai caractère <literal>%</literal> dans la commande. La commande utile la plus
-    simple est quelque chose comme
+    <literal>%%</literal> est utilisé pour écrire le
+    caractère <literal>%</literal> dans la commande. La commande utile la plus
+    simple ressemble à
 <programlisting>archive_command = 'cp -i %p /mnt/serveur/repertoire_archive/%f &lt;/dev/null'</programlisting>
-    qui copiera les segments WAL archivables dans le répertoire
+    qui copie les segments WAL archivables dans le répertoire
     <filename>/mnt/serveur/repertoire_archive</filename>. (Ceci est un exemple, pas
-    une recommandation, et pourrait ne pas fonctionner sur toutes les
+    une recommandation, et peut ne pas fonctionner sur toutes les
     plateformes.)
    </para>
 
    <para>
-    La commande d'archivage sera exécutée en tant qu'utilisateur 
-    propriétaire du serveur <productname>PostgreSQL</productname>. Comme la série de
-    fichiers WAL en cours d'archivage contient réellement tout ce qui se
-    trouve dans votre base de données, vous vous assurerez que les
-    données archivées sont protégées des autres utilisateurs&nbsp;; par
-    exemple, si les archives sont stockées dans un répertoire où se trouvent
-    des droits de lecture pour le groupe ou pour les autres.
+    La commande d'archivage est exécutée sous l'identité de l'utilisateur 
+    propriétaire du serveur <productname>PostgreSQL</productname>. La série de
+    fichiers WAL en cours d'archivage contient absolument tout ce qui se
+    trouve dans la base de données, il convient donc de s'assurerer que les
+    données archivées sont protégées des autres utilisateurs&nbsp;; on peut,
+    par exemple, archiver dans un répertoire sur lequel les droits de lecture
+    ne sont positionnés ni pour le groupe ni pour le reste du monde.
    </para>
 
    <para>
-    Il est important que la commande d'archivage renvoie le code de sortie
-    zéro si et seulement si l'exécution a réussi. En obtenant un résultat
-    zéro, <productname>PostgreSQL</productname> supposera que le fichier segment WAL a
+    Il est important que la commande d'archivage ne renvoie le code de sortie
+    zéro que si, et seulement si, l'exécution a réussi. En obtenant un résultat
+    zéro, <productname>PostgreSQL</productname> suppose que le fichier segment WAL a
     été archivé avec succès et qu'il peut le supprimer ou le recycler.
-    Néanmoins, un statut différent de zéro indique à  
+    Un statut différent de zéro indique à  
     <productname>PostgreSQL</productname> que le fichier n'a pas été archivé&nbsp;; il
-    essaiera périodiquement jusqu'à ce qu'il y arrive.
+    essaie alors périodiquement jusqu'à la réussite de l'archivage.
    </para>
 
    <para>
-    La commande d'archivage devrait être généralement conçue pour refuser
-    d'écraser tout fichier archive déjà existant. Ceci est une fonctionnalité
-    de sécurité importante pour préserver l'intégrité de votre archive dans le
+    La commande d'archivage doit en général être conçue pour refuser
+    d'écraser tout fichier archive déjà existant. C'est une fonctionnalité
+    de sécurité importante pour préserver l'intégrité de l'archive dans le
     cas d'une erreur de l'administrateur (comme l'envoi de la sortie de deux
     serveurs différents dans le même répertoire d'archivage). Il est
-    conseillé de tester votre commande d'archivage proposée pour vous
-    assurer qu'en effet il n'écrase pas un fichier existant <emphasis>et qu'il
-    renvoie un statut différent de zéro dans ce cas</emphasis>. Nous avons découvert
+    conseillé de tester la commande d'archivage proposée pour
+    s'assurer qu'en effet elle n'écrase pas un fichier existant <emphasis>et
+    qu'elle retourne un statut différent de zéro dans ce cas</emphasis>.
+    Il a été découvert
     que <literal>cp -i</literal> travaille correctement sur certaines plateformes,
     mais pas sur toutes. Si la commande choisie ne gère pas elle-même ce
-    cas, vous pouvez ajouter une commande pour tester l'existence du fichier
-    d'archivage. Par exemple, quelque chose comme
+    cas, il convient d'ajouter une commande pour tester l'existence du fichier
+    d'archivage. Quelque chose comme
 <programlisting>archive_command = 'test ! -f .../%f &amp;&amp; cp %p .../%f'</programlisting>
-    fonctionne correctement sur la plupart des variantes Unix.
+    fonctionne, par exemple, correctement sur la plupart des variantes Unix.
    </para>
 
    <para>
-    Lors de la conception de votre configuration d'archivage, considérez ce
-    qui se passerait si la commande d'archivage échouait de façon répétée parce
-    que certains aspects demanderaient une intervention de l'opérateur ou
-    à cause d'un manque d'espace dans le répertoire d'archivage. Par exemple,
-    ceci pourrait arriver si vous écrivez sur une cartouche sans changeur 
-    automatique&nbsp;; quand la cartouche est remplie, rien ne peut être
-    archivé tant que la cassette n'est pas changée. Vous devez vous assurer
-    que toute erreur ou requête à un opérateur humain est rapportée de façon
-    approprié pour que la situation puisse être résolue relativement
-    rapidement. Le répertoire <filename>pg_xlog/</filename> continuera à se remplir
-    de fichiers segment WAL jusqu'à la résolution de la situation.
+    Lors de la conception de la configuration d'archivage, il faut
+    considérer ce qui arrive si la commande d'archivage échoue de façon répétée parce
+    que certains aspects demandent une intervention de l'opérateur ou
+    par manque d'espace dans le répertoire d'archivage. 
+    Ceci peut arriver, par exemple, lors de l'écriture sur une cartouche sans changeur 
+    automatique&nbsp;; quand la cartouche est pleine, rien ne peut être
+    archivé tant que la cassette n'est pas changée. 
+    Toute erreur ou requête à un opérateur humain doit être rapportée de façon
+    approprié pour que la situation puisse être résolue
+    rapidement. Le répertoire <filename>pg_xlog/</filename> continue à se remplir
+    de fichiers de segment WAL jusqu'à la résolution de la situation.
    </para>
 
    <para>
     La vitesse de la commande d'archivage n'est pas importante, tant qu'elle
-    est au même rythme que la génération de données WAL du serveur. Les
+    suit le rythme que la génération de données WAL du serveur. Les
     opérations normales continuent même si le processus d'archivage est un peu
     plus lent. Si l'archivage est significativement plus lent, alors la
-    quantité de données qui pourrait être perdue va croître. Cela signifie
-    aussi que le répertoire <filename>pg_xlog/</filename> contiendra un grand nombre
-    de fichiers segment non archivés, qui finiront éventuellement par
-    dépasser l'espace disque disponible. Il vous est conseillé de surveiller
-    le processus d'archivage pour vous assurer que tout fonctionne
+    quantité de données qui peut être perdue croît. Cela signifie
+    aussi que le répertoire <filename>pg_xlog/</filename> contiend un grand nombre
+    de fichiers segment non archivés, qui peuvent finir par
+    dépasser l'espace disque disponible. Il est conseillé de surveiller
+    le processus d'archivage pour s'assurer que tout fonctionne
     normalement.
    </para>
 
    <para>
-    En écrivant votre commande d'archivage, vous devez vous assurer que les
-    noms de fichier à archiver auront 64 caractères maximum et peuvent
-    contenir toute combinaison de lettres ASCII, de chiffres et de points.
-    Il n'est pas nécessaire de rappeler le chemin complet original
+    Lors de l'écriture de la commande d'archivage, il faut garder à l'esprit que les
+    noms de fichier à archiver peuvent contenir jusqu'à 64 caractères et 
+    être composés de toute combinaison de lettres ASCII, de chiffres et de points.
+    Il n'est pas nécessaire de retenir le chemin complet original
     (<literal>%p</literal>) mais il est nécessaire de rappeler le nom du fichier
     (<literal>%f</literal>).
    </para>
 
    <para>
-    Notez que, bien que l'archivage WAL vous autorisera à restaurer toute
-    modification réalisée sur les données de votre base 
-    <productname>PostgreSQL</productname>, il ne restaurera pas les modifications
+    Bien que l'archivage WAL autorise à restaurer toute
+    modification réalisée sur les données de la base 
+    <productname>PostgreSQL</productname>, il ne restaure pas les modifications
     effectuées sur les fichiers de configuration (c'est-à-dire
     <filename>postgresql.conf</filename>, <filename>pg_hba.conf</filename> et
-    <filename>pg_ident.conf</filename>) car ceux-ci sont édités manuellement plutôt
-    qu'au travers d'opérations SQL. Vous pourriez souhaiter conserver les
-    fichiers de configuration à un endroit où ils seront sauvegardés avec vos
-    procédures standards de sauvegarde du système de fichiers. Voir la
+    <filename>pg_ident.conf</filename>) car ceux-ci sont édités manuellement
+    et non au travers d'opérations SQL. Il est souhaitable de conserver les
+    fichiers de configuration à un endroit où ils sont sauvegardés par les
+    procédures standard de sauvegarde du système de fichiers. Voir la
     <xref linkend="runtime-config-file-locations"/> pour savoir comment
     modifier l'emplacement des fichiers de configuration.
    </para>
 
    <para>
-    La commande d'archivage est seulement appelée sur les segments WAL complets.
-    Du coup, si votre serveur génère peu de trafic WAL (ou qu'il y a des périodes
-    de calme où le trafic WAL est léger), il pourrait y avoir une longue période
+    La commande d'archivage n'est appelée que sur les segments WAL complets.
+    Du coup, si le serveur engendre peu de trafic WAL (ou qu'il y a des périodes
+    de calme où le trafic WAL est léger), il peut y avoir une longue période
     entre la fin d'une transaction et son enregistrement sûr dans le stockage
     d'archive. Pour placer une limite sur l'ancienneté des données archivées,
-    vous pouvez configurer <xref linkend="guc-archive-timeout"/> pour forcer le
-    serveur à changer de fichier segment WAL suivant ce délai. Notez que les
-    fichiers archivés à cause d'une demande d'archivage forcée sont toujours de
+    on configure <xref linkend="guc-archive-timeout"/> qui force le
+    serveur à changer de fichier segment WAL passé ce délai. Les
+    fichiers archivés lors d'un tel forçage ont toujours
     la même taille que les fichiers complets. Il est donc déconseillé de configurer
-    un délai <varname>archive_timeout</varname> trop court &mdash; cela grossirait
-    anormalement votre stockage. Une minute pour <varname>archive_timeout</varname>
+    un délai <varname>archive_timeout</varname> trop court &mdash; cela grossit
+    anormalement le stockage. Une minute pour <varname>archive_timeout</varname>
     est généralement raisonnable.
    </para>
 
    <para>
-    De plus, vous pouvez forcer manuellement le changement d'un segment avec
-    <function>pg_switch_xlog</function>, si vous voulez vous assurer qu'une
-    transaction tout juste terminée est archivée immédiatement. D'autres
+    De plus, le changement d'un segment peut être forcé manuellement avec
+    <function>pg_switch_xlog</function>. Cela permet de s'assurer qu'une
+    transaction tout juste terminée est immédiatement archivée. D'autres
     fonctions utilitaires relatives à la gestion des WAL sont disponibles dans
     <xref linkend="functions-admin-backup-table"/>.
    </para>
@@ -658,63 +663,66 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
   <orderedlist>
    <listitem>
     <para>
-     Assurez-vous que l'archivage WAL est activée et fonctionnelle.
+     S'assurer que l'archivage WAL est activé et fonctionnel.
     </para>
    </listitem>
    <listitem>
     <para>
-     Connectez-vous à la base de données en tant que superutilisateur et
-     lancez la commande
+     Se connecter à la base de données en tant que superutilisateur et
+     lancer la commande
 <programlisting>SELECT pg_start_backup('label');</programlisting>
-     où <literal>label</literal> est toute chaîne que vous voulez utiliser pour
+     où <literal>label</literal> est une chaîne utilisée pour
      identifier de façon unique l'opération de sauvegarde (une bonne pratique
-     est d'utiliser le chemin complet où vous avez l'intention de placer le
+     est d'utiliser le chemin complet du
      fichier de sauvegarde). <function>pg_start_backup</function> crée un fichier
-     <firstterm>label de sauvegarde</firstterm> nommé <filename>backup_label</filename> dans
-     le répertoire du groupe avec des informations sur votre sauvegarde.
+     <firstterm>de label de sauvegarde</firstterm> nommé
+     <filename>backup_label</filename> dans
+     le répertoire du cluster. Ce fichier contient les informations de la sauvegarde.
     </para>
 
     <para>
-     Peu importe la base de données à laquelle vous vous connectez pour lancer
-     cette commande. Vous pouvez ignorer le résultat renvoyé par la
-     fonction mais, si elle rapporte une erreur, gérez-la avant de
-     continuer.
+     La base de données de connexion utilisée pour lancer
+     cette commande n'a aucune importance. Le résultat de la fonction peut
+     être ignoré, mais il faut gérer l'erreur éventuelle avant
+     de continuer.
     </para>
    </listitem>
    <listitem>
     <para>
-     Lancez la sauvegarde en utilisant n'importe quel outil de sauvegarde du
-     système de fichiers comme <application>tar</application> ou <application>cpio</application>. Il
+     Lancer la sauvegarde à l'aide de n'importe quel outil de sauvegarde du
+     système de fichiers, tel <application>tar</application> ou
+     <application>cpio</application>. Il
      n'est ni nécessaire ni désirable de stopper les opérations normales de
-     la base de données lorsque vous faites cela.
+     la base de données pour cela.
     </para>
    </listitem>
    <listitem>
     <para>
-     Connectez-vous de nouveau sur la base de données en tant que
-     superutilisateur et lancez la commande
+     Se connecter de nouveau à la base de données en tant que
+     superutilisateur et lancer la commande
 <programlisting>SELECT pg_stop_backup();</programlisting>
-     Elle devrait réussir. Néanmoins, la sauvegarde n'est pas encore entièrement
-     valide. Un basculement automatique du prochain segment WAL survient, donc
-     tous les fichiers segment WAL en relation avec l'archivage seront maintenant
+     Elle doit réussir. Néanmoins, la sauvegarde n'est pas encore entièrement
+     valide. Un basculement automatique du prochain segment WAL intervient. 
+     Tous les fichiers segment WAL en relation avec l'archivage sont maintenant
      marqués à archiver.
     </para>
    </listitem>
    <listitem>
     <para>
      Une fois que les fichiers des segments WAL utilisées lors de la sauvegarde
-     sont archivées, vous avez terminé. Le fichier identifié par le résultat de
+     sont archivées, c'est terminé. Le fichier identifié par le résultat de
      <function>pg_stop_backup</function> est le dernier segment à archiver pour
-     terminer la sauvegarde. L'archivage de ces fichiers survient automatiquement
-     car vous avez déjà configuré <varname>archive_command</varname>. Dans de
-     nombreux cas, ceci arrive assez rapidement mais il est conseillé de
-     surveiller votre système d'archivage pour vous assurer qu'il s'effectue
-     correctement et que vous avez une sauvegarde valide.
+     terminer la sauvegarde. L'archivage de ces fichiers intervient automatiquement
+     car <varname>archive_command</varname> est déjà configuré. Dans de
+     nombreux cas, c'est assez rapide mais il est conseillé de
+     surveiller le système d'archivage pour s'assurer que celui-ci s'effectue
+     correctement et que la sauvegarde est valide.
     </para>
    </listitem>
   </orderedlist>
    </para>
 
+<!-- ICI -->
    <para>
     Certains outils de sauvegarde que vous souhaiteriez utiliser émettent des
     messages d'avertissements ou d'erreurs si les fichiers qu'ils essaient de
