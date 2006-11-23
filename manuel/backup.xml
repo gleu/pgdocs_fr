@@ -1496,55 +1496,56 @@ restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows</programlisti
    pérenne.
   </para>
 
-<!-- ICI -->
   <sect2 id="warm-standby-planning">
    <title>Planification</title>
 
    <para>
-    Sur le serveur de secours, tous les espaces logiques et chemins référeront
-    aux points de montage noméms de façon similaire. Il est donc important de
-    créer les serveurs primaire et d'attente de façon identique, au moins
-    en ce qui concerne le serveur de bases de données. De puis, tout commande
-    CREATE TABLESPACE sera passée ainsi, donc tout nouveau point de montage
-    doit être créé sur les deux serveurs avant de pouvoir être utilisé sur
-    le serveur principal. Le matériel n'a pas besoin d'être identique mais
-    l'expérience a montré que maintenir deux systèmes identiques est plus
-    facile que maintenir deux systèmes différents sur la durée de vie
-    des applications et du système.
+    Sur le serveur de secours, tous les espaces logiques et chemins font
+    référence à des points de montage nommés de façon similaire. Il est donc important de
+    créer des serveurs primaire et de secours les plus semblables possible,
+    tout du moins en ce qui concerne la vision qu'en a le serveur de bases
+    de données. De plus, tout commande
+    <xref linkend="sql-createtablespace" endterm="sql-createtablespace-title">
+    est passée en l'état. Tout nouveau point de montage
+    doit donc être créé sur les deux serveurs avant de pouvoir être utilisé sur
+    le serveur principal. Il n'est pas nécessaire que le matériel soit
+    identique, mais l'expérience montre qu'il est plus facile de maintenir
+    deux systèmes identiques sur la durée de vie des applications et du système.
    </para>
 
    <para>
-    Il n'existe pas de mode spécial requis pour activer un serveur d'attente.
-    Les opérations qui surviennent sur les serveurs principal et d'attente
-    sont entièrement des tâches d'archivage et de récupération continues.
-    Le point principal de contacte entre les deux serveurs de base est
+    Il n'existe pas de mode spécial pour activer un serveur de secours.
+    Les seules opérations sur les serveurs principal et de secours
+    sont des tâches normales et continuelles d'archivage et de récupération.
+    Le principal point de contact entre les deux serveurs est
     l'archive des fichiers WAL qu'ils partagent&nbsp;: le principal les
-    écrit, le serveur en attente les lit. Il faut aussi s'assurer que les
+    écrit, le serveur de secours les lit. Il est impératif que des
     archives WAL de serveurs différents ne soient pas mélangées.
    </para>
 
    <para>
-    Ce qui fait que les deux serveurs faiblement liés travaillent ensemble
-    est simplement un <varname>restore_command</varname> qui attend l'archivage
-    du prochain fichier WAL à partir du serveur principal.
+    La magie qui permet à deux serveurs faiblement liés de travailler
+    ensemble réside dans une simple <varname>restore_command</varname>
+    qui attend l'archivage du prochain fichier WAL en provenance 
+    du serveur principal.
     <varname>restore_command</varname> est indiqué
-    dans le fichier <filename>recovery.conf</filename> du serveur en attente.
-    Le traitement de la récupération normale demandera un fichier sur le serveur
-    en attente, occasionnant une erreur si le fichier n'est pas disponible.
-    Pour le traitement du serveur en attente, il est normal que le prochain
-    fichier soit indisponible, donc nous devons être patient et attendre
-    son arrivée. Un restore_command en attente peut être écrit avec un
-    script personnalisé qui attend l'arrivée du prochain fichier WAL. Il
-    doit aussi y avoir un moyen pour déclencher le
-    <foreignphrase>failover</foreignphrase>, ce qui interrompra le
-    restore_command, cassera la boucle et renverra une erreur de fichier
-    non trouvé sur le serveur en attente. Puis, cela arrêtera la
-    récupération et le serveur en attente deviendra un serveur normal.
+    dans le fichier <filename>recovery.conf</filename> du serveur de secours.
+    Le traitement usuel de la récupération attend un fichier dans l'archive
+    WAL, une erreur survenant s'il n'existe pas. Dans le cas du serveur de
+    secours, il est normal que le fichier suivant n'existe pas. Il ne reste donc
+    qu'à attendre son arrivée. Une <varname>restore_command</varname>
+    d'attente peut être obtenue par l'écriture d'un script personnalisé 
+    qui boucle sur un test d'apparition du prochain fichier WAL. Il faut
+    également définir un moyen de déclencher la bascule
+    (<foreignphrase>failover</foreignphrase>), ce qui interrompt la
+    <varname>restore_command</varname>, sort de la boucle et retourne une
+    erreur au serveur de secours indiquant que le fichier n'a pas été trouvé.
+    Cela arrête alors la récupération et le serveur de secours deviend un serveur normal.
    </para>
 
    <para>
     Un exemple de code pour une version C de <varname>restore_command</varname>
-    serait&nbsp;:
+    peut être&nbsp;:
 <programlisting>triggered = false;
 while (!NextWALFileReady() &amp;&amp; !triggered)
 {
@@ -1558,65 +1559,70 @@ if (!triggered)
    </para>
 
    <para>
-    <productname>PostgreSQL</productname> ne fournit pas de logiciel requis pour
-    identifier un échec sur le serveur principal et pour notifier le serveur en
-    attente. De nombreux outils de ce type existent et sont bien intégrés avec
-    d'autres aspects dun système en <foreignphrase>failover</foreignphrase>,
-    comme la migration d'une adresse IP.
+    <productname>PostgreSQL</productname> ne fournit pas de logiciel 
+    qui permette d'identifier une panne du serveur principal et d'en
+    notifier le serveur de secours. De nombreux outils de ce type existent
+    et sont bien intégrés à d'autres aspects de
+    <foreignphrase>failover</foreignphrase> de système,
+    comme la migration d'adresse IP.
    </para>
 
    <para>
-    Déclencher le <foreignphrase>failover</foreignphrase> est une partie
-    importante de la planification et de la conception. <varname>restore_command</varname> est
-    exécuté complètement une fois pour chaque fichier WAL. Le processus
-    exécutant <varname>restore_command</varname> est du coup créé et meurt pour chaque fichier,
-    donc il n'y a pas de démon ou de processus serveur. Du coup, nous ne
-    pouvons pas utiliser les signaux et un gestionnaire de signal. Une
-    notification plus permanente est requise pour déclencher l'opération
-    de <foreignphrase>failover</foreignphrase>. Il est possible d'utiliser
-    un simple délai, spécialement s'il est utilisé en conjonction avec un
-    paramètre <varname>archive_timeout</varname> connu sur le principal. Ceci peut porter à erreur
-    car un réseau ou un serveur principal occupé pourrait suffire à provoquer
+    Le déclenchement du <foreignphrase>failover</foreignphrase> est une partie
+    importante de la planification et de la conception.
+    <varname>restore_command</varname> est
+    exécutée complètement pour chaque fichier WAL. Le processus
+    exécutant <varname>restore_command</varname> est du coup créé et meurt
+    pour chaque fichier. Il n'y a, de ce fait, pas de démon ou de processus
+    serveur. Il n'est alors pas possible d'utiliser les signaux et un
+    gestionnaire de signal. Une notification plus permanente est requise pour
+    le déclenchement du <foreignphrase>failover</foreignphrase>. Il est
+    possible d'utiliser un simple dépassement de temps d'attente,
+    spécialement en conjonction avec un paramètre
+    <varname>archive_timeout</varname> défini sur le serveur principal et
+    connu. Cela peut toutefois induire des erreurs, car le réseau ou
+    l'occupation du serveur principal peuvent suffire à provoquer
     un <foreignphrase>failover</foreignphrase>. Un mécanisme de notificaton
-    comme la création explicite d'un fichier déclencheur est moins sujet à
-    l'erreur si cela peut être arrangé.
+    tel que la création explicite d'un fichier déclencheur, quand cela est
+    possible, est moins source d'erreur.
    </para>
   </sect2>
 
   <sect2 id="warm-standby-config">
-   <title>Implémentation</title>
+   <title>Mise en place</title>
 
    <para>
-    Une procédure courte pour configurer un serveur en attente suit. Pour
-    des détails complets de chaque étape, référez-vous aux sections précédentes.
+    Une procédure courte de configuration d'un serveur de secours est
+    indiquée dans la suite du document. Pour
+    les détails complets de chaque étape, on peut se référer aux sections précédentes.
     <orderedlist>
      <listitem>
       <para>
-       Configurer les serveurs principal et d'attente de façon quasi identique,
-       ceci incluant deux copies identiques de <productname>PostgreSQL</productname>,
-       avec la même version.
+       Configurer les serveurs principal et de secours de façon quasi identique,
+       ce qui inclue deux copies identiques de <productname>PostgreSQL</productname>,
+       dans la même version.
       </para>
      </listitem>
      <listitem>
       <para>
-       Configurer l'archivage continue sur le principal vers une archive locale
-       situé dansun répertoire sur le serveur d'attente. Assurez-vous que les deux
-       paramètres <xref linkend="guc-archive-command"/> et <xref
-       linkend="guc-archive-timeout"/> sont configurés (voir
-       <xref linkend="backup-archiving-wal"/>)
+       Configurer l'archivage continu sur le serveur principal vers une archive locale
+       située dans un répertoire du serveur de secours. S'assurer que les deux
+       paramètres <xref linkend="guc-archive-command"/> et
+       <xref linkend="guc-archive-timeout"/> sont configurés (voir
+       <xref linkend="backup-archiving-wal"/>).
       </para>
      </listitem>
      <listitem>
       <para>
-       Faites une sauvegarde de base du serveur principal (voir <xref
-       linkend="backup-base-backup"/>)
+       Faire une sauvegarde des bases du serveur principal (voir <xref
+       linkend="backup-base-backup"/>).
       </para>
      </listitem>
      <listitem>
       <para>
-       Commencer la récupération sur le serveur en attente à partir de l'archive
+       Commencer la récupération sur le serveur de secours à partir de l'archive
        WAL locale en utilisant un fichier <filename>recovery.conf</filename>
-       spécifiant un <varname>restore_command</varname> qui attend (voir
+       qui utilise une <varname>restore_command</varname> d'attente (voir
        <xref linkend="backup-pitr-recovery"/>).
       </para>
      </listitem>
@@ -1624,116 +1630,125 @@ if (!triggered)
    </para>
 
    <para>
-    La récupération traite l'archive WAL en lecture seule, donc une fois
-    qu'un fichier WAL a été copié sur le système en attente, il peut être
-    copié sur une cassette en même temps qu'il est utilisé par le système
-    en attente pour la récupération. Du coup, exécuter un serveur en
-    attente pour la haute disponibilité peut se réaliser au même temps
-    que le stockage des fichiers à plus long terme en cas de récupération
+    La récupération traite l'archive WAL en lecture seule. Ainsi, dès lors
+    qu'un fichier WAL est copié sur le système de secours, il peut être
+    copié sur une cassette en même temps qu'il est utilisé pour la
+    récupération. De ce fait, un serveur de secours 
+    de haute disponibilité peut tourner simultanément
+    au stockage des fichiers à plus long terme en vue d'une récupération
     après un désastre.
    </para>
 
    <para>
-    Dans un but de tests, il est possible d'exécuter les serveurs principal
-    et d'attente sur le même système. Ceci ne fournit aucune amélioration
-    sur la robustesse du système pas plus qu'il ne pourra être décrit comme
+    Pour les tests, il est possible d'exécuter les serveurs principal
+    et celui de secours sur le même système. Cela n'apporte aucune amélioration
+    sur la robustesse du système, et ne peut pas être présenté comme
     de la haute disponibilité.
    </para>
   </sect2>
 
   <sect2 id="warm-standby-failover">
-   <title>Failover</title>
+   <title>Bascule (<foreignphrase>Failover</foreignphrase>)</title>
 
    <para>
-    Si le serveur principal a un problème, le serveur de secours doit commencer
+    Si le serveur principal rencontre un problème, le serveur de secours doit commencer
     la procédure de <foreignphrase>failover</foreignphrase>.
    </para>
 
    <para>
-    Si le serveur en attente échoue, alors aucun <foreignphrase>failover</foreignphrase>
-    n'a pas besoin de prendre place. Si le serveur en attente peut être
-    redémarré, même quelques temps après, alors le processus de récupération
-    peut aussi être immédiatement relancé en prenant avantage du
-    <foreignphrase>Restartable Recovery</foreignphrase>. Si le serveur en
-    attente ne peut être redémarré, alors un nouveau serveur en attente
-    devra être créé.
+    Si le serveur de secours échoue, alors le 
+    <foreignphrase>failover</foreignphrase> n'est plus nécessaire.
+    S'il peut être redémarré, même quelques temps après, alors le
+    processus de récupération peut être immédiatement relancé en tirant
+    parti de la restauration réactivable (<foreignphrase>Restartable
+    Recovery</foreignphrase>). Enfin, s'il ne peut être redémarré, un
+    nouveau serveur de secours doit être créé.
    </para>
 
    <para>
-    Si le serveur principal échoue et est immédiatement redémarré, vous devez
-    avoir un mécanisme l'informant qu'il n'est plus le serveur principal. Ceci
-    est connu sous l'acronyme <acronym>STONITH</acronym> (<foreignphrase>Shoot
-    the Other Node In The Head</foreignphrase>), qui est nécessaire pour éviter
-    les situations où les deux systèmes pensent qu'ils sont le principal, ce
-    qui peut amener une certaine confusion et des pertes de données.
+    Si le serveur principal tombe et redémarre immédiatement, il faut
+    disposer d'un mécanisme l'informant qu'il n'est plus le serveur
+    principal. Ce mécanisme, connu sous l'acronyme <acronym>STONITH</acronym>
+    (<foreignphrase>Shoot The Other Node In The Head</foreignphrase>), est
+    permet d'éviter les situations où les deux systèmes pensent qu'ils sont
+    le serveur principal, ce qui peut engendrer une certaine confusion et
+    conduire à des pertes irrémédiables de données.
    </para>
 
    <para>
-    Un grand nombre de systèmes <foreignphrase>failover</foreignphrase>
-    utilisent simplement deux systèmes, le principal et celui en attente,
-    connectés par un mécanisme appelé heartbeat pour vérifier la connexion
-    entre les deux et la viabilité du principal. Il est aussi possible
-    d'utiliser un troisième système appelé serveur témoin pour éviter
-    des problèmes de <foreignphrase>failover</foreignphrase> inapproprié
-    mais la complexité supplémentaire pourrait être inutile sauf s'ils
-    sont configurés avec suffisamment d'attention et testés rigoureusement.
+    Un grand nombre de systèmes de <foreignphrase>failover</foreignphrase>
+    utilisent simplement deux systèmes, le principal et celui de secours,
+    connectés par un mécanisme appelé <quote>heartbeat</quote> qui vérifie
+    en permanence la connectivité entre les deux systèmes et la viabilité
+    du principal. Il est aussi possible d'utiliser un troisième système,
+    appelé serveur témoin pour éviter tout problème de
+    <foreignphrase>failover</foreignphrase> inapproprié. Cependant, 
+    la complexité supplémentaire peut s'avérer inutile sauf s'il
+    est configuré avec une attention suffisante et des tests rigoureux.
    </para>
 
    <para>
-    Au moment où le <foreignphrase>failover</foreignphrase> prend place sur le
-    serveur en attente, nous avons seulement un serveur en opération. C'est
-    connu sous le terme d'état dégénéré. L'ancien serveur en attente est
-    devenu le serveur principal. L'ancien serveur principal est arrêté
-    et pourrait le rester. 
-    Nous devons maintenant recréer un serveur en attente, soit sur l'ancien
-    système principal soit sur un troisième système. Une fois terminé,
-    nous pouvons considérer avoir changer de serveur principal et de
-    serveur d'attente. Certaines personnes choisissent un troisième serveur
-    pour fournir une protection supplémentaire au travers de l'interval du
-    <foreignphrase>failover</foreignphrase> bien que cela complique à coup
-    sûr la configuration du système et les processus opérationnelles
-    (et il peut aussi agir en tant que serveur témoin).
+    Au moment où le <foreignphrase>failover</foreignphrase> est mis en place sur le
+    serveur se secours, un seul serveur est opérationnel. On parle alors
+    d'état dégénéré. L'ancien serveur de secours est
+    devenu serveur principal, l'ancien serveur principal est arrêté
+    et peut le rester. Il faut désormais recréer un serveur de secours, soit
+    sur l'ancien système principal, s'il peut redémarrer, soit sur un
+    troisième, de préférence nouveau, système. Lorsque cela est réalisé, on
+    peut considérer que les deux serveurs ont échangé leurs rôles.
+   </para>
+   <para>
+    Certains
+    choisissent d'utiliser un troisième serveur pour fournir une protection
+    supplémentaire lors de l'interval de
+    <foreignphrase>failover</foreignphrase>. Il peut également servir de
+    serveur témoin. Toutefois, cela complique
+    assurément la configuration du système et les processus opérationnels.
    </para>
 
    <para>
-    Donc, basculer du principal ou serveur d'attente peut être rapide
-    mais requiert du temps pour re-préparer le cluster en
-    <foreignphrase>failover</foreignphrase>. Un basculement régulier entre
-    le serveur principal et celui d'attente est encouragé bien que cela
-    permette un arrêt habituel pour chaque système qui requiert un HA.
-    Cela agit aussi en tant que test des mécanismes de
+    La bascule entre le serveur principal et celui de secours peut être
+    rapide, mais nécessite quelque temps pour repréparer le cluster de 
+    <foreignphrase>failover</foreignphrase>. Une bascule régulière
+    est encouragée car elle permet l'arrêt régulier de chaque système,
+    requis pour maintenir la haute-disponiblité.
+    Cela permet également de tester les mécanismes de
     <foreignphrase>failover</foreignphrase> pour s'assurer que cela
-    fonctionnera toujours quand vous en aurez besoin.
+    fonctionnera toujours en cas de besoin.
    </para>
   </sect2>
 
   <sect2 id="warm-standby-record">
-   <title>Implémenter le <foreignphrase>Record-based Log Shipping</foreignphrase></title>
+   <title>Mise en place du transfert de journaux d'après les enregistrements
+   (<foreignphrase>Record-based Log Shipping</foreignphrase>)</title>
 
    <para>
-    Les principales fonctionnalités de <foreignphrase>Log Shipping</foreignphrase>
-    dans cette version sont basées autour du <foreignphrase>Log Shipping</foreignphrase>.
-    décrit ci -dessus. Ils est aussi possibles d'implémenter
-    <foreignphrase>Log Shipping</foreignphrase> en utilisant la fonction
-    <function>pg_xlogfile_name_offset()</function> (voir <xref
-    linkend="functions-admin"/>), bien que ceci requiert un développement
-    personnalisé.
+    Les principales fonctionnalités du transfert de journaux
+    (<foreignphrase>Log Shipping</foreignphrase>) accessibles
+    dans cette version reposent sur le transfert d'après fichier
+    (<foreignphrase>File-based Log Shipping</foreignphrase>)
+    décrit ci -dessus. Le
+    <foreignphrase>Record-based Log Shipping</foreignphrase> peut également
+    être mis en place à l'aide de la fonction
+    <function>pg_xlogfile_name_offset()</function> (voir
+    <xref linkend="functions-admin"/>), mais cela nécessite un développement
+    adapté.
    </para>
 
    <para>
-    Un programme externe peut appeler <function>pg_xlogfile_name_offset()</function>
-    pour trouver le nom du fichier et le décalage en octets du dernier pointeur WAL.
-    Si le programme externe demande régulièrement au serveur, il peut savoir.
-    Si le programme externe interroge souvent le serveur, elle peut trouver
-    comment le pointeur a été déplacé&nbsp;; ensuite, il peut accéder au
-    fichier WAL et copie ces octets. Il peut accèder aux fichiers qui a une copie
-    pas mis à jour) sur un serveur en attente.
+    <function>pg_xlogfile_name_offset()</function> peut être appelée par un
+    programme externe pour trouver le nom du fichier et le décalage en octets
+    au sein de ce fichier du dernier pointeur WAL.
+    Si le programme externe interroge souvent le serveur, il peut trouver
+    comment le pointeur a été déplacé. Il peut alors accéder directement au
+    fichier WAL et transférer ces octets sur une copie moins récente en
+    place sur le serveur de secours.
    </para>
   </sect2>
  </sect1>
 
  <sect1 id="migration">
-  <title>Migration entre les différentes versions</title>
+  <title>Migration entre versions</title>
 
   <indexterm zone="migration">
    <primary>mise à jour</primary>
@@ -1745,70 +1760,71 @@ if (!triggered)
   </indexterm>
 
   <para>
-   Cette section discute de la façon de migrer vos données de la base à partir
-   d'une version de <productname>PostgreSQL</productname> vers une autre, plus récente. La
-   procédure d'installation du logiciel <foreignphrase>per se</foreignphrase> n'est pas le
-   sujet de cette section&nbsp;; ces détails sont dans le <xref
-   linkend="installation"/>.
+   Cette section discute de la façon de migrer les données de la base vers
+   une version plus récente de <productname>PostgreSQL</productname>.
+   Le sujet de cette section ne concerne pas la procédure d'installation
+   <foreignphrase>per se</foreignphrase> du logiciel&nbsp;; ces détails sont
+   dans le <xref linkend="installation"/>.
   </para>
 
   <para>
-   En règle générale, le format interne des données est modifié entre les 
-   différentes versions de <productname>PostgreSQL</productname> (quand le nombre après le
-   deuxième point change). Ceci ne s'applique pas entre les différentes sorties
-   mineures ayant le même numéro de version majeur (quand le nombre après le
-   deuxième point change)&nbsp;; elles ont toujours un format de stockage
-   compatible.
+   En règle générale, le format interne des données est sujet à modification d'une
+   version majeure à l'autre (quand le nombre après le premier point change).
+   Ce qui n'est pas le cas pour les versions mineures à l'intérieur d'une
+   même version majeure (quand seul le nombre après le deuxième point change)&nbsp;;
+   elles ont toujours un format de stockage compatible.
    Par exemple, les versions 7.2.1, 7.3.2 et 7.4 ne sont pas compatibles, alors
-   que les versions 7.2.1 et 7.2.2 le sont. Lorsque vous mettez à jour entre 
-   des versions compatibles, vous pouvez simplement remplacer les exécutables et
-   ré-utiliser le répertoire des données sur le disque. Sinon, vous avez besoin
-   de sauvegarder vos données et de les restaurer sur le nouveau serveur. Ceci
-   doit se faire en utilisant <application>pg_dump</application>&nbsp;; les méthodes de
-   sauvegarde au niveau système de fichiers ne fonctionneront évidemment pas. Il
-   existe des vérifications en place pour vous empêcher d'utiliser un répertoire
-   de données d'une version incompatible version de
-   <productname>PostgreSQL</productname>, donc aucun mal ne sera fait si vous
-   essayez de lancer un serveur d'une mauvaise version dans un répertoire de
+   que les versions 7.2.1 et 7.2.2 le sont. Lorsque la mise à jour concerne
+   des versions compatibles, les exécutables peuvent simplement être
+   remplacés et le répertoire des données sur le disque réutilisé. 
+   Dans le cas contraire, il faut sauvegarder les données et les restaurer sur
+   le nouveau serveur. <application>pg_dump</application> doit être utilisé
+   pour cela&nbsp;; les méthodes de
+   sauvegarde au niveau système de fichiers ne fonctionnent évidemment pas.
+   Un certain nombre de vérifications sont automatiquement effectuées pour
+   interdire l'utilisation d'un répertoire de données d'une version
+   incompatible. Il n'y a donc pas grand risque à lancer une mauvaise
+   version de <productname>PostgreSQL</productname> sur un répertoire de
    données.
   </para>
 
   <para>
    Il est recommandé d'utiliser les programmes <application>pg_dump</application> et
-   <application>pg_dumpall</application> à partir de la nouvelle version de
-   <productname>PostgreSQL</productname>, pour utiliser les avantages de toutes
-   améliorations effectuées sur ces programmes. Les versions actuelles des
-   programmes de sauvegarde peuvent lire des données à partir des serveurs
-   d'anciennes versions, jusqu'à la 7.0.
+   <application>pg_dumpall</application> issus de la nouvelle version de
+   <productname>PostgreSQL</productname>. Ceci permet de tirer parti
+   des améliorations de ces programmes. Les versions actuelles des
+   programmes de sauvegarde peuvent lire des données sur des serveurs
+   de versions anciennes, jusqu'à la 7.0.
   </para>
 
   <para>
-   Vous minimiserez la durée d'indisponibilité en installant le nouveau serveur
-   dans un répertoire différent et en lançant l'ancien et le nouveau serveur en 
-   parallèle sur des ports différents, puis en utilisant des commandes comme
- 
+   La durée d'indisponibilité est minimisée par l'installation de nouveau serveur
+   dans un répertoire différent et par le lancement en parallèle des deux
+   serveurs (ancien et nouveau), sur des ports différents. On peut alors
+   utiliser une commande telle que 
+
 <programlisting>pg_dumpall -p 5432 | psql -d postgres -p 6543</programlisting>
 
-   pour transférer les données. Ou utilisez un fichier intermédiaire si vous
-   voulez. Vous pouvez alors éteindre le nouveau serveur et démarrer le nouveau
-   sur le port que l'ancien utilisait. Vous devez vous assurer que l'ancienne
-   base de données n'est pas modifiée après que vous ayez lancé 
-   <application>pg_dumpall</application>, sans quoi ces modifications seraient évidemment 
-   perdues. Référez vous au <xref linkend="client-authentication"/> pour savoir 
-   comment interdire l'accès.
+   pour transférer les données. On peut aussi utiliser un fichier
+   intermédiare. L'ancien serveur peut alors être éteint, et le nouveau
+   démarré sur le port utilisé par l'ancien. Il est impératif que la base de
+   données ne soit pas modifiée pendant l'exécution de  
+   <application>pg_dumpall</application>. Ces modifications seraient, sans
+   cela, perdues. Le <xref linkend="client-authentication"/> informe sur la
+   façon d'interdire l'accès.
   </para>
   
   <para>
-   En pratique, vous voudrez certainement tester votre application sur le
+   En pratique, on souhaite souvent tester son application sur le
    nouveau serveur avant de basculer définitivement. C'est une autre raison
-   pour configurer des installations concurrentes avec l'ancienne et la nouvelle
-   version.
+   de configurer des installations concurrentes de l'ancienne et de la nouvelle
+   versions.
   </para>
 
   <para>
-   Si vous ne pouvez pas ou ne voulez pas lancer les deux serveurs en 
-   parallèle, vous pouvez faire l'étape de sauvegarde avant d'installer la 
-   nouvelle version, éteindre le serveur, déplacer l'ancienne version à un autre
+   Si n'est pas souhaité, ou pas possible, de lancer les deux serveurs en 
+   parallèle, il faut réaliser l'étape de sauvegarde avant d'installer la 
+   nouvelle version, éteindre le serveur, déplacer l'ancienne version vers un autre
    endroit, installer la nouvelle, la démarrer et enfin restaurer les données. Par
    exemple&nbsp;:
    
@@ -1821,23 +1837,24 @@ initdb -D /usr/local/pgsql/data
 postgres -D /usr/local/pgsql/data
 psql -f sauvegarde.sql postgres</programlisting>
 
-   Vous trouverez les méthodes pour arrêter et démarrer les serveurs, ainsi que 
-   d'autres détails dans le <xref linkend="runtime"/>.
-   Les instructions d'installation vous donneront des conseils sur les endroits 
+   Toutes les méthodes pour arrêter et démarrer les serveurs, ainsi que 
+   d'autres détails sont présentés dans le <xref linkend="runtime"/>.
+   Les instructions d'installation donnent des conseils sur les endroits 
    stratégiques pour réaliser ces opérations.
   </para>
 
   <note>
    <para>
-    Quand vous <quote>déplacez l'ancienne version à un autre endroit</quote>, 
-    l'ancienne installation pourrait ne plus être tout à fait utilisable.
-    Certains des exécutables contiennent les chemins absolus vers les
-    différents programmes et fichiers de données installés. Ceci n'est
-    habituellement pas un gros problème mais si vous planifiez d'utiliser deux
-    installations en parallèle pendant un moment, vous devez leur affecter des
+    Lorsque <quote>l'ancienne installation est déplacée</quote>, 
+    il se peut qu'elle ne soit plus correctement utilisable.
+    En effet, certains exécutables contiennent des chemins absolus vers les
+    différents programmes et fichiers de données installés. Ce n'est
+    habituellement pas un problème insurmontable, mais pour utiliser deux
+    installations en parallèle pendant un moment, il faut leur affecter des
     répertoires d'installation différents au moment de la construction. (Ce
-    problème est rectifié pour <productname>PostgreSQL</productname> 8.0 et ultérieurs mais
-    vous devez faire bien attention à déplacer les anciennes installations.)
+    problème est rectifié pour <productname>PostgreSQL</productname> 8.0 et
+    suivantes mais une attention particulière doit être portée au
+    déplacement de versions plus anciennes.)
    </para>
   </note>
  </sect1>
