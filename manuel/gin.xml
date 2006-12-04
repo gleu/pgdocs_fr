@@ -16,8 +16,9 @@
    <acronym>GIN</acronym> est l'acronyme de <foreignphrase>Generalized Inverted
    Index</foreignphrase>. C'est une structure d'index stockant des ensembles de
    paires (clé, liste de lignes) où le terme <quote>liste de lignes</quote>
-   est un ensemble de lignes dans lesquelles la clé est valable. Chaque ligne
-   peut contenir plusieurs clés.
+   est un ensemble de lignes dans lesquelles la clé est valable. Each
+   indexed value may contain many keys, so the same row ID may appear in
+   multiple posting lists.
  </para>
 
  <para>
@@ -57,28 +58,15 @@
  <para>
    Ce qui est nécessaire pour qu'une méthode d'accès <acronym>GIN</acronym>
    fonctionne est d'implémenter quatre méthodes définies par l'utilisateur,
-   méthodes qui définissent le comportement des clés dans l'arbre. En bref,
-   <acronym>GIN</acronym> combine l'extensibilité avec la généralité, la
-   réutilisation de code et une interface propre.
- </para>
-
-</sect1>
-
-<sect1 id="gin-implementation">
- <title>Implémentation</title>
-
- <para>
-  En interne, <acronym>GIN</acronym> consiste en un index B-tree construit sur
-  des clés, où chaque clé est un élement d'une valeur indexée (élément d'un
-  tableau par exemple) et où chaque ligne d'une page enfant est soit un
-  pointeur vers un B-tree sur des pointeurs de l'en-tête (PT, arbre de lignes)
-  soit une liste de pointeurs d'en-tête (PL, liste de lignes) si la ligne est
-  suffisamment petite.
+   méthodes qui définissent le comportement des clés dans l'arbre
+   and the relationships between keys, indexed values,
+   and indexable queries. In short, <acronym>GIN</acronym> combines
+   extensibility with generality, code reuse, and a clean interface.
  </para>
 
  <para>
-   Il existe quatre méthodes qu'une classe d'opérateur de l'index
-   <acronym>GIN</acronym> doit fournir (les prototypes sont en pseudocode)&nbsp;:
+   Les quatre méthodes qu'une classe d'opérateur d'index
+   <acronym>GIN</acronym> doit fournir sont&nbsp;:
  </para>
 
  <variablelist>
@@ -97,20 +85,26 @@
      <term>Datum* extractValue(Datum inputValue, uint32 *nkeys)</term>
      <listitem>
       <para>
-	   Renvoie un tableau de clés de valeurs à indexer, nkeys devrait contenir
-	   le nombre de clés renvoyées.
+	   Renvoie un tableau de clés à partir de valeurs à indexer. Le nombre
+	   de clés renvoyées doit être stocké dans <literal>*nkeys</literal>.
       </para>
      </listitem>
     </varlistentry>
 
     <varlistentry>
-     <term>Datum* extractQuery(Datum query, uint32 nkeys, 
+     <term>Datum* extractQuery(Datum query, uint32 *nkeys,
 		StrategyNumber n)</term>
      <listitem>
       <para>
-	   Renvoie un tableau de clés de la requête à exécuter. n contient le
-	   numéro de stratégie de l'opération (voir <xref linkend="xindex-strategies"/>).
-	   Suivant n, la requête pourrait être d'un type différent.
+       Returns an array of keys given a value to be queried; that is,
+       <literal>query</literal> is the value on the right-hand side of an
+       indexable operator whose left-hand side is the indexed column.
+       <literal>n</literal> is the strategy number of the operator within the
+       operator class (see <xref linkend="xindex-strategies"/>).
+       Often, <function>extractQuery</function> will need
+       to consult <literal>n</literal> to determine the data type of
+       <literal>query</literal> and the key values that need to be extracted.
+       The number of returned keys must be stored into <literal>*nkeys</literal>.
       </para>
      </listitem>
     </varlistentry>
@@ -119,17 +113,35 @@
      <term>bool consistent(bool check[], StrategyNumber n, Datum query)</term>
      <listitem>
       <para>
-	   Renvoie TRUE si la valeur indexée satisfait le qualifiant de la requête
-	   avec une stratégie n (ou pourrait satisfaire dans le cas d'une marque
-	   RECHECK dans la classe d'opérateur). Chaque élément d'un tableau de
-	   vérification est TRUE si la valeur indexée a une clé correspondante
-	   dans la requête : si (check[i] == TRUE), la i-ème clé de la requête
-	   est présente dans la valeur indexée.
+       Renvoie TRUE si la valeur indexée satisfait l'opérateur de la requête
+       avec un numéro de stratégie <literal>n</literal> (ou pourrait satisfaire
+       si l'opérateur est marqué RECHECK dans la classe d'opérateur).
+       The <literal>check</literal> array has
+       the same length as the number of keys previously returned by
+       <function>extractQuery</function> for this query.  Each element of the
+       <literal>check</literal> array is TRUE if the indexed value contains the
+       corresponding query key, ie, if (check[i] == TRUE) the i-th key of the
+       <function>extractQuery</function> result array is present in the indexed value.
+       The original <literal>query</literal> datum (not the extracted key array!) is
+       passed in case the <function>consistent</function> method needs to consult it.
       </para>
      </listitem>
     </varlistentry>
 
   </variablelist>
+
+</sect1>
+
+<sect1 id="gin-implementation">
+ <title>Implementation</title>
+
+ <para>
+  Internally, a <acronym>GIN</acronym> index contains a B-tree index
+  constructed over keys, where each key is an element of the indexed value
+  (a member of an array, for example) and where each tuple in a leaf page is
+  either a pointer to a B-tree over heap pointers (PT, posting tree), or a
+  list of heap pointers (PL, posting list) if the list is small enough.
+ </para>
 
 </sect1>
 
@@ -151,29 +163,27 @@
   </varlistentry>
 
   <varlistentry>
-   <term>gin_fuzzy_search_limit</term>
+   <term><xref linkend="guc-gin-fuzzy-search-limit"/></term>
    <listitem>
 	<para>
 	 La raison principale qui a poussé le développement des index
-	 <acronym>GIN</acronym> était le support des recherches de texte
+	 <acronym>GIN</acronym> a été la création du support des recherches de texte
 	 complet dans <productname>PostgreSQL</productname> et il arrive
 	 fréquemment qu'une recherche renvoie un gros ensemble de résultats.
-	 La lecture des lignes du disque et leur tri prend beaucoup de temps,
+	 Moreover, this often happens when the query contains very frequent
+	 words, so that the large result set is not even useful. La lecture des
+	 lignes du disque et leur tri prend beaucoup de temps,
 	 ce qui est une situation inacceptable en production. (Notez que la
 	 recherche dans l'index est en soi très rapide.)
-    </para>
-	<para>
-	 De telles requêtes contiennent habituellement des mots très fréquents,
-	 donc les résultats ne sont pas très utiles. Pour faciliter l'exécution
-	 de telles requêtes, <acronym>GIN</acronym> a une limite douce supérieure
-	 configurable pour la taille de l'ensemble renvoyé. Elle est déterminée
-	 par la variable GUC <varname>gin_fuzzy_search_limit</varname>. Elle vaut
-	 0 par défaut (aucune limite).
 	</para>
 	<para>
-	 Si une limite de recherche différente de zéro est configurée, alors
-	 l'ensemble renvoyée est un sous-ensemble de l'ensemble complet des
-	 résultats, choisi au hasard.
+	 To facilitate controlled execution of such queries
+	 <acronym>GIN</acronym> has a configurable soft upper limit on the size
+	 of the returned set, the
+	 <varname>gin_fuzzy_search_limit</varname> configuration parameter.
+	 It is set to 0 (meaning no limit) by default.
+	 If a non-zero limit is set, then the returned set is a subset of
+	 the whole result set, chosen at random.
 	</para>
 	<para>
 	 <quote>Douce</quote> (<foreignphrase>Soft</foreignphrase>) signifie
@@ -191,18 +201,26 @@
  <title>Limitations</title>
 
  <para>
-  <acronym>GIN</acronym> ne supporte pas les parcours d'index complets à cause
-  de leur inefficacité extrême&nbsp;: comme il existe souvent de nombreuses clés
-  pour une valeur, chaque pointeur d'en-tête sera renvoyé plusieurs fois.
+  <acronym>GIN</acronym> doesn't support full index scans: because there are
+  often many keys per value, each heap pointer would be returned many times,
+  and there is no easy way to prevent this.
  </para>
 
  <para>
   Quand <function>extractQuery</function> ne renvoit aucune clé,
-  <acronym>GIN</acronym> rapportera une erreur&nbsp;: pour différentes classes
-  d'opérateurs et stratégies, la signification sémantique d'une requête vide
-  pourrait être différente (par exemple, tout tableau contient un tableau vide
-  mais il n'y a pas croisement avec le tableau vide). <acronym>GIN</acronym> ne
-  peut pas proposer une réponse raisonnable.
+  <acronym>GIN</acronym> will emit an error.  Depending on the operator,
+  a void query might match all, some, or none of the indexed values (for
+  example, every array contains the empty array, but does not overlap the
+  empty array), and <acronym>GIN</acronym> can't determine the correct
+  answer, nor produce a full-index-scan result if it could determine that
+  that was correct.
+ </para>
+
+ <para>
+  It is not an error for <function>extractValue</> to return zero keys,
+  but in this case the indexed value will be unrepresented in the index.
+  This is another reason why full index scan is not useful &mdash; it would
+  miss such rows.
  </para>
 
  <para>

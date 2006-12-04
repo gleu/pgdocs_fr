@@ -180,12 +180,15 @@
    <title>Utilisation de <application>pg_dumpall</application></title>
 
    <para>
-    Le mécanisme précédent est peu pratique pour sauvegarder un serveur de bases
-    de données complet. <xref linkend="app-pg-dumpall"/> est prévu pour cela.
+    <application>pg_dump</application> dumps only a single database at a time,
+    and it does not dump information about roles or tablespaces
+    (because those are cluster-wide rather than per-database).
+    To support convenient dumping of the entire contents of a database
+    cluster, the <xref linkend="app-pg-dumpall"> program is provided.
     <application>pg_dumpall</application> sauvegarde toutes les bases de données d'un
     groupe de bases de données <productname>PostgreSQL</productname> (appelé cluster) et
-    préserve les données communes au cluster, comme les utilisateurs et
-    les groupes. L'utilisation basique de cette commande est&nbsp;:
+    préserve les données communes au cluster, comme les rôles et tablespaces.
+    L'utilisation basique de cette commande est&nbsp;:
 <synopsis>pg_dumpall &gt; <replaceable>fichier_de_sortie</replaceable></synopsis>
     Le fichier de sauvegarde résultant peut être restauré avec
     <application>psql</application>&nbsp;:
@@ -195,7 +198,9 @@
     préférable d'utiliser <literal>postgres</literal>.)
     Il faut obligatoirement avoir un profil superutilisateur pour restaurer
     une sauvegarde faite avec <application>pg_dumpall</application>, afin de
-    pouvoir restaurer les informations sur les utilisateurs et les groupes.
+    pouvoir restaurer les informations sur les rôles et les tablespaces.
+    If you use tablespaces, be careful that the tablespace paths in the
+    dump are appropriate for the new installation.
    </para>
   </sect2>
 
@@ -453,7 +458,7 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
      Si la série de fichiers WAL est fournie en continu à une autre
      machine chargée avec le même fichier de sauvegarde de base,
      on obtient un système <quote>de reprise automatique</quote>
-     (<foreignphrase>hot standby</foreignphrase>)&nbsp;: à tout
+     (<foreignphrase>warm standby</foreignphrase>)&nbsp;: à tout
      moment, la deuxième machine peut être montée et disposer d'une copie
      quasi-complète de la base de données.
     </para>
@@ -493,10 +498,7 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
     WAL de 16&nbsp;Mo chacun (en génral, mais cette taille peut
     être modifiée lors de la construction de <productname>PostgreSQL</productname>). Les
     fichiers de segment reçoivent des noms numériques pour refléter leur
-    position dans la séquence abstraite des WAL.
-   </para>
-   <para>
-    Lorsque le système n'utilise
+    position dans la séquence abstraite des WAL. Lorsque le système n'utilise
     pas l'archivage des WAL, il ne crée que quelques fichiers de segment,
     qu'il <quote>recycle</quote> en renommant les fichiers de segment devenus inutiles.
     Un fichier segment dont le contenu précède le
@@ -511,8 +513,8 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
     <quote>sauvegarder les données ailleurs</quote> peut se faire de plusieurs
     façons&nbsp;: les fichiers de segment peuvent être copiés dans un répertoire
     NFS monté sur une autre machine, être écrits sur une cartouche (après
-    s'être assuré que le fichier peut être restauré avec son nom
-    d'origine) ou être groupés pour gravage sur un CD, ou tout à fait autre chose.
+    s'être assuré que vous avez un moyen d'identifier le nom original de chaque
+    fichier) ou être groupés pour gravage sur un CD, ou tout à fait autre chose.
     Pour fournir autant de flexibilité que possible à l'administrateur de la
     base de données, <productname>PostgreSQL</productname> essaie de ne faire aucune
     supposition sur la façon dont l'archivage est réalisé. À la place,
@@ -701,10 +703,10 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
      Se connecter de nouveau à la base de données en tant que
      superutilisateur et lancer la commande
 <programlisting>SELECT pg_stop_backup();</programlisting>
-     Elle doit réussir. Néanmoins, la sauvegarde n'est pas encore entièrement
-     valide. Un basculement automatique du prochain segment WAL intervient. 
-     Tous les fichiers segment WAL en relation avec l'archivage sont maintenant
-     marqués à archiver.
+     This terminates the backup mode and performs an automatic switch to
+     the next WAL segment.  The reason for the switch is to arrange that
+     the last WAL segment file written during the backup interval is
+     immediately ready to archive.
     </para>
    </listitem>
    <listitem>
@@ -716,7 +718,7 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
      car <varname>archive_command</varname> est déjà configuré. Dans de
      nombreux cas, c'est assez rapide mais il est conseillé de
      surveiller le système d'archivage pour s'assurer que celui-ci s'effectue
-     correctement et que la sauvegarde est valide.
+     correctement et que la sauvegarde est complète.
     </para>
    </listitem>
   </orderedlist>
@@ -745,15 +747,16 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
 
    <para>
     Il n'est pas utile d'accorder de l'importance au le temps passé entre
-    <function>pg_start_backup</function> et le début réel de la sauvegarde, pas plus
-    qu'entre la fin de la sauvegarde et <function>pg_stop_backup</function>&nbsp;; un
-    délai de quelques minutes ne pose pas de problème. Néanmoins, si le
-    serveur est normalement utilisé alors que
-    <varname>full_page_writes</varname> est désactivé, une perte de
-    performances entre <function>pg_start_backup</function>
-    et <function>pg_stop_backup</function> peut être constatée. Il convient
-    toutefois de s'assurer que les opérations de sauvegarde sont effectuées
-    séquentiellement, sans chevauchement. Dans le ca contraire, la
+    <function>pg_start_backup</function> et le début réel de la sauvegarde, pas
+    plus qu'entre la fin de la sauvegarde et
+    <function>pg_stop_backup</function>&nbsp;; un délai de quelques minutes ne
+    pose pas de problème. (Néanmoins, si le serveur est normalement utilisé
+    alors que <varname>full_page_writes</varname> est désactivé, une perte de
+    performances entre <function>pg_start_backup</function> et
+    <function>pg_stop_backup</function> peut être constatée car
+    <varname>full_page_writes</varname> est réellement forcée lors du mode de
+    sauvegarde.) Il convient toutefois de s'assurer que ces étapes sont
+    effectuées séquentiellement, sans chevauchement. Dans le cas contraire, la
     sauvegarde est invalidée.
    </para>
 
@@ -778,7 +781,7 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
    </para>
 
    <para>
-    La sauvegarde n'est utilisable que si les  fichiers de segment WAL
+    La sauvegarde n'est utilisable que si les fichiers de segment WAL
     engendrés pendant ou après cette sauvegarde sont préservés.
     Pour faciliter cela, la fonction 
     <function>pg_stop_backup</function> crée un <firstterm>fichier d'historique de la
@@ -1013,16 +1016,17 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
 
    <para>
     Si la récupération découvre une corruption des données WAL,
-    elle se termine à ce point et le serveur ne démarre pas. Le processus
-    de récupération peut alors être ré-exécuté à partir du début en
-    précisant une <quote>cible de récupération</quote> pour permettre à la
-    récupération de se terminer correctement. Si la récupération échoue pour une raison
-    externe (arrêt brutal du système ou archive WAL devenue
-    inaccessible), alors la récupération peut être simplement relancée.
-    Elle redémarre alors pratiquement là où elle a échoué. La récupération
-    peut être redémarrée parce qu'elle enregistre un point de redémarrage dans le
-    fichier de contrôle au niveau du premier enregistrement d'un point de contrôle
-    utilisable trouvé après <varname>checkpoint_timeout</varname> secondes.
+    elle se termine à ce point et le serveur ne démarre pas. Dans un tel cas,
+    le processus de récupération peut alors être ré-exécuté à partir du début
+    en précisant une <quote>cible de récupération</quote> avant le point de
+    récupération pour permettre à cette dernière de se terminer correctement.
+    Si la récupération échoue pour une raison externe (arrêt brutal du système
+    ou archive WAL devenue inaccessible), alors la récupération peut être
+    simplement relancée. Elle redémarre alors pratiquement là où elle a échoué.
+    Recovery restart works much like checkpointing in normal operation:
+    the server periodically forces all its state to disk, and then updates
+    the <filename>pg_control</filename> file to indicate that the already-processed
+    WAL data need not be scanned again.
    </para>
 
     <sect3 id="recovery-config-settings" xreflabel="Configuration de la récupération">
@@ -1219,64 +1223,6 @@ restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows</programlisti
    </para>
   </sect2>
 
-  <sect2 id="backup-incremental-updated">
-   <title>Sauvegardes actualisées par incrément</title>
-
-  <indexterm zone="backup">
-   <primary>sauvegardes actualisées par incrément</primary>
-  </indexterm>
-
-  <indexterm zone="backup">
-   <primary>sauvegardes incrémentales</primary>
-  </indexterm>
-
-  <indexterm zone="backup">
-   <primary>accumulation des modifications</primary>
-  </indexterm>
-
-   <para>
-    La récupération réactivable (<foreignphrase>restartable
-    recovery</foreignphrase>) peut aussi être utilisée pour décharger
-    le serveur principal de la réalisation de sauvegardes de base
-    périodiques, la sauvegarde des fichiers se faisant alors à partir d'un
-    serveur de secours (<foreignphrase>Standby server</foreignphrase>). Ce
-    concept est également connu
-    sous le nom de sauvegardes actualisées par incrément
-    (<foreignphrase>incrementally updated backups</foreignphrase>),
-    accumulation des modifications de journaux
-    (<foreignphrase>log change accumulation</foreignphrase>) ou plus simplement
-    accumulation de modifications (<foreignphrase>change accumulation</foreignphrase>).
-   </para>
-
-   <para>
-    Si une sauvegarde des fichiers du serveur est réalisé alors qu'une
-    récupération est en cours, il est possible de relancer la récupération
-    à partir du dernier point de redémarrage. Cette sauvegarde contient
-    alors certaines modifications des fichiers d'archive WAL précédents, ce
-    qui fait de cette version une version actualisée de la sauvegarde
-    originale de la base. Si une récupération s'avère nécessaire, elle est
-    plus rapide à partir de la version actualisée qu'à
-    partir de la sauvegarde de la base.
-   </para>
-
-   <para>
-    Pour utiliser cette possibilité, il faut configurer une base
-    de secours sur un deuxième système comme cela est décrit dans
-    <xref linkend="warm-standby"/>. En réalisant une sauvegarde du serveur
-    de secours lorsqu'il est en cours d'exécution, une
-    sauvegarde actualisée par incrément est créée. Lorsque cette
-    configuration est mise en place, il n'est plus nécessaire de réaliser
-    régulièrement des sauvegardes de la base sur le serveur principal&nbsp;;
-    toutes les sauvegardes de la base peuvent être réalisées sur le serveur
-    de secours. Bien qu'il ne soit pas nécessaire
-    d'implanter les fonctionnalités de basculement
-    (<foreignphrase>failover</foreignphrase>) sur une configuration de
-    reprise intermédiaire (<foreignphrase>Warm Standby</foreignphrase>), c'est
-    possible.
-   </para>
-
-  </sect2>
-
   <sect2 id="continuous-archiving-caveats">
    <title>Chausse-trappes</title>
 
@@ -1358,7 +1304,7 @@ restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows</programlisti
   <title>Serveurs de secours semi-automatique (<foreignphrase>Warm Standby</foreignphrase>) pour la haute disponibilité</title>
 
   <indexterm zone="backup">
-   <primary>Warm Standby</primary>
+   <primary>warm standby</primary>
   </indexterm>
 
   <indexterm zone="backup">
@@ -1370,7 +1316,7 @@ restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows</programlisti
   </indexterm>
 
   <indexterm zone="backup">
-   <primary>PITR Standby</primary>
+   <primary>PITR standby</primary>
   </indexterm>
 
   <indexterm zone="backup">
@@ -1378,7 +1324,7 @@ restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows</programlisti
   </indexterm>
 
   <indexterm zone="backup">
-   <primary>Standby Server</primary>
+   <primary>standby server</primary>
   </indexterm>
 
   <indexterm zone="backup">
@@ -1386,11 +1332,11 @@ restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows</programlisti
   </indexterm>
 
   <indexterm zone="backup">
-   <primary>Log Shipping</primary>
+   <primary>log shipping</primary>
   </indexterm>
 
   <indexterm zone="backup">
-   <primary>Witness Server</primary>
+   <primary>witness server</primary>
   </indexterm>
 
   <indexterm zone="backup">
@@ -1398,7 +1344,7 @@ restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows</programlisti
   </indexterm>
 
   <indexterm zone="backup">
-   <primary>High Availability</primary>
+   <primary>high availability</primary>
   </indexterm>
 
   <indexterm zone="backup">
@@ -1406,77 +1352,74 @@ restore_command = 'copy /mnt/server/archivedir/%f "%p"'  # Windows</programlisti
   </indexterm>
 
   <para>
-   L'archivage continu peut être utilisé pour créer une configuration
-   de cluster de haute disponibilité avec un ou plusieurs serveurs de
-   secours, prêt(s) à prendre en main les opérations en cas de défaillance du
-   serveur principal. Cette capacité est surtout connue sous
-   le nom de <foreignphrase>Warm Standby Log Shipping</foreignphrase>.
+   L'archivage continu peut être utilisé pour créer une configuration de cluster
+   de <firstterm>haute disponibilité</firstterm> (HA) avec un ou plusieurs
+   <firstterm>serveurs de secours</firstterm>, prêt(s) à prendre en main les
+   opérations en cas de défaillance du serveur principal. Cette capacité est
+   surtout connue sous le nom de
+   <firstterm><foreignphrase>Warm Standby</foreignphrase></firstterm> ou
+   <firstterm><foreignphrase>Log Shipping</foreignphrase><firstterm>.
   </para>
 
   <para>
    Le serveur principal et le serveur de secours travaillent ensemble pour
    fournir cette capacité, bien que les serveurs soient très faiblement couplés.
-   Le serveur principal opère en mode d'archivage continu alors que le
+   Le serveur principal opère en mode d'archivage continu alors que chaque
    serveur de secours opère en mode de récupération continue en lisant
    les fichiers WAL du serveur primaire. Aucune modification des tables
    de la base n'est requise pour activer cette capacité. Elle a de ce fait
    un coût modique en terme d'administration supplémentaire en comparaison à
    d'autres approches de réplication. Cette configuration a également un impact
-   très faible sur les performances du serveur principal.
+   relativement faible sur les performances du serveur principal.
   </para>
 
   <para>
    Le déplacement direct des enregistrements des WAL (ou journaux) d'une base à
    une autre est généralement appelé <quote>transfert de journaux</quote>
-   (<foreignphrase>Log Shipping</foreignphrase>).
+   (<foreignphrase>log shipping</foreignphrase>).
    Sous <productname>PostgreSQL</productname> c'est un transfert de
    fichiers, de sorte que les enregistrements
-   WAL sont traités fichier par fichier. Les fichiers WAL peuvent être envoyés
+   WAL sont transférés fichier par fichier. Les fichiers WAL peuvent être envoyés
    facilement et sans surcoût quelque soit la distance, que ce soit sur un
    système adjacent, sur un autre système du même site ou sur un autre système
    de l'autre côté du globe. La bande passante requise par cette technique
    varie en focntion du taux de transaction du serveur principal.
    Le transfert de journaux par enregistrement 
-   (<foreignphrase>Record-based Log Shipping</foreignphrase>) est également
-   réalisable, à l'aide de procédures personnalisées, discutées dans une
-   section ultérieure.
-   Il est possible que des développements futurs incluent le transfert de
-   journaux par enregistrement synchrone ou intégré
-   (<foreignphrase>synchronous and/or integrated record-based log
-   shipping</foreignphrase>).
+   (<foreignphrase>record-based log shipping</foreignphrase>) est également
+   réalisable, à l'aide de procédures personnalisées, discutées dans
+   <xref linkend="warm-standby-record"/>.
   </para>
 
   <para>
    L'envoi des journaux est asynchrone, c'est-à-dire
    que les enregistrements WAL sont envoyés après validation de la
    transaction. De ce fait, il y a un léger risque de perte de données
-   si le serveur principal est l'objet d'une panne catastrophique.
-   Ce problème est minimisé par l'utilisation du paramètre
-   <varname>archive_timeout</varname> qui peut être abaisser à quelques secondes
-   si nécessaire. Un paramètrage très bas peut accroître les besoins de bande
-   passante pour l'envoi des journaux.
+   si le serveur principal est l'objet d'une panne catastrophique&nbsp;:
+   transactions not yet shipped will be lost.
+   The length of the window of data loss
+   can be limited by use of the <varname>archive_timeout</varname> parameter,
+   which can be set as low as a few seconds if required.  However such low
+   settings will substantially increase the bandwidth requirements for file
+   shipping.  If you need a window of less than a minute or so, it's probably
+   better to look into record-based log shipping.
   </para>
 
   <para>
    Le serveur de secours n'est pas accessible, car il est en permanence
    occupé par la récupération. Les performances de récupération
-   sont suffisamment bonnes pour que l'attente ne soit que de
-   quelques minutes avant d'obtenir une disponibilité complète une fois qu'il a été
+   sont suffisamment bonnes pour que l'attente ne soit que d'un peu de temps
+   avant d'obtenir une disponibilité complète une fois qu'il a été
    activé. En conséquence, on appelle cela une configuration de reprise intermédiaire ou
-   de secours semi-automatique (<foreignphrase>Warm
-   Standby</foreignphrase>) permettant d'obtenir de la haute disponibilité.
+   de secours semi-automatique (<foreignphrase>warm
+   standby</foreignphrase>) permettant d'obtenir de la haute disponibilité.
    La restauration d'un serveur à partir d'une sauvegarde archivée de la
-   base et de la relecture des journaux prend considérablement plus de temps.
-   Cette technique n'offre qu'une solution de récupération suite à une panne, mais pas
-   de la haute disponibilité.
+   base et de la relecture des journaux prendra considérablement plus de temps.
+   Cette technique n'offre qu'une solution de récupération suite à une panne,
+   mais pas de la haute disponibilité.
   </para>
 
-  <para>
-   L'utilisation d'un serveur de secours permet d'y réaliser les sauvegardes
-   plutôt que sur le serveur principal, ce qui évite la réalisation de
-   sauvegarde oériodiques 
-   (voir <xref linkend="backup-incremental-updated"/>).
-  </para>
+  <sect2 id="warm-standby-planning">
+   <title>Planification</title>
 
   <para>
    D'autres mécanismes de réplication en vue d'atteindre une haute disponibilité
