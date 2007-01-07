@@ -6,6 +6,7 @@ HTM_OUTPUT := pgsql-$(VERSION)-fr
 TGZ_OUTPUT := pg$(VER).tar.gz
 ZIP_OUTPUT := pg$(VER).zip
 PDF_OUTPUT := pg$(VER).pdf
+FO_OUTPUT := pg$(VER).fo
 QUICKPDF_OUTPUT := quickpg$(VER).pdf
 MAN_OUTPUT := pg$(VER).man.tar.gz
 CHM_OUTPUT := pg$(VER).chm.tar.gz
@@ -45,6 +46,15 @@ index.html: $(src)
 	cd $(BASEDIR); tar cfz $(TGZ_OUTPUT) $(HTM_OUTPUT)
 	cd $(BASEDIR); zip -r $(ZIP_OUTPUT) $(HTM_OUTPUT)
 	mv $(BASEDIR)/$(TGZ_OUTPUT) $(BASEDIR)/$(ZIP_OUTPUT) $(BASEDIR)/$(HTM_OUTPUT)
+
+fo: $(FO_OUTPUT)
+$(FO_OUTPUT): $(src)
+	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
+	xsltproc --xinclude --nonet --stringparam profile.condition pdf \
+                -stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
+		--output $(BASEDIR)/pg-pdf.xml stylesheets/pg-profile.xsl postgres.xml
+	xsltproc --nonet --output $(BASEDIR)/pg-pdf.fo stylesheets/pg-pdf.xsl \
+		$(BASEDIR)/pg-pdf.xml
 
 pdf: $(PDF_OUTPUT)
 $(PDF_OUTPUT): $(src)
