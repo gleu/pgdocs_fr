@@ -117,6 +117,7 @@ htmlhelp:
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
 	xsltproc stylesheets/pg-chm.xsl \
 		postgres.xml
+	test -d chm || mkdir chm
 	mv *.html *.h?? chm
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(CHM_OUTPUT) chm
 	rm -r chm
