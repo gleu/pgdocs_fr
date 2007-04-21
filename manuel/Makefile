@@ -18,6 +18,19 @@ src = *.xml ref/*.xml
 
 all: html pdf htmlhelp manpages INSTALL.html INSTALL.txt
 
+sommaire: toc92.html
+toc92.html: $(src)
+	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
+	xsltproc --xinclude --nonet \
+		-stringparam profile.condition html \
+		-stringparam profile.attribute  "standalone" \
+		-stringparam profile.value  "no" \
+		-stringparam chunk.quietly $(CHUNK_QUIET) \
+		-stringparam use.id.as.filename "yes" \
+		-stringparam base.dir $(BASEDIR)/$(HTM_OUTPUT)/ \
+		/opt/docbook-xsl/xhtml/maketoc.xsl postgres.xml
+#xsltproc  -output  mytoc.xml  html/maketoc.xsl  myfile.xml
+
 html: index.html
 index.html: $(src)
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
@@ -41,6 +54,7 @@ index.html: $(src)
 	  true; \
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
 	done;
+	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@</body>@</body><script src='http://www.google-analytics.com/urchin.js' type='text/javascript'></script><script type='text/javascript'> _uacct = 'UA-140513-1'; urchinTracker(); </script>@g" *.html
 
 	cd $(BASEDIR); tar cfz $(TGZ_OUTPUT) $(HTM_OUTPUT)
 	cd $(BASEDIR); zip -r $(ZIP_OUTPUT) $(HTM_OUTPUT)
