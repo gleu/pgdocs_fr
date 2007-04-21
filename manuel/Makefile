@@ -43,6 +43,8 @@ index.html: $(src)
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
 	done;
 
+	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@</body>@</body><script src='http://www.google-analytics.com/urchin.js' type='text/javascript'></script><script type='text/javascript'> _uacct = 'UA-140513-1'; urchinTracker(); </script>@g" *.html
+
 	cd $(BASEDIR); tar cfz $(TGZ_OUTPUT) $(HTM_OUTPUT)
 	cd $(BASEDIR); zip -r $(ZIP_OUTPUT) $(HTM_OUTPUT)
 	mv $(BASEDIR)/$(TGZ_OUTPUT) $(BASEDIR)/$(ZIP_OUTPUT) $(BASEDIR)/$(HTM_OUTPUT)
