@@ -15,12 +15,14 @@
      distribution (especially on JavaHelp code) from Norman Walsh.
 
      ******************************************************************** -->
-
+  <!--
   <xsl:import href="/opt/docbook-xsl/htmlhelp/htmlhelp.xsl"/>
+  -->
+  <xsl:import href="C:/Docbook/xsl/htmlhelp/htmlhelp.xsl"/>
 
   <xsl:param name="html.stylesheet" select="'pg-chm.css'"/>
-  <xsl:param name="htmlhelp.chm" select="'pgsql.chm'"/>
-<!--  <xsl:param name="base.dir" select="'./chm/'"/> -->
+  <xsl:param name="htmlhelp.chm" select="'pg824.chm'"/>
+  <xsl:param name="base.dir" select="'./chm/'"/> 
   <xsl:template name="user.header.navigation">
   </xsl:template>
 
