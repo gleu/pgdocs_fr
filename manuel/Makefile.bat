@@ -33,17 +33,21 @@ echo Copie du fichier CSS.
 
 copy /Y %PG_ENV_82%\stylesheets\pg-chm.css %PG_ENV_82%\chm\
 
+rem /**
+rem  * génération des fichiers avec la feuille de style spécifique.
+rem  */
+
 echo Génération du fichier au format HTMLHelp
 
 %HHC% %PG_ENV_82%\htmlhelp.hhp
 
-rem
-rem Transfert FTP du fichier
-rem
+rem /**
+rem  * Transfert FTP du fichier
+rem  */
 
 echo Transfert FTP.
 
-rem ftp -n -s:pgfr.ftp
+ftp -n -s:pgfr.ftp
 
 endlocal
 
