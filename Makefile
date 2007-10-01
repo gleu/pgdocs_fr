@@ -1,5 +1,5 @@
-VERSION := $(shell grep -v major version.xml | cut -c19-23)
-VER := $(shell grep -v major version.xml | cut -c19-23 | sed 's/\.//g')
+VERSION := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/')
+VER := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/' -e 's/\.//g')
 
 BASEDIR := $(HOME)/pgsql-$(VERSION)-fr
 HTM_OUTPUT := pgsql-$(VERSION)-fr
@@ -16,7 +16,7 @@ XSLROOTDIR=/opt/docbook-xsl
 VPATH = $(BASEDIR):$(BASEDIR)/ref
 src = *.xml ref/*.xml
 
-all: html pdf htmlhelp manpages INSTALL.html INSTALL.txt
+all: html pdf manpages INSTALL.html INSTALL.txt
 
 html: index.html
 index.html: $(src)
