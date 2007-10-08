@@ -500,7 +500,11 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/xindex.sgml,v 1.12 2005/09/15 07:03:25 guill
   </para>
 
   <para>
-   Le code C de l'opérateur d'égalité ressemble à ceci&nbsp;:
+   Le plus simple moyen de définie un ensemble d'opérateurs de comparaison est
+   d'écrire en premier la fonction de comparaison B-tree, puis d'écrire les
+   autres fonctions en tant que wrapper de la fonction de support. Ceci réduit
+   les risques de résultats incohérents pour les cas spécifiques. En suivant
+   cette approche, nous devons tout d'abord écrire&nbsp;:
 
 <programlisting>#define Mag(c) ((c)-&gt;x*(c)-&gt;x + (c)-&gt;y*(c)-&gt;y)
 
@@ -511,25 +515,36 @@ complex_abs_eq(Complex *a, Complex *b)
     return (amag == bmag);
 }
 </programlisting>
-   Les quatre autres opérateurs sont très similaires. Vous pouvez trouver leur
-   code dans <filename>src/tutorial/complex.c</filename> et
-   <filename>src/tutorial/complex.sql</filename> dans la distribution des
-   sources.
+
+   Maintenant, la fonction plus-petit-que ressemble à ceci&nbsp;:
+
+<programlisting>PG_FUNCTION_INFO_V1(complex_abs_lt);
+
+Datum
+complex_abs_lt(PG_FUNCTION_ARGS)
+{
+    Complex    *a = (Complex *) PG_GETARG_POINTER(0);
+    Complex    *b = (Complex *) PG_GETARG_POINTER(1);
+
+    PG_RETURN_BOOL(complex_abs_cmp_internal(a, b) &lt; 0);
+}
+</programlisting>
+
+   Les quatre autres fonctions diffèrent seulement sur la façon dont ils
+   comparent le résultat de la fonction interne au zéro.
   </para>
 
   <para>
-   Maintenant, déclarons les fonctions et les opérateurs basés sur ces
+   Maintenant, déclarons en SQL les fonctions et les opérateurs basés sur ces
    fonctions&nbsp;:
-<programlisting>CREATE FUNCTION complex_abs_eq(complex, complex) RETURNS boolean
-    AS '<replaceable>nom_fichier</replaceable>', 'complex_abs_eq'
-    LANGUAGE C;
+<programlisting>CREATE FUNCTION complex_abs_lt(complex, complex) RETURNS bool
+    AS '<replaceable>nom_fichier</replaceable>', 'complex_abs_lt'
+    LANGUAGE C IMMUTABLE STRICT;
 
-CREATE OPERATOR = (
-    leftarg = complex,
-    rightarg = complex,
-    procedure = complex_abs_eq,
-    restrict = eqsel,
-    join = eqjoinsel
+CREATE OPERATOR &lt; (
+   leftarg = complex, rightarg = complex, procedure = complex_abs_lt,
+   commutator = &gt; , negator = &gt;= ,
+   restrict = scalarltsel, join = scalarltjoinsel
 );
 </programlisting>
    Il est important de spécifier les fonctions de sélectivité de restriction et
