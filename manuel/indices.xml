@@ -21,12 +21,12 @@
   <title>Introduction</title>
 
   <para>
-   Supposons que nous ayons une table comme celle-ci:
+   Supposons que nous ayons une table comme celle-ci&nbsp;:
 <programlisting>CREATE TABLE test1 (
     id integer,
     contenu varchar
 );</programlisting>
-   et que l'application utilise beaucoup de requêtes de la forme
+   et que l'application utilise beaucoup de requêtes de la forme&nbsp;:
 <programlisting>SELECT contenu FROM test1 WHERE id = <replaceable>constante</replaceable>;</programlisting>
    Sans préparation supplémentaire, le système devrait lire la table
    <structname>test1</structname> en entier, ligne par ligne, pour trouver
@@ -142,9 +142,10 @@
    </simplelist>
 
    Les constructions équivalentes à des combinaisons de ces opérateurs, comme
-   <literal>BETWEEN</literal> et <literal>IN</literal>, peuvent aussi être implémentées avec
-   une recherche par index B-tree (mais notez que <literal>IS NULL</literal> n'est pas
-   équivalent à <literal>=</literal> et n'est pas indexable).
+   <literal>BETWEEN</literal> et <literal>IN</literal>, peuvent aussi être
+   implémentées avec une recherche par index B-tree. De plus, une condition
+   <literal>IS NULL</literal> sur une colonne indexée peut être utilisé avec
+   un index B-tree.
   </para>
 
   <para>
@@ -175,8 +176,9 @@
    Les index hash peuvent seulement gérer des comparaisons d'égalité simple.
    Le planificateur de requêtes considérera l'utilisation d'un index hash quand
    une colonne indexée est impliquée dans une comparaison avec l'opérateur
-   <literal>=</literal>. La commande suivante est utilisée pour créer un index
-   hash&nbsp;:
+   <literal>=</literal>. (But hash indexes do not support
+   <literal>IS NULL</literal> searches.) La commande suivante est utilisée pour
+   créer un index hash&nbsp;:
 <synopsis>CREATE INDEX <replaceable>nom</replaceable> ON <replaceable>table</replaceable> USING hash (<replaceable>column</replaceable>);
 </synopsis>
   </para>
@@ -227,6 +229,8 @@
 
    Voir la <xref linkend="functions-geometry"/> pour connaître la
    signification de ces opérateurs.
+   Also, an <literal>IS NULL</literal> condition on
+an index column can be used with a GiST index.
    Beaucoup de classes d'opérateur GiST sont disponibles dans l'ensemble
    des <literal>contrib</literal> ou comme projet séparé. Pour plus
    d'informations, voir <xref linkend="gist"/>.
@@ -257,8 +261,9 @@
     <member><literal>&amp;&amp;</literal></member>
    </simplelist>
 
-   (Voir <xref linkend="functions-array"/> pour la signification de ces
-   opérateurs.)
+   Voir <xref linkend="functions-array"/> pour la signification de ces
+   opérateurs.
+   GIN indexes cannot use <literal>IS NULL</> as a search condition.
    Les autres classes d'opérateurs GIN sont disponibles dans les modules
    <literal>contrib</literal> <literal>tsearch2</literal> et
    <literal>intarray</literal>. Pour plus d'informations,
@@ -290,7 +295,7 @@
 <programlisting>SELECT nom FROM test2 WHERE majeur = <replaceable>constante</replaceable> AND mineur = <replaceable>constante</replaceable>;</programlisting>
    alors il est sans doute souhaitable de définir un index sur les colonnes
    <structfield>majeur</structfield> et
-   <structfield>mineur</structfield> ensemble, par exemple avec:,
+   <structfield>mineur</structfield> ensemble, par exemple avec&nbsp;:
 <programlisting>CREATE INDEX test2_mm_idx ON test2 (majeur, mineur);</programlisting>
   </para>
 
@@ -349,6 +354,88 @@
    risque d'être inefficace sauf si l'utilisation de cette table est extrêmement
    stylisée. Voir aussi la <xref linkend="indexes-bitmap-scans"/> pour des
    discussions sur les mérites des différentes configurations d'index.
+  </para>
+ </sect1>
+
+
+ <sect1 id="indexes-ordering">
+  <title>Indexes and <literal>ORDER BY</literal></title>
+
+  <indexterm zone="indexes-ordering">
+   <primary>index</primary>
+   <secondary>and <literal>ORDER BY</literal></secondary>
+  </indexterm>
+
+  <para>
+   In addition to simply finding the rows to be returned by a query,
+   an index may be able to deliver them in a specific sorted order.
+   This allows a query's <literal>ORDER BY</literal> specification to be met
+   without a separate sorting step.  Of the index types currently
+   supported by <productname>PostgreSQL</productname>, only B-tree
+   can produce sorted output &mdash; the other index types return
+   matching rows in an unspecified, implementation-dependent order.
+  </para>
+
+  <para>
+   The planner will consider satisfying an <literal>ORDER BY</literal> specification
+   either by scanning any available index that matches the specification,
+   or by scanning the table in physical order and doing an explicit
+   sort.  For a query that requires scanning a large fraction of the
+   table, the explicit sort is likely to be faster because it requires
+   less disk I/O due to a better-ordered access pattern.  Indexes are
+   more useful when only a few rows need be fetched.  An important
+   special case is <literal>ORDER BY</literal> in combination with
+   <literal>LIMIT</literal> <replaceable>n</replaceable>: an explicit sort will have to process
+   all the data to identify the first <replaceable>n</replaceable> rows, but if there is
+   an index matching the <literal>ORDER BY</literal> then the first <replaceable>n</replaceable>
+   rows can be retrieved directly, without scanning the remainder at all.
+  </para>
+
+  <para>
+   By default, B-tree indexes store their entries in ascending order
+   with nulls last.  This means that a forward scan of an index on a
+   column <literal>x</literal> produces output satisfying <literal>ORDER BY x</literal>
+(or more verbosely, <literal>ORDER BY x ASC NULLS LAST</literal>).  The
+   index can also be scanned backward, producing output satisfying
+   <literal>ORDER BY x DESC</literal>
+   (or more verbosely, <literal>ORDER BY x DESC NULLS FIRST</literal>, since
+   <literal>NULLS FIRST</literal> is the default for <literal>ORDER BY DESC</literal>).
+  </para>
+
+  <para>
+   You can adjust the ordering of a B-tree index by including the
+   options <literal>ASC</literal>, <literal>DESC</literal>, <literal>NULLS FIRST</literal>,
+   and/or <literal>NULLS LAST</literal> when creating the index; for example:
+<programlisting>
+CREATE INDEX test2_info_nulls_low ON test2 (info NULLS FIRST);
+CREATE INDEX test3_desc_index ON test3 (id DESC NULLS LAST);
+</programlisting>
+   An index stored in ascending order with nulls first can satisfy
+   either <literal>ORDER BY x ASC NULLS FIRST</literal> or
+   <literal>ORDER BY x DESC NULLS LAST</literal> depending on which direction
+   it is scanned in.
+  </para>
+
+  <para>
+   You might wonder why bother providing all four options, when two
+   options together with the possibility of backward scan would cover
+   all the variants of <literal>ORDER BY</literal>.  In single-column indexes
+   the options are indeed redundant, but in multicolumn indexes they can be
+   useful.  Consider a two-column index on <literal>(x, y)</literal>: this can
+satisfy <literal>ORDER BY x, y</literal> if we scan forward, or
+<literal>ORDER BY x DESC, y DESC</literal> if we scan backward.
+   But it might be that the application frequently needs to use
+   <literal>ORDER BY x ASC, y DESC</literal>.  There is no way to get that
+   ordering from a regular index, but it is possible if the index is defined
+   as <literal>(x ASC, y DESC)</literal> or <literal>(x DESC, y ASC)</literal>.
+  </para>
+
+  <para>
+   Obviously, indexes with non-default sort orderings are a fairly
+   specialized feature, but sometimes they can produce tremendous
+   speedups for certain queries.  Whether it's worth keeping such an
+   index depends on how often you use queries that require a special
+   sort ordering.
   </para>
  </sect1>
 
@@ -734,7 +821,7 @@ CREATE UNIQUE INDEX contrainte_tests_reussis ON tests (sujet, resultat)
   <para>
    Enfin, un index partiel peut aussi être utilisé pour passer outre les
    choix de plan d'exécution de requête du système.
-   Il peut arriver avec certains jeux de données particuliers que le
+   De plus, les jeux de données particuliers peuvent faire que le
    système utilise un index alors qu'il ne devrait vraiment pas le faire.
    Dans ce cas, on peut mettre en place l'index de telle façon qu'il ne soit 
    pas utilisé pour la requête qui pose problème.
@@ -764,16 +851,20 @@ CREATE UNIQUE INDEX contrainte_tests_reussis ON tests (sujet, resultat)
  </sect1>
 
  <sect1 id="indexes-opclass">
-  <title>Classes d'opérateurs</title>
+  <title>Classes et familles d'opérateurs</title>
 
   <indexterm zone="indexes-opclass">
-   <primary>classe d'opérateurs</primary>
+	  <primary>classe d'opérateurs</primary>
+  </indexterm>
+
+  <indexterm zone="indexes-opfamily">
+	  <primary>famille d'opérateurs</primary>
   </indexterm>
 
   <para>
    Une définition d'index peut indiquer une <firstterm>classe 
    d'opérateurs</firstterm> pour chaque colonne de l'index.
-<synopsis>CREATE INDEX <replaceable>nom</replaceable> ON <replaceable>table</replaceable> (<replaceable>colonne</replaceable> <replaceable>classe_operateur</replaceable> <optional>, ...</optional>);</synopsis>
+<synopsis>CREATE INDEX <replaceable>nom</replaceable> ON <replaceable>table</replaceable> (<replaceable>colonne</replaceable> <replaceable>classe_operateur</replaceable>  <optional><replaceable>options de tri</replaceable></optional><optional>, ...</optional>);</synopsis>
    La classe d'opérateurs identifie les opérateurs que l'index doit utiliser 
    sur cette colonne. Par exemple, un index B-tree sur une colonne de type
    <type>int4</type> utiliserait la classe <literal>int4_ops</literal>.
@@ -787,6 +878,10 @@ CREATE UNIQUE INDEX contrainte_tests_reussis ON tests (sujet, resultat)
    soit par sa valeur absolue, soit par sa partie entière.
    Nous pourrions le faire en définissant deux classes d'opérateurs pour ce 
    type de données et en sélectionnant la bonne classe en créant l'index.
+   The operator class determines
+   the basic sort ordering (which can then be modified by adding sort options
+   <literal>ASC</literal>/<literal>DESC</literal> and/or
+   <literal>NULLS FIRST</literal>/<literal>NULLS LAST</literal>).
   </para>
 
   <para>
@@ -833,19 +928,33 @@ CREATE UNIQUE INDEX contrainte_tests_reussis ON tests (sujet, resultat)
 <programlisting>SELECT am.amname AS index_method,
        opc.opcname AS opclass_name
     FROM pg_am am, pg_opclass opc
-    WHERE opc.opcamid = am.oid
+    WHERE opc.opcmethod = am.oid
     ORDER BY index_method, opclass_name;</programlisting>
 
-    Elle peut être étendue pour montrer tous les opérateurs inclus dans chaque classe:
-    
-<programlisting>SELECT am.amname AS index_method,
-       opc.opcname AS opclass_name,
-       opr.oid::regoperator AS opclass_operator
-    FROM pg_am am, pg_opclass opc, pg_amop amop, pg_operator opr
-    WHERE opc.opcamid = am.oid AND
-          amop.amopclaid = opc.oid AND
-          amop.amopopr = opr.oid
-    ORDER BY index_method, opclass_name, opclass_operator;</programlisting>
+  </para>
+
+  <para>
+   An operator class is actually just a subset of a larger structure called an
+   <firstterm>operator family</firstterm>.  In cases where several data types have
+   similar behaviors, it is frequently useful to define cross-data-type
+   operators and allow these to work with indexes.  To do this, the operator
+   classes for each of the types must be grouped into the same operator
+   family.  The cross-type operators are members of the family, but are not
+   associated with any single class within the family.
+  </para>
+
+  <para>
+    This query shows all defined operator families and all
+    the operators included in each family:
+<programlisting>
+SELECT am.amname AS index_method,
+       opf.opfname AS opfamily_name,
+       amop.amopopr::regoperator AS opfamily_operator
+    FROM pg_am am, pg_opfamily opf, pg_amop amop
+    WHERE opf.opfmethod = am.oid AND
+          amop.amopfamily = opf.oid
+    ORDER BY index_method, opfamily_name, opfamily_operator;
+</programlisting>
   </para>
  </sect1>
 

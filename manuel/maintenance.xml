@@ -61,7 +61,8 @@
 
   <para>
    La commande <command>VACUUM</command> de <productname>PostgreSQL</productname>
-   <emphasis>doit</emphasis> être exécutée régulièrement pour plusieurs raisons&nbsp;:
+   (<xref linkend="sql-vacuum"/>) doit être exécutée régulièrement pour
+   plusieurs raisons&nbsp;:
 
     <orderedlist>
      <listitem>
@@ -79,14 +80,6 @@
       d'un <firstterm>cycle de l'identifiant de transaction (XID)</firstterm>.</simpara>
      </listitem>
     </orderedlist>
-
-   La fréquence et le périmètre des exécutions de <command>VACUUM</command> variera
-   pour chacune des raisons ci-dessus selon les besoins des sites. De plus, les
-   administrateurs doivent appréhender chaque cas et développer une stratégie de
-   maintenance appropriée. L'objectif de cette section est de décrire
-   globalement les problèmes à résoudre&nbsp;; pour la syntaxe et les autres
-   détails, voir la page de référence de la commande <xref linkend="sql-vacuum"
-   endterm="sql-vacuum-title"/>.
   </para>
 
   <para>
@@ -105,9 +98,10 @@
   </para>
 
   <para>
-   Un mécanisme automatisé de traitement des opérations <command>VACUUM</command>
-   nécessaires a été ajouté dans <productname>PostgreSQL</productname> 8.1.
-   Voir <xref linkend="autovacuum"/>.
+   Fortunately, autovacuum (<xref linkend="autovacuum"/>) monitors table
+   activity and performs <command>VACUUM</command>s when necessary.
+   Autovacuum works dynamically so it is often better
+   administration-scheduled vacuuming.
   </para>
 
   <sect2 id="vacuum-for-space-recovery">
@@ -132,24 +126,12 @@
    </para>
 
    <para>
-    Évidemment, une table qui subit beaucoup de mises à jour et suppressions
-    nécessitera des nettoyages plus fréquents que les tables rarement modifiées.
-    Il peut être pertinent de programmer périodiquement par <application>cron</application>
-    des tâches spécifiques qui nettoient uniquement les tables concernées (avec
-    <command>VACUUM</command>) et ignorent les tables que l'on sait peu
-    modifiées. Ceci ne sera vraiment utile que s'il y a à la fois des tables
-    volumineuses intensément modifiées et des tables volumineuses peu modifiées.
-    En effet, le coût supplémentaire lié au nettoyage d'une petite table ne
-    mérite pas que l'on s'en préoccupe.
-   </para>
-
-   <para>
     Il existe deux variantes de la commande <command>VACUUM</command>. La
     première forme, connu en tant que <quote>vacuum fainéant</quote> ou plus
-    simplement <command>VACUUM</command>, marque les données expirées dans les
+    simplement <command>VACUUM</command>, marque les données mortes dans les
     tables et les index pour une utilisation future&nbsp;; il ne tente
     <emphasis>pas</emphasis> de récupérer l'espace utilisée par
-    cette donnée expirée sauf si l'espace est à la fin de la table et qu'un
+    cette donnée morte sauf si l'espace est à la fin de la table et qu'un
     verrou exclusif de table puisse être facilement obtenu. L'espace inutilisé
     au début ou au milieu du fichier ne résulte pas en un raccourcissement du
     fichier et de l'espace redonné au système d'exploitation. Cette variante de
@@ -160,9 +142,9 @@
    <para>
    La seconde forme est la commande <command>VACUUM FULL</command>. Elle utilise
    un algorithme plus agressif pour récupérer l'espace consommé par les versions
-   expirées des lignes. Tout espace qui est libéré par <command>VACUUM
-   FULL</command> est immédiatement rendu au système d'exploitation.
-   Malheureusement,
+   mortes des lignes. Tout espace qui est libéré par <command>VACUUM
+   FULL</command> est immédiatement rendu au système d'exploitation and the
+   table data is physically compacted on the disk. Malheureusement,
    cette variante de la commande <command>VACUUM</command> acquiert un verrou
    exclusif sur chaque table avant que <command>VACUUM FULL</command> ne la
    traite. Du coup, utiliser fréquemment <command>VACUUM FULL</command> peut
@@ -182,16 +164,36 @@
    </para>
 
    <para>
-    La meilleure stratégie pour la plupart des sites est de planifier un
-    <command>VACUUM</command> général sur toute la base une fois par jour, en dehors
-    des horaires normaux de production, accompagné si nécessaire de nettoyages
-    plus fréquents pour les tables subissant d'intenses modifications.
-    (Quelques installations avec un taux extrêmement important des
-    modifications de données lancent un <command>VACUUM</command> sur les
-    tables très occupées jusqu'à une fois toutes les quelques minutes.) S'il y
-    a plusieurs bases de données dans un cluster (groupe de bases de données),
-    ne pas oublier de nettoyer chacune d'entre elles&nbsp;; l'exécutable
-    <xref linkend="app-vacuumdb" endterm="app-vacuumdb-title"/> peut s'avérer utile.
+    Fortunately, autovacuum (<xref linkend="autovacuum"/>) monitors table
+    activity and performs <command>VACUUM</command>s when necessary.  This
+    eliminates the need for administrators to worry about disk space
+    recovery in all but the most unusual cases.
+   </para>
+
+   <para>
+    For administrators who want to control <command>VACUUM</command>
+    themselves, the standard form of <command>VACUUM</command> is best used to
+    maintain a steady-state usage of disk space. If you need to return
+    disk space to the operating system, you can use <command>VACUUM
+    FULL</command>, but this is unwise if the table will just grow again in the
+    future.  Moderately-frequent standard <command>VACUUM</command> runs are a
+    better approach than infrequent <command>VACUUM FULL</command> runs for
+    maintaining heavily-updated tables.  However, if some heavily-updated
+    tables have gone too long with infrequent <command>VACUUM</command>, you can
+    use <command>VACUUM FULL</command> or <command>CLUSTER</command> to get performance
+    back (it is much slower to scan a table containing almost only dead
+    rows).
+   </para>
+
+   <para>
+    For those not using autovacuum, one approach is to schedule a
+    database-wide <command>VACUUM</command> once a day during low-usage period,
+    supplemented by more frequent vacuuming of heavily-updated tables if
+    necessary. (Some installations with extremely high update rates vacuum
+    their busiest tables as often as once every few minutes.) If you have
+    multiple databases in a cluster, don't forget to
+    <command>VACUUM</command> each one; the program <xref
+    linkend="app-vacuumdb" endterm="app-vacuumdb-title"/> might be helpful.
    </para>
 
    <para>
@@ -274,12 +276,19 @@
    </tip>
 
    <para>
-    Pour la plupart des site, la meilleure stratégie est de programmer une
-    collecte générale des statistiques sur toute la base, une fois par jour.
-    Ceci peut être profitablement couplé avec un <command>VACUUM</command> (la nuit
-    par exemple). Quoi qu'il en soit, les administrateurs des bases dont les
-    statistiques changent peu pourront juger que cela est exagéré et que des
-    exécutions moins fréquentes de <command>ANALYZE</command> sont bien suffisantes.
+    Fortunately, autovacuum (<xref linkend="autovacuum"/>) monitors table
+    activity and performs <command>ANALYZE</command>s when necessary.  This
+    eliminates the need for administrators to manually schedule
+    <command>ANALYZE</command>.
+   </para>
+
+   <para>
+    For those not using autovacuum, one approach is to schedule a
+    database-wide <command>ANALYZE</command> once a day at a low-usage time of
+    day; this can usefully be combined with a nightly <command>VACUUM</command>.
+    However, sites with relatively slowly changing table statistics might
+    find that this is overkill, and that less-frequent <command>ANALYZE</command>
+    runs are sufficient.
    </para>
   </sect2>
 
@@ -414,7 +423,7 @@
     XID normaux apparaissant dans cette base &mdash; c'est tout simplement le
     minimum des valeurs <structfield>relfrozenxid</structfield> par table dans
     cette base. Pour examiner cette information, le plus simple est d'exécuter
-    des requêtes comme
+    des requêtes comme&nbsp;:
 
 <programlisting>SELECT relname, age(relfrozenxid) FROM pg_class WHERE relkind = 'r';
 SELECT datname, age(datfrozenxid) FROM pg_database;</programlisting>
@@ -445,8 +454,9 @@ HINT:  To avoid a database shutdown, execute a full-database VACUUM in "mydb".
     million avant la réinitialisation&nbsp;:
 
 <programlisting>
-ERROR:  database is shut down to avoid wraparound data loss in database "mydb"
-HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</programlisting>
+ERROR:  database is not accepting commands to avoid wraparound data loss in database "mydb"
+HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
+</programlisting>
 
     La marge de sécurité de un million de transactions existe pour permettre à
     l'administrateur de récupérer ces données sans perte en exécutant
@@ -469,26 +479,39 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</pr
    </indexterm>
    <para>
     À partir de <productname>PostgreSQL </productname> 8.1, il existe un
-    processus serveur optionnel et séparé appelé le <firstterm>démon
-    autovacuum</firstterm>, dont le but est d'automatiser l'exécution des
-    commandes <command>VACUUM</command> et <command>ANALYZE </command>. Une
-    fois activé, le démon autovacuum s'exécute périodiquement et vérifie les
-    tables ayant un grand nombre de lignes insérées, mises à jour ou
-    supprimées. Ces vérifications utilisent la fonctionnalité de récupération
-    de statistiques au niveau ligne&nbsp;; du coup, le démon autovacuum ne peut
-    pas être utilisé sauf si <xref linkend="guc-stats-start-collector"/> et <xref
-    linkend="guc-stats-row-level"/> sont configurés à <literal>true</literal>.
-    De plus, il est important d'autoriser un emplacement pour le processus
-    autovacuum lors du choix de la valeur de <xref
-    linkend="guc-superuser-reserved-connections"/>.
+    processus serveur optionnel appelé <firstterm>autovacuum</firstterm>,
+    dont le but est d'automatiser l'exécution des commandes
+    <command>VACUUM</command> et <command>ANALYZE </command>. Une fois activé,
+    autovacuum vérifie les tables ayant un grand nombre de lignes insérées,
+    mises à jour ou supprimées. Ces vérifications utilisent la fonctionnalité
+    de récupération de statistiques&nbsp;; du coup, autovacuum ne peut
+    pas être utilisé sauf si <xref linkend="guc-track-counts"/> est configuré
+    à <literal>true</literal>.
+    In the default configuration, autovacuuming is enabled and the related
+    configuration parameters are appropriately set.
    </para>
 
    <para>
-    Le démon autovacuum, si activé, s'exécute toutes les <xref
-    linkend="guc-autovacuum-naptime"/> secondes. À chaque exécution, il
-    sélectionne une base à traiter et vérifie chaque table de cette base. Les
-    commandes <command>VACUUM</command> et <command>ANALYZE</command> sont
-    exécutées si nécessaire.
+    Beginning in <productname>PostgreSQL</productname> 8.3, autovacuum has a
+    multi-process architecture: there is a daemon process, called the
+    <firstterm>autovacuum launcher</firstterm>, which is in charge of starting
+    an <firstterm>autovacuum worker</firstterm> process on each database every
+    <xref linkend="guc-autovacuum-naptime"/> seconds. On each run, the worker
+    process checks each table within that database, and <command>VACUUM</command> or
+    <command>ANALYZE</command> commands are issued as needed.
+   </para>
+
+   <para>
+    The <xref linkend="guc-autovacuum-max-workers"/> setting limits how many
+    workers may be running at any time. If several large tables all become
+    eligible for vacuuming in a short amount of time, all autovacuum workers
+    may end up vacuuming those tables for a very long time. This would result
+    in other tables and databases not being vacuumed until a worker became
+    available. There is not a limit on how many workers might be in a
+    single database, but workers do try to avoid repeating work that has
+    already been done by other workers. Note that the number of running
+    workers does not count towards the <xref linkend="guc-max-connections"/> nor
+    the <xref linkend="guc-superuser-reserved-connections"/> limits.
    </para>
 
    <para>
@@ -513,7 +536,7 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</pr
     être perdues en cas de grosse charge). Pour ANALYZE, une condition similaire
     est utilisée&nbsp;: la limite, définie comme
 <programlisting>limite du analyze = limite de base du analyze + facteur d'échelle du analyze * nombre de lignes</programlisting>
-    est comparée au nombre de lignes insérées, mises à jour ou supprimées depuis
+    est comparée au nombre de lignes insérées ou mises à jour depuis
     le dernier <command>ANALYZE</command>.
    </para>
 
@@ -579,6 +602,12 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</pr
     </para>
    </caution>
 
+   <para>
+    When multiple workers are running, the cost limit is
+    <quote>balanced</quote> among all the running workers, so that the
+    total impact on the system is the same, regardless of the number
+    of workers actually running.
+   </para>
   </sect2>
  </sect1>
 
@@ -669,10 +698,11 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".</pr
    Une meilleure approche est d'envoyer la sortie <systemitem>stderr</systemitem>
    du serveur dans un programme de rotation de journaux. Il
    existe un programme interne de rotation que vous pouvez utiliser en
-   configurant le paramètre <literal>redirect_stderr</literal> à
+   configurant le paramètre <literal>logging_collector</literal> à
    <literal>true</literal> dans <filename>postgresql.conf</filename>. Les paramètres de
    contrôle pour ce programme sont décrits dans <xref
-   linkend="runtime-config-logging-where"/>.
+   linkend="runtime-config-logging-where"/>. You can also use this approach
+   to capture the log data in machine readable CSV format.
   </para>
 
   <para>

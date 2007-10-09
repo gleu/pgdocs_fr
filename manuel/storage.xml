@@ -182,6 +182,17 @@ le tablespace <literal>pg_global</literal> n'est pas accédé via
 <filename>pg_tblspc</filename> mais correspond à <varname>PGDATA</varname><filename>/global</filename>.
 </para>
 
+<para>
+Temporary files (for operations such as sorting more data than can fit in
+memory) are created within <varname>PGDATA</varname><filename>/base/pgsql_tmp</filename>,
+or within a <filename>pgsql_tmp</filename> subdirectory of a tablespace directory
+if a tablespace other than <literal>pg_default</literal> is specified for them.
+The name of a temporary file has the form
+<filename>pgsql_tmp<replaceable>PPP</replaceable>.<replaceable>NNN</replaceable></filename>,
+where <replaceable>PPP</replaceable> is the PID of the owning backend and
+<replaceable>NNN</replaceable> distinguishes different files of that backend.
+</para>
+
 </sect1>
 
 <sect1 id="storage-toast">
@@ -227,20 +238,27 @@ en entrée; mais dans certains cas, des approches plus efficaces sont possibles.)
 </para>
 
 <para>
-<acronym>TOAST</acronym> empiète les deux bits de poids fort sur le mot contenant la
-longueur varlena, limitant par conséquent la taille logique de toute valeur d'un
-type de données <acronym>TOAST</acronym>-able à 1&nbsp;Go (2<superscript>30</superscript> - 1
-octets). Quand les deux bits sont à zéro, cette valeur est une valeur
-ordinaire, non <acronym>TOAST</acronym>ée, du type de données. Un des bits initialisé
-indique que la valeur a été compressée et doit être décompressée avant d'être
-utilisée. L'autre bit indique que la valeur a été stocké en dehors de la ligne.
-Dans ce cas, le reste de la valeur est en réalité simplement un pointeur 
-et la véritable donnée se trouve ailleurs. 
-Quand les deux bits sont initialisés, les données sont stockées
-ailleurs tout en étant compressées. Dans tous les cas, la longueur dans les bits
-de poids faible du mot varlena indique la taille réelle de la donnée, pas la taille de la
-valeur logique qui serait extraite par décompression ou récupération
-de la donnée en dehors de la ligne.
+<acronym>TOAST</acronym> usurps two bits of the varlena length word (the high-order
+bits on big-endian machines, the low-order bits on little-endian machines),
+thereby limiting the logical size of any value of a <acronym>TOAST</acronym>-able
+data type to 1 GB (2<superscript>30</superscript> - 1 bytes).  When both bits are zero,
+the value is an ordinary un-<acronym>TOAST</acronym>ed value of the data type, and
+the remaining bits of the length word give the total datum size (including
+length word) in bytes.  When the highest-order or lowest-order bit is set,
+the value has only a single-byte header instead of the normal four-byte
+header, and the remaining bits give the total datum size (including length
+byte) in bytes.  As a special case, if the remaining bits are all zero
+(which would be impossible for a self-inclusive length), the value is a
+pointer to out-of-line data stored in a separate TOAST table.  (The size of
+a TOAST pointer is given in the second byte of the datum.)
+Values with single-byte headers aren't aligned on any particular
+boundary, either.  Lastly, when the highest-order or lowest-order bit is
+clear but the adjacent bit is set, the content of the datum has been
+compressed and must be decompressed before use.  In this case the remaining
+bits of the length word give the total size of the compressed datum, not the
+original data.  Note that compression is also possible for out-of-line data
+but the varlena header does not tell whether it has occurred &mdash;
+the content of the TOAST pointer tells that, instead.
 </para>
 
 <para>
@@ -259,9 +277,8 @@ détails.
 
 <para>
 Les valeurs hors-ligne sont divisées (après compression si nécessaire) en
-morceaux d'au plus <literal>TOAST_MAX_CHUNK_SIZE</literal> octets (cette valeur est
-un peu plus petite que <literal>BLCKSZ/4</literal>, soit à peu près 2000 octets par
-défaut). Chaque morceau est stocké comme une ligne séparée dans la table
+morceaux d'au plus <literal>TOAST_MAX_CHUNK_SIZE</literal> octets (by default this value is chosen
+so that four chunk rows will fit on a page, making it about 2000 bytes). Chaque morceau est stocké comme une ligne séparée dans la table
 <acronym>TOAST</acronym> de la table propriétaire. Chaque table <acronym>TOAST</acronym>
 contient les colonnes <structfield>chunk_id</structfield> (un OID identifiant la valeur
 <acronym>TOAST</acronym>ée particulière), <structfield>chunk_seq</structfield> (un numéro de
@@ -273,17 +290,18 @@ besoin de stocker l'OID de la table <acronym>TOAST</acronym> dans laquelle cherc
 et l'OID de la valeur spécifique (son <structfield>chunk_id</structfield>). Par commodité, 
 les pointeurs datums stockent aussi la taille logique du datum (taille
 de la donnée originale non compressée) et la taille stockée réelle (différente
-si la compression a été appliquée). A partir du mot d'en-tête varlena,
-la taille totale d'un pointeur datum <acronym>TOAST</acronym> est par conséquent de 20 octets
+si la compression a été appliquée). À partir des octets d'en-tête varlena,
+la taille totale d'un pointeur datum <acronym>TOAST</acronym> est par conséquent de 18 octets
 quelque soit la taille réelle de la valeur représentée.
 </para>
 
 <para>
 Le code <acronym>TOAST</acronym> est déclenché seulement quand une valeur de ligne
-à stocker dans une table est plus grande que <literal>BLCKSZ/4</literal> octets (habituellement
+à stocker dans une table est plus grande que <symbol>TOAST_TUPLE_THRESHOLD</symbol> octets (habituellement
 2&nbsp;Ko). Le code <acronym>TOAST</acronym> compressera et/ou déplacera les valeurs
 de champ hors la ligne jusqu'à ce que la valeur de la ligne soit plus petite que
-<literal>BLCKSZ/4</literal> octets ou que plus aucun gain ne puisse être réalisé. 
+<symbol>TOAST_TUPLE_TARGET</symbol> octets  (habituellement là-aussi
+2&nbsp;Ko) ou que plus aucun gain ne puisse être réalisé. 
 Lors d'une opération UPDATE, les valeurs des champs non modifiées sont habituellement
 préservées telles quelles&nbsp;; donc un UPDATE sur une ligne avec des valeurs hors
 ligne n'induit pas de coûts à cause de <acronym>TOAST</acronym> si aucune des valeurs
@@ -298,7 +316,8 @@ les colonnes <acronym>TOAST</acronym>-ables&nbsp;:
     <listitem>
      <para>
       <literal>PLAIN</literal> empêche soit la compression soit le stockage
-      hors-ligne. Ceci est la seule stratégie possible pour les 
+      hors-ligne; furthermore it disables use of single-byte headers
+      for varlena types. Ceci est la seule stratégie possible pour les 
       colonnes des types de données non <acronym>TOAST</acronym>-ables.
      </para>
     </listitem>
@@ -419,7 +438,7 @@ cinq parties pour chaque page.
 
 <row>
  <entry>PageHeaderData</entry>
- <entry>Longueur de 20 octets. Contient des informations générales sur la page y compris
+ <entry>Longueur de 24 octets. Contient des informations générales sur la page y compris
   des pointeurs sur les espaces libres.</entry>
 </row>
 
@@ -454,28 +473,31 @@ cinq parties pour chaque page.
 
  <para>
 
-  Les vingt premiers octets de chaque page consistent en un en-tête de page
+  Les 24 premiers octets de chaque page consistent en un en-tête de page
   (PageHeaderData). Son format est détaillé dans <xref
   linkend="pageheaderdata-table"/>. Les deux premiers champs traquent l'entrée
-  WAL la plus récente relative à cette page. Ils sont suivis par trois
+  WAL la plus récente relative à cette page. Next is a 2-byte field
+  containing flag bits. Ils sont suivis par trois
   champs d'entiers sur deux octets (<structfield>pd_lower</structfield>,
   <structfield>pd_upper</structfield> et
   <structfield>pd_special</structfield>). Ils contiennent des décalages
   d'octets à partir du début de la page jusqu'au début de l'espace non alloué,
   jusqu'à la fin de l'espace non alloué, et jusqu'au début de l'espace spécial.
-  Les deux derniers octets de l'en-tête de page,
+  Les deux octets suivants de l'en-tête de page,
   <structfield>pd_pagesize_version</structfield>, stockent à la fois la taille
-  de la page et un indicateur de versoin. À partir de la version 8.1 de
-  <productname>PostgreSQL</productname>, le numéro de version est 3&nbsp;; 
+  de la page et un indicateur de versoin. À partir de la version 8.3 de
+  <productname>PostgreSQL</productname>, le numéro de version est 4&nbsp;; 
+  <productname>PostgreSQL</productname> 8.1 et 8.2 ont utilisé le numéro de version 3&nbsp;; 
   <productname>PostgreSQL</productname> 8.0 a utilisé le numéro de version 2&nbsp;;
   <productname>PostgreSQL</productname> 7.3 et 7.4 ont utilisé le numéro de
   version 1&nbsp;; les versions précédentes utilisaient le numéro de version 0.
   (La disposition fondamentale de la page et le format de l'en-tête n'ont pas changé
-  dans ces versions mais la disposition de l'en-tête des lignes de tête a
+  dans la plupart de ces versions mais la disposition de l'en-tête des lignes de tête a
   changé.) La taille de la page est seulement présente comme vérification
   croisée&nbsp;; il n'existe pas de support pour avoir plus d'une taille de
   page dans une installation.
-  
+  The last field is a hint that shows whether pruning the page is likely
+  to be profitable: it tracks the oldest un-pruned XMAX on the page.
  </para>
  
  <table tocentry="1" id="pageheaderdata-table">
@@ -504,9 +526,16 @@ cinq parties pour chaque page.
   </row>
   <row>
    <entry>pd_tli</entry>
-   <entry>TimeLineID</entry>
-   <entry>4 octets</entry>
-   <entry>TLI de la dernière modification</entry>
+   <entry>uint16</entry>
+   <entry>2 octets</entry>
+   <entry>TimeLineID de la dernière modification (seulement les 16 bits de
+     poids faible)</entry>
+  </row>
+  <row>
+   <entry>pd_flags</entry>
+   <entry>uint16</entry>
+   <entry>2 octets</entry>
+   <entry>Bits d'état</entry>
   </row>
   <row>
    <entry>pd_lower</entry>
@@ -532,6 +561,12 @@ cinq parties pour chaque page.
    <entry>2 octets</entry>
    <entry>Taille de la page et disposition de l'information du numéro de
     version</entry>
+  </row>
+  <row>
+   <entry>pd_prune_xid</entry>
+   <entry>TransactionId</entry>
+   <entry>4 bytes</entry>
+   <entry>Oldest unpruned XMAX on page, or zero if none</entry>
   </row>
  </tbody>
  </tgroup>
@@ -586,7 +621,7 @@ cinq parties pour chaque page.
  <para>
 
   Toutes les lignes de la table sont structurées de la même façon. Il existe
-  un en-tête à taille fixe (occupant 27 octets sur la plupart des machines),
+  un en-tête à taille fixe (occupant 23 octets sur la plupart des machines),
   suivi par un bitmap NULL optionnel, un champ ID de l'objet optionnel et les
   données de l'utilisateur. L'en-tête est détaillé dans <xref
   linkend="heaptupleheaderdata-table"/>. Les données réelles de l'utilisateur
@@ -630,25 +665,19 @@ cinq parties pour chaque page.
    <entry>t_xmin</entry>
    <entry>TransactionId</entry>
    <entry>4 octets</entry>
-   <entry>insère le tampon XID</entry>
-  </row>
-  <row>
-   <entry>t_cmin</entry>
-   <entry>CommandId</entry>
-   <entry>4 octets</entry>
-   <entry>insère le tampon CID</entry>
+   <entry>XID d'insertion</entry>
   </row>
   <row>
    <entry>t_xmax</entry>
    <entry>TransactionId</entry>
    <entry>4 octets</entry>
-   <entry>supprime le tampon XID</entry>
+   <entry>XID de suppression</entry>
   </row>
   <row>
-   <entry>t_cmax</entry>
+   <entry>t_cid</entry>
    <entry>CommandId</entry>
    <entry>4 octets</entry>
-   <entry>supprime le tampon CID (surcharge avec t_xvac)</entry>
+   <entry>CID d'insertion et de suppression (surcharge avec t_xvac)</entry>
   </row>
   <row>
    <entry>t_xvac</entry>
@@ -664,10 +693,10 @@ cinq parties pour chaque page.
     récente</entry>
   </row>
   <row>
-   <entry>t_natts</entry>
+   <entry>t_infomask2</entry>
    <entry>int16</entry>
    <entry>2 octets</entry>
-   <entry>nombre d'attributs</entry>
+   <entry>nombre d'attributs et quelques bits d'état</entry>
   </row>
   <row>
    <entry>t_infomask</entry>
@@ -702,7 +731,6 @@ cinq parties pour chaque page.
   Tout ceci est emballé dans les fonctions
   <firstterm>heap_getattr</firstterm>, <firstterm>fastgetattr</firstterm>
   et <firstterm>heap_getsysattr</firstterm>.
-  
  </para>
  <para>
 
@@ -713,7 +741,7 @@ cinq parties pour chaque page.
   sont placés simplement. S'il s'agit d'un champ à taille variable
   (attlen = -1), alors c'est un peu plus compliqué. Tous les types de données
   à longueur variable partagent la même structure commune d'en-tête,
-  <type>varattrib</type>, qui inclut la longueur totale de la valeur stockée
+  <type>struct varlena</type>, qui inclut la longueur totale de la valeur stockée
   et quelques bits d'option. Suivant les options, les données pourraient être
   soit dans la table de base soit dans une table <acronym>TOAST</acronym>&nbsp;;
   elles pourraient aussi être compressées (voir <xref 

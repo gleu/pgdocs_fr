@@ -155,7 +155,8 @@ validité des conversions entre les types de données et la façon
 d'exécuter ces conversions.  Les conversions sont appelées
 <firstterm>casts</firstterm> en anglais. Des conversions de types
 supplémentaires peuvent être ajoutées par l'utilisateur avec la commande
-<command>CREATE CAST</command> (c'est habituellement réalisé en
+<xref linkend="sql-createcast" endterm="sql-createcast-title"> (c'est
+habituellement réalisé en
 conjonction avec la définition de nouveaux types de données.
 L'ensemble des conversions entre les types prédéfinis a été
 soigneusement choisi et le mieux est de ne pas le modifier).
@@ -372,24 +373,30 @@ Quelques exemples suivent.
 </para>
 
 <example>
-<title>Résolution de types pour l'opérateur exponentiel</title>
+<title>Résolution de types pour l'opérateur factoriel</title>
+
+<example>
+<title>Factorial Operator Type Resolution</title>
 
 <para>
-Il n'y a qu'un seul opérateur exponentiel défini dans le catalogue et
-il prend deux arguments de type <type>double precision</type> (double précision).
-L'analyseur assigne initialement le type <type>integer</type> (entier)
-aux deux arguments de cette expression&nbsp;:
-<screen>SELECT 2 ^ 3 AS "exp";
+	There is only one factorial operator (postfix <literal>!</literal>)
+defined in the standard catalog, and it takes an argument of type 
+<type>bigint</type>.
+The scanner assigns an initial type of <type>integer</type> to the argument
+in this query expression:
+<screen>
+SELECT 40 ! AS "40 factorial";
 
- exp
------
-   8
-(1 row)</screen>
+                   40 factorial
+--------------------------------------------------
+ 815915283247897734345611269596115894272000000000
+(1 row)
+</screen>
 
-L'analyseur fait donc une conversion de types sur les deux opérandes et
+L'analyseur fait donc une conversion de types sur l'opérande et
 la requête est équivalente à
 
-<screen>SELECT CAST(2 AS double precision) ^ CAST(3 AS double precision) AS "exp";</screen>
+<screen>SELECT CAST(40 AS bigint) ! AS "40 factorial";</screen>
 </para>
 </example>
 
@@ -453,14 +460,15 @@ implémentent toutes des opérations de valeur absolue pour des types de
 données numériques variées.  Une de ces entrées est pour le type
 <type>float8</type> (réel) qui est le type préféré dans la catégorie
 des numériques.  Par conséquent, <productname>PostgreSQL</productname>
-utilisera cette entrée quand il sera en face d'un argument non numérique&nbsp;:
+utilisera cette entrée quand il sera en face d'un argument de type
+<type>unknown</type>&nbsp;:
 <screen>SELECT @ '-4.5' AS "abs";
  abs
 -----
  4.5
 (1 row)</screen>
-Le système a effectué une conversion implicite du type <type>text</type> vers
-le type <type>float8</type> (réel) avant d'appliquer l'opérateur choisi. Nous
+Le système a compris implicitement que le litéral de type
+<type>unknown</type> est de type <type>float8</type> (réel) avant d'appliquer l'opérateur choisi. Nous
 pouvons vérifier que <type>float8</type>, et pas un autre type, a été
 utilisé&nbsp;:
 <screen>SELECT @ '-4.5e500' AS "abs";
@@ -476,7 +484,7 @@ avec <literal>~</literal>, nous obtenons&nbsp;:
 <screen>SELECT ~ '20' AS "negation";
 
 ERROR:  operator is not unique: ~ "unknown"
-HINT:  Could not choose a best candidate operator. You may need to add explicit
+HINT:  Could not choose a best candidate operator. You might need to add explicit
 type casts.</screen>
 Ceci se produit parce que le système ne peut pas décider quel opérateur
 doit être préféré parmi les différents opérateurs <literal>~</literal>
@@ -544,15 +552,27 @@ trouveront jamais de correspondance à cette étape).
 
 <step performance="required">
 <para>
-Si aucune correspondance n'est trouvée, regarder si l'appel à la
-fonction apparaît être une requête triviale de conversion de types.
+Si aucune correspondance n'est trouvée, vérifier si l'appel à la
+fonction apparaît être une requête spéciale de conversion de types.
 Cela arrive si l'appel à la fonction a juste un argument et si le nom
 de la fonction est le même que le nom (interne) de certains types de
 données.  De plus, l'argument de la fonction doit être soit un type
 inconnu soit un type qui a une compatibilité binaire avec le type de
-données nommés.  Quand ces conditions sont réunies, l'argument de la
-fonction est converti vers le type de données nommé sans aucun appel
-effectif à la fonction.
+données nommés, or a type that could be converted to the named data type by
+applying that type's I/O functions (that is, the conversion is either to or
+from one of the standard string types).  When these conditions are met,
+the function call is treated as a form of <literal>CAST</literal> specification.
+  <footnote>
+   <para>
+    The reason for this step is to support function-style cast specifications
+    in cases where there is not an actual cast function.  If there is a cast
+    function, it is conventionally named after its output type, and so there
+    is no need to have a special case.  See
+    <xref linkend="sql-createcast" endterm="sql-createcast-title"/>
+    for additional commentary.
+   </para>
+  </footnote>
+
 </para>
 </step>
 <step performance="required">
@@ -693,7 +713,7 @@ L'analyseur apprend depuis le catalogue <structname>pg_cast</structname> que les
 types <type>text</type> et <type>varchar</type> ont une compatibilité
 binaire, ce qui veut dire que l'un peut être passé à une fonction qui
 accepte l'autre sans avoir à faire aucune conversion physique.  Par
-conséquent, aucun appel de conversion explicite de types n'est
+conséquent, aucun appel de conversion de types n'est
 réellement inséré dans ce cas.
 </para>
 </note>
@@ -703,17 +723,23 @@ réellement inséré dans ce cas.
 Et si la fonction est appelée avec un argument de type
 <type>integer</type>, l'analyseur essaie de le convertir en
 <type>text</type>&nbsp;:
-<screen>SELECT substr(1234, 3);
+<screen>
+SELECT substr(1234, 3);
+ERROR:  function substr(integer, integer) does not exist
+HINT:  No function matches the given name and argument types. You might need
+to add explicit type casts.
+</screen>
+
+This does not work because <type>integer</type> does not have an implicit cast
+to <type>text</type>.  An explicit cast will work, however:
+<screen>
+SELECT substr(CAST (1234 AS text), 3);
 
  substr
 --------
      34
-(1 row)</screen>
-
-Ceci est réellement exécuté de la façon suivante&nbsp;:
-<screen>SELECT substr(CAST (1234 AS text), 3);</screen>
-Cette transformation automatique peut réussir parce qu'il y a un appel de
-conversion implicite du type <type>integer</type> vers le type <type>text</type>.
+(1 row)
+</screen>
 </para>
 </example>
 
