@@ -119,14 +119,16 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
    <productname>PostgreSQL</productname> est un sous-système qui supporte la
    récupération et les rapports d'informations sur l'activité du serveur.
    Actuellement, le récupérateur peut compter les accès aux tables et index à la
-   fois en terme de blocs disque et de lignes individuelles.  </para>
+   fois en terme de blocs disque et de lignes individuelles. It also tracks
+   total numbers of rows in each table, and the last vacuum and analyze times
+   for each table.
+  </para>
 
   <para>
    <productname>PostgreSQL</productname> supporte aussi
    la détermination de la commande exacte en cours d'exécution par les autres
-   processus serveur. Cette fonctionnalité indépendante peut être activée ou
-   désactivée que les statistiques niveau bloc et ligne soient récupérées ou
-   non.
+   processus serveur. Cette fonctionnalité indépendante ne dépend pas du
+   récupérateur de statistiques.
   </para>
 
  <sect2 id="monitoring-stats-setup">
@@ -142,31 +144,14 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
   </para>
 
   <para>
-   Le paramètre <xref linkend="guc-stats-start-collector"/> doit valoir
-   <literal>true</literal> pour que le récupérateur de statistiques soit seulement
-   lancé. C'est la valeur par défaut et la configuration recommandée mais elle
-   peut être désactivée si vous n'êtes pas intéressé par les statistiques et
-   que vous souhaitez supprimer toute activité en trop (néanmoins, ce que vous
-   sauverez sera assez restreint). Notez que cette option ne peut pas être
-   changée alors que le serveur est en cours d'exécution.
+   The parameter <xref linkend="guc-track-counts"/> controls whether
+   information is actually sent to the collector process and thus determines
+   whether any run-time overhead occurs for event counting.
   </para>
 
   <para>
-   Les paramètres <xref linkend="guc-stats-block-level"/> et
-   <xref linkend="guc-stats-row-level"/>
-   contrôlent la quantité d'informations réellement envoyée au récupérateur et
-   détermine du coup le temps supplémentaire réclamé. Ils déterminent
-   respectivement si un processus serveur récupère les statistiques d'accès disque
-   au niveau bloc et celles au niveau ligne. De plus, les statistiques sur les
-   transactions réussies et échouées par base sont récupérées si un de ces deux
-   paramètres sont configurés.
-  </para>
-
-  <para>
-   Le paramètre <xref linkend="guc-stats-command-string"/> active la surveillance
-   de la commande en cours d'exécution par un processus serveur. Le sous-processus
-   de récupération des statistiques n'a pas besoin d'être en cours d'exécution
-   pour activer cette fonctionnalité.
+   Le paramètre <xref linkend="guc-track-activities"/> active la surveillance
+   de la commande en cours d'exécution par un processus serveur.
   </para>
 
   <para>
@@ -179,17 +164,6 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
    superutilisateurs sont autorisés à modifier ces paramètres avec
    <command>SET</command>).
   </para>
-
-   <note>
-    <para>
-     Comme les paramètres <varname>stats_block_level</varname> et
-     <varname>stats_row_level</varname> valent par défaut <literal>false</literal>,
-     très peu de statistiques sont récupérées dans la configuration par défaut.
-     Activer une ou plus des variables de configuration augmentera
-     significativement le nombre de données utiles produit par le récupérateur
-     de statistiques au prix d'une surcharge supplémentaire à l'exécution.
-    </para>
-   </note>
 
  </sect2>
 
@@ -207,15 +181,15 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
   <para>
    En utilisant les statistiques pour surveiller l'activité en cours, il est
    important de réaliser que l'information n'est pas mise à jour instantanément.
-   Chaque processus serveur individuel transmet le nouveau nombre d'accès au
-   niveau des blocs et des lignes au récupérateur juste avant l'attente d'une
+   Chaque processus serveur individuel transmet les nouvelles statistiques au
+   récupérateur juste avant l'attente d'une
    nouvelle commande du client&nbsp;; donc une requête toujours en cours
    n'affecte pas les totaux affichés. De plus, le récupérateur lui-même émet un
    nouveau rapport une fois par <varname>PGSTAT_STAT_INTERVAL</varname>
    millisecondes (500, sauf si cette valeur a été modifiée lors de la
    construction du serveur). Donc, les totaux affichés sont bien derrière
    l'activité réelle. Néanmoins, l'information sur la requête en cours récupérée
-   par <varname>stats_command_string</varname> est toujours à jour.
+   par <varname>track_activities</varname> est toujours à jour.
   </para>
 
   <para>
@@ -232,7 +206,10 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
    requêtes sur les statistiques et de corréler les résultats sans vous
    inquiéter que les nombres aient pu changer. Mais si vous voulez voir les
    nouveaux résultats pour chaque requête, assurez-vous de lancer les requêtes
-   en dehors de tout bloc de transaction.
+   en dehors de tout bloc de transaction.  Alternatively, you can invoke
+   <function>pg_stat_clear_snapshot</function>(), which will discard the
+   current transaction's statistics snapshot (if any).  The next use of
+   statistical information will cause a new snapshot to be fetched.
   </para>
 
   <table id="monitoring-stats-views-table">
@@ -253,14 +230,28 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
       <entry><structname>pg_stat_activity</structname></entry>
       <entry>Une ligne par processus serveur, affichant l'OID de la base de
       données, le nom de la base, l'<acronym>ID</acronym> du processus, l'OID de
-      l'utilisateur, son nom, la requête en cours, l'état d'attente de la requête
-      et le moment où a commencé l'exécution de la requête, ainsi que l'adresse
+      l'utilisateur, son nom, la requête en cours, l'état d'attente de la requête,
+      le moment où a commencé l'exécution de la requête et de la transaction, le
+	  moment où le processus serveur a été lancé ainsi que l'adresse
       et le numéro de port du client. Les colonnes renvoyant des données sur la
       requête en cours sont disponibles sauf si le paramètre
-      <varname>stats_command_string</varname> a été désactivé. De
+      <varname>track_activities</varname> a été désactivé. De
       plus, ces colonnes sont seulement visibles si l'utilisateur examinant
       cette vue est un superutilisateur ou est le propriétaire du processus en
       cours de rapport.</entry>
+     </row>
+
+     <row>
+      <entry><structname>pg_stat_bgwriter</structname></entry>
+      <entry>One row only, showing cluster-wide statistics from the
+      background writer: number of scheduled checkpoints, requested
+      checkpoints, buffers written by checkpoints and cleaning scans,
+      and the number of times the bgwriter stopped a cleaning scan
+      because it had written too many buffers.  Also includes
+      statistics about the shared buffer pool, including buffers written
+      by backends (that is, not by the background writer) and total buffers
+      allocated.
+     </entry>
      </row>
 
      <row>
@@ -268,9 +259,10 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
       <entry>Une ligne par base de données, affichant l'OID de la base de
       données, son nom, le nombre de processus serveur actifs connectés à cette
       base, le nombre total de transactions validées et le nombre de
-      celles qui ont été annulées, le nombre total de blocs disque lus et le
+      celles qui ont été annulées, le nombre total de blocs disque lus, le
       nombre total de succès du tampon (c'est-à-dire le nombre de lectures de
-      blocs évitées en trouvant déjà le bloc dans le cache du tampon).
+      blocs évitées en trouvant déjà le bloc dans le cache du tampon), le
+	  nombre de lignes renvoyées, insérées, mises à jour et supprimées.
      </entry>
      </row>
 
@@ -283,7 +275,9 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
       vivantes récupérées par des parcours séquentiels, le nombre de parcours
       d'index réalisés (pour tous les index appartenant à cette table), le
       nombre de lignes vivantes récupérées par les parcours d'index, le nombre
-      d'insertions, de modifications et de suppressions de ligne, la dernière
+      d'insertions, de modifications et de suppressions de ligne,
+	  number of row updates that were HOT (i.e., no separate index update),
+	  numbers of live and dead rows, la dernière
       fois que la table a été la cible d'un VACUUM manuel, la dernière fois
       qu'elle a été la cible d'un VACUUM exécuté par le démon autovacuum, la
       dernière fois que la table a été la cible d'un ANALYZE manuel, la dernière
@@ -517,6 +511,46 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
      </row>
 
      <row>
+      <entry><literal><function>pg_stat_get_db_tuples_returned</function>(<type>oid</type>)</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       Number of tuples returned for database
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_db_tuples_fetched</function>(<type>oid</type>)</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       Number of tuples fetched for database
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_db_tuples_inserted</function>(<type>oid</type>)</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       Number of tuples inserted in database
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_db_tuples_updated</function>(<type>oid</type>)</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       Number of tuples updated in database
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_db_tuples_deleted</function>(<type>oid</type>)</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       Number of tuples deleted in database
+      </entry>
+     </row>
+
+     <row>
       <entry><literal><function>pg_stat_get_numscans</function>(<type>oid</type>)</literal></entry>
       <entry><type>bigint</type></entry>
       <entry>
@@ -558,7 +592,8 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
       <entry><literal><function>pg_stat_get_tuples_updated</function>(<type>oid</type>)</literal></entry>
       <entry><type>bigint</type></entry>
       <entry>
-       Nombre de lignes mises à jour dans la table
+       Nombre de lignes mises à jour dans la table (incluant les mises à jour
+	   via HOT)
       </entry>
      </row>
 
@@ -567,6 +602,30 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
       <entry><type>bigint</type></entry>
       <entry>
        Nombre de lignes supprimées dans la table
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_tuples_hot_updated</function>(<type>oid</type>)</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       Number of rows HOT-updated in table
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_live_tuples</function>(<type>oid</type>)</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       Number of live rows in table
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_dead_tuples</function>(<type>oid</type>)</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       Number of dead rows in table
       </entry>
      </row>
 
@@ -695,7 +754,7 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
       <entry>
        Commande active du processus serveur indiqué mais seulement si l'utilisateur
        courant est un superutilisateur ou le même utilisateur dont vient la commande
-       (et que <varname>stats_command_string</varname> est activé)
+       (et que <varname>track_activities</varname> est activé)
       </entry>
      </row>
 
@@ -705,7 +764,7 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
       <entry>
        True si le processus serveur indiqué attend un verrou mais seulement si l'utilisateur
        courant est un superutilisateur ou le même utilisateur dont vient la commande
-       (et que <varname>stats_command_string</varname> est activé)
+       (et que <varname>track_activities</varname> est activé)
       </entry>
      </row>
 
@@ -716,7 +775,19 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
        Date/heure du lancement de la requête en cours d'exécution sur le processus
        serveur indiqué, mais seulement si l'utilisateur courant est un
        superutilisateur ou le même utilisateur dont vient la commande (et que
-       <varname>stats_command_string</varname> est activé)
+       <varname>track_activities</varname> est activé)
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_backend_xact_start</function>(<type>integer</type>)</literal></entry>
+      <entry><type>timestamp with time zone</type></entry>
+      <entry>
+       The time at which the given server process' currently
+       executing transaction was started, but only if the
+       current user is a superuser or the same user as that of
+       the session being queried (and
+       <varname>track_activities</varname> is on)
       </entry>
      </row>
 
@@ -753,10 +824,83 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
      </row>
 
      <row>
-      <entry><literal><function>pg_stat_reset</function>()</literal></entry>
-      <entry><type>boolean</type></entry>
+      <entry><literal><function>pg_stat_get_bgwriter_timed_checkpoints</function>()</literal></entry>
+       <entry><type>bigint</type></entry>
+       <entry>
+        The number of times the bgwriter has started timed checkpoints
+        (because the <varname>checkpoint_timeout</varname> time has expired)
+       </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_bgwriter_requested_checkpoints</function>()</literal></entry>
+      <entry><type>bigint</type></entry>
       <entry>
-       Réinitialise les statistiques niveau bloc et niveau ligne à zéro
+       The number of times the bgwriter has started checkpoints based
+       on requests from backends because the <varname>checkpoint_segments</varname>
+       has been exceeded or because the <command>CHECKPOINT</command>
+       command has been issued
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_bgwriter_buf_written_checkpoints</function>()</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       The number of buffers written by the bgwriter during checkpoints
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_bgwriter_buf_written_clean</function>()</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       The number of buffers written by the bgwriter for routine cleaning of
+       dirty pages
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_bgwriter_maxwritten_clean</function>()</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       The number of times the bgwriter has stopped its cleaning scan because
+       it has written more buffers than specified in the
+       <varname>bgwriter_lru_maxpages</varname> parameter
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_buf_written_backend</function>()</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       The number of buffers written by backends because they needed
+       to allocate a new buffer
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_get_buf_alloc</function>()</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       The total number of buffer allocations
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_clear_snapshot</function>()</literal></entry>
+      <entry><type>void</type></entry>
+      <entry>
+       Discard the current statistics snapshot
+      </entry>
+     </row>
+
+     <row>
+      <entry><literal><function>pg_stat_reset</function>()</literal></entry>
+      <entry><type>void</type></entry>
+      <entry>
+       Reset all statistics counters for the current database to zero
+       (requires superuser privileges)
       </entry>
      </row>
     </tbody>
@@ -976,7 +1120,7 @@ postgres  1016  0.1  2.4  6532 3080 pts/1    SN   13:19   0:00 postgres: tgl reg
    L'exemple ci-dessous montre un script DTrace pour l'analyse du nombre de
    transactions sur le système, comme alternative à l'interrogation régulière
    de <structname>pg_stat_database</structname> avant et après un test de
-   performance.
+   performance&nbsp;:
 <programlisting>#!/usr/sbin/dtrace -qs 
 
 postgresql$1:::transaction-start

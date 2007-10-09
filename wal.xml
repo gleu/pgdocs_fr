@@ -111,14 +111,14 @@
 
   <para>
    <firstterm>Write-Ahead Logging</firstterm> (<acronym>WAL</acronym>)
-   est une approche conventionnelle pour l'écriture d'un journal de
-   transactions.  Sa description détaillée peut être trouvée dans la
+   est une méthode conventionnelle pour s'assurer de l'intégrité des
+   données.  Une description détaillée peut être trouvée dans la
    plupart (si ce n'est tous) des livres sur le traitement
    transactionnel. Brièvement, le concept central des
    <acronym>WAL</acronym> est d'effectuer les changements des fichiers de
    données (où résident les tables et les index) 
    uniquement après que ces changements ont été écrits dans un journal,
-   c'est-à-dire quand l'enregistrement du journal décrivant les changements a
+   c'est-à-dire après que l'enregistrement du journal décrivant les changements a
    été écrit vers le
    stockage permanent.  Si nous suivons cette procédure, nous n'avons
    pas besoin d'écrire les pages de données vers le disque à chaque
@@ -131,18 +131,17 @@
   </para>
 
    <para>
-    Un avantage majeur en utilisant les <acronym>WAL</acronym>
-    est la réduction significative du nombre d'écritures sur le disque
-    puisque seul le journal des transactions a besoin d'être écrit sur le
-    disque au moment où la transaction est validée plutôt que d'écrire dans chaque fichier de
-    données modifié par la transaction. Dans un environnement
-    multi-utilisateurs, la validation de nombreuses transactions peut être
-    accomplie avec un seul <function>fsync()</function> du journal.  De plus, ce
-    dernier est écrit séquentiellement et donc, le coût de
-    synchronisation du journal est largement moindre que le coût d'écriture des
-    pages de données. Ceci est spécialement vrai pour les serveurs gérant
-    beaucoup de petites transactions touchant différentes parties du stockage de
-    données.
+    Utiliser les <acronym>WAL</acronym> permet de réduire de façon
+    significative le nombre d'écritures sur le disque puisque seul le journal
+    des transactions a besoin d'être écrit sur le disque pour garantir qu'une
+    transaction a été validée plutôt que d'écrire dans chaque fichier de
+    données modifié par la transaction. Ce journal est écrit séquentiellement
+    et donc, le coût de synchronisation du journal est largement moindre que
+    le coût d'écriture des pages de données. Ceci est spécialement vrai pour
+    les serveurs gérant beaucoup de petites transactions touchant différentes
+    parties du stockage de données. Furthermore, when the server is processing 
+    many small concurrent transactions, one <function>fsync</function> of the
+    log file may suffice to commit many transactions.
    </para>
 
    <para>
@@ -158,6 +157,139 @@
     cette période corrigera toute incohérence interne.
    </para>
   </sect1>
+
+ <sect1 id="wal-async-commit">
+  <title>Asynchronous Commit</title>
+
+   <indexterm>
+    <primary>synchronous commit</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>asynchronous commit</primary>
+   </indexterm>
+
+  <para>
+   <firstterm>Asynchronous commit</firstterm> is an option that allows transactions
+   to complete more quickly, at the cost that the most recent transactions may
+   be lost if the database should crash.  In many applications this is an
+   acceptable tradeoff.
+  </para>
+
+  <para>
+   As described in the previous section, transaction commit is normally
+   <firstterm>synchronous</firstterm>: the server waits for the transaction's
+   <acronym>WAL</acronym> records to be flushed to permanent storage
+   before returning a success indication to the client.  The client is
+   therefore guaranteed that a transaction reported to be committed will
+   be preserved, even in the event of a server crash immediately after.
+   However, for short transactions this delay is a major component of the
+   total transaction time.  Selecting asynchronous commit mode means that
+   the server returns success as soon as the transaction is logically
+   completed, before the <acronym>WAL</acronym> records it generated have
+   actually made their way to disk.  This can provide a significant boost
+   in throughput for small transactions.
+  </para>
+
+  <para>
+   Asynchronous commit introduces the risk of data loss. There is a short
+   time window between the report of transaction completion to the client
+   and the time that the transaction is truly committed (that is, it is
+   guaranteed not to be lost if the server crashes).  Thus asynchronous
+   commit should not be used if the client will take external actions
+   relying on the assumption that the transaction will be remembered.
+   As an example, a bank would certainly not use asynchronous commit for
+   a transaction recording an ATM's dispensing of cash.  But in many
+   scenarios, such as event logging, there is no need for a strong
+   guarantee of this kind.
+  </para>
+
+  <para>
+   The risk that is taken by using asynchronous commit is of data loss,
+   not data corruption.  If the database should crash, it will recover
+   by replaying <acronym>WAL</acronym> up to the last record that was
+   flushed.  The database will therefore be restored to a self-consistent
+   state, but any transactions that were not yet flushed to disk will
+   not be reflected in that state.  The net effect is therefore loss of
+   the last few transactions.  Because the transactions are replayed in
+   commit order, no inconsistency can be introduced &mdash; for example,
+   if transaction B made changes relying on the effects of a previous
+   transaction A, it is not possible for A's effects to be lost while B's
+   effects are preserved.
+  </para>
+
+  <para>
+   The user can select the commit mode of each transaction, so that
+   it is possible to have both synchronous and asynchronous commit
+   transactions running concurrently.  This allows flexible tradeoffs
+   between performance and certainty of transaction durability.
+   The commit mode is controlled by the user-settable parameter
+   <xref linkend="guc-synchronous-commit"/>, which can be changed in any of
+   the ways that a configuration parameter can be set.  The mode used for
+   any one transaction depends on the value of
+   <varname>synchronous_commit</varname> when transaction commit begins.
+  </para>
+
+  <para>
+   Certain utility commands, for instance <command>DROP TABLE</command>, are
+   forced to commit synchronously regardless of the setting of
+   <varname>synchronous_commit</varname>.  This is to ensure consistency
+   between the server's filesystem and the logical state of the database.
+   The commands supporting two-phase commit, such as <command>PREPARE
+   TRANSACTION</command>, are also always synchronous.
+  </para>
+
+  <para>
+   If the database crashes during the risk window between an
+   asynchronous commit and the writing of the transaction's
+   <acronym>WAL</acronym> records,
+   then changes made during that transaction <emphasis>will</emphasis> be lost.
+   The duration of the
+   risk window is limited because a background process (the <quote>wal
+   writer</quote>) flushes unwritten <acronym>WAL</acronym> records to disk
+   every <xref linkend="guc-wal-writer-delay"/> milliseconds.
+   The actual maximum duration of the risk window is three times
+   <varname>wal_writer_delay</varname> because the wal writer is
+   designed to favor writing whole pages at a time during busy periods.
+  </para>
+
+  <caution>
+   <para>
+    An immediate-mode shutdown is equivalent to a server crash, and will
+    therefore cause loss of any unflushed asynchronous commits.
+   </para>
+  </caution>
+
+  <para>
+   Asynchronous commit provides behavior different from setting
+   <xref linkend="guc-fsync"/> = off.
+   <varname>fsync</varname> is a server-wide
+   setting that will alter the behavior of all transactions.  It disables
+   all logic within <productname>PostgreSQL</productname> that attempts to synchronize
+   writes to different portions of the database, and therefore a system
+   crash (that is, a hardware or operating system crash, not a failure of
+   <productname>PostgreSQL</productname> itself) could result in arbitrarily bad
+   corruption of the database state.  In many scenarios, asynchronous
+   commit provides most of the performance improvement that could be
+   obtained by turning off <varname>fsync</varname>, but without the risk
+   of data corruption.
+  </para>
+
+  <para>
+   <xref linkend="guc-commit-delay"/> also sounds very similar to
+   asynchronous commit, but it is actually a synchronous commit method
+   (in fact, <varname>commit_delay</varname> is ignored during an
+   asynchronous commit).  <varname>commit_delay</varname> causes a delay
+   just before a synchronous commit attempts to flush
+   <acronym>WAL</acronym> to disk, in the hope that a single flush
+   executed by one such transaction can also serve other transactions
+   committing at about the same time.  Setting <varname>commit_delay</varname>
+   can only help when there are many concurrently committing transactions,
+   and it is difficult to tune it to a value that actually helps rather
+   than hurting throughput.
+  </para>
+
+ </sect1>
 
  <sect1 id="wal-configuration">
   <title>Configuration de <acronym>WAL</acronym></title>
@@ -239,15 +371,46 @@
   </para>
 
   <para>
-   Il y aura au moins un fichier segment WAL et normalement
-   pas plus de 2 * <varname>checkpoint_segments</varname> + 1
+   To avoid flooding the I/O system with a burst of page writes,
+   writing dirty buffers during a checkpoint is spread over a period of time.
+   That period is controlled by
+   <xref linkend="guc-checkpoint-completion-target">, which is
+   given as a fraction of the checkpoint interval.
+   The I/O rate is adjusted so that the checkpoint finishes when the
+   given fraction of <varname>checkpoint_segments</varname> WAL segments
+   have been consumed since checkpoint start, or the given fraction of
+   <varname>checkpoint_timeout</varname> seconds have elapsed,
+   whichever is sooner.  With the default value of 0.5,
+   <productname>PostgreSQL</> can be expected to complete each checkpoint
+   in about half the time before the next checkpoint starts.  On a system
+   that's very close to maximum I/O throughput during normal operation,
+   you might want to increase <varname>checkpoint_completion_target</varname>
+   to reduce the I/O load from checkpoints.  The disadvantage of this is that
+   prolonging checkpoints affects recovery time, because more WAL segments
+   will need to be kept around for possible use in recovery.  Although
+   <varname>checkpoint_completion_target</varname> can be set as high as 1.0,
+   it is best to keep it less than that (perhaps 0.9 at most) since
+   checkpoints include some other activities besides writing dirty buffers.
+   A setting of 1.0 is quite likely to result in checkpoints not being
+   completed on time, which would result in performance loss due to
+   unexpected variation in the number of WAL segments needed.
+  </para>
+
+  <para>
+   There will always be at least one WAL segment file, and will normally
+   not be more than (2 + <varname>checkpoint_completion_target</varname>) * <varname>checkpoint_segments</varname> + 1
+   files.  Each segment file is normally 16 MB (though this size can be
+  <para>
+   Il y aura toujours au moins un fichier segment WAL et normalement
+   pas plus de (2 + <varname>checkpoint_completion_target</varname>) *
+   <varname>checkpoint_segments</varname> + 1
    fichiers.  Chaque fichier de segment fait normalement 16&nbsp;Mo (bien
    que cette taille puisse être modifiée lors de la compilation du serveur). Vous pouvez
    utiliser cela pour estimer l'espace disque
    nécessaire pour <acronym>WAL</acronym>. D'habitude, quand les vieux fichiers 
    segment de journaux ne sont plus nécessaires, ils sont recyclés
    (renommés pour devenir les prochains segments dans une séquence
-   numérotée).  S'il y a plus de 2 * <varname>checkpoint_segments</varname> + 1
+   numérotée).  S'il y a plus de 3 * <varname>checkpoint_segments</varname> + 1
    fichiers segments à cause d'un pic temporaire du taux d'écriture des journaux,
    ceux inutilisés seront effacés au lieu d'être
    recyclés jusqu'à ce que le système soit en-dessous de cette limite.

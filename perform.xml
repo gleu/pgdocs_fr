@@ -625,7 +625,7 @@ EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique
 
   <para>
    Quand la requête implique des jointures externes, le planificateur est moins
-   libre qu'il ne l'est lors de jointures internes. Par exemple, considérez
+   libre qu'il ne l'est lors de jointures internes. Par exemple, considérez&nbsp;:
 <programlisting>SELECT * FROM a LEFT JOIN (b JOIN c ON (b.ref = c.id)) ON (a.id = b.id);</programlisting>
    Bien que les restrictions de cette requête semblent superficiellement
    similaires à l'exemple précédent, les sémantiques sont différentes car une
@@ -635,7 +635,7 @@ EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique
    puis joindre A à ce résultat. Du coup, cette requête prend moins de temps à
    planifier que la requête précédente. Dans d'autres cas, le planificateur
    pourrait être capable de déterminer que plus d'un ordre de jointure est
-   sûr. Par exemple, étant donné
+   sûr. Par exemple, étant donné&nbsp;:
 <programlisting>
 SELECT * FROM a LEFT JOIN b ON (a.bid = b.id) LEFT JOIN c ON (a.cid = c.id);
 </programlisting>
@@ -679,7 +679,8 @@ SELECT * FROM a JOIN (b JOIN c ON (b.ref = c.id)) ON (a.id = b.id);</programlist
   <para>
    Vous n'avez pas besoin de restreindre l'ordre de jointure pour diminuer le 
    temps de recherche car il est bien d'utiliser les opérateurs <literal>JOIN</literal>
-   dans les éléments d'une liste <literal>FROM</literal>. Par exemple, considérez
+   dans les éléments d'une liste <literal>FROM</literal>. Par exemple,
+   considérez&nbsp;:
 <programlisting>SELECT * FROM a CROSS JOIN b, c, d, e WHERE ...;</programlisting>
    Avec <varname>join_collapse_limit</varname> = 1, ceci force le planificateur à
    joindre A à B avant de les joindre aux autre stables mais sans restreindre
@@ -699,7 +700,7 @@ SELECT * FROM a JOIN (b JOIN c ON (b.ref = c.id)) ON (a.id = b.id);</programlist
   <para>
    Un problème très proche et affectant le temps de planification est le
    regroupement de sous-requêtes dans leurs requêtes parents. Par exemple,
-   considérez&nbsp;
+   considérez&nbsp;:
 <programlisting>SELECT *
 FROM x, y,
     (SELECT * FROM a, b, c WHERE quelquechose) AS ss
@@ -708,7 +709,7 @@ WHERE quelquechosedautre;</programlisting>
    jointure&nbsp;; la règle <literal>SELECT</literal> de la vue sera insérée à la
    place de la référence de la vue, demande une requête plutôt identique à celle
    ci-dessus. Normalement, le planificateur essaiera de regrouper la
-   sous-requête avec son parent, donnant
+   sous-requête avec son parent, donnant&nbsp;:
 <programlisting>SELECT * FROM x, y, a, b, c WHERE quelquechose AND quelquechosedautre;</programlisting>
    Ceci résulte habituellement en un meilleur plan que de planifier séparément
    la sous-requête (par exemple, les conditions <literal>WHERE</literal> externes
@@ -796,7 +797,9 @@ WHERE quelquechosedautre;</programlisting>
     créer une instruction préparée <command>INSERT</command>, puis utilisez
     <command>EXECUTE</command> autant de fois que nécessaire. Ceci évite
     certaines surcharges lors d'une analyse et d'une planification répétées
-    de commandes <command>INSERT</command>.
+	de commandes <command>INSERT</command>. Different interfaces provide this facility
+	in different ways; look for <quote>prepared statements</quote> in the interface
+    documentation.
    </para>
 
    <para>
@@ -805,6 +808,18 @@ WHERE quelquechosedautre;</programlisting>
     <command>INSERT</command>, même si <command>PREPARE</command> est utilisé lorsque
     de nombreuses insertions sont groupées en une seule transaction.
    </para>
+
+   <para>
+    <command>COPY</command> is fastest when used within the same
+    transaction as an earlier <command>CREATE TABLE</command> or
+    <command>TRUNCATE</command> command. In such cases no WAL
+    needs to be written, because in case of an error, the files
+    containing the newly loaded data will be removed anyway.
+    However, this consideration does not apply when
+    <xref linkend="guc-archive-mode"/> is set, as all commands
+    must write WAL in that case.
+   </para>
+
   </sect2>
 
   <sect2 id="populate-rm-indexes">
@@ -875,6 +890,59 @@ WHERE quelquechosedautre;</programlisting>
    </para>
   </sect2>
 
+  <sect2 id="populate-pitr">
+   <title>Turn off <varname>archive_mode</varname></title>
+
+   <para>
+    When loading large amounts of data into an installation that uses
+    WAL archiving, you might want to disable archiving (turn off the
+    <xref linkend="guc-archive-mode"/> configuration variable)
+    while loading.  It might be
+    faster to take a new base backup after the load has completed
+    than to process a large amount of incremental WAL data.
+    But note that turning <varname>archive_mode</varname> on or off
+    requires a server restart.
+   </para>
+
+   <para>
+    Aside from avoiding the time for the archiver to process the WAL data,
+    doing this will actually make certain commands faster, because they
+    are designed not to write WAL at all if <varname>archive_mode</varname>
+    is off.  (They can guarantee crash safety more cheaply by doing an
+    <function>fsync</function> at the end than by writing WAL.)
+    This applies to the following commands: 
+    <itemizedlist>
+     <listitem>
+      <para>
+       <command>CREATE TABLE AS SELECT</command>
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <command>CREATE INDEX</command> (and variants such as
+       <command>ALTER TABLE ADD PRIMARY KEY</command>)
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <command>ALTER TABLE SET TABLESPACE</command>
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <command>CLUSTER</command>
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <command>COPY FROM</command>, when the target table has been
+       created or truncated earlier in the same transaction
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+  </sect2>
+
   <sect2 id="populate-analyze">
    <title>Lancez <command>ANALYZE</command> après</title>
 
@@ -908,15 +976,48 @@ WHERE quelquechosedautre;</programlisting>
    </para>
 
    <para>
-    Par défaut, <application>pg_dump</application> utilise <command>COPY</command> et, lorsqu'il
-    génère une sauvegarde complexe, schéma et données, il est préférable de
-    charger les données avant de créer les index et les clés étrangères. Donc,
-    dans ce cas, les premières lignes de conduite sont gérées automatiquement.
-    Ce qui vous reste à faire est d'initialiser les valeurs appropriées
-    (c'est-à-dire plus importantes que les valeurs habituelles) pour
-    <varname>maintenance_work_mem</varname> et
-    <varname>checkpoint_segments</varname> avant de charger le script de
-    sauvegarde puis d'exécuter <command>ANALYZE</command>.
+    Par défaut, <application>pg_dump</application> utilise
+    <command>COPY</command> et, lorsqu'il génère une sauvegarde complexe,
+    schéma et données, il est préférable de charger les données avant de créer
+    les index et les clés étrangères. Donc, dans ce cas, plusieurs lignes de
+    conduite sont gérées automatiquement. Ce qui vous reste à faire est
+    de&nbsp;:
+    <itemizedlist>
+     <listitem>
+      <para>
+       Set appropriate (i.e., larger than normal) values for
+       <varname>maintenance_work_mem</varname> and
+       <varname>checkpoint_segments</varname>.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       If using WAL archiving, consider disabling it during the restore.
+       To do that, turn off <varname>archive_mode</varname> before loading the
+       dump script, and afterwards turn it back on
+       and take a fresh base backup.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Consider whether the whole dump should be restored as a single
+       transaction.  To do that, pass the <option>-1</option> or
+       <option>--single-transaction</option> command-line option to
+       <application>psql</application> or <application>pg_restore</application>.
+	   When using this
+       mode, even the smallest of errors will rollback the entire restore,
+       possibly discarding many hours of processing.  Depending on how
+       interrelated the data is, that might seem preferable to manual cleanup,
+	   or not.  <command>COPY</command> commands will run fastest if you use a single
+       transaction and have WAL archiving turned off.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Run <command>ANALYZE</command> afterwards.
+      </para>
+     </listitem>
+    </itemizedlist>
    </para>
 
    <para>
