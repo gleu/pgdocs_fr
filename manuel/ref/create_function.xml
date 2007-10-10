@@ -23,6 +23,9 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/ref/create_function.sgml,v 1.9 2005/09/15 07
     | IMMUTABLE | STABLE | VOLATILE
     | CALLED ON NULL INPUT | RETURNS NULL ON NULL INPUT | STRICT
     | [EXTERNAL] SECURITY INVOKER | [EXTERNAL] SECURITY DEFINER
+    | COST <replaceable class="parameter">execution_cost</replaceable>
+    | ROWS <replaceable class="parameter">result_rows</replaceable>
+    | SET <replaceable class="parameter">configuration_parameter</replaceable> { TO <replaceable class="parameter">value</replaceable> | = <replaceable class="parameter">value</replaceable> | FROM CURRENT }
     | AS '<replaceable class="parameter">definition</replaceable>'
     | AS '<replaceable class="parameter">fichier_obj</replaceable>', '<replaceable class="parameter">symbole_lien</replaceable>'
   } ...
@@ -52,7 +55,7 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/ref/create_function.sgml,v 1.9 2005/09/15 07
   </para>
 
   <para>
-   Pour mettre à jour la définition d'une fonction existante, 
+   Pour remplacer la définition actuelle d'une fonction existante, 
    <command>CREATE OR REPLACE FUNCTION</command> est utilisé. Il n'est pas possible de
    changer le nom ou les types d'argument d'une fonction de cette façon 
    (cela crée une nouvelle fonction distincte). De
@@ -70,6 +73,8 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/ref/create_function.sgml,v 1.9 2005/09/15 07
    déclencheurs, etc. qui référencent l'ancienne fonction. 
    <command>CREATE OR REPLACE FUNCTION</command> permet de modifier la définition
    d'une fonction sans casser les objets qui s'y réfèrent.
+   Also, <command>ALTER FUNCTION</command> can be used to change most of the
+   auxiliary properties of an existing function.
   </para>
 
   <para>
@@ -287,6 +292,55 @@ $Header: /var/lib/cvs/pgsql-fr/sgml/ref/create_function.sgml,v 1.9 2005/09/15 07
    </varlistentry>
 
     <varlistentry>
+     <term><replaceable class="parameter">execution_cost</replaceable></term>
+
+     <listitem>
+      <para>
+       A positive number giving the estimated execution cost for the function,
+       in units of <xref linkend="guc-cpu-operator-cost"/>.  If the function
+       returns a set, this is the cost per returned row.  If the cost is
+       not specified, 1 unit is assumed for C-language and internal functions,
+       and 100 units for functions in all other languages.  Larger values
+       cause the planner to try to avoid evaluating the function more often
+       than necessary.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><replaceable class="parameter">result_rows</replaceable></term>
+
+     <listitem>
+      <para>
+       A positive number giving the estimated number of rows that the planner
+       should expect the function to return.  This is only allowed when the
+       function is declared to return a set.  The default assumption is
+       1000 rows.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><replaceable>configuration_parameter</replaceable></term>
+     <term><replaceable>value</replaceable></term>
+     <listitem>
+      <para>
+       The <literal>SET</literal> clause causes the specified configuration
+       parameter to be set to the specified value when the function is
+       entered, and then restored to its prior value when the function exits.
+       <literal>SET FROM CURRENT</literal> saves the session's current value of
+       the parameter as the value to be applied when the function is entered.
+      </para>
+
+      <para>
+       See <xref linkend="sql-set" endterm="sql-set-title"/> and
+       <xref linkend="runtime-config"/>
+       for more information about allowed parameter names and values.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><replaceable class="parameter">definition</replaceable></term>
 
      <listitem>
@@ -396,7 +450,8 @@ CREATE FUNCTION foo(int, out text) ...
 
    <para>
     Lors d'appels répétés à <command>CREATE FUNCTION</command> faisant référence
-    au même fichier objet, le fichier est chargé une seule fois. Pour décharger
+    au même fichier objet, le fichier est chargé une seule fois par session.
+    Pour décharger
     et recharger le fichier (en phase de développement, par exemple), la
     commande <xref linkend="sql-load" endterm="sql-load-title"/> est utilisée.
    </para>
@@ -413,6 +468,18 @@ CREATE FUNCTION foo(int, out text) ...
     guillemets dollar, tout guillemet simple et tout antislash dans la définition de
     la fonction doit être échappé en le doublant.
   </para>
+
+   <para>
+    If a <literal>SET</literal> clause is attached to a function, then
+    the effects of a <command>SET LOCAL</command> command executed inside the
+    function for the same variable are restricted to the function: the
+    configuration parameter's prior value is still restored at function exit.
+    However, an ordinary
+    <command>SET</command> command (without <literal>LOCAL</literal>) overrides the
+    <literal>SET</literal> clause, much as it would do for a previous <command>SET
+    LOCAL</command> command: the effects of such a command will persist after
+    function exit, unless the current transaction is rolled back.
+   </para>
 
    <para>
     Pour pouvoir définir une fonction, l'utilisateur doit posséder le droit
@@ -494,30 +561,46 @@ SELECT * FROM dup(42);
 CREATE FUNCTION verifie_motdepasse(unom TEXT, motpasse TEXT)
 RETURNS BOOLEAN AS $$
 DECLARE ok BOOLEAN;
-        ancien_path TEXT;
 BEGIN
-        -- Sauvegarder l'ancien search_path ;
-        -- remarquez que nous devons qualifier current_setting
-        -- pour nous assurer que nous appelons la bonne fonction
-        ancien_path := pg_catalog.current_setting('search_path');
-
-        -- Configurer un search_path sécurisé : schémas de confiance, puis 'pg_temp'.
-        -- Nous initialisons is_local = true pour que l'ancienne valeur
-        -- soit restaurée au cas où une erreur surviendrait avant 
-        -- la fin de la fonction.
-        PERFORM pg_catalog.set_config('search_path', 'admin, pg_temp', true);
-
         -- Effectuer le travail sécurisé de la fonction.
         SELECT  (motdepasse = $2) INTO ok
         FROM    motsdepasse
         WHERE   nomutilisateur = $1;
 
-        -- Restaurer le search_path de l'appelant
-        PERFORM pg_catalog.set_config('search_path', ancien_path, true);
-
         RETURN ok;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$  LANGUAGE plpgsql
+    SECURITY DEFINER
+    -- Set a secure search_path: trusted schema(s), then 'pg_temp'.
+    SET search_path = admin, pg_temp;
+</programlisting>
+
+   <para>
+    Before <productname>PostgreSQL</productname> version 8.3, the
+    <literal>SET</literal> option was not available, and so older functions may
+    contain rather complicated logic to save, set, and restore
+    <varname>search_path</varname>.  The <literal>SET</literal> option is far easier
+    to use for this purpose.
+   </para>
+
+   <para>
+    Another point to keep in mind is that by default, execute privilege
+    is granted to <literal>PUBLIC</literal> for newly created functions
+    (see <xref linkend="sql-grant" endterm="sql-grant-title"/> for more
+    information).  Frequently you will wish to restrict use of a security
+    definer function to only some users.  To do that, you must revoke
+    the default <literal>PUBLIC</literal> privileges and then grant execute
+    privilege selectively.  To avoid having a window where the new function
+    is accessible to all, create it and set the privileges within a single
+    transaction.  For example:
+   </para>
+
+<programlisting>
+BEGIN;
+CREATE FUNCTION check_password(uname TEXT, pass TEXT) ... SECURITY DEFINER;
+REVOKE ALL ON FUNCTION check_password(uname TEXT, pass TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION check_password(uname TEXT, pass TEXT) TO admins;
+COMMIT;
 </programlisting>
 
  </refsect1>

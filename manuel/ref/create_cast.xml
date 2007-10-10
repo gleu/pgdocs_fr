@@ -33,11 +33,11 @@ CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</re
   <para>
    <command>CREATE CAST</command> définit un transtypage. Un transtypage
    spécifie l'opération de conversion entre deux types de
-   données. Par exemple,
-<programlisting>SELECT CAST(42 AS text);
+   données. Par exemple&nbsp;:
+<programlisting>SELECT CAST(42 AS float8);
 </programlisting>
-   convertit la constante entière 42 en <type>text</type> en appelant
-   une fonction précédemment définie, <literal>text(int4)</literal> dans le cas
+   convertit la constante entière 42 en <type>float8</type> en appelant
+   une fonction précédemment définie, <literal>float8(int4)</literal> dans le cas
    présent (si aucun transtypage convenable n'a été défini, la conversion échoue).
   </para>
 
@@ -61,7 +61,7 @@ CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</re
    alors son appel peut être
    implicite lors de l'affectation d'une valeur à une colonne du
    type de donnée cible. Par exemple, en supposant que
-   <literal>foo.f1</literal> soit une colonne de type <type>text</type>, 
+   <literal>foo.f1</literal> soit une colonne de type <type>text</type>&nbsp;:
 <programlisting>INSERT INTO foo (f1) VALUES (42);
 </programlisting>
    est autorisé si la conversion du type <type>integer</type> vers le type
@@ -71,19 +71,39 @@ CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</re
   </para>
 
   <para>
-   Si le transtypage est marqué <literal>AS IMPLICIT</literal>, alors 
-   son appel peut être implicite, indépendemment du contexte, lors d'une
-   affectation ou dans une expression. Par exemple, comme <literal>||</literal> prend deux
-   opérandes <type>text</type>,
-<programlisting>SELECT 'L\'heure est ' || now();
+   If the cast is marked <literal>AS IMPLICIT</literal> then it can be invoked
+   implicitly in any context, whether assignment or internally in an
+   expression.  (We generally use the term <firstterm>implicit
+   cast</firstterm> to describe this kind of cast.)
+   For example, consider this query:
+<programlisting>
+SELECT 2 + 4.0;
 </programlisting>
-   n'est autorisé que si la conversion du type <type>timestamp</type> vers le
-   type <type>text</type> est marquée <literal>AS IMPLICIT</literal>. Dans le cas contraire,
-   il est nécessaire d'écrire explicitement la conversion, par exemple
-<programlisting>SELECT 'L\'heure est ' || CAST(now() AS text);
+   The parser initially marks the constants as being of type <type>integer</type>
+   and <type>numeric</type> respectively.  There is no <type>integer</type>
+   <literal>+</literal> <type>numeric</type> operator in the system catalogs,
+   but there is a <type>numeric</type> <literal>+</literal> <type>numeric</type> operator.
+   The query will therefore succeed if a cast from <type>integer</type> to
+   <type>numeric</type> is available and is marked <literal>AS IMPLICIT</literal> &mdash;
+   which in fact it is.  The parser will apply the implicit cast and resolve
+   the query as if it had been written
+<programlisting>
+SELECT CAST ( 2 AS numeric ) + 4.0;
 </programlisting>
-   Le terme de <firstterm>transtypage implicite</firstterm> est habituellement utilisé pour décrire
-   ce type de conversion.
+  </para>
+
+  <para>
+   Now, the catalogs also provide a cast from <type>numeric</type> to
+   <type>integer</type>.  If that cast were marked <literal>AS IMPLICIT</literal> &mdash;
+   which it is not &mdash; then the parser would be faced with choosing
+   between the above interpretation and the alternative of casting the
+   <type>numeric</type> constant to <type>integer</type> and applying the
+   <type>integer</type> <literal>+</type> <type>integer</type> operator.  Lacking any
+   knowledge of which choice to prefer, it would give up and declare the
+   query ambiguous.  The fact that only one of the two casts is
+   implicit is the way in which we teach the parser to prefer resolution
+   of a mixed <type>numeric</type>-and-<type>integer</type> expression as
+   <type>numeric</type>; there is no built-in knowledge about that.
   </para>
 
   <para>
@@ -201,10 +221,7 @@ CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</re
    plus d'un argument. Cette possibilité est utilisée pour représenter dans le
    catalogue système des fonctions de transtypage agissant sur la longueur d'un type.
    La fonction nommée est utilisée pour convertir la valeur d'un type à la valeur du
-   modificateur de type fournie par le second argument (puisque la
-   grammaire n'autorise qu'un nombre restreint de types internes à avoir des
-   modificateurs de type, cette fonctionnalité n'est d'aucun intérêt pour
-   les types cibles utilisateur&nbsp;; elle n'est signalée que dans un souci de complétude).
+   modificateur de type fournie par le second argument.
   </para>
 
   <para>
@@ -229,6 +246,32 @@ CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</re
 
   <para>
    Pour convertir les types dans les deux sens, il est obligatoire de déclarer explicitement les deux sens.
+  </para>
+
+ <indexterm zone="sql-createcast">
+  <primary>cast</primary>
+  <secondary>I/O conversion</secondary>
+ </indexterm>
+
+  <para>
+   It is normally not necessary to create casts between user-defined types
+   and the standard string types (<type>text</type>, <type>varchar</type>, and
+   <type>char(<replaceable>n</replaceable>)</type>).  <productname>PostgreSQL</productname> will
+   automatically handle a cast to a string type by invoking the other
+   type's output function, or conversely handle a cast from a string type
+   by invoking the other type's input function.  These
+   automatically-provided casts are known as <firstterm>I/O conversion
+   casts</firstterm>.  I/O conversion casts to string types are treated as
+   assignment casts, while I/O conversion casts from string types are
+   explicit-only.  You can override this behavior by declaring your own
+   cast to replace an I/O conversion cast, but usually the only reason to
+   do so is if you want the conversion to be more easily invokable than the
+   standard assignment-only or explicit-only setting.  Another possible
+   reason is that you want the conversion to behave differently from the
+   type's I/O function; but that is sufficiently surprising that you
+   should think twice about whether it's a good idea.  (A small number of
+   the built-in types do indeed have different behaviors for conversions,
+   mostly because of requirements of the SQL standard.)
   </para>
 
   <para>
@@ -260,16 +303,20 @@ CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</re
 
   <note>
    <para>
-   Le paragraphe précédent présente une légère imprécision&nbsp;: il existe
-   un cas dans lequel <structname>pg_cast</structname> sera utilisé pour résoudre le sens
-   d'un appel de fonction. Si un appel de fonction
-   <replaceable>nom</replaceable>(<replaceable>x</replaceable>) ne coïncide avec aucune fonction
-   existante, mais que <replaceable>nom</replaceable>(<replaceable>x</replaceable>) est le nom d'un type
-   de données et que <structname>pg_cast</structname> indique une conversion binairement
-   compatible du type de <replaceable>x</replaceable>, alors l'appel sera interprété
-   comme un transtypage explicite. Cette exception autorise les conversions
-   binairement compatibles à être invoquées à l'aide d'une
-   syntaxe fonctionnelle, même en l'absence de fonction les décrivant.
+    Actually the preceding paragraph is an oversimplification: there are
+    two cases in which a function-call construct will be treated as a cast
+    request without having matched it to an actual function.
+    If a function call <replaceable>name</replaceable>(<replaceable>x</replaceable>) does not
+    exactly match any existing function, but <replaceable>name</replaceable> is the name
+    of a data type and <structname>pg_cast</structname> provides a binary-compatible cast
+    to this type from the type of <replaceable>x</replaceable>, then the call will be
+    construed as a binary-compatible cast.  This exception is made so that
+    binary-compatible casts can be invoked using functional syntax, even
+    though they lack any function.  Likewise, if there is no
+    <structname>pg_cast</structname> entry but the cast would be to or from a string
+    type, the call will be construed as an I/O conversion cast.  This
+    exception allows I/O conversion casts to be invoked using functional
+    syntax.
    </para>
   </note>
  </refsect1>
@@ -279,10 +326,10 @@ CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</re
   <title>Exemples</title>
 
   <para>
-   Création d'un transtypage du type <type>text</type> vers le type
+   Création d'un transtypage du type <type>bigint</type> vers le type
    <type>int4</type> à l'aide de la fonction
-   <literal>int4(text)</literal>&nbsp;:
-<programlisting>CREATE CAST (text AS int4) WITH FUNCTION int4(text);
+   <literal>int4(bigint)</literal>&nbsp;:
+<programlisting>CREATE CAST (bigint AS int4) WITH FUNCTION int4(bigint);
 </programlisting>
    (Ce transtypage est déjà prédéfini dans le système.)
   </para>
