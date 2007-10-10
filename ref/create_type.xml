@@ -20,11 +20,16 @@ PostgreSQL documentation
 <synopsis>CREATE TYPE <replaceable class="parameter">nom</replaceable> AS
     ( <replaceable class="parameter">nom_attribut</replaceable> <replaceable class="parameter">type_donnée</replaceable> [, ... ] )
 
+CREATE TYPE <replaceable class="parameter">name</replaceable> AS ENUM
+    ( '<replaceable class="parameter">label</replaceable>' [, ... ] )
+
 CREATE TYPE <replaceable class="parameter">nom</replaceable> (
     INPUT = <replaceable class="parameter">fonction_entrée</replaceable>,
     OUTPUT = <replaceable class="parameter">fonction_sortie</replaceable>
     [ , RECEIVE = <replaceable class="parameter">fonction_réception</replaceable> ]
     [ , SEND = <replaceable class="parameter">fonction_envoi</replaceable> ]
+    [ , TYPMOD_IN = <replaceable class="parameter">type_modifier_input_function</replaceable> ]
+    [ , TYPMOD_OUT = <replaceable class="parameter">type_modifier_output_function</replaceable> ]
     [ , ANALYZE = <replaceable class="parameter">fonction_analyse</replaceable> ]
     [ , INTERNALLENGTH = { <replaceable class="parameter">longueurinterne</replaceable> | VARIABLE } ]
     [ , PASSEDBYVALUE ]
@@ -75,17 +80,32 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
   </refsect2>
 
   <refsect2>
+   <title>Enumerated Types</title>
+
+   <para>
+    The second form of <command>CREATE TYPE</command> creates an enumerated
+    (enum) type, as described in <xref linkend="datatype-enum"/>.
+    Enum types take a list of one or more quoted labels, each of which
+    must be less than <symbol>NAMEDATALEN</symbol> bytes long (64 in a standard
+    <productname>PostgreSQL</productname> build).
+   </para>
+  </refsect2>
+
+  <refsect2>
    <title>Types de base</title>
 
   <para>
-   La seconde forme de <command>CREATE TYPE</command> crée un nouveau type de base
+   La troisième forme de <command>CREATE TYPE</command> crée un nouveau type de base
    (type scalaire). L'ordre des paramètres, dont la plupart sont optionnels, n'a aucune
    d'importance. Avant de définir le type, il est nécessaire de définir au moins
    deux fonctions (à l'aide de la commande <command>CREATE FUNCTION</command>).
    Les fonctions de support <replaceable class="parameter">fonction_entrée</replaceable>
    et <replaceable class="parameter">fonction_sortie</replaceable> sont obligatoires. Les
    fonctions <replaceable class="parameter">fonction_réception</replaceable>,
-   <replaceable class="parameter">fonction_envoi</replaceable> et
+   <replaceable class="parameter">fonction_envoi</replaceable>,
+   <replaceable class="parameter">type_modifier_input_function</replaceable>,
+   <replaceable class="parameter">type_modifier_output_function</replaceable>
+   et
    <replaceable class="parameter">fonction_analyse</replaceable> sont
    optionnelles. Généralement, ces fonctions sont codées en C ou dans un
    autre langage de bas niveau.
@@ -164,6 +184,34 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    <command>CREATE TYPE</command> avec une définition complète remplace le
    squelette avec une définition complète et valide du type, après quoi le
    nouveau type peut être utilisé normalement.
+  </para>
+
+  <para>
+   The optional
+   <replaceable class="parameter">type_modifier_input_function</replaceable>
+   and <replaceable class="parameter">type_modifier_output_function</replaceable>
+   are needed if the type supports modifiers, that is optional constraints
+   attached to a type declaration, such as <literal>char(5)</literal> or
+   <literal>numeric(30,2)</literal>.  <productname>PostgreSQL</productname> allows
+   user-defined types to take one or more simple constants or identifiers as
+   modifiers; however, this information must be capable of being packed into a
+   single non-negative integer value for storage in the system catalogs.  The
+   <replaceable class="parameter">type_modifier_input_function</replaceable>
+   is passed the declared modifier(s) in the form of a <type>cstring</type>
+   array.  It must check the values for validity (throwing an error if they
+   are wrong), and if they are correct, return a single non-negative
+   <type>integer</type> value that will be stored as the column <quote>typmod</quote>.
+   Type modifiers will be rejected if the type does not have a
+   <replaceable class="parameter">type_modifier_input_function</replaceable>.
+   The <replaceable class="parameter">type_modifier_output_function</replaceable>
+   converts the internal integer typmod value back to the correct form for
+   user display.  It must return a <type>cstring</type> value that is the exact
+   string to append to the type name; for example <type>numeric</type>'s
+   function might return <literal>(30,2)</literal>.
+   It is allowed to omit the
+   <replaceable class="parameter">type_modifier_output_function</replaceable>,
+   in which case the default display format is just the stored typmod value
+   enclosed in parentheses.
   </para>
 
   <para>
@@ -265,14 +313,17 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    <title>Types tableau</title>
 
    <para>
-    À chaque fois qu'un type de données utilisateur basique est
-    créé, <productname>PostgreSQL</productname> crée automatiquement un type
-    tableau associé dont le nom est celui du type précédé d'un
-    tiret base (<literal>_</literal>). L'analyseur comprend cette convention de nommage et traduit
-    les requêtes sur les colonnes de type <literal>foo[]</literal> en requêtes sur le
-    type <literal>_foo</literal>. Le type tableau implicitement créé est de longueur
-    variable et utilise les fonctions entrée et sortie intégrées
-    <literal>array_in</literal> et <literal>array_out</literal>.
+    Whenever a user-defined type is created,
+    <productname>PostgreSQL</productname> automatically creates an
+    associated array type, whose name consists of the base type's
+    name prepended with an underscore, and truncated if necessary to keep
+    it less than <symbol>NAMEDATALEN</symbol> bytes long.  (If the name
+    so generated collides with an existing type name, the process is
+    repeated until a non-colliding name is found.)
+    This implicitly-created array type is variable length and uses the
+    built-in input and output functions <literal>array_in</literal> and
+    <literal>array_out</literal>.  The array type tracks any changes in its
+    element type's owner or schema, and is dropped if the element type is.
    </para>
 
    <para>
@@ -282,11 +333,9 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     La seule utilité d'<option>ELEMENT</option> est la création d'un type de longueur
     fixe représenté en interne par un tableau d'éléments identiques auxquels on souhaite 
     accéder directement par leurs indices (en plus de toute autre opération 
-    effectuée sur le type dans sa globalité). Par exemple, le type
-    <type>name</type> permet d'accéder ainsi à ses éléments constituants <type>char</type>.
-    Un type <type>point</type> en deux dimensions peut autoriser
-    l'accès aux deux nombres qui le constitue, 
-    <literal>point[0]</literal> et <literal>point[1]</literal>. Cette
+    effectuée sur le type dans sa globalité). For example, type <type>point</type>
+    is represented as just two floating-point numbers, which it allows to be
+    accessed as <literal>point[0]</literal> and <literal>point[1]</literal>. Cette
     fonctionnalité n'est possible qu'avec les types de longueur fixe dont la
     forme interne est strictement une séquence de champs de longueur fixée.
     Un type de longueur variable est accessible par ses indices
@@ -333,6 +382,16 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </varlistentry>
 
    <varlistentry>
+    <term><replaceable class="parameter">label</replaceable></term>
+    <listitem>
+     <para>
+      A string literal representing the textual label associated with
+      one value of an enum type.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">fonction_entrée</replaceable></term>
     <listitem>
      <para>
@@ -368,6 +427,26 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
      <para>
       Le nom d'une fonction de conversion des données de la forme
       interne du type en forme binaire externe.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">type_modifier_input_function</replaceable></term>
+    <listitem>
+     <para>
+      The name of a function that converts numeric modifier(s) for the type
+      into internal form.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">type_modifier_output_function</replaceable></term>
+    <listitem>
+     <para>
+      The name of a function that converts the internal form of the type's
+      modifier(s) to external textual form.
      </para>
     </listitem>
    </varlistentry>
@@ -449,15 +528,6 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
   <title>Notes</title>
 
   <para>
-   Les noms de types utilisateur ne peuvent pas
-   commencer par un tiret bas (<literal>_</literal>). Ils ont au plus
-   62 caractères (ou en général <symbol>NAMEDATALEN</symbol> - 2,
-   et non <symbol>NAMEDATALEN</symbol> - 1 comme les
-   autres noms). Les noms de types commençant par un tiret bas sont réservés
-   aux noms internes des types tableau.
-  </para>
-
-  <para>
    Comme il n'y a pas de restrictions à l'utilisation d'un type de données
    une fois qu'il a été créé, créer un type de base est équivalent à donner les
    droits d'exécution ssur les fonctions mentionnées dans la définition du
@@ -467,6 +537,27 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    un type d'une façon qui nécessiterait que des informations
    <quote>secrètes</quote> soient utilisées lors de sa convertion vers ou à
    partir d'une forme externe.
+  </para>
+
+  <para>
+   Before <productname>PostgreSQL</productname> version 8.3, the name of
+   a generated array type was always exactly the element type's name with one
+   underscore character (<literal>_</literal>) prepended.  (Type names were
+   therefore restricted in length to one less character than other names.)
+   While this is still usually the case, the array type name may vary from
+   this in case of maximum-length names or collisions with user type names
+   that begin with underscore.  Writing code that depends on this convention
+   is therefore deprecated.  Instead, use
+   <structname>pg_type</structname>.<structfield>typarray</structfield> to locate the array type
+   associated with a given type.
+  </para>
+
+  <para>
+   It may be advisable to avoid using type and table names that begin with
+   underscore.  While the server will change generated array type names to
+   avoid collisions with user-given names, there is still risk of confusion,
+   particularly with old client software that may assume that type names
+   beginning with underscores always represent arrays.
   </para>
 
   <para>
@@ -512,6 +603,20 @@ $$ LANGUAGE SQL;
   </para>
 
   <para>
+   This example creates an enumerated type and uses it in
+   a table definition:
+<programlisting>
+CREATE TYPE bug_status AS ENUM ('new', 'open', 'closed');
+
+CREATE TABLE bug (
+    serial id,
+    description text,
+    status bug_status
+);
+</programlisting>
+  </para>
+
+  <para>
    Créer le type de données basique <type>box</type> utilisé dans
    la définition d'une table&nbsp;:
 <programlisting>CREATE TYPE box;
@@ -534,7 +639,7 @@ CREATE TABLE myboxes (
 
   <para>
    Si la structure interne de <type>box</type> est un tableau de quatre
-   éléments <type>float4</type>, on peut écrire
+   éléments <type>float4</type>, on peut écrire&nbsp;:
 <programlisting>CREATE TYPE box (
     INTERNALLENGTH = 16,
     INPUT = ma_fonction_entree_box,
