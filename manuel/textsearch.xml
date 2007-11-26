@@ -572,8 +572,8 @@ CREATE INDEX pgweb_idx ON pgweb USING gin(to_tsvector('english', title || body))
     <literal>NULL</literal>&nbsp;:
 
 <programlisting>
-ALTER TABLE pgweb ADD COLUMN textsearch_index tsvector;
-UPDATE pgweb SET textsearch_index =
+ALTER TABLE pgweb ADD COLUMN textsearchable_index_col tsvector;
+UPDATE pgweb SET textsearchable_index_col =
      to_tsvector('english', coalesce(title,'') || coalesce(body,''));
 </programlisting>
 
@@ -581,7 +581,7 @@ UPDATE pgweb SET textsearch_index =
     recherche&nbsp;:
 
 <programlisting>
-CREATE INDEX textsearch_idx ON pgweb USING gin(textsearch_index);
+CREATE INDEX textsearch_idx ON pgweb USING gin(textsearchable_index_col);
 </programlisting>
 
     Maintenant, nous sommes prêt pour des recherches plein texte rapides&nbsp;:
@@ -589,7 +589,7 @@ CREATE INDEX textsearch_idx ON pgweb USING gin(textsearch_index);
 <programlisting>
 SELECT title
 FROM pgweb
-WHERE to_tsquery('create &amp; table') @@ textsearch_index
+WHERE textsearchable_index_col @@ to_tsquery('create &amp; table')
 ORDER BY last_mod_date DESC LIMIT 10;
 </programlisting>
    </para>
@@ -984,6 +984,7 @@ SELECT plainto_tsquery('english', 'The Fat &amp; Rats:C');
      <listitem>
       <para>
        4 divise le score par "mean harmonic distance between extents"
+       (this is implemented only by <function>ts_rank_cd</function>)
       </para>
      </listitem>
      <listitem>
@@ -997,15 +998,23 @@ SELECT plainto_tsquery('english', 'The Fat &amp; Rats:C');
        le document
       </para>
      </listitem>
+     <listitem>
+      <para>
+       32 divides the rank by itself + 1
+      </para>
+     </listitem>
     </itemizedlist>
 
+    If more than one flag bit is specified, the transformations are
+    applied in the order listed.
    </para>
 
    <para>
-    Il est important der que les fonctions de score n'utilisent aucune
+    Il est important de noter que les fonctions de score n'utilisent aucune
     information globale donc il est impossible de produire une normalisation de
-    1% ou 100%, comme c'est parfois demandé. Néanmoins, une technique simple
-    comme <literal>score/(score+1)</literal> peut s'appliquer. Bien sûr, c'est
+    1% ou 100%, comme c'est parfois demandé. L'option de normalisation 32
+    (<literal>score/(score+1)</literal>) peut s'appliquer to scale all ranks
+    into the range zero to one, but bien sûr, c'est
     une petite modification cosmétique, donc l'ordre des résultats ne changera
     pas.
    </para>
@@ -1036,7 +1045,7 @@ ORDER BY rank DESC LIMIT 10;
     Voici le même exemple en utilisant un score normalisé&nbsp;:
 
 <programlisting>
-SELECT title, ts_rank_cd(textsearch, query)/(ts_rank_cd(textsearch, query) + 1) AS rank
+SELECT title, ts_rank_cd(textsearch, query, 32 /* rank/(rank+1) */ ) AS rank
 FROM apod, to_tsquery('neutrino|(dark &amp; matter)') query
 WHERE  query @@ textsearch
 ORDER BY rank DESC LIMIT 10;
@@ -1087,7 +1096,7 @@ ORDER BY rank DESC LIMIT 10;
 
    <para>
     <function>ts_headline</function> accepte un document avec une requête et
-    renvoie une ou plusieurs extractions du document séparées par des ellipses.
+    renvoie un résumé du document.
     Les termes de la requête sont surlignés dans les extractions. La
     configuration à utiliser pour analyser le document peut être précisée par
     <replaceable>config</replaceable>&nbsp;; si <replaceable>config</replaceable>
@@ -1142,24 +1151,27 @@ StartSel=&lt;b&gt;, StopSel=&lt;/b&gt;, MaxWords=35, MinWords=15, ShortWord=3, H
     Par exemple&nbsp;:
 
 <programlisting>
-SELECT ts_headline('ts_headline accepts a document along
-with a query, and returns one or more ellipsis-separated excerpts from
-the document in which terms from the query are highlighted.',
-  to_tsquery('ellipsis &amp; term'));
-                            ts_headline                             
---------------------------------------------------------------------
- &lt;b&gt;ellipsis&lt;/b&gt;-separated excerpts from
- the document in which &lt;b&gt;terms&lt;/b&gt; from the query are highlighted.
+SELECT ts_headline('The most common type of search
+is to find all documents containing given query terms 
+and return them in order of their similarity to the
+query.', to_tsquery('query &amp; similarity'));
+                        ts_headline                         
+------------------------------------------------------------
+ given &lt;b&gt;query&lt;/b&gt; terms
+ and return them in order of their &lt;b&gt;similarity&lt;/b&gt; to the
+ &lt;b&gt;query&lt;/b&gt;.
 
-SELECT ts_headline('ts_headline accepts a document along
-with a query, and returns one or more ellipsis-separated excerpts from
-the document in which terms from the query are highlighted.',
-  to_tsquery('ellipsis &amp; term'),
+SELECT ts_headline('The most common type of search
+is to find all documents containing given query terms
+and return them in order of their similarity to the
+query.',
+  to_tsquery('query &amp; similarity'), 
   'StartSel = &lt;, StopSel = &gt;');
-                          ts_headline                          
----------------------------------------------------------------
- &lt;ellipsis&gt;-separated excerpts from
- the document in which &lt;terms&gt; from the query are highlighted.
+                      ts_headline                      
+-------------------------------------------------------
+ given &lt;query&gt; terms
+ and return them in order of their &lt;similarity&gt; to the
+ &lt;query&gt;.
 </programlisting>
    </para>
 
@@ -1884,8 +1896,8 @@ LIMIT 10;
       <entry><literal>example.com</literal></entry>
      </row>
      <row>
-      <entry><literal>uri</literal></entry>
-      <entry>URI</entry>
+      <entry><literal>url_path</literal></entry>
+      <entry>chemin URL</entry>
       <entry><literal>/stuff/index.html</literal>, in the context of a URL</entry>
      </row>
      <row>
@@ -1978,7 +1990,7 @@ SELECT alias, description, token FROM ts_debug('http://example.com/stuff/index.h
  protocol | Protocol head | http://
  url      | URL           | example.com/stuff/index.html
  host     | Host          | example.com
- uri      | URI           | /stuff/index.html
+ url_path | URL path      | /stuff/index.html
 </programlisting>
   </para>
 
@@ -2171,9 +2183,11 @@ SELECT ts_rank_cd (to_tsvector('english','list stop words'), to_tsquery('list &a
     Le modèle du dictionnaire <literal>simple</literal> opère en convertissant
     le jeton en entrée en minuscule puis en vérifiant s'il fait partie de la
     liste des mots courants qu'il a sur fichier. S'il est trouvé dans ce
-    fichier, <literal>NULL</literal> est renvoyé. Le jeton sera alors ignoré.
+    fichier, un tableau vide est renvoyé. Le jeton sera alors ignoré.
     Dans le cas contraire, la forme minuscule du mot est renvoyé en tant que
-    lexeme normalisé.
+    lexeme normalisé. Alternatively, the dictionary
+    can be configured to report non-stop-words as unrecognized, allowing
+    them to be passed on to the next dictionary in the list.
    </para>
 
    <para>
@@ -2214,6 +2228,35 @@ SELECT ts_lexize('public.simple_dict','The');
 -----------
  {}
 </programlisting>
+   </para>
+
+   <para>
+    We can also choose to return <literal>NULL</literal>, instead of the lower-cased
+    word, if it is not found in the stop words file.  This behavior is
+    selected by setting the dictionary's <literal>Accept</literal> parameter to
+    <literal>false</literal>.  Continuing the example:
+
+<programlisting>
+ALTER TEXT SEARCH DICTIONARY public.simple_dict ( Accept = false );
+
+SELECT ts_lexize('public.simple_dict','YeS');
+ ts_lexize
+-----------
+
+
+SELECT ts_lexize('public.simple_dict','The');
+ ts_lexize
+-----------
+ {}
+</programlisting>
+   </para>
+
+   <para>
+    With the default setting of <literal>Accept</literal> = <literal>true</literal>,
+    it is only useful to place a <literal>simple</literal> dictionary at the end
+    of a list of dictionaries, since it will never pass on any token to
+    a following dictionary.  Conversely, <literal>Accept</literal> = <literal>false</literal>
+    is only useful when there is at least one following dictionary.
    </para>
 
    <caution>
@@ -2339,22 +2382,17 @@ more sample word(s) : more indexed word(s)
    </para>
 
    <para>
-    Les mots courants reconnus par le sous-dictionnaire sont remplacés par un
-    <quote>marqueur de terme courant</quote> pour enregistrer leur position.
-    Pour illustrer ceci, considérez ces phrases&nbsp;:
+    Specific stop words recognized by the subdictionary cannot be
+    specified;  instead use <literal>?</literal> to mark the location where any
+    stop word can appear.  For example, assuming that <literal>a</literal> and
+    <literal>the</literal> are stop words according to the subdictionary:
 
 <programlisting>
-a one the two : swsw
-the one a two : swsw2
+? one ? two : swsw
 </programlisting>
 
-    En supposant que <literal>a</literal> et <literal>the</literal> sont des
-    termes courants d'après le sous-dictionnaire, ces deux phrases sont
-    identiques pour le thésaurus&nbsp;: elles ressemblent toutes les deux à
-    <replaceable>stopword</replaceable> <literal>one</literal>
-    <replaceable>stopword</replaceable> <literal>two</literal>. Une entrée
-    correspondant à ce modèle sera remplacée par <literal>swsw2</literal>, d'après
-    la règle du match nul.
+    matches <literal>a one the two</literal> and <literal>the one a two</literal>;
+    both would be replaced by <literal>swsw</literal>.
    </para>
 
    <para>
@@ -2730,7 +2768,7 @@ ALTER TEXT SEARCH CONFIGURATION pg
 
 <programlisting>
 ALTER TEXT SEARCH CONFIGURATION pg
-    DROP MAPPING FOR email, url, sfloat, uri, float;
+    DROP MAPPING FOR email, url, url_path, sfloat, float;
 </programlisting>
    </para>
 
@@ -3041,7 +3079,7 @@ SELECT * FROM ts_token_type('default');
     15 | numhword        | Hyphenated word, letters and digits
     16 | asciihword      | Hyphenated word, all ASCII
     17 | hword           | Hyphenated word, all letters
-    18 | uri             | URI
+    18 | url_path        | URL path
     19 | file            | File or path name
     20 | float           | Decimal notation
     21 | int             | Signed integer
@@ -3328,6 +3366,13 @@ EXPLAIN SELECT * FROM apod WHERE textsearch @@ to_tsquery('supernovae');
   </para>
 
   <para>
+   Note that <acronym>GIN</acronym> index build time can often be improved
+   by increasing <xref linkend="guc-maintenance-work-mem"/>, while
+   <acronym>GiST</acronym> index build time is not sensitive to that
+   parameter.
+  </para>
+
+  <para>
    Le partitionnement de gros ensembles et l'utilisation intelligente des index
    GIN et GiST autorise l'implémentation de recherches très rapides avec une
    mise à jour en ligne. Le partitionnement peut se faire au niveau de la base
@@ -3422,8 +3467,8 @@ Parser: "pg_catalog.default"
  numword         | simple
  sfloat          | simple
  uint            | simple
- uri             | simple
  url             | simple
+ url_path        | simple
  version         | simple
  word            | russian_stem
 </programlisting>
@@ -3514,8 +3559,8 @@ Parser: "pg_catalog.default"
  sfloat          | Scientific notation
  tag             | HTML tag
  uint            | Unsigned integer
- uri             | URI
  url             | URL
+ url_path        | URL path
  version         | Version number
  word            | Word, all letters
 (23 rows)
@@ -3606,94 +3651,77 @@ Parser: "pg_catalog.default"
   <title>Migration à partir d'une recherche plein texte antérieure à 8.3</title>
 
   <para>
-   Cette partie a besoin de beaucoup de travail. Voici une liste rapide des
-   problèmes connus&nbsp;:
+   Applications that used the <filename>contrib/tsearch2</filename> add-on module
+   for text searching will need some adjustments to work with the
+   built-in features:
   </para>
 
-  <itemizedlist mark="bullet">
+  <itemizedlist>
    <listitem>
     <para>
-     The old contrib/tsearch2 objects <emphasis>must</emphasis> be removed from
-     the pg_dump output from a pre-8.3 database.  While many of them won't
-     load for lack of a tsearch2.so library, some do and cause problems.
-     We have a working perl script for doing this with a custom- or tar-format
-     backup, but there is a proposal to incorporate the functionality directly
-     into pg_restore.  Neither approach will help for pg_dumpall output.
+     Some functions have been renamed or had small adjustments in their
+     argument lists, and all of them are now in the <literal>pg_catalog</literal>
+     schema, whereas in a previous installation they would have been in
+     <literal>public</literal> or another non-system schema.  There is a new
+     version of <filename>contrib/tsearch2</filename> (see <xref linkend="tsearch2"/>)
+     that provides a compatibility layer to solve most problems in this
+     area.
     </para>
    </listitem>
 
    <listitem>
     <para>
-     The old dump may include schema-qualified references to the old
-     contrib/tsearch2 objects; for example <literal>public.tsvector</literal>
-     columns in table definitions.  These will fail since the objects
-     are now in the pg_catalog schema.  Given current pg_dump behavior
-     this will happen only for tables that are in a different schema
-     from the tsearch2 objects; which makes it more likely to bite
-     people who carefully put their tsearch2 objects in a
-     non-<literal>public</literal> schema.
-    </para>
-
-    <para>
-     Question: will restore-time failures of this type happen for
-     any objects other than the tsvector and tsquery datatypes?
-    </para>
-
-    <para>
-     The basic alternatives for fixing this seem to involve creating
-     a dummy linkage, such as a public.tsvector domain linking to the
-     base pg_catalog.tsvector type (which only helps for the datatypes);
-     or stripping the schema references out of the dump.  We could
-     just recommend that users do this manually, or try to provide
-     some tools to help.
+     The old <filename>contrib/tsearch2</filename> functions and other objects
+     <emphasis>must</emphasis> be suppressed when loading <application>pg_dump</application>
+     output from a pre-8.3 database.  While many of them won't load anyway,
+     a few will and then cause problems.  One simple way to deal with this
+     is to load the new <filename>contrib/tsearch2</filename> module before restoring
+     the dump; then it will block the old objects from being loaded.
     </para>
    </listitem>
 
    <listitem>
     <para>
-     We have renamed the built-in tsvector update triggers, and changed
-     their arguments too.  This will result in CREATE TRIGGER commands
-     failing during load, which can be ignored, but users will need to
-     re-issue them with suitable argument adjustment.  We probably
-     can't automate that for them.  Also, the old tsearch2 trigger
-     function offered an option to invoke functions, which was removed
-     as being a security hole.  Users who were relying on that will need to
-     write custom trigger functions as a substitute.  I think all we
-     can do here is document what to do to fix it.
+     Text search configuration setup is completely different now.
+     Instead of manually inserting rows into configuration tables,
+     search is configured through the specialized SQL commands shown
+     earlier in this chapter.  There is not currently any automated
+     support for converting an existing custom configuration for 8.3;
+     you're on your own here.
     </para>
    </listitem>
 
    <listitem>
     <para>
-     We have renamed a number of other functions besides the triggers,
-     compared to the tsearch2 versions.  This seems unlikely to cause
-     any problems during dump/reload but it will require adjustments in
-     the bodies of stored procedures and in client application code.
-     Again, not much to do except document it.
-    </para>
-   </listitem>
+     Most types of dictionaries rely on some outside-the-database
+     configuration files.  These are largely compatible with pre-8.3
+     usage, but note the following differences:
 
-   <listitem>
-    <para>
-     Configuration setup is completely different now.  Can we provide
-     any automated assistance for translating an old custom setup?
-     It probably can't be 100% automatic in any case, so maybe documentation
-     is the best we can do here too.  Aside from the inside-the-database
-     differences, outside-the-database configuration files now have
-     prescribed location and extensions, which was not true before.
-    </para>
-   </listitem>
+     <itemizedlist  spacing="compact" mark="bullet">
+      <listitem>
+       <para>
+        Configuration files now must be placed in a single specified
+        directory (<filename>$SHAREDIR/tsearch_data</filename>), and must have
+        a specific extension depending on the type of file, as noted
+        previously in the descriptions of the various dictionary types.
+        This restriction was added to forestall security problems.
+       </para>
+      </listitem>
 
-   <listitem>
-    <para>
-     Relocation of configuration from add-on tables into core system catalogs
-     will break client queries that looked at the add-on tables.
-    </para>
-   </listitem>
+      <listitem>
+       <para>
+        Configuration files must be encoded in UTF-8 encoding,
+        regardless of what database encoding is used.
+       </para>
+      </listitem>
 
-   <listitem>
-    <para>
-     Qui d'autre&nbsp;?
+      <listitem>
+       <para>
+        In thesaurus configuration files, stop words must be marked with
+        <literal>?</literal>.
+       </para>
+      </listitem>
+     </itemizedlist>
     </para>
    </listitem>
 

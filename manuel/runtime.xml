@@ -162,6 +162,35 @@ postgres$ <userinput>initdb -d /usr/local/pgsql/data</userinput></screen>
    été choisi pour correspondre au paramétrage de la locale. Pour les détails,
    voir la <xref linkend="multibyte"/>.
   </para>
+
+  <sect2 id="creating-cluster-nfs">
+   <title>Network File Systems</title>
+
+   <indexterm zone="creating-cluster-nfs">
+    <primary>Network File Systems</primary>
+   </indexterm>
+   <indexterm><primary><acronym>NFS</acronym></primary><see>Network File Systems</see></indexterm>
+   <indexterm><primary>Network Attached Storage (<acronym>NAS</acronym>)</primary><see>Network File Systems</see></indexterm>
+
+   <para>
+    Many installations create database clusters on network file systems.
+    Sometimes this is done directly via <acronym>NFS</acronym>, or by using a
+    Network Attached Storage (<acronym>NAS</acronym>) device that uses
+    <acronym>NFS</acronym> internally.  <productname>PostgreSQL</productname> does nothing
+    special for <acronym>NFS</acronym> file systems, meaning it assumes
+    <acronym>NFS</acronym> behaves exactly like locally-connected drives
+    (<acronym>DAS</acronym>, Direct Attached Storage).  If client and server
+    <acronym>NFS</acronym> implementations have non-standard semantics, this can
+    cause reliability problems (see <ulink
+    url="http://www.time-travellers.org/shane/papers/NFS_considered_harmful.html"></ulink>).
+    Specifically, delayed (asynchonous) writes to the <acronym>NFS</acronym>
+    server can cause reliability problems;   if possible, mount
+    <acronym>NFS</acronym> file systems synchonously (without caching) to avoid
+    this.  (Storage Area Networks (<acronym>SAN</acronym>) use a low-level
+    communication protocol rather than <acronym>NFS</acronym>.)
+   </para>
+
+  </sect2>
  </sect1>
 
  <sect1 id="server-start">
@@ -456,9 +485,9 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
     <productname>PostgreSQL</productname>). pratiquement, tous les systèmes d'exploitation
     modernes fournissent ces fonctionnalités mais, parmi elles, toutes ne sont pas
     activées ou dimensionnées suffisamment par défaut, spécialement les systèmes
-    ayant l'héritage BSD (pour le port <systemitem class="osname">windows</systemitem>,
+    ayant l'héritage BSD (Sur <systemitem class="osname">windows</systemitem>,
     <productname>PostgreSQL</productname> fournit sa
-    propre implémentation de remplacement de ces fonctionnalités).
+    propre implémentation de remplacement de ces fonctionnalités, du coup, ce qui suit peut être ignoré).
    </para>
 
    <para>
@@ -537,13 +566,13 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
         <entry><varname>semmni</varname></entry>
         <entry>nombre maximum d'identifiants de sémaphores (c'est-à-dire
          d'ensembles)</entry>
-        <entry>au moins <literal>ceil(max_connections / 16)</literal></entry>
+ <entry>au moins <literal>ceil((max_connections + autovacuum_max_workers) / 16)</literal></entry>
        </row>
 
        <row>
         <entry><varname>semmns</varname></entry>
         <entry>nombre maximum de sémaphores répartis dans le système</entry>
-        <entry><literal>ceil(max_connections / 16) * 17</literal> plus la place
+	<entry><literal>ceil((max_connections + autovacuum_max_workers) / 16) * 17</literal> plus la place
          pour les autres applications</entry>
        </row>
 
@@ -579,16 +608,14 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
     argument</errorname>, il est possible que cette limite soit dépassée.
     La taille du segment de mémoire partagée requis dépend de plusieurs
     paramètres de configuration de <productname>PostgreSQL</productname>, comme indiqué
-    dans le <xref linkend="shared-memory-parameters"/>. temporairement, vous pouvez
-    baisser certains de ces paramètres pour éviter un échec. Comme approximation
-    brute, vous pouvez estimer la taille du segment requis à 500&nbsp;Ko auquel
-    vous ajoutez les tailles variables affichées dans la table (tout message
+    dans le <xref linkend="shared-memory-parameters"/> (tout message
     d'erreur obtenu incluera la taille exacte utilisée dans la requête
-    d'allocation qui a échoué). Alors qu'il est possible d'obtenir de
+    d'allocation qui a échoué). Temporairement, vous pouvez
+    baisser certains de ces paramètres pour éviter un échec. Alors qu'il est possible d'obtenir de
     <productname>PostgreSQL</productname> qu'il fonctionne avec un <varname>shmmax</varname>
-    de 1&nbsp;Mo, vous devez disposer d'au moins 4&nbsp;Mo pour obtenir
+    de 2&nbsp;Mo, vous avez besoin de bien plus pour obtenir
     des performances acceptables. Les paramètrages désirables sont plutôt de
-    l'ordre de dizaines de Mo.
+    l'ordre de dizaines voire de centaines de Mo.
    </para>
 
    <para>
@@ -613,17 +640,19 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
 
    <para>
     <productname>PostgreSQL</productname> utilise un sémaphore par connexion autorisée
-    (<xref linkend="guc-max-connections"/>), par ensemble de 16. chacun de ces
+    (<xref linkend="guc-max-connections"/>) and allowed autovacuum worker
+    process (<xref linkend="guc-autovacuum-max-workers"/>), par ensemble de 16. chacun de ces
     ensembles contiendra aussi un 17è sémaphore qui contient un <quote>nombre
     magique</quote> pour détecter la collision avec des ensembles de sémaphore
     utilisés par les autres applications. Le nombre maximum de sémaphores dans le
     système est initialisé par <varname>semmns</varname>, qui en conséquence doit être
-    au moins aussi haut que <varname>max_connections</varname> plus un extra de chacune
-    des 16 connexions autorisées (voir la formule dans le <xref
+    au moins aussi haut que <varname>max_connections</varname> plus
+    <varname>autovacuum_max_workers</varname> plus un extra de chacune
+    des 16 connexions autorisées et des processus autovacuum (voir la formule dans le <xref
     linkend="sysvipc-parameters"/>). Le paramètre <varname>semmni</varname> détermine la
     limite sur le nombre d'ensembles de sémaphores qui peuvent exister sur le
     système à un instant précis. Donc, ce paramètre doit être au moins égal à
-    <literal>ceil(max_connections / 16)</literal>. baisser le nombre de connexions
+    <literal>ceil((max_connections + autovacuum_max_workers) / 16)</literal>. baisser le nombre de connexions
     autorisées est un contournement temporaire pour les échecs qui sont
     habituellement indiqués par le message <errorname>no space left on
     device</errorname>, à partir de la fonction <function>semget</function>.
@@ -852,8 +881,8 @@ options         SEMMAP=256</programlisting>
       <listitem>
       <indexterm><primary>linux</primary><secondary>configuration ipc</secondary></indexterm>
        <para>
-        Les paramètres par défaut sont seulement convenables pour de petites
-	installations (la taille du segment maximum par défaut est de 32&nbsp;Mo).
+        The default maximum segment size is 32 MB, which is only adequate
+        for small <productname>PostgreSQL</productname> installations.
 	Néanmoins, les paramètres restants sont assez généreusement configurés
 	et ne requièrent pas habituellement de modifications. La taille du
 	segment maximum de mémoire partagé peut être modifiée via l'interface <command>sysctl</command>.
@@ -965,7 +994,7 @@ kern.sysv.shmall=1024
       <listitem>
       <indexterm><primary>solaris</primary><secondary>configuration ipc</secondary></indexterm>
        <para>
-        Au moins dans la version 2.6, la taille maximum par défaut des segments
+        Au moins dans la version 2.6, la taille maximum par défaut d'un segment
         de mémoire partagée est trop basse pour <productname>PostgreSQL</productname>. le
         paramétrage adéquat peut être modifié dans <filename>/etc/system</filename>, par
         exemple&nbsp;:
@@ -1026,29 +1055,35 @@ url="http://sunsite.uakom.sk/sunworldonline/swol-09-1997/swol-09-insidesolaris.h
      <thead>
       <row>
        <entry>Nom</entry>
-       <entry>Multiplicateur approximatif (octets par incrément)</entry>
+       <entry>Multiplicateur approximatif (octets par incrément) à
+       partir de la 8.3</entry>
       </row>
      </thead>
 
      <tbody>
       <row>
        <entry><xref linkend="guc-max-connections"/></entry>
-       <entry>400 + 270 * <xref linkend="guc-max-locks-per-transaction"/></entry>
+       <entry>1800 + 270 * <xref linkend="guc-max-locks-per-transaction"/></entry>
+      </row>
+
+      <row>
+       <entry><xref linkend="guc-autovacuum-max-workers"/></entry>
+       <entry>1800 + 270 * <xref linkend="guc-max-locks-per-transaction"/></entry>
       </row>
 
       <row>
        <entry><xref linkend="guc-max-prepared-transactions"/></entry>
-       <entry>600 + 270 * <xref linkend="guc-max-locks-per-transaction"/></entry>
+       <entry>770 + 270 * <xref linkend="guc-max-locks-per-transaction"/></entry>
       </row>
 
       <row>
        <entry><xref linkend="guc-shared-buffers"/></entry>
-       <entry>8300 (en supposant 8&nbsp;ko par <symbol>BLCKSZ</symbol>)</entry>
+       <entry>8400 (en supposant un <symbol>BLCKSZ</symbol> à 8&nbsp;Ko)</entry>
       </row>
 
       <row>
        <entry><xref linkend="guc-wal-buffers"/></entry>
-       <entry>8200 (en supposant 8&nbsp;ko par <symbol>XLOG_BLCKSZ</symbol>)</entry>
+       <entry>8200 (en supposant un <symbol>XLOG_BLCKSZ</symbol> à 8&nbsp;Ko)</entry>
       </row>
 
       <row>
@@ -1059,6 +1094,11 @@ url="http://sunsite.uakom.sk/sunworldonline/swol-09-1997/swol-09-insidesolaris.h
       <row>
        <entry><xref linkend="guc-max-fsm-pages"/></entry>
        <entry>6</entry>
+      </row>
+
+      <row>
+       <entry>Pré-requis d'un espace fixe</entry>
+       <entry>770&nbsp;Ko</entry>
       </row>
      </tbody>
     </tgroup>
