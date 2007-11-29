@@ -1,64 +1,72 @@
 
 <sect1 id="lo">
  <title>lo</title>
- 
+
  <indexterm zone="lo">
   <primary>lo</primary>
  </indexterm>
 
  <para>
-  PostgreSQL type extension for managing Large Objects
+  Extension PostgreSQL pour la gestion des <quote>Large Objects</quote>.
  </para>
 
  <sect2>
-  <title>Overview</title>
+  <title>Aperçu</title>
   <para>
-   One of the problems with the JDBC driver (and this affects the ODBC driver
-   also), is that the specification assumes that references to BLOBS (Binary
-   Large OBjectS) are stored within a table, and if that entry is changed, the
-   associated BLOB is deleted from the database.
+   Un des problèmes avec le pilote JDBC (mais cela affecte aussi le pilote
+   ODBC) est que la spécification suppose que les références aux BLOB (Binary
+   Large OBject) sont stockées dans une table et que, si une entrée est
+   modifiée, le BLOB associé est supprimé de cette base.
   </para>
   <para>
-   As PostgreSQL stands, this doesn't occur.  Large objects are treated as
-   objects in their own right; a table entry can reference a large object by
-   OID, but there can be multiple table entries referencing the same large
-   object OID, so the system doesn't delete the large object just because you
-   change or remove one such entry.
+   Au niveau de PostgreSQL, ceci n'arrive pas. Les <quote>Large Objects</quote>
+   sont traités comme des objets propres&nbsp;; une entrée de table peut
+   référencer un <quote>Large Object</quote> par son OID, mais plusieurs
+   tables peuvent référencer le même OID. Donc, le système ne peut pas
+   supprimer un <quote>Large Object</quote> simplement parce que vous
+   avez modifié ou supprimé une entrée contenant son OID.
   </para>
   <para>
-   Now this is fine for new PostgreSQL-specific applications, but existing ones
-   using JDBC or ODBC won't delete the objects, resulting in orphaning - objects
-   that are not referenced by anything, and simply occupy disk space.
-  </para>
- </sect2>
-
- <sect2>
-  <title>The Fix</title>
-  <para>
-   I've fixed this by creating a new data type 'lo', some support functions, and
-   a Trigger which handles the orphaning problem.  The trigger essentially just
-   does a 'lo_unlink' whenever you delete or modify a value referencing a large
-   object.  When you use this trigger, you are assuming that there is only one
-   database reference to any large object that is referenced in a
-   trigger-controlled column!
-  </para>
-  <para>
-   The 'lo' type was created because we needed to differentiate between plain
-   OIDs and Large Objects. Currently the JDBC driver handles this dilemma easily,
-   but (after talking to Byron), the ODBC driver needed a unique type. They had
-   created an 'lo' type, but not the solution to orphaning.
-  </para>
-  <para>
-   You don't actually have to use the 'lo' type to use the trigger, but it may be
-   convenient to use it to keep track of which columns in your database represent
-   large objects that you are managing with the trigger.
+   Ceci n'est pas un problème pour les nouvelles applications spécifiques
+   à PostgreSQL mais celles qui existent déjà, qui utilisent JDBC ou ODBC,
+   ne suppriment pas les objets, ceci aboutissant à des <quote>Large
+   Objects</quote> orphelins - des objets qui ne sont référencés par
+   personne et occupant donc un espace disque précieux sans raison.
   </para>
  </sect2>
 
  <sect2>
-  <title>How to Use</title>
+  <title>La correction</title>
   <para>
-   The easiest way is by an example:
+   J'ai corrigé ceci en créant un nouveau type de données,
+   <literal>lo</literal>, quelques fonctions de support et un trigger qui
+   gère le problème des <quote>Large Objects</quote> orphelins. Le trigger
+   exécute essentiellement un <command>lo_unlink</command> à chaque fois
+   que vous voulez supprimer ou modifier une valeur référencer un
+   <quote>Large Object</quote>. Quand vous utilisez ce trigger, vous supposez
+   qu'il n'existe qu'une référence à ce <quote>Large Object</quote> dans
+   toute la base de données&nbsp;!
+  </para>
+  <para>
+   Le type <literal>lo</literal> a été créé car nous avons besoin de
+   différencier les OID normaux des OID de <quote>Large Object</quote>.
+   Actuellement, le pilote JDBC gère ce dilemne facilement mais, après
+   en avoir discuté avec Byron, le pilote ODBC a besoin d'un type unique.
+   Ils avaient créé un type <literal>lo</literal> mais sans solution pour
+   les orphelins.
+  </para>
+  <para>
+   Vous n'avez pas à utiliser le type <literal>lo</literal> pour utiliser
+   le trigger mais c'est plus agréable de l'utiliser car ça vous permet
+   de bien visualiser les colonnes de votre base qui contiennent des
+   <quote>Large Objects</quote> et que vous gérez avec le trigger.
+  </para>
+ </sect2>
+
+ <sect2>
+  <title>Comment l'utiliser</title>
+  <para>
+   Voici la façon la plus simple&nbsp;:
   </para>
   <programlisting>
    CREATE TABLE image (title TEXT, raster lo);
@@ -66,50 +74,53 @@
      FOR EACH ROW EXECUTE PROCEDURE lo_manage(raster);
   </programlisting>
   <para>
-   Create a trigger for each column that contains a lo type, and give the column
-   name as the trigger procedure argument.  You can have more than one trigger on
-   a table if you need multiple lo columns in the same table, but don't forget to
-   give a different name to each trigger.
+   Crée un trigger pour chaque colonne contenant un type <literal>lo</literal>
+   et donne le nom de la colonne en argument de la procédure trigger. Vous
+   pouvez avoir plus d'un trigger sur une table si cette dernière contient
+   plusieurs colonnes de type <literal>lo</literal> mais n'oubliez pas de
+   donner un nom différent à chaque trigger.
   </para>
  </sect2>
 
  <sect2>
-  <title>Issues</title>
+  <title>Problèmes</title>
 
   <itemizedlist>
    <listitem>
     <para>
-     Dropping a table will still orphan any objects it contains, as the trigger
-     is not executed.
+     Supprimer une table laissera toujours un grand nombre d'orphelins car
+     il n'existe pas de trigger pour cette opération.
     </para>
     <para>
-     Avoid this by preceding the 'drop table' with 'delete from {table}'.
+     Éviter ceci en exécutant avant le <literal>DROP TABLE</literal> un
+     <literal>DELETE FROM</literal>.
     </para>
     <para>
-     If you already have, or suspect you have, orphaned large objects, see
-     the contrib/vacuumlo module to help you clean them up.  It's a good idea
-     to run contrib/vacuumlo occasionally as a back-stop to the lo_manage
-     trigger.
+     Si vous avez déjà, ou suspecté avoir, des <quote>Large Objects</quote>
+     orphelins, jetez un ½il au module contrib vacuumlo pour vous aider à
+     faire le nettoyage. Exécuter vacuumlo de temps en temps est une bonne
+     idée.
     </para>
    </listitem>
    <listitem>
     <para>
-     Some frontends may create their own tables, and will not create the
-     associated trigger(s). Also, users may not remember (or know) to create
-     the triggers.
+     Certaines interfaces pourraient créer leur propres tables, sans associer
+     le(s) trigger(s) associé(s). De plus, le sutilisateurs pourraient ne
+     plus se rappeler (ou savoir) d'avoir à créer les triggers.
     </para>
    </listitem>
   </itemizedlist>
 
   <para>
-   As the ODBC driver needs a permanent lo type (&amp; JDBC could be optimised to
-   use it if it's Oid is fixed), and as the above issues can only be fixed by
-   some internal changes, I feel it should become a permanent built-in type.
+   Comme le pilote ODBC a besoin d'un type <literal>lo</literal> permanent
+   (&amp; JDBC pourrait être optimisé pour l'utiliser si son OID est fixe)
+   et comme les problèmes ci-dessus peuvent seulement être corrigés par
+   des modifications internes, je pense qu'il devrait être un type interne.
   </para>
  </sect2>
 
  <sect2>
-  <title>Author</title>
+  <title>Auteur</title>
   <para>
    Peter Mount <email>peter@retep.org.uk</email> June 13 1998
   </para>
