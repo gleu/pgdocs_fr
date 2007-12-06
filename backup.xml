@@ -663,9 +663,22 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
    <para>
     De plus, le changement d'un segment peut être forcé manuellement avec
     <function>pg_switch_xlog</function>. Cela permet de s'assurer qu'une
-    transaction tout juste terminée est immédiatement archivée. D'autres
+    transaction tout juste terminée est archivée aussi vite que possible.
+	D'autres
     fonctions utilitaires relatives à la gestion des WAL sont disponibles dans
     <xref linkend="functions-admin-backup-table"/>.
+   </para>
+
+   <para>
+    When <varname>archive_mode</varname> is <literal>off</literal> some SQL commands
+    are optimized to avoid WAL logging, as described in <xref
+    linkend="populate-pitr"/>. If archiving were turned on during execution
+    of one of these statements, WAL would not contain enough information
+    for archive recovery.  (Crash recovery is unaffected.)  For
+    this reason, <varname>archive_mode</varname> can only be changed at server
+    start.  (<varname>archive_command</varname> can be changed with a
+    configuration file reload, and setting it to <literal>''</literal> does
+    prevent archiving.)
    </para>
   </sect2>
 
@@ -1022,17 +1035,24 @@ cat <replaceable class="parameter">nom_fichier</replaceable>* | psql <replaceabl
    <para>
     Normalement, la récupération traite tous les segments WAL disponibles,
     restaurant du coup la base de données à l'instant présent (ou aussi proche que
-    possible, en fonction des segments WAL disponibles). Mais, pour
-    récupérer à un instant particulier (disons, juste avant que
-    l'administrateur junior ait supprimé la table principale de
-    transactions), il suffit de spécifier le point d'arrêt voulu dans
-    <filename>recovery.conf</filename>. Ce point d'arrêt, connu
-    sous le nom de <quote>cible de récupération</quote> (ou
-    <foreignphrase>recovery target</foreignphrase>), peut être indiqué 
-    soit à l'aide d'une date/heure, soit par l'ID de la dernière transaction.
-    Au moment de la rédaction de ce document,
-    seule l'option date/heure est réellement utilisable car il n'existe pas
-    d'outils permettant d'identifier précisément l'ID de transaction à utiliser.
+    possible, en fonction des segments WAL disponibles). So a normal
+    recovery will end with a "file not found" message, the exact text
+    of the error message depending upon your choice of 
+    <varname>restore_command</varname>.  You may also see an error message
+    at the start of recovery for a file named something like
+    <filename>00000001.history</filename>.  This is also normal and does not
+    indicate a problem in simple recovery situations. See 
+    <xref linkend="backup-timelines"/> for discussion.
+   </para>
+
+   <para>
+    If you want to recover to some previous point in time (say, right before
+    the junior DBA dropped your main transaction table), just specify the 
+    required stopping point in <filename>recovery.conf</filename>.  You can specify 
+    the stop point, known as the <quote>recovery target</quote>, either by 
+    date/time or by completion of a specific transaction ID.  As of this 
+    writing only the date/time option is very usable, since there are no tools 
+    to help you identify with any accuracy which transaction ID to use.
    </para>
 
    <note>
@@ -1271,6 +1291,92 @@ restore_command = 'copy /mnt/serveur/reparchives/%f "%p"'  # Windows</programlis
     dans <filename>recovery.conf</filename>. Il n'est pas possible de
     récupérer dans des timelines antérieures à la sauvegarde.
    </para>
+  </sect2>
+
+  <sect2 id="backup-tips">
+   <title>Tips and Examples</title>
+
+   <para>
+    Some examples of configuring Continuous Archiving are given here.
+   </para>
+
+    <sect3 id="backup-standalone">
+     <title>Recovery Settings</title>
+
+     <para>
+      It is possible to use the existing backup facilities to produce
+      standalone hot backups. These are backups that cannot be used for
+      point-in-time recovery, yet are much faster to backup and restore
+      than <application>pg_dump</application>.
+     </para>
+
+     <para>
+      To configure standalone backups you should use a switch file. If the
+      file exists then archives are made, otherwise archiving is ignored.
+<programlisting>
+archive_command = 'test -f /var/lib/pgsql/backup_in_progress &amp;&amp; cp -i %p /var/lib/pgsql/archive/%f &lt;/dev/null'
+</programlisting>
+      Backup can then be taken using a script like the following:
+<programlisting>
+touch /var/lib/pgsql/backup_in_progress
+psql -c "select pg_start_backup('hot_backup');"
+tar -cvf /var/lib/pgsql/backup.tar /var/lib/pgsql/data/
+psql -c "select pg_stop_backup();"
+sleep 20
+rm /var/lib/pgsql/backup_in_progress
+tar -rvf /var/lib/pgsql/backup.tar /var/lib/pgsql/archive/
+</programlisting>
+      The switch file <filename>/var/lib/pgsql/backup_in_progress</filename> is
+      created first, allowing archiving to start prior to the backup.
+      After the backup the switch file is removed. Archived WAL files are
+      then added to the backup so that both base backup and all required
+      WAL files are part of the same <application>tar</application> file.
+     </para>
+    </sect3>
+
+    <sect3 id="backup-scripts">
+     <title><varname>archive_command</varname> scripts</title>
+
+     <para>
+      Many people choose to use scripts to define their 
+      <varname>archive_command</varname>, so that their
+      <filename>postgresql.conf</filename> looks very simple:
+<programlisting>
+archive_command = 'local_backup_script.sh'
+</programlisting>
+      This allows all complexity to be managed within the script, which
+      can be written in a popular scripting language such as
+      <application>bash</application> or <application>perl</application>.  Statements echoed to
+      <literal>stderr</literal> will appear in the database server log, allowing
+      complex configurations to be easily diagnosed if they fail.
+     </para>
+     <para>
+      Example of how scripts might be used include:
+      <itemizedlist>
+       <listitem>
+        <para>
+         Copying data to a secure off-site data storage provider
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Batching WAL files so they are transferred every three hours, rather than
+         one at a time as they fill
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Interfacing with other backup and recovery software
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Interfacing with monitoring software to report errors directly
+        </para>
+       </listitem>
+      </itemizedlist>
+     </para>
+    </sect3>
   </sect2>
 
   <sect2 id="continuous-archiving-caveats">
