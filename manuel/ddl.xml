@@ -2347,8 +2347,8 @@ CHECK ( comté BETWEEN 200 AND 300 )</programlisting>
 
       <listitem>
        <para>
-        Optionnellement, définir une règle ou un déclencheur pour rediriger les
-	modifications de la table maître vers la partition appropriée.
+        Optionnellement, définir un déclencheur ou une règle pour rediriger les
+        données insérées dans la table maître vers la partition appropriée.
        </para>
       </listitem>
 
@@ -2404,12 +2404,12 @@ CHECK ( comté BETWEEN 200 AND 300 )</programlisting>
        <para>
         une partition est ensuite créée pour chaque mois actif&nbsp;:
 
-<programlisting>CREATE TABLE mesure_a2004m02 ( ) INHERITS (mesure);
-CREATE TABLE mesure_a2004m03 ( ) INHERITS (mesure);
+<programlisting>CREATE TABLE mesure_a2006m02 ( ) INHERITS (mesure);
+CREATE TABLE mesure_a2006m03 ( ) INHERIT (mesure);
 ...
-CREATE TABLE mesure_a2005m11 ( ) INHERITS (mesure);
-CREATE TABLE mesure_a2005m12 ( ) INHERITS (mesure);
-CREATE TABLE mesure_a2006m01 ( ) INHERITS (mesure);</programlisting>
+CREATE TABLE mesure_a2007m11 ( ) INHERITS (mesure);
+CREATE TABLE mesure_a2007m12 ( ) INHERITS (mesure);
+CREATE TABLE mesure_a2008m01 ( ) INHERITS (mesure);</programlisting>
 
         Chaque partition est une table à part entière mais
 	sa définition est héritée de la table <structname>mesure</structname>.
@@ -2428,21 +2428,21 @@ CREATE TABLE mesure_a2006m01 ( ) INHERITS (mesure);</programlisting>
 	Il faut ajouter des des contraintes de table qui interdisent les
 	recouvrements. Le script de création de table devient&nbsp;:
 
-<programlisting>CREATE TABLE mesure_a2004m02 (
-    CHECK ( date_trace &gt;= DATE '2004-02-01' AND date_trace &lt; DATE '2004-03-01' )
+<programlisting>CREATE TABLE mesure_a2006m02 (
+    CHECK ( date_trace &gt;= DATE '2006-02-01' AND date_trace &lt; DATE '2006-03-01' )
 ) INHERITS (mesure);
-CREATE TABLE mesure_a2004m03 (
-    CHECK ( date_trace &gt;= DATE '2004-03-01' AND date_trace &lt; DATE '2004-04-01' )
+CREATE TABLE mesure_a2006m03 (
+    CHECK ( date_trace &gt;= DATE '2006-03-01' AND date_trace &lt; DATE '2006-04-01' )
 ) INHERITS (mesure);
 ...
-CREATE TABLE mesure_a2005m11 (
-    CHECK ( date_trace &gt;= DATE '2005-11-01' AND date_trace &lt; DATE '2005-12-01' )
+CREATE TABLE mesure_a2007m11 (
+    CHECK ( date_trace &gt;= DATE '2007-11-01' AND date_trace &lt; DATE '2007-12-01' )
 ) INHERITS (mesure);
-CREATE TABLE mesure_a2005m12 (
-    CHECK ( date_trace &gt;= DATE '2005-12-01' AND date_trace &lt; DATE '2006-01-01' )
+CREATE TABLE mesure_a2007m12 (
+    CHECK ( date_trace &gt;= DATE '2007-12-01' AND date_trace &lt; DATE '2007-01-01' )
 ) INHERITS (mesure);
-CREATE TABLE mesure_a2006m01 (
-    CHECK ( date_trace &gt;= DATE '2006-01-01' AND date_trace &lt; DATE '2006-02-01' )
+CREATE TABLE mesure_a2008m01 (
+    CHECK ( date_trace &gt;= DATE '2008-01-01' AND date_trace &lt; DATE '2008-02-01' )
 ) INHERITS (mesure);</programlisting>
        </para>
       </listitem>
@@ -2451,12 +2451,12 @@ CREATE TABLE mesure_a2006m01 (
        <para>
         Des index sur les colonnes clés sont probablement nécessaires&nbsp;:
 
-<programlisting>CREATE INDEX mesure_a2004m02_date_trace ON mesure_a2004m02 (date_trace);
-CREATE INDEX mesure_a2004m03_date_trace ON mesure_a2004m03 (date_trace);
+<programlisting>CREATE INDEX mesure_a2006m02_date_trace ON mesure_a2006m02 (date_trace);
+CREATE INDEX mesure_a2006m03_date_trace ON mesure_a2006m03 (date_trace);
 ...
-CREATE INDEX mesure_a2005m11_date_trace ON mesure_a2005m11 (date_trace);
-CREATE INDEX mesure_a2005m12_date_trace ON mesure_a2005m12 (date_trace);
-CREATE INDEX mesure_a2006m01_date_trace ON mesure_a2006m01 (date_trace);</programlisting>
+CREATE INDEX mesure_a2007m11_date_trace ON mesure_a2007m11 (date_trace);
+CREATE INDEX mesure_a2007m12_date_trace ON mesure_a2007m12 (date_trace);
+CREATE INDEX mesure_a2008m01_date_trace ON mesure_a2008m01 (date_trace);</programlisting>
 
         À ce stade, c'est suffisant.
        </para>
@@ -2464,52 +2464,72 @@ CREATE INDEX mesure_a2006m01_date_trace ON mesure_a2006m01 (date_trace);</progra
 
       <listitem>
        <para>
+        We want our application to be able to say <literal>INSERT INTO
+        measurement ...</literal> and have the data be redirected into the
+        appropriate partition table.  We can arrange that by attaching
+        a suitable trigger function to the master table.
         Si les données ne sont ajoutées que dans la dernière partition,
-	une règle très simple d'insértion des données peut être configurée.
-	Elle doit être redéfinie chaque mois pour toujours pointer vers
-	la partition en cours.
+	nous pouvons utiliser une fonction trigger très simple.
 
-<programlisting>CREATE OR REPLACE RULE partition_actuelle_mesure AS
-ON INSERT TO mesure
-DO INSTEAD
-    INSERT INTO mesure_a2006m01 VALUES ( NEW.id_ville,
-                                         NEW.date_trace,
-                                         NEW.temperature,
-                                         NEW.ventes );</programlisting>
+<programlisting>
+CREATE OR REPLACE FUNCTION measurement_insert_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO measurement_y2008m01 VALUES (NEW.*);
+    RETURN NULL;
+END;
+$$
+LANGUAGE plpgsql;
+</programlisting>
 
+        After creating the function, we create a trigger which
+        calls the trigger function:
+
+<programlisting>
+CREATE TRIGGER insert_measurement_trigger
+    BEFORE INSERT ON measurement
+    FOR EACH ROW EXECUTE PROCEDURE measurement_insert_trigger();
+</programlisting>
+
+        We must redefine the trigger function each month so that it always
+        points to the current partition.  The trigger definition does
+        not need to be updated, however.
+       </para>
+
+       <para>
         Il est également possible de laisser le serveur localiser la partition
-	dans laquelle doit être insérée la ligne proposée en entrée. Un
-	ensemble de règles plus complexes permet d'obtenir ce résultat&nbsp;:
+	dans laquelle doit être insérée la ligne proposée en entrée. Une
+	fonction trigger permet d'obtenir ce résultat&nbsp;:
 
-<programlisting>CREATE RULE mesure_insert_a2004m02 AS
-ON INSERT TO mesure WHERE
-    ( date_trace &gt;= DATE '2004-02-01' AND date_trace &lt; DATE '2004-03-01' )
-DO INSTEAD
-    INSERT INTO mesure_a2004m02 VALUES ( NEW.id_ville,
-                                         NEW.date_trace,
-                                         NEW.temperature,
-                                         NEW.ventes );
-...
-CREATE RULE mesure_insert_a2005m12 AS
-ON INSERT TO mesure WHERE
-    ( date_trace &gt;= DATE '2005-12-01' AND date_trace &lt; DATE '2006-01-01' )
-DO INSTEAD
-    INSERT INTO mesure_a2005m12 VALUES ( NEW.id_ville,
-                                         NEW.date_trace,
-                                         NEW.temperature,
-                                         NEW.ventes );
-CREATE RULE mesure_insert_a2006m01 AS
-ON INSERT TO mesure WHERE
-    ( date_trace &gt;= DATE '2006-01-01' AND date_trace &lt; DATE '2006-02-01' )
-DO INSTEAD
-    INSERT INTO mesure_a2006m01 VALUES ( NEW.id_ville,
-                                         NEW.date_trace,
-                                         NEW.temperature,
-                                         NEW.ventes );</programlisting>
+<programlisting>
+CREATE OR REPLACE FUNCTION measurement_insert_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF ( logdate &gt;= DATE '2006-02-01' AND logdate &lt; DATE '2006-03-01' ) THEN
+        INSERT INTO measurement_y2006m02 VALUES (NEW.*);
+    ELSIF ( logdate &gt;= DATE '2006-03-01' AND logdate &lt; DATE '2006-04-01' ) THEN
+        INSERT INTO measurement_y2006m03 VALUES (NEW.*);
+    ...
+    ELSIF ( logdate &gt;= DATE '2008-01-01' AND logdate &lt; DATE '2008-02-01' ) THEN
+        INSERT INTO measurement_y2008m01 VALUES (NEW.*);
+    ELSE
+        RAISE EXCEPTION 'Date out of range.  Fix the measurement_insert_trigger() function!';
+    END IF;
+    RETURN NULL;
+END;
+$$
+LANGUAGE plpgsql;
+</programlisting>
 
-        La clause <literal>WHERE</literal> de chaque règle correspond
-	exactement à la contrainte de vérification de la partition
-	correspondante.
+        The trigger definition is the same as before.
+        Note that each <literal>IF</literal> test must exactly match the
+        <literal>CHECK</literal> constraint for its partition.
+       </para>
+
+       <para>
+        While this function is more complex than the single-month case,
+        it doesn't need to be updated as often, since branches can be
+        added in advance of being needed.
        </para>
       </listitem>
      </orderedlist>
@@ -2522,24 +2542,6 @@ DO INSTEAD
      engendre automatiquement la DDL requise.
     </para>
 
-
-   <para>
-    Le partitionnement peut aussi se faire en utilisant une vue <literal>UNION
-    ALL</literal>&nbsp;:
-
-<programlisting>
-CREATE VIEW mesure AS
-          SELECT * FROM measure_a2004m02
-UNION ALL SELECT * FROM measure_a2004m03
-...
-UNION ALL SELECT * FROM measure_a2005m11
-UNION ALL SELECT * FROM measure_a2005m12
-UNION ALL SELECT * FROM measure_a2006m01;
-</programlisting>
-
-    Toutefois, l'obigation de recréer la vue impose une étape supplémentaire à
-    l'ajout et à la suppression de partitions.
-   </para>
    </sect2>
 
    <sect2 id="ddl-partitioning-managing-partitions">
@@ -2559,7 +2561,7 @@ UNION ALL SELECT * FROM measure_a2006m01;
    <para>
      L'option la plus simple pour supprimer d'anciennes données consiste à
      supprimer la partition qui n'est plus nécessaire&nbsp;:
-<programlisting>DROP TABLE mesure_a2003m02;
+<programlisting>DROP TABLE mesure_a2006m02;
 </programlisting>
      Cela permet de supprimer très rapidement des millions d'enregistrements
      car il n'est nul besoin de supprimer séparément chaque enregistrement.
@@ -2568,7 +2570,7 @@ UNION ALL SELECT * FROM measure_a2006m01;
    <para>
      Une autre option, souvent préférable, consiste à supprimer la partition de la
      table partitionnée mais de conserver l'accès à la table en tant que telle&nbsp;:
-<programlisting>ALTER TABLE mesure_a2003m02 NO INHERIT mesure;
+<programlisting>ALTER TABLE mesure_a2006m02 NO INHERIT mesure;
 </programlisting>
      Ceci permet la réalisation d'opérations ultérieures sur les données
      avant qu'elles ne soient supprimées. Par exemple, c'est souvent le bon moment
@@ -2585,8 +2587,8 @@ UNION ALL SELECT * FROM measure_a2006m01;
      créées plus haut&nbsp;:
 
 <programlisting>
-CREATE TABLE mesure_a2006m02 (
-    CHECK ( date_trace &gt;= DATE '2006-02-01' AND date_trace &lt; DATE '2006-03-01' )
+CREATE TABLE mesure_a2008m02 (
+    CHECK ( date_trace &gt;= DATE '2008-02-01' AND date_trace &lt; DATE '2008-03-01' )
     ) INHERITS (mesure);
 </programlisting>
 
@@ -2597,14 +2599,15 @@ CREATE TABLE mesure_a2006m02 (
      dans la table partitionnée&nbsp;:
 
 <programlisting>
-CREATE TABLE mesure_a2006m02
+CREATE TABLE mesure_a2008m02
   (LIKE mesure INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
-ALTER TABLE mesure_a2006m02 ADD CONSTRAINT a2006m02
-   CHECK ( date_trace &gt;= DATE '2006-02-01' AND date_trace &lt; DATE '2006-03-01' );
-\copy mesure_a2006m02 from 'mesure_a2006m02'
--- autre travail de préparation des données
-ALTER TABLE mesure_a2006m02 INHERIT mesure;
+ALTER TABLE mesure_a2008m02 ADD CONSTRAINT y2008m02
+   CHECK ( date_trace &gt;= DATE '2008-02-01' AND date_trace &lt; DATE '2008-03-01' );
+\copy mesure_a2008m02 from 'mesure_a2008m02'
+-- quelques travaux de préparation des données
+ALTER TABLE mesure_a2008m02 INHERIT measurement;
 </programlisting>
+
     </para>
    </sect2>
 
@@ -2621,7 +2624,7 @@ ALTER TABLE mesure_a2006m02 INHERIT mesure;
     telles que décrites plus haut. Par exemple&nbsp;:
 
 <programlisting>SET constraint_exclusion = on;
-SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';</programlisting>
+SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';</programlisting>
 
     Sans exclusion de contrainte, la requête ci-dessus parcourt chacune
     des partitions de la table <structname>mesure</structname>. Avec l'exclusion de
@@ -2640,23 +2643,24 @@ SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';</programli
     table est&nbsp;:
 
 <programlisting>SET constraint_exclusion = off;
-EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';
+EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
 
                                           QUERY PLAN
 -------------------------------------------------------------------------------------
  Aggregate  (cost=158.66..158.68 rows=1 width=0)
-   ->  Append  (cost=0.00..151.88 rows=2715 width=0)
-         ->  Seq Scan on mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2006-01-01'::date)
-         ->  Seq Scan on mesure_a2004m02 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2006-01-01'::date)
-         ->  Seq Scan on mesure_a2004m03 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2006-01-01'::date)
+   -&gt;  Append  (cost=0.00..151.88 rows=2715 width=0)
+         -&gt;  Seq Scan on mesure  (cost=0.00..30.38 rows=543 width=0)
+               Filter: (date_trace &gt;= '2008-01-01'::date)
+         -&gt;  Seq Scan on mesure_a2006m02 mesure  (cost=0.00..30.38 rows=543 width=0)
+               Filter: (date_trace &gt;= '2008-01-01'::date)
+         -&gt;  Seq Scan on mesure_ay2006m03 mesure  (cost=0.00..30.38 rows=543 width=0)
+               Filter: (date_trace &gt;= '2008-01-01'::date)
 ...
-         ->  Seq Scan on mesure_a2005m12 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2006-01-01'::date)
-         ->  Seq Scan on mesure_a2006m01 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2006-01-01'::date)</programlisting>
+         -&gt;  Seq Scan on mesure_a2007m12 mesure  (cost=0.00..30.38 rows=543 width=0)
+               Filter: (date_trace &gt;= '2008-01-01'::date)
+         -&gt;  Seq Scan on mesure_a2008m01 mesure  (cost=0.00..30.38 rows=543 width=0)
+               Filter: (date_trace &gt;= '2008-01-01'::date)
+</programlisting>
 
     Quelques partitions, voire toutes, peuvent utiliser des parcours d'index
     à la place des parcours séquentiels de la table complète mais le fait est
@@ -2666,15 +2670,15 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';
     réponse&nbsp;:
 
 <programlisting>SET constraint_exclusion = on;
-EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';
+EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
                                           QUERY PLAN
 -------------------------------------------------------------------------------------
  Aggregate  (cost=63.47..63.48 rows=1 width=0)
    ->  Append  (cost=0.00..60.75 rows=1086 width=0)
          ->  Seq Scan on mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2006-01-01'::date)
-         ->  Seq Scan on mesure_a2006m01 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2006-01-01'::date)</programlisting>
+               Filter: (date_trace &gt;= '2008-01-01'::date)
+         ->  Seq Scan on mesure_a2008m01 mesure  (cost=0.00..30.38 rows=543 width=0)
+               Filter: (date_trace &gt;= '2008-01-01'::date)</programlisting>
    </para>
 
    <para>
@@ -2687,6 +2691,68 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';
    </para>
    </sect2>
 
+   <sect2 id="ddl-partitioning-alternatives">
+   <title>Alternative Partitioning Methods</title>
+
+    <para>
+     A different approach to redirecting inserts into the appropriate
+     partition table is to set up rules, instead of a trigger, on the
+     master table.  For example:
+
+<programlisting>
+CREATE RULE measurement_insert_y2006m02 AS
+ON INSERT TO measurement WHERE
+    ( logdate &gt;= DATE '2006-02-01' AND logdate &lt; DATE '2006-03-01' )
+DO INSTEAD
+    INSERT INTO measurement_y2006m02 VALUES (NEW.*);
+...
+CREATE RULE measurement_insert_y2008m01 AS
+ON INSERT TO measurement WHERE
+    ( logdate &gt;= DATE '2008-01-01' AND logdate &lt; DATE '2008-02-01' )
+DO INSTEAD
+    INSERT INTO measurement_y2008m01 VALUES (NEW.*);
+</programlisting>
+
+     A rule has significantly more overhead than a trigger, but the overhead
+     is paid once per query rather than once per row, so this method might be
+     advantageous for bulk-insert situations.  In most cases, however, the
+     trigger method will offer better performance.
+    </para>
+
+    <para>
+     Be aware that <command>COPY</command> ignores rules.  If you want to
+     use <command>COPY</command> to insert data, you'll need to copy into the correct
+     partition table rather than into the master.  <command>COPY</command> does fire
+     triggers, so you can use it normally if you use the trigger approach.
+    </para>
+
+    <para>
+     Another disadvantage of the rule approach is that there is no simple
+     way to force an error if the set of rules doesn't cover the insertion
+     date; the data will silently go into the master table instead.
+    </para>
+
+    <para>
+     Partitioning can also be arranged using a <literal>UNION ALL</literal>
+     view, instead of table inheritance.  For example,
+
+<programlisting>
+CREATE VIEW measurement AS
+          SELECT * FROM measurement_y2006m02
+UNION ALL SELECT * FROM measurement_y2006m03
+...
+UNION ALL SELECT * FROM measurement_y2007m11
+UNION ALL SELECT * FROM measurement_y2007m12
+UNION ALL SELECT * FROM measurement_y2008m01;
+</programlisting>
+
+     However, the need to recreate the view adds an extra step to adding and
+     dropping individual partitions of the data set.  In practice this
+     method has little to recommend it compared to using inheritance.
+    </para>
+
+   </sect2>
+
    <sect2 id="ddl-partitioning-caveats">
    <title>Restrictions</title>
 
@@ -2695,24 +2761,35 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';
    <itemizedlist>
     <listitem>
      <para>
-      il n'existe, actuellement, pas de moyen de vérifier que toutes les
+      il n'existe pas de moyen automatique de vérifier que toutes les
       contraintes de vérification (<literal>CHECK</literal>) sont mutuellement
-      exclusives. C'est au concepteur de la base de données de faire les
-      vérifications nécessaires&nbsp;;
+      exclusives. It is safer to create code that generates
+      partitions and creates and/or modifies associated objects than
+      to write each by hand.&nbsp;;
      </para>
     </listitem>
 
     <listitem>
      <para>
-      il n'existe, actuellement, pas de façon simple de préciser que les
-      lignes ne doivent pas être insérées dans la table maître. Une contrainte
-      <literal>CHECK (false)</literal> sur la table maître est héritée par toutes
-      les tables filles et ne peut donc pas être utilisée dans ce but. Une
-      possibilité consiste à configurer un
-      déclencheur <literal>ON INSERT</literal> sur la table maître qui lève
-      systématiquement une erreur. (Ou un déclencheur qui redirige les
-      données dans la bonne table fille au lieu d'utiliser un ensemble de règles
-      comme suggéré ci-dessus).
+      The schemes shown here assume that the partition key column(s)
+      of a row never change, or at least do not change enough to require
+      it to move to another partition.  An <command>UPDATE</command> that attempts
+      to do that will fail because of the <literal>CHECK</literal> constraints.
+      If you need to handle such cases, you can put suitable update triggers
+      on the partition tables, but it makes management of the structure
+      much more complicated.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      If you are using manual <command>VACUUM</command> or
+      <command>ANALYZE</command> commands, don't forget that
+      you need to run them on each partition individually. A command like
+<programlisting>
+ANALYZE measurement;
+</programlisting>
+      will only process the master table.
      </para>
     </listitem>
    </itemizedlist>
@@ -2743,7 +2820,7 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';
       précédents. Une bonne règle est que les contraintes de partitionnement
       doivent seulement contenir des comparaisons entre les colonnes de
       partitionnement et des constantes en utilisant des opérateurs
-      utilisables par les index btree.
+      utilisables par les index B-tree.
      </para>
     </listitem>
 
@@ -2752,16 +2829,9 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2006-01-01';
       toutes les constraintes de toutes les partitions de la table maître sont
       examinées lors de l'exclusion de contraintes. De ce fait, un grand nombre
       de partitions a tendance à augmenter considérablement le temps de
-      planification de la requête&nbsp;;
-     </para>
-    </listitem>
-
-    <listitem>
-     <para>
-      il est toujours nécessaire d'exécuter un <command>ANALYZE</command>
-      sur chaque partition. Une commande comme&nbsp;:
-<programlisting>ANALYZE mesure;</programlisting>
-      ne traite que la table maître.
+      planification de la requête. Partitioning using
+      these techniques will work well with up to perhaps a hundred partitions;
+      don't try to use many thousands of partitions.
      </para>
     </listitem>
 
