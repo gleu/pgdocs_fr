@@ -1051,11 +1051,32 @@ est obsolète et non supporté par <application>libpq</application>).
     </varlistentry>
 
     <varlistentry>
+     <term><function>PQconnectionNeedsPassword</function><indexterm><primary>PQconnectionNeedsPassword</primary></indexterm></term>
+     <listitem>
+      <para>
+       Returns true (1) if the connection authentication method
+       required a password, but none was available.
+       Returns false (0) if not.
+
+       <synopsis>
+        int PQconnectionNeedsPassword(const PGconn *conn);
+       </synopsis>
+
+      </para>
+
+      <para>
+       This function can be applied after a failed connection attempt
+       to decide whether to prompt the user for a password.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><function>PQconnectionUsedPassword</function><indexterm><primary>PQconnectionUsedPassword</primary></indexterm></term>
      <listitem>
       <para>
-       Renvoie true (1) si la méthode d'authentification de la connexion
-       nécessite l'utilisation d'un mot de passe. Renvoie false (0) sinon.
+       Returns true (1) if the connection authentication method
+       used a caller-supplied password. Returns false (0) if not.
 
        <synopsis>
         int PQconnectionUsedPassword(const PGconn *conn);
@@ -1064,9 +1085,10 @@ est obsolète et non supporté par <application>libpq</application>).
       </para>
 
       <para>
-       Cette fonction est utilisable après une connexion réussie ou échouée.
-       Par exemple, dans le cas d'un échec, elle peut être utilisée pour
-       décider si le mot de passe doit être demandé à l'utilisateur.
+       This function detects whether a password supplied to the connection
+       function was actually used.  Passwords obtained from other
+       sources (such as the <filename>.pgpass</filename> file) are not considered
+       caller-supplied.
       </para>
      </listitem>
     </varlistentry>
@@ -4524,16 +4546,33 @@ ldap://ldap.masociété.com/dc=masociété,dc=com?uniqueMember?one?(cn=mabase)
   </para>
 
   <para>
-   Si le serveur demande un certificat client,
-   <application>libpq</application> enverra le certificat stocké dans le fichier
-   <filename>~/.postgresql/postgresql.crt</filename> compris dans le répertoire
-   personnel de l'utilisateur. Un fichier de clé privée correspondant
-   <filename>~/.postgresql/postgresql.key</filename> doit aussi être présent
-   sauf si la clé secrète du certificat est stockée dans un jeton matériel, comme
-   spécifié par <envar>PGSSLKEY</envar>. (Sur Microsoft Windows, ces fichiers
-   sont nommés <filename>%APPDATA%\postgresql\postgresql.crt</filename>
-   et <filename>%APPDATA%\postgresql\postgresql.key</filename>.) Le fichier
-   contenant la clé privée ne doit pas être lisible par le reste du monde.
+   To verify the server certificate is trustworthy, place certificates of
+   the certificate authorities (<acronym>CA</acronym>) you trust in the
+   file <filename>~/.postgresql/root.crt</filename> in the user's home directory.
+   (On Microsoft Windows the file is named
+   <filename>%APPDATA%\postgresql\root.crt</filename>.)
+   <application>libpq</application> will then verify that the server's
+   certificate is signed by one of the trusted certificate authorities.
+   The SSL connection will fail if the server does not present a trusted
+   certificate.  Certificate Revocation List (CRL) entries are also checked
+   if the file <filename>~/.postgresql/root.crl</filename> exists
+   (<filename>%APPDATA%\postgresql\root.crl</filename> on Microsoft
+   Windows).
+  </para>
+
+  <para>
+   If the server requests a trusted client certificate,
+   <application>libpq</application> will send the certificate stored in
+   file <filename>~/.postgresql/postgresql.crt</filename> in the user's home
+   directory.  The certificate must be signed by one of the certificate
+   authorities (<acronym>CA</acronym>) trusted by the server.  A matching
+   private key file <filename>~/.postgresql/postgresql.key</filename> must also
+   be present, unless the secret key for the certificate is stored in a
+   hardware token, as specified by <envar>PGSSLKEY</envar>.  (On Microsoft
+   Windows these files are named
+   <filename>%APPDATA%\postgresql\postgresql.crt</filename> and
+   <filename>%APPDATA%\postgresql\postgresql.key</filename>.) The private
+   key file must not be world-readable.
   </para>
 
   <para>
@@ -4548,22 +4587,6 @@ ldap://ldap.masociété.com/dc=masociété,dc=com?uniqueMember?one?(cn=mabase)
    cryptographiques qui nécessitent la clé secrète du jeton matériel.
   </para>
 
-
-  <para>
-    Si le fichier <filename>~/.postgresql/root.crt</filename> est présent dans le
-    répertoire personnel de l'utilisateur,
-    <application>libpq</application> utilisera la liste de certificats stockés
-    pour vérifier le certificat du serveur (sur les systèmes Microsoft
-    Windows, le fichier est nommé
-    <filename>%APPDATA%\postgresql\root.crt</filename>). La connexion SSL
-    échouera si le serveur ne présente pas de certificat&nbsp;; du coup,
-    pour utiliser cette fonctionnalité, le serveur doit avoir un fichier
-    <filename>server.crt</filename>.
-    Les entrées de la liste de révocation des certificats (CRL) sont aussi
-    vérifiées si le fichier <filename>~/.postgresql/root.crl</filename> existe
-    (<filename>%APPDATA%\postgresql\root.crl sur Microsoft Windows</filename>).
-  </para>
-
   <para>
    Si vous utilisez <acronym>SSL</acronym> dans votre application (ainsi que dans
    <application>libpq</application>), vous pouvez utiliser
@@ -4571,6 +4594,50 @@ ldap://ldap.masociété.com/dc=masociété,dc=com?uniqueMember?one?(cn=mabase)
    que la bibliothèque <acronym>SSL</acronym> a déjà été initialisée par votre
    application.
   </para>
+
+  <table id="libpq-ssl-file-usage">
+   <title>Libpq/Client SSL File Usage</title>
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>File</entry>
+      <entry>Contents</entry>
+      <entry>Effect</entry>
+     </row>
+    </thead>
+
+    <tbody>
+
+     <row>
+      <entry><filename>~/.postgresql/postgresql.crt</filename></entry>
+      <entry>client certificate</entry>
+      <entry>requested by server</entry>
+     </row>
+
+     <row>
+      <entry><filename>~/.postgresql/postgresql.key</filename></entry>
+      <entry>client private key</entry>
+      <entry>proves client certificate sent by owner; does not indicate
+      certificate owner is trustworthy</entry>
+     </row>
+
+     <row>
+      <entry><filename>~/.postgresql/root.crt</filename></entry>
+      <entry>trusted certificate authorities</entry>
+      <entry>checks server certificate is signed by a trusted certificate
+      authority</entry>
+     </row>
+
+     <row>
+      <entry><filename>~/.postgresql/root.crl</filename></entry>
+      <entry>certificates revoked by certificate authorities</entry>
+      <entry>server certificate must not be on this list</entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
 </sect1>
 
 <sect1 id="libpq-threading">

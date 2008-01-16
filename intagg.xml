@@ -7,25 +7,73 @@
  </indexterm>
 
  <para>
-  Cette section décrit le module <literal>intagg</literal> qui fournit une
+  Le module <filename>intagg</filename> fournit une
   agrégation pour entier et un énumérateur.
  </para>
+
+ <sect2>
+  <title>Functions</title>
+
  <para>
-  Beaucoup de systèmes de bases de données ont la notion d'une table de lien
-  vers plusieurs autres tables. Ce type de table se trouve habituellement
-  entre deux tables indexées, de cette façon:&nbsp;
+  The aggregator is an aggregate function
+  <function>int_array_aggregate(integer)</function>
+  that produces an integer array
+  containing exactly the integers it is fed.
+  Here is a not-tremendously-useful example:
  </para>
+
  <programlisting>
-CREATE TABLE one_to_many(left INT, right INT) ;
+test=# select int_array_aggregate(i) from
+test-#   generate_series(1,10,2) i;
+ int_array_aggregate
+---------------------
+ {1,3,5,7,9}
+(1 row)
  </programlisting>
 
  <para>
-  Elle est utilisée ainsi&nbsp;:
+  The enumerator is a function
+  <function>int_array_enum(integer[])</function>
+  that returns <type>setof integer</type>.  It is essentially the reverse
+  operation of the aggregator: given an array of integers, expand it
+  into a set of rows.  For example,
  </para>
 
  <programlisting>
-  SELECT right.* from right JOIN one_to_many ON (right.id = one_to_many.right) 
-        WHERE  one_to_many.left = item;
+test=# select * from int_array_enum(array[1,3,5,7,9]);
+ int_array_enum
+----------------
+              1
+              3
+              5
+              7
+              9
+(5 rows)
+ </programlisting>
+
+ </sect2>
+
+ <sect2>
+  <title>Sample Uses</title>
+
+  <para>
+   Many database systems have the notion of a one to many table. Such a table
+   usually sits between two indexed tables, for example:
+  </para>
+
+ <programlisting>
+CREATE TABLE left (id INT PRIMARY KEY, ...);
+CREATE TABLE right (id INT PRIMARY KEY, ...);
+CREATE TABLE one_to_many(left INT REFERENCES left, right INT REFERENCES right);
+ </programlisting>
+
+ <para>
+  It is typically used like this:
+ </para>
+
+ <programlisting>
+  SELECT right.* from right JOIN one_to_many ON (right.id = one_to_many.right)
+    WHERE one_to_many.left = <replaceable>item</replaceable>;
  </programlisting>
 
  <para>
@@ -34,8 +82,8 @@ CREATE TABLE one_to_many(left INT, right INT) ;
  </para>
 
  <para>
-  Cette méthode devient complexe avec plusieurs tables. Suivant l'ordre dans
-  lequel les données sont saisies, une jointure de ce type pourrait résulter
+  Cette méthode devient complexe avec plusieurs tables. Souvent, une jointure
+  de ce type pourrait résulter
   en un parcours d'index et une récupération de chaque enregistrement de
   la table de droite pour chaque entrée particulière de la table de gauche.
   Si vous avez un système dynamique, vous ne pourrez pas faire grand chose pour
@@ -44,25 +92,27 @@ CREATE TABLE one_to_many(left INT, right INT) ;
  </para>
 
  <programlisting>
-CREATE TABLE summary as SELECT left, int_array_aggregate(right) 
-        AS right FROM one_to_many GROUP BY left;
+CREATE TABLE summary as
+  SELECT left, int_array_aggregate(right) AS right
+  FROM one_to_many
+  GROUP BY left;
  </programlisting>
 
  <para>
   Ceci crée une table avec une ligne par élément gauche et un tableau d'éléments
   droits. Ceci est réellement inutilisable sans un moyen pour utiliser le
-  tableau, et c'est là que l'énumérateur entre en service.
+  tableau, et c'est là que l'énumérateur entre en service. You can do
  </para>
  <programlisting>
-SELECT left, int_array_enum(right) FROM summary WHERE left = item;
+SELECT left, int_array_enum(right) FROM summary WHERE left = <replaceable>item</replaceable>;
  </programlisting>
 
  <para>
-  La requête ci-dessus utilisant int_array_enum produit les mêmes résultats
+  La requête ci-dessus utilisant <function>int_array_enum</function> produit les mêmes résultats
   que celle-ci&nbsp;:
  </para>
  <programlisting>
-SELECT left, right FROM one_to_many WHERE left = item;
+SELECT left, right FROM one_to_many WHERE left = <replaceable>item</replaceable>;
  </programlisting>
  
  <para>
@@ -71,17 +121,22 @@ SELECT left, right FROM one_to_many WHERE left = item;
   doit faire un parcours d'index et récupérer une ligne par enregistrement.
  </para>
  <para>
-  Sur notre système, un EXPLAIN montre qu'une requête avec un coût de 8488
-  est réduite à une requête d'un coût de 329. La requête est une jointure entre
-  la table one_to_many,
+  Sur un système, un <command>EXPLAIN</command> a montré qu'une requête avec
+  un coût de 8488 a été réduite à une requête d'un coût de 329. La requête
+  originale était une jointure impliquant la table
+  <structname>one_to_many</structname>, which was replaced by:
  </para>
  <programlisting>
-SELECT right, count(right) FROM 
-(
-        SELECT left, int_array_enum(right) AS right FROM summary JOIN
-                (SELECT left FROM left_table WHERE left = item) AS lefts
-                 ON (summary.left = lefts.left ) 
-) AS list GROUP BY right ORDER BY count DESC ;
+SELECT right, count(right) FROM
+  ( SELECT left, int_array_enum(right) AS right
+    FROM summary JOIN (SELECT left FROM left_table WHERE left = <replaceable>item</replaceable>) AS lefts
+         ON (summary.left = lefts.left)
+  ) AS list
+  GROUP BY right
+  ORDER BY count DESC;
  </programlisting>
+
+ </sect2>
+
 </sect1>
 
