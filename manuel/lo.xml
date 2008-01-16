@@ -7,7 +7,9 @@
  </indexterm>
 
  <para>
-  Extension PostgreSQL pour la gestion des <quote>Large Objects</quote>.
+  The <filename>lo</filename> module provides support for managing Large Objects
+  (also called LOs or BLOBs).  This includes a data type <type>lo</type>
+  and a trigger <function>lo_manage</function>.
  </para>
 
  <sect2>
@@ -19,7 +21,8 @@
    modifiée, le BLOB associé est supprimé de cette base.
   </para>
   <para>
-   Au niveau de PostgreSQL, ceci n'arrive pas. Les <quote>Large Objects</quote>
+   Au niveau de <productname>PostgreSQL</productname>, ceci n'arrive pas. Les
+   <quote>Large Objects</quote>
    sont traités comme des objets propres&nbsp;; une entrée de table peut
    référencer un <quote>Large Object</quote> par son OID, mais plusieurs
    tables peuvent référencer le même OID. Donc, le système ne peut pas
@@ -28,102 +31,97 @@
   </para>
   <para>
    Ceci n'est pas un problème pour les nouvelles applications spécifiques
-   à PostgreSQL mais celles qui existent déjà, qui utilisent JDBC ou ODBC,
+   à <productname>PostgreSQL</productname> mais celles qui existent déjà, qui
+   utilisent JDBC ou ODBC,
    ne suppriment pas les objets, ceci aboutissant à des <quote>Large
    Objects</quote> orphelins - des objets qui ne sont référencés par
    personne et occupant donc un espace disque précieux sans raison.
   </para>
- </sect2>
+
+  <para>
+   The <filename>lo</filename> module allows fixing this by attaching a trigger
+   to tables that contain LO reference columns.  The trigger essentially just
+   does a <function>lo_unlink</function> whenever you delete or modify a value
+   referencing a large object.  When you use this trigger, you are assuming
+   that there is only one database reference to any large object that is
+   referenced in a trigger-controlled column!
+  </para>
+ 
+  <para>
+   The module also provides a data type <type>lo</type>, which is really just
+   a domain of the <type>oid</type> type.  This is useful for differentiating
+   database columns that hold large object references from those that are
+   OIDs of other things.  You don't have to use the <type>lo</type> type to
+   use the trigger, but it may be convenient to use it to keep track of which
+   columns in your database represent large objects that you are managing with
+   the trigger.  It is also rumored that the ODBC driver gets confused if you
+   don't use <type>lo</type> for BLOB columns.
+  </para>
+</sect2>
 
  <sect2>
-  <title>La correction</title>
-  <para>
-   J'ai corrigé ceci en créant un nouveau type de données,
-   <literal>lo</literal>, quelques fonctions de support et un trigger qui
-   gère le problème des <quote>Large Objects</quote> orphelins. Le trigger
-   exécute essentiellement un <command>lo_unlink</command> à chaque fois
-   que vous voulez supprimer ou modifier une valeur référencer un
-   <quote>Large Object</quote>. Quand vous utilisez ce trigger, vous supposez
-   qu'il n'existe qu'une référence à ce <quote>Large Object</quote> dans
-   toute la base de données&nbsp;!
-  </para>
-  <para>
-   Le type <literal>lo</literal> a été créé car nous avons besoin de
-   différencier les OID normaux des OID de <quote>Large Object</quote>.
-   Actuellement, le pilote JDBC gère ce dilemne facilement mais, après
-   en avoir discuté avec Byron, le pilote ODBC a besoin d'un type unique.
-   Ils avaient créé un type <literal>lo</literal> mais sans solution pour
-   les orphelins.
-  </para>
-  <para>
-   Vous n'avez pas à utiliser le type <literal>lo</literal> pour utiliser
-   le trigger mais c'est plus agréable de l'utiliser car ça vous permet
-   de bien visualiser les colonnes de votre base qui contiennent des
-   <quote>Large Objects</quote> et que vous gérez avec le trigger.
-  </para>
- </sect2>
+  <title>How to Use It</title>
 
- <sect2>
-  <title>Comment l'utiliser</title>
   <para>
-   Voici la façon la plus simple&nbsp;:
+   Here's a simple example of usage:
   </para>
+
   <programlisting>
    CREATE TABLE image (title TEXT, raster lo);
+
    CREATE TRIGGER t_raster BEFORE UPDATE OR DELETE ON image
      FOR EACH ROW EXECUTE PROCEDURE lo_manage(raster);
   </programlisting>
+
   <para>
-   Crée un trigger pour chaque colonne contenant un type <literal>lo</literal>
-   et donne le nom de la colonne en argument de la procédure trigger. Vous
-   pouvez avoir plus d'un trigger sur une table si cette dernière contient
-   plusieurs colonnes de type <literal>lo</literal> mais n'oubliez pas de
-   donner un nom différent à chaque trigger.
+   For each column that will contain unique references to large objects,
+   create a <literal>BEFORE UPDATE OR DELETE</literal> trigger, and give the column
+   name as the sole trigger argument.  If you need multiple <type>lo</type>
+   columns in the same table, create a separate trigger for each one,
+   remembering to give a different name to each trigger on the same table.
   </para>
  </sect2>
 
  <sect2>
-  <title>Problèmes</title>
+  <title>Limitations</title>
 
   <itemizedlist>
    <listitem>
     <para>
-     Supprimer une table laissera toujours un grand nombre d'orphelins car
-     il n'existe pas de trigger pour cette opération.
+     Dropping a table will still orphan any objects it contains, as the trigger
+     is not executed.  You can avoid this by preceding the <command>DROP
+     TABLE</command> with <command>DELETE FROM <replaceable>table</replaceable></command>.
     </para>
+
     <para>
-     Éviter ceci en exécutant avant le <literal>DROP TABLE</literal> un
-     <literal>DELETE FROM</literal>.
+     <command>TRUNCATE</command> has the same hazard.
     </para>
+
     <para>
-     Si vous avez déjà, ou suspecté avoir, des <quote>Large Objects</quote>
-     orphelins, jetez un ½il au module contrib vacuumlo pour vous aider à
-     faire le nettoyage. Exécuter vacuumlo de temps en temps est une bonne
-     idée.
+     If you already have, or suspect you have, orphaned large objects, see the
+     <filename>contrib/vacuumlo</filename> module (<xref linkend="vacuumlo"/>) to help
+     you clean them up.  It's a good idea to run <application>vacuumlo</application>
+     occasionally as a back-stop to the <function>lo_manage</function> trigger.
     </para>
    </listitem>
+
    <listitem>
     <para>
-     Certaines interfaces pourraient créer leur propres tables, sans associer
-     le(s) trigger(s) associé(s). De plus, le sutilisateurs pourraient ne
-     plus se rappeler (ou savoir) d'avoir à créer les triggers.
+     Some frontends may create their own tables, and will not create the
+     associated trigger(s).  Also, users may not remember (or know) to create
+     the triggers.
     </para>
    </listitem>
   </itemizedlist>
-
-  <para>
-   Comme le pilote ODBC a besoin d'un type <literal>lo</literal> permanent
-   (&amp; JDBC pourrait être optimisé pour l'utiliser si son OID est fixe)
-   et comme les problèmes ci-dessus peuvent seulement être corrigés par
-   des modifications internes, je pense qu'il devrait être un type interne.
-  </para>
  </sect2>
 
  <sect2>
-  <title>Auteur</title>
+  <title>Author</title>
+
   <para>
-   Peter Mount <email>peter@retep.org.uk</email> June 13 1998
+   Peter Mount <email>peter@retep.org.uk</email>
   </para>
  </sect2>
+
 </sect1>
 
