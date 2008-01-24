@@ -1,3 +1,8 @@
+# Dernière modification
+#   le       $Date$
+#   par      $Author$
+#   révision $Revision$
+
 VERSION := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/')
 VER := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/' -e 's/\.//g')
 
