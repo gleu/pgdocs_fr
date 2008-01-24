@@ -1,3 +1,8 @@
+rem Dernière modification
+rem   le       $Date$
+rem   par      $Author$
+rem   révision $Revision$
+
 @echo off
 rem /**
 rem  * Génération de la version CHM de la documentation.
