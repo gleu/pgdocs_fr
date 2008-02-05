@@ -1290,8 +1290,7 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
       <title>Processus d'écriture en arrière-plan</title>
   
       <para>
-        Avec <productname>PostgreSQL</productname> 8.0 est apparu un processus
-        serveur distinct, nommé
+        Il existe un processus serveur distinct, nommé
 	<firstterm>processus d'écriture en arrière-plan</firstterm>
 	(<foreignphrase>background writer</foreignphrase>), dont la
         seule fonction est d'écrire les tampons partagés
@@ -1304,8 +1303,7 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
 	considérablement, parce que si une page fréquemment modifiée n'était
 	auparavant écrite qu'une seule fois par point de vérification, le
 	processus d'écriture en arrière-plan peut l'écrire plusieurs fois
-	dans le même intervalle. Dans la plupart des situations, une faible
-	charge continue est préférable à un pic périodique, mais les
+	dans le même intervalle. Les
 	paramètres décrits dans cette sous-section permettent d'ajuster ce
 	comportement pour des besoins particuliers.
       </para>
@@ -1361,12 +1359,14 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
          <primary>paramètre de configuration <varname>bgwriter_lru_multiplier</varname></primary> 
         </indexterm> 
         <para>
-         Sauf s'il est limité par <varname>bgwriter_lru_maxpages</varname>, le nombre
-	 de tampons modifiés écrits à chaque tour est déterminé par la référence
-	 au nombre de nouveaux tampons nécessaires aux processus
-	 serveur lors des tours précédents. Ce nombre est multiplié par
-         <varname>bgwriter_lru_multiplier</varname> pour arriver à l'estimation
-         du nombre de tampons nécessaires lors du prochain tour.
+         Le nombre de tampons sales écrit à chaque tour est basé sur le nombre
+	 de nouveaux tampons qui ont été requis par les processus serveur lors
+	 des derniers tours. Le besoin récent moyen est multiplié par
+         <varname>bgwriter_lru_multiplier</varname> pour arriver à une
+	 estimation du nombre de tampons nécessaire au prochain tour. Les
+	 tampons sales sont écrits pour qu'il y ait ce nombre de tampons
+	 propres, réutilisables. (Néanmoins, pas plus de <varname>bgwriter_lru_maxpages</varname> tampons seront écrits par
+         tour.)
          De ce fait, une configuration de 1.0 représente une politique d'écriture
 	 <quote>juste à temps</quote> d'exactement le nombre de tampons prédits.
 	 Des valeurs plus importantes fournissent une protection
@@ -4073,6 +4073,25 @@ COPY postgres_log FROM '/chemin/complet/vers/le/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-session-replication-role" xreflabel="session_replication_role">
+      <term><varname>session_replication_role</varname> (<type>string</type>)</term>
+      <indexterm>
+       <primary>paramètre de configuration <varname>session_replication_role</varname></primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Contrôle l'exécution des triggers et règles relatifs à la réplication
+	pour la session en cours. Configurer cette variable requiert d'être
+	super-utilisateur et résulte en l'annulation de tout plan de requête
+	précédemment mis en cache. Les valeurs possibles sont
+	<literal>origin</literal> (la valeur par défaut),
+	<literal>replica</literal> et <literal>local</literal>.
+        Voir <xref linkend="sql-altertable" endterm="sql-altertable-title"/>
+	pour plus d'informations.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-statement-timeout" xreflabel="statement_timeout">
       <term><varname>statement_timeout</varname> (<type>integer</type>)</term>
       <listitem>
@@ -4086,24 +4105,6 @@ COPY postgres_log FROM '/chemin/complet/vers/le/logfile.csv' WITH csv;
 	Si <varname>log_min_error_statement</varname> est configuré
 	à <literal>ERROR</literal>, ou plus bas, l'instruction en cause
 	est tracée. La valeur zéro (par défaut) désactive le décompte.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry id="guc-session-replication-role" xreflabel="session_replication_role">
-      <term><varname>session_replication_role</varname> (<type>string</type>)</term>
-      <listitem>
-       <indexterm> 
-        <primary>paramètre de configuration <varname>session_replication_role</varname></primary> 
-       </indexterm>
-       <para>
-        Contrôle le déclenchement des triggers et des règles pour la session en
-	cours. Voir <xref linkend="sql-altertable" endterm="sql-altertable-title"/>
-	pour les différentes options d'activation et de désactivation des triggers
-	et des règles. Configurer cette variable requiert d'être superutilisateur
-	et ne peut se faire qu'avant la mise en cache de plans de requêtes. Les
-	valeurs possibles sont <literal>origin</literal>,
-	<literal>replica</literal> et <literal>local</literal>.
        </para>
       </listitem>
      </varlistentry>
@@ -4628,6 +4629,29 @@ SET XML OPTION { DOCUMENT | CONTENT };
         ou de sémaphores que ne le permet la configuration par défaut du
 	système d'exploitation. Voir la <xref linkend="sysvipc"/> pour plus
         d'informations sur la façon d'ajuster ces paramètres, si nécessaire.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-synchronize-seqscans" xreflabel="synchronize_seqscans">
+      <term><varname>synchronize_seqscans</varname> (<type>boolean</type>)</term>
+      <indexterm>paramètre de configuration <primary><varname>synchronize_seqscans</varname></primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Cette variable permet la synchronisation des parcours séquentiels de
+	grosses tables pour que les parcours en parallèle lisent le même bloc
+	au même moment, et donc partagent la charge en entrée/sortie. Quand
+	elle est activée, un parcours pourrait commencer au milieu de la table,
+	aller jusqu'à la fin, puis <quote>revenir au début</quote> pour
+	récupérer toutes les lignes, ce qui permet de synchroniser avec
+	l'activité des parcours déjà commencés. Ceci peut résulter en des
+	modifications non prévisibles dans l'ordre des lignes renvoyées par
+	les requêtes qui n'ont pas de clause <literal>ORDER BY</literal>.
+	Désactiver ce paramètre assure un comportement identique aux versions
+	précédant la 8.3 pour lesquelles un parcours séquentiel commence
+	toujours au début de la table. Activé par défaut
+	(<literal>on</literal>).
        </para>
       </listitem>
      </varlistentry>
