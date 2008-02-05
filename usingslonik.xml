@@ -1,0 +1,377 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Dernière modification
+     le       $Date$
+     par      $Author$
+     révision $Revision$ -->
+
+<sect1 id="usingslonik"> <title>Using Slonik</title>
+
+<indexterm><primary>using slonik</primary></indexterm>
+
+<para> It's a bit of a pain writing <application>Slonik</application>
+scripts by hand, particularly as you start working with &slony1;
+clusters that may be comprised of increasing numbers of nodes and
+sets.  Some problems that have been noticed include the following:
+
+<itemizedlist>
+
+<listitem><para> If you are using &slony1; as a
+<quote>master/slave</quote> replication system with one
+<quote>master</quote> node and one <quote>slave</quote> node, it may
+be sufficiently mnemonic to call the <quote>master</quote> node 1 and
+the <quote>slave</quote> node 2.</para>
+
+<para> Unfortunately, as the number of nodes increases, the mapping of
+IDs to nodes becomes way less obvious, particularly if you have a
+cluster where the origin might shift from node to node over
+time.</para></listitem>
+
+<listitem><para> Similarly, if there is only one replication set, it's
+fine for that to be <quote>set 1,</quote> but if there are a
+multiplicity of sets, the numbering involved in using set numbers may
+grow decreasingly intuitive.</para></listitem>
+
+<listitem><para> People have observed that
+<application>Slonik</application> does not provide any notion of
+iteration.  It is common to want to create a set of similar <xref
+linkend="stmtstorepath"/> entries, since, in most cases, hosts will
+likely access a particular server via the same host name or IP
+address.</para></listitem>
+
+<listitem><para> Users seem interested in wrapping everything possible
+in <command>TRY</command> blocks, which is regrettably somewhat
+<emphasis>less</emphasis> useful than might be
+hoped...</para></listitem>
+
+</itemizedlist></para>
+
+<para> These have assortedly pointed to requests for such enhancements
+as:
+
+<itemizedlist>
+<listitem><para> Named nodes, named sets</para>
+
+<para> This is supported in &slony1; 1.1 by the <xref
+linkend="stmtdefine"/> and <xref linkend="stmtinclude"/> statements.
+</para>
+
+<para> The use of <xref linkend="stmtinclude"/> to allow creating
+<quote>preamble files</quote> has proven an invaluable tool to reduce
+errors.  The preamble file is set up <emphasis>once</emphasis>,
+verified <emphasis>once</emphasis>, and then that verified script may
+be used with confidence for each slonik script.
+</para>
+</listitem>
+
+<listitem><para> Looping and control constructs</para>
+
+<para> It seems to make little sense to create a fullscale parser as
+Yet Another Little Language grows into a rather larger one.  There are
+plenty of scripting languages out there that can be used to construct
+Slonik scripts; it is unattractive to force yet another one on people.
+</para></listitem>
+
+</itemizedlist></para>
+
+<para> There are several ways to work around these issues that have
+been seen <quote>in the wild</quote>:</para>
+
+<itemizedlist>
+
+<listitem><para> Embedding generation of slonik inside shell
+scripts</para>
+
+<para> The test bed found in the <filename>src/ducttape</filename>
+directory takes this approach.</para></listitem>
+
+<listitem><para> The <link linkend="altperl"> altperl tools </link>
+use Perl code to generate Slonik scripts.</para>
+
+<para> You define the cluster's configuration as a set of Perl
+objects; each script walks through the Perl objects as needed to
+generate a slonik script for that script's purpose.
+</para></listitem>
+
+</itemizedlist>
+</sect1>
+
+<sect1 id="slonikshell"><title> Embedding Slonik in Shell Scripts </title>
+
+<indexterm><primary> embedding slonik in shell scripts </primary></indexterm>
+
+<para> As mentioned earlier, there are numerous &slony1; test scripts
+in <filename>src/ducttape</filename> that embed the generation of
+Slonik inside the shell script.</para>
+
+<para> They mostly <emphasis> don't </emphasis> do this in a terribly
+sophisticated way.  Typically, they use the following sort of
+structure:
+
+<programlisting><![CDATA[
+DB1=slony_test1
+DB2=slony_test2
+slonik <<_EOF_
+	cluster name = T1;
+	node 1 admin conninfo = 'dbname=$DB1';
+	node 2 admin conninfo = 'dbname=$DB2';
+
+	try {
+		table add key (node id = 1, fully qualified name = 
+                               'public.history');
+	}
+	on error {
+		exit 1;
+	}
+
+	try {
+		create set (id = 1, origin = 1, comment = 
+                            'Set 1 - pgbench tables');
+		set add table (set id = 1, origin = 1,
+			id = 1, fully qualified name = 'public.accounts',
+			comment = 'Table accounts');
+		set add table (set id = 1, origin = 1,
+			id = 2, fully qualified name = 'public.branches',
+			comment = 'Table branches');
+		set add table (set id = 1, origin = 1,
+			id = 3, fully qualified name = 'public.tellers',
+			comment = 'Table tellers');
+		set add table (set id = 1, origin = 1,
+			id = 4, fully qualified name = 'public.history',
+			key = serial, comment = 'Table accounts');
+	}
+	on error {
+		exit 1;
+	}
+_EOF_
+]]></programlisting></para>
+
+<para> A more sophisticated approach might involve defining some
+common components, notably the <quote>preamble</quote> that consists
+of the <xref linkend="clustername"/> <xref linkend="admconninfo"/>
+commands that are common to every Slonik script, thus:
+
+<programlisting>
+CLUSTER=T1
+DB1=slony_test1
+DB2=slony_test2
+PREAMBLE="cluster name = $CLUSTER
+node 1 admin conninfo = 'dbname=$DB1';
+node 2 admin conninfo = 'dbname=$DB2';
+"
+</programlisting></para>
+
+<para> The <envar>PREAMBLE</envar> value could then be reused over and
+over again if the shell script invokes <command>slonik</command>
+multiple times.  You might also consider using <xref
+     linkend="stmtinclude"/> and place the preamble in a file that is
+<command>include</command>d.
+ </para>
+
+<para> Shell variables provide a simple way to assign names to sets
+and nodes:
+
+<programlisting><![CDATA[
+origin=1
+subscriber=2
+mainset=1
+slonik <<_EOF_
+$PREAMBLE
+try {
+    table add key (node id = $origin, fully qualified name = 
+                   'public.history');
+} on error {
+    exit 1;
+}
+try {
+	create set (id = $mainset, origin = $origin, 
+                    comment = 'Set $mainset - pgbench tables');
+	set add table (set id = $mainset, origin = $origin,
+		id = 1, fully qualified name = 'public.accounts',
+		comment = 'Table accounts');
+	set add table (set id = $mainset, origin = $origin,
+		id = 2, fully qualified name = 'public.branches',
+		comment = 'Table branches');
+	set add table (set id = $mainset, origin = $origin,
+		id = 3, fully qualified name = 'public.tellers',
+		comment = 'Table tellers');
+	set add table (set id = $mainset, origin = $origin,
+		id = 4, fully qualified name = 'public.history',
+		key = serial, comment = 'Table accounts');
+} on error {
+	exit 1;
+}
+_EOF_
+]]></programlisting></para>
+
+<para> The script might be further enhanced to loop through the list
+of tables as follows:
+
+<programlisting><![CDATA[
+# Basic configuration
+origin=1
+subscriber=2
+mainset=1
+# List of tables to replicate
+TABLES="accounts branches tellers history"
+ADDTABLES=""
+tnum=1
+for table in `echo $TABLES`; do
+  ADDTABLES="$ADDTABLES
+   set add table ($set id = $mainset, origin = $origin,
+   id = $tnum, fully qualified name = 'public.$table',
+   comment = 'Table $tname');
+"
+  let "tnum=tnum+1"
+done
+slonik <<_EOF_
+$PREAMBLE
+try {
+    table add key (node id = $origin, fully qualified name = 
+                   'public.history');
+} on error {
+    exit 1;
+}
+try {
+	create set (id = $mainset, origin = $origin, 
+                    comment = 'Set $mainset - pgbench tables');
+$ADDTABLES
+} on error {
+	exit 1;
+}
+_EOF_
+]]></programlisting></para>
+
+<para> That is of somewhat dubious value if you only have 4 tables,
+but eliminating errors resulting from enumerating large lists of
+configuration by hand will make this pretty valuable for the larger
+examples you'll find in <quote>real life.</quote></para>
+
+<para> You can do even more sophisticated things than this if your
+scripting language supports things like:
+
+<itemizedlist>
+
+<listitem><para> <quote>Record</quote> data structures that allow
+assigning things in parallel</para></listitem>
+
+<listitem><para> Functions, procedures, or subroutines, allowing you
+to implement useful functionality once, and then refer to it multiple
+times within a script</para></listitem>
+
+<listitem><para> Some sort of <quote>module import</quote> system so
+that common functionality can be shared across many
+scripts</para></listitem>
+
+</itemizedlist></para>
+
+<para> If you can depend on having <ulink
+url="http://www.gnu.org/software/bash/bash.html"> Bash</ulink>, <ulink
+url="http://www.zsh.org/"> zsh</ulink>, or <ulink
+url="http://www.kornshell.com/"> Korn shell</ulink> available, well,
+those are all shells with extensions supporting reasonably
+sophisticated data structures and module systems.  On Linux, Bash is
+fairly ubiquitous; on commercial <trademark>UNIX</trademark>, Korn
+shell is fairly ubiquitous; on BSD, <quote>sophisticated</quote>
+shells are an option rather than a default.</para>
+
+<para> At that point, it makes sense to start looking at other
+scripting languages, of which Perl is the most ubiquitous, being
+widely available on Linux, <trademark>UNIX</trademark>, and BSD.
+</para>
+</sect1>
+
+<sect1 id="noslonik"><title> Not Using Slonik - Bare Metal &slony1;
+Functions </title>
+
+<indexterm><primary> bare metal &slony1; functions </primary></indexterm>
+
+<para> There are cases where it may make sense to directly use the
+stored functions that implement the various pieces of &slony1;.
+Slonik doesn't do terribly much <quote>magic;</quote> it is common for
+Slonik commands to simply involve deciding on a node at which to apply
+a command, and then submit a SQL query consisting of a call to one of
+the &slony1; stored functions.</para>
+
+<para> The developers of &slony1; anticipate that interested parties
+may wish to develop graphical tools as an alternative to Slonik; it
+would be entirely appropriate in such cases to submit configuration
+requests directly via the stored functions.  If you plan to do so, it
+is suggested that you examine how the stored procedures are used in
+<filename>slonik.c</filename>, as that represents the most correct use
+of the functions.</para>
+
+<para> When debugging problems in <quote>troubled</quote> &slony1;
+clusters, it has also occasionally proven useful to use the stored
+functions.  This has been particularly useful for cases where <xref
+linkend="table.sl-listen"/> configuration has been broken, and events
+have not been propagating properly.  The <quote>easiest</quote> fix
+was to:</para>
+
+<para> <command> select
+_slonycluster.droplisten(li_origin,li_provider,li_receiver) from
+_slonycluster.sl_listen;</command></para>
+
+<para> <command> select _slonycluster.storelisten(pa_server,
+pa_server, pa_client) from _slonycluster.sl_path;</command></para>
+
+<para> The result of this set of queries is to regenerate
+<emphasis>and propagate</emphasis> the listen paths.  By running the main
+<function> _slonycluster.storelisten()</function> function,
+<command>STORE_LISTEN</command> events are raised to cause the listen paths to
+propagate to the other nodes in the cluster.</para>
+
+<para> If there was a <emphasis>local</emphasis> problem on one node, and you
+didn't want the updates to propagate (this would be an unusual
+situation; you almost certainly want to fix things
+<emphasis>everywhere</emphasis>), the queries would instead be:</para>
+
+<para> <command> select
+slonycluster.droplisten_int(li_origin,li_provider,li_receiver) from
+_slonycluster.sl_listen;</command></para>
+
+<para> <command> select _slonycluster.storelisten_int(pa_server,
+pa_server, pa_client) from _slonycluster.sl_path;</command></para>
+
+<para> If you are planning to add &slony1; support to other tools
+(<emphasis>e.g.</emphasis> - adding replication support to something
+like <ulink url="http://www.pgadmin.org/"> <productname>pgAdmin
+III</productname> </ulink>), you need to be clear on where various
+functions need to be called.  The normal <quote>protocol</quote> is
+thus:
+
+<itemizedlist>
+
+<listitem><para> The <quote>main</quote> function
+(<emphasis>e.g.</emphasis> - without the <command>_int</command>
+suffix) is called on a <quote>relevant</quote> node in the &slony1;
+cluster.</para>
+
+<para> In some cases, the function may be called on any node, and it
+can satisfactorily propagate to other nodes.  That is true for <xref
+linkend="function.storelisten-integer-integer-integer"/>, for instance.
+In other cases, the function needs to be called on some particular
+node because that is the only place where data may be reasonably
+validated.  For instance, <xref
+linkend="function.subscribeset-integer-integer-integer-boolean"/> must
+be called on the receivernode.</para></listitem>
+
+<listitem><para> If that <quote>main</quote> function succeeds, then
+the configuration change is performed on the local node, and an event
+is created using <xref linkend="function.createevent-name-text"/> to
+cause the configuration change to propagate to all of the other nodes
+in the &slony1; cluster.</para></listitem>
+
+<listitem><para> Thirdly, the <command>_int</command> version of the
+function must be run.</para>  
+
+<para> In some cases, where functions are idempotent, the node where
+the <quote>main</quote> function runs can do this fairly early in
+processing.</para>
+
+<para> When the event propagates, the other nodes will run the
+<command>_int</command> version, we rather hope with good
+success. </para></listitem>
+
+</itemizedlist></para>
+
+</sect1>

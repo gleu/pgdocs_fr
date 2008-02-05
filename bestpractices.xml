@@ -1,0 +1,640 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Dernière modification
+     le       $Date$
+     par      $Author$
+     révision $Revision$ -->
+
+<sect1 id="bestpractices">
+<title> &slony1; <quote>Best Practices</quote> </title>
+<indexterm><primary>best practices for &slony1; usage</primary></indexterm>
+
+<para> It is common for managers to have a desire to operate systems
+using some available, documented set of <quote>best practices.</quote>
+Documenting that sort of thing is essential to ISO 9000, ISO 9001, and
+other sorts of organizational certifications. </para>
+
+<para> It is worthwhile to preface a discussion of <quote>best
+practices</quote> by mentioning that each organization that uses
+&slony1; is unique, and there may be a need for local policies to
+reflect unique local operating characteristics.  It is for that reason
+that &slony1; does <emphasis>not</emphasis> impose its own policies
+for such things as <link linkend="failover"> failover </link>; those
+will need to be determined based on the overall shape of your network,
+of your set of database servers, and of your usage patterns for those
+servers. </para>
+
+<para> There are, however, a number of things that early adopters of
+&slony1; have discovered which can at least help to suggest the sorts
+of policies you might want to consider. </para>
+
+<itemizedlist>
+
+<listitem>
+<para> &slony1; is a complex multi-client, multi-server
+system, with the result that there are almost an innumerable set of
+places where problems can arise.  </para> 
+
+<para> As a natural result, maintaining a clean, consistent
+environment is really valuable, as any sort of environmental
+<quote>messiness</quote> can either cause unexpected problems or mask
+the real problem. </para>
+
+<para> Numerous users have reported problems resulting from mismatches
+between &slony1; versions, local libraries, and &postgres; libraries.
+Details count: you need to be clear on what hosts are running what
+versions of what software. </para>
+
+<para> This is normally a matter of being disciplined about how your
+software is deployed, and the challenges represent a natural
+consequence of being a distributed system comprised of a large number
+of components that need to match. </para>
+</listitem>
+
+<listitem><para> If a slonik script does not run as expected in a
+first attempt, it would be foolhardy to attempt to run it again until
+a problem has been found and resolved.  </para>
+
+<para> There are a very few slonik commands such as <xref
+linkend="stmtstorepath"/> that behave in a nearly idempotent manner; if
+you run <xref linkend="stmtstorepath"/> again, that merely updates
+table <envar>sl_path</envar> with the same value.  </para>
+
+<para> In contrast <xref linkend="stmtsubscribeset"/> behaves in two
+<emphasis>very</emphasis> different ways depending on whether the
+subscription has been activated yet or not; if initiating the
+subscription didn't work at a first attempt, submitting the request
+again <emphasis>won't</emphasis> help make it happen. </para>
+</listitem>
+
+<listitem>
+<para> Principle: Use an unambiguous, stable time zone such
+as UTC or GMT.</para>
+
+<para> Users have run into problems with &lslon; functioning properly
+when their system uses a time zone that &postgres; was unable to
+recognize such as CUT0 or WST.  It is necessary that you use a
+timezone that &postgres; can recognize correctly.  It is furthermore
+preferable to use a time zone where times do not shift around due to
+Daylight Savings Time. </para>
+
+<para> The <quote>geographically unbiased</quote> choice seems to be
+<command><envar>TZ</envar>=UTC</command> or
+<command><envar>TZ</envar>=GMT</command>, and to make sure that
+systems are <quote>in sync</quote> by using NTP to synchronize clocks
+throughout the environment. </para>
+
+<para> See also <xref linkend="times"/>.</para>
+</listitem>
+
+<listitem>
+<para> Principle: Long running transactions are Evil </para>
+
+<para> The FAQ has an entry on <link linkend="pglistenerfull"> growth
+of &pglistener; </link> which discusses this in a fair bit of detail;
+the long and short is that long running transactions have numerous ill
+effects.  They are particularly troublesome on an
+<quote>origin</quote> node, holding onto locks, preventing vacuums
+from taking effect, and the like.</para>
+
+<para> In version 1.2, some of the <quote>evils</quote> should be
+lessened, because:</para>
+
+<itemizedlist>
+
+<listitem><para> Events in &pglistener; are only generated when
+replication updates are relatively infrequent, which should mean that
+busy systems won't generate many dead tuples in that table
+</para></listitem>
+
+<listitem><para> The system will periodically rotate (using
+<command>TRUNCATE</command> to clean out the old table) between the
+two log tables, <xref linkend="table.sl-log-1"/> and <xref
+linkend="table.sl-log-2"/>, preventing unbounded growth of dead space
+there.  </para></listitem>
+</itemizedlist>
+
+</listitem>
+
+<listitem>
+<para> <link linkend="Failover"> Failover </link> policies
+should be planned for ahead of time.  </para>
+
+<para> This may simply involve thinking about what the priority lists
+should be of what should fail to what, as opposed to trying to
+automate it.  But knowing what to do ahead of time cuts down on the
+number of mistakes made.</para>
+
+<para> At Afilias, a variety of internal <citation>The 3AM Unhappy
+DBA's Guide to...</citation> guides have been created to provide
+checklists of what to do when certain <quote>unhappy</quote> events
+take place.  This sort of material is highly specific to the
+environment and the set of applications running there, so you would
+need to generate your own such documents.  This is one of the vital
+components of any disaster recovery preparations.
+</para>
+</listitem>
+
+<listitem><para> <xref linkend="stmtmoveset"/> should be used to allow
+preventative maintenance to prevent problems from becoming serious
+enough to require <link linkend="failover"> failover </link>. </para>
+</listitem>
+
+<listitem> <para> <command>VACUUM</command> policy needs to be
+carefully defined.</para>
+
+<para> As mentioned above, <quote>long running transactions are
+Evil.</quote> <command>VACUUM</command>s are no exception in this.  A
+<command>VACUUM</command> on a huge table will open a long-running
+transaction with all the known ill effects.</para>
+</listitem>
+
+<listitem> <para> Running all of the &lslon; daemons on a central
+server for each network has proven preferable. </para>
+
+<para> Each &lslon; should run on a host on the same local network as
+the node that it is servicing, as it does a <emphasis>lot</emphasis>
+of communications with its database, and that connection needs to be
+as reliable as possible.  </para>
+
+<para> In theory, the <quote>best</quote> speed might be expected to
+come from running the &lslon; on the database server that it is
+servicing. </para>
+
+<para> In practice, strewing &lslon; processes and configuration
+across a dozen servers turns out to be inconvenient to manage.</para>
+</listitem>
+
+<listitem><para> &lslon; processes should run in the same
+<quote>network context</quote> as the node that each is responsible
+for managing so that the connection to that node is a
+<quote>local</quote> one.  Do <emphasis>not</emphasis> run such links
+across a WAN. </para>
+
+<para> A WAN outage can leave database connections
+<quote>zombied</quote>, and typical TCP/IP behaviour <link
+linkend="multipleslonconnections"> will allow those connections to
+persist, preventing a slon restart for around two hours. </link>
+</para>
+
+<para> It is not difficult to remedy this; you need only <command>kill
+SIGINT</command> the offending backend connection.  But by running the
+&lslon; locally, you will generally not be vulnerable to this
+condition. </para>
+</listitem>
+
+<listitem><para> Before getting too excited about having fallen into
+some big problem, consider killing and restarting all the &lslon;
+processes.  Historically, this has frequently been able to
+resolve <quote>stickiness.</quote> </para>
+
+<para> With a very few exceptions, it is generally not a big deal to
+kill off and restart the &lslon; processes.  Each &lslon; connects to
+one database for which it is the manager, and then connects to other
+databases as needed to draw in events.  If you kill off a &lslon;, all
+you do is to interrupt those connections.  If
+a <command>SYNC</command> or other event is sitting there
+half-processed, there's no problem: the transaction will roll back,
+and when the &lslon; restarts, it will restart that event from
+scratch.</para>
+
+<para> The exception, where it is undesirable to restart a &lslon;, is
+where a <command>COPY_SET</command> is running on a large replication
+set, such that stopping the &lslon; may discard several hours worth of
+load work. </para>
+
+<para> In early versions of &slony1;, it was frequently the case that
+connections could get a bit <quote>deranged</quote> which restarting
+&lslon;s would clean up.  This has become much more rare, but it has
+occasionally proven useful to restart the &lslon;.  If there has been
+any <quote>network derangement</quote>, this can clear up the issue of
+defunct database connections.  </para> </listitem>
+
+<listitem>
+<para>The <link linkend="ddlchanges"> Database Schema Changes </link>
+section outlines some practices that have been found useful for
+handling changes to database schemas. </para></listitem>
+
+<listitem>
+<para> Handling of Primary Keys </para> 
+
+<para> Discussed in the section on <link linkend="definingsets">
+Replication Sets, </link> it is <emphasis>ideal</emphasis> if each
+replicated table has a true primary key constraint; it is
+<emphasis>acceptable</emphasis> to use a <quote>candidate primary
+key.</quote></para>
+
+<para> It is <emphasis>not recommended</emphasis> that a
+&slony1;-defined key (created via <xref linkend="stmttableaddkey"/>) be
+used to introduce a candidate primary key, as this introduces the
+possibility that updates to this table can fail due to the introduced
+unique index, which means that &slony1; has introduced a new failure
+mode for your application.</para>
+</listitem>
+
+<listitem>
+<para> <link linkend="definesets"> Grouping tables into sets
+</link> suggests strategies for determining how to group tables and
+sequences into replication sets. </para>
+</listitem>
+
+<listitem>
+<para> It should be obvious that actions that can delete a
+lot of data should be taken with great care; the section on <link
+linkend="dropthings"> Dropping things from &slony1; Replication</link>
+discusses the different sorts of <quote>deletion</quote> that &slony1;
+supports.  </para>
+</listitem>
+
+<listitem>
+<para> <link linkend="Locking"> Locking issues </link></para>
+
+<para> Certain &slony1; operations, notably <link
+linkend="stmtsetaddtable"> <command>set add table</command> </link>,
+<link linkend="stmtmoveset"> <command> move set</command> </link>,
+<link linkend="stmtlockset"> <command> lock set </command> </link>,
+and <link linkend="stmtddlscript"> <command>execute script</command>
+</link> require acquiring <emphasis>exclusive locks</emphasis> on the
+tables being replicated. </para>
+
+<para> Depending on the kind of activity on the databases, this may or
+may not have the effect of requiring a (hopefully brief) database
+outage. </para>
+</listitem>
+
+<listitem><para> What to do about DDL. </para>
+
+<para> &slony1; operates via detecting updates to table data via
+triggers that are attached to those tables.  That means that updates
+that take place via methods that do not fire triggers will not notice
+those updates.  <command>ALTER TABLE</command>, <command>CREATE OR
+REPLACE FUNCTION</command>, <command>CREATE TABLE</command>, all
+represent SQL requests that &slony1; has no way to notice. </para>
+
+<para> A philosophy underlying &slony1;'s handling of this is that
+competent system designers do not write self-modifying code, and
+database schemas that get modified by the application are an instance
+of this.  It does not try hard to make it convenient to modify
+database schemas. </para>
+
+<para> There will be cases where that is necessary, so the <link
+linkend="stmtddlscript"> <command>execute script</command> is provided
+which will apply DDL changes at the same location in the transaction
+stream on all servers.  </link> </para>
+
+<para> Unfortunately, this introduces a great deal of locking of
+database objects.  Altering tables requires taking out an exclusive
+lock on them; doing so via <command>execute script</command> requires
+that &slony1; take out an exclusive lock on <emphasis>all</emphasis>
+replicated tables.  This can prove quite inconvenient when
+applications are running; you run into deadlocks and such. </para>
+
+<para> One particularly dogmatic position that some hold is that
+<emphasis>all</emphasis> schema changes should
+<emphasis>always</emphasis> be propagated using <command>execute
+script</command>.  This guarantees that nodes will be consistent, but
+the costs of locking and deadlocking may be too high for some
+users.</para>
+
+<para> At Afilias, our approach has been less dogmatic; there
+<emphasis>are</emphasis> sorts of changes that
+<emphasis>must</emphasis> be applied using <command>execute
+script</command>, but we apply others independently.</para>
+
+<itemizedlist>
+<listitem><para> Changes that must be applied using <command>execute script</command> </para>
+<itemizedlist>
+<listitem><para> All instances of <command>ALTER TABLE</command></para></listitem>
+</itemizedlist>
+
+</listitem>
+<listitem><para> Changes that are not normally applied using <command>execute script</command> </para>
+<itemizedlist>
+<listitem><para> <command>CREATE INDEX</command> </para></listitem>
+<listitem><para> <command>CREATE TABLE</command> </para>
+<para> Tables that are not being replicated do not require &slony1; <quote>permission</quote>. </para></listitem>
+
+<listitem><para> <command>CREATE OR REPLACE FUNCTION </command> </para>
+
+<para> Typically, new versions of functions may be done without
+&slony1; being <quote>aware</quote> of them.  The obvious exception is
+when a new function is being deployed to accomodate a table
+alteration; in that case, the new version must be added in in a manner
+synchronized with the <command>execute script</command> for the table
+alteration. </para>
+
+<para> Similarly, <command>CREATE TYPE</command>, <command> CREATE
+AGGREGATE </command>,  and such will
+commonly not need to be forcibly applied in <quote>perfectly
+synchronized</quote> manner across nodes. </para></listitem>
+
+<listitem><para> Security management, such as <command> CREATE USER
+</command>, <command> CREATE ROLE </command>, <command>GRANT
+</command>, and such are largely irrelevant to &slony1; as it runs as
+a <quote>superuser</quote>. </para>
+
+<para> Indeed, we have frequently found it useful to have different
+security arrangements on different nodes.  Access to the
+<quote>master</quote> node should be restricted to applications that
+truly need access to it; <quote>reporting</quote> users commonly are
+restricted much more there than on subscriber nodes.</para>
+
+</listitem>
+</itemizedlist>
+</listitem>
+</itemizedlist>
+
+</listitem>
+
+<listitem id="slonyuser"> <para> &slony1;-specific user names. </para>
+
+<para> It has proven useful to define a <command>slony</command> user
+for use by &slony1;, as distinct from a generic
+<command>postgres</command> or <command>pgsql</command> user.  </para>
+
+<para> If all sorts of automatic <quote>maintenance</quote>
+activities, such as <command>vacuum</command>ing and performing
+backups, are performed under the <quote>ownership</quote> of a single
+&postgres; user, it turns out to be pretty easy to run into deadlock
+problems. </para>
+
+<para> For instance, a series of <command>vacuums</command> that
+unexpectedly run against a database that has a large
+<command>SUBSCRIBE_SET</command> event under way may run into a
+deadlock which would roll back several hours worth of data copying
+work.</para>
+
+<para> If, instead, different maintenance roles are performed by
+different users, you may, during vital operations such as
+<command>SUBSCRIBE_SET</command>, lock out other users at the
+<filename>pg_hba.conf</filename> level, only allowing the
+<command>slony</command> user in, which substantially reduces the risk
+of problems while the subscription is in progress.
+</para>
+</listitem>
+
+<listitem>
+<para> Path configuration </para> 
+
+<para> The section on <link linkend="plainpaths"> Path Communications
+</link> discusses the issues surrounding what network connections need
+to be in place in order for &slony1; to function.</para>
+</listitem>
+
+<listitem><para> Lowering Authority </para>
+
+<para> Traditionally, it has been stated that <quote>&slony1; needs to
+use superuser connections.</quote> It turns out that this is not
+entirely true, and and if there are particular concerns about
+excessive use of superuser accounts, it is possible to reduce this
+considerably. </para>
+
+<para> It is true to say that each &lslon; <emphasis>must</emphasis>
+have a superuser connection in order to manage the node that it is
+assigned to.  It needs to be able to alter the system catalogue in
+order to set up subscriptions and to process alterations
+(<emphasis>e.g</emphasis> - to run <xref linkend="stmtddlscript"/> and
+other events that may alter the role of replicated tables on the local
+node).  </para>
+
+<para> However, the connections that &lslon; processes open to other
+nodes to access events and process subcriptions do not need to have
+nearly so much permission.  Indeed, one could set up a <quote>weak
+user</quote> assigned to all <xref linkend="stmtstorepath"/> requests.
+The minimal permissions that this user, let's call it
+<command>weakuser</command>, requires are as follows:</para>
+
+<itemizedlist>
+<listitem><para> It must have read access to the &slony1;-specific namespace </para> </listitem>
+<listitem><para> It must have read access to all tables and sequences in that namespace</para> </listitem>
+<listitem><para> It must have write access to the &slony1; table <envar>sl_nodelock</envar> and sequence <envar>sl_nodelock_nl_conncnt_seq</envar> </para> </listitem>
+<listitem><para> At subscribe time, it must have read access to all of the replicated tables. </para> 
+<para> Outside of subscription time, there is no need for access to access to the replicated tables. </para> </listitem>
+<listitem><para> There is some need for read access to tables in pg_catalog; it has not been verified how little access would be suitable. </para> </listitem>
+</itemizedlist>
+
+<para> In version 1.3, the tests in the <xref linkend="testbed"/>
+support using a <envar>WEAKUSER</envar> so that testing can regularly
+confirm the minimal set of permissions needed to support
+replication.</para>
+
+</listitem>
+
+<listitem><para> The section on <link linkend="listenpaths"> listen
+paths </link> discusses the issues surrounding the table <xref
+linkend="table.sl-listen"/>.</para>
+
+<para> As of &slony1; 1.1, its contents are computed automatically
+based on the communications information available to &slony1; which
+should alleviate the problems found in earlier versions where this had
+to be configured by hand.  Many seemingly inexplicable communications
+failures, where nodes failed to talk to one another even though they
+technically could, were a result of incorrect listen path
+configuration. </para>
+</listitem>
+
+<listitem><para> Use <filename>test_slony_state.pl</filename> to look
+for configuration problems.</para>
+
+<para>This is a Perl script which connects to a &slony1; node and then
+rummages through &slony1; configuration looking for quite a variety of
+conditions that tend to indicate problems, including:
+<itemizedlist>
+<listitem><para>Bloating of some config tables</para></listitem>
+<listitem><para>Analysis of listen paths</para></listitem>
+<listitem><para>Analysis of event propagation and confirmation</para></listitem>
+</itemizedlist></para>
+
+<para> If replication mysteriously <quote>isn't working</quote>, this
+tool can run through many of the possible problems for you. </para>
+
+</listitem>
+
+<listitem>
+<para> Configuring &lslon; </para> 
+
+<para> As of version 1.1, &lslon; configuration may be
+drawn either from the command line or from configuration files.
+<quote>Best</quote> practices have yet to emerge from the two
+options:</para>
+</listitem>
+</itemizedlist>
+
+<itemizedlist>
+
+<listitem>
+<para> Configuration via command line options</para> 
+
+<para> This approach has the merit that all the options that are
+active are visible in the process environment.  (And if there are a
+lot of them, they may be a nuisance to read.)</para>
+
+<para> Unfortunately, if you invoke &lslon; from the
+command line, you could <emphasis>forget</emphasis> to include
+&logshiplink; configuration and thereby destroy the sequence of logs
+for a log shipping node. </para>
+</listitem>
+
+<listitem> <para> Unlike when command line options are used, the
+active options are <emphasis>not</emphasis> visible.  They can only be
+inferred from the name and/or contents of the &lslon;
+configuration file, and will not reflect subsequent changes to the
+configuration file.  </para>
+
+<para> By putting the options in a file, you won't forget including
+any of them, so this is safer for &logshiplink;. </para>
+</listitem>
+
+</itemizedlist>
+<itemizedlist>
+
+<listitem><para> Things to do when subscribing nodes </para>
+
+<para> When a new node is running the <command>COPY_SET</command>
+event for a large replication set (<emphasis>e.g.</emphasis> - one
+which takes several hours to subscribe) it has been found to be
+desirable to lock all users other than the <command>slony</command>
+user out of the new subscriber because:
+</para>
+</listitem>
+</itemizedlist>
+<itemizedlist>
+
+<listitem><para> Applications will run into partially-copied,
+half-baked data that is not totally consistent. </para> </listitem>
+
+<listitem><para> It is possible for applications (and maintenance
+scripts) to submit combinations of queries that will get the system
+into a deadlock situation, thereby terminating the
+<command>COPY_SET</command> event, and requiring the subscription to
+start over again.  </para> </listitem>
+
+</itemizedlist>
+
+<para> It <emphasis>may</emphasis> be worth considering turning the
+&postgres; <function>fsync</function> functionality off during the
+copying of data, as this will improve performance, and if the database
+<quote>falls over</quote> during the <command>COPY_SET</command>
+event, you will be restarting the copy of the whole replication
+set.</para>
+
+<itemizedlist>
+<listitem><para> Managing use of slonik </para> 
+
+<para> The notes on <link linkend="usingslonik"> Using Slonik </link>
+describe some of the lessons learned from managing large numbers of
+<xref linkend="slonik"/> scripts.</para>
+
+<para> Notable principles that have fallen out of generating many
+slonik scripts are that:
+
+<itemizedlist>
+
+<listitem><para>Using <quote>preamble</quote> files is
+<emphasis>highly recommended</emphasis> as it means that you use
+heavily-verified preambles over and over.</para></listitem>
+
+<listitem><para>Any opportunity that you have to automatically
+generate configuration whether by drawing it from a database or by
+using a script that generates repetitively similar elements will help
+prevent human error.</para></listitem>
+
+</itemizedlist>
+</para>
+</listitem>
+
+<listitem><para> Handling Very Large Replication Sets </para>
+
+<para> Some users have set up replication on replication sets that are
+tens to hundreds of gigabytes in size, which puts some added
+<quote>strain</quote> on the system, in particular where it may take
+several days for the <command>COPY_SET</command> event to complete.
+Here are some principles that have been observed for dealing with
+these sorts of situations.</para></listitem>
+
+</itemizedlist>
+
+<itemizedlist>
+
+<listitem><para> Drop all indices other than the primary key index
+while the <command>COPY_SET</command> event is run. </para>
+
+<para> When data is copied into a table that has indices on it,
+&postgres; builds the indices incrementally, on the fly.  This is much
+slower than simply copying the data into the table, and then
+recreating each index <quote>ex nihilo</quote>, as the latter can take
+substantial advantage of sort memory. </para>
+
+<para> In &slony1; version 1.1.5 and later versions, indices are
+dropped and recreated automatically, which effectively invalidates
+this practice.</para>
+</listitem>
+
+<listitem><para> If there are large numbers of updates taking place as
+the large set is being copied, this can lead to the subscriber being
+behind by some enormous number of <command>SYNC</command> events.</para>
+
+<para> If a <command> SYNC </command> is generated about once per
+second, that leads to the subscriber <quote>falling behind</quote> by
+around 90,000 <command>SYNC</command>s per day, possibly for several
+days.  </para>
+
+<para> There will correspondingly be an <emphasis>enormous</emphasis>
+growth of <xref linkend="table.sl-log-1"/> and <xref
+linkend="table.sl-seqlog"/>.  Unfortunately, once the
+<command>COPY_SET</command> completes, users have found that the
+queries against these tables wind up reverting to <command>Seq
+Scans</command> so that even though a particular
+<command>SYNC</command> processing event is only processing a small
+number of those 90,000 <command>SYNC</command> events, it still reads
+through the entire table.  In such a case, you may never see
+replication catch up.
+</para> 
+
+<para> Several things can be done that will help, involving
+careful selection of &lslon; parameters:</para>
+</listitem>
+</itemizedlist>
+
+<itemizedlist>
+
+<listitem><para> Ensure that there exists, on the
+<quote>master</quote> node, an index on <function> sl_log_1(log_xid)
+</function>.  If it doesn't exist, as the &slony1; instance was set up
+before version 1.1.1, see <filename> slony1_base.sql </filename> for
+the exact form that the index setup should take. </para> 
+
+<para> In 1.2, there is a process that runs automatically to add
+partial indexes by origin node number, which should be the optimal
+form for such an index to take.  </para>
+</listitem>
+
+<listitem><para> On the subscriber's &lslon;, increase
+the number of <command>SYNC</command> events processed together, with
+the <xref linkend= "slon-config-sync-group-maxsize"/> parameter to some
+value that allows it to process a significant portion of the
+outstanding <command>SYNC</command> events. </para> </listitem>
+
+<listitem><para> On the subscriber's &lslon;, set the
+<xref linkend="slon-config-desired-sync-time"/> to 0, as the adaptive
+<command>SYNC</command> grouping system will start with small
+groupings that will, under these circumstances, perform
+poorly. </para> </listitem>
+
+<listitem><para> Increase the <xref
+linkend="slon-config-sync-interval"/> on the origin's <xref
+linkend="slon"/> so that <command>SYNC</command> events are generated
+less frequently.  If a <command>SYNC</command> is only generated once
+per minute instead of once per second, that will cut down the number
+of events by a factor of 60. </para> </listitem>
+</itemizedlist>
+
+<itemizedlist>
+<listitem><para> It is likely to be worthwhile to use <xref
+linkend="slon-config-vac-frequency"/> to deactivate <xref
+linkend="slon"/>-initiated vacuuming in favor of running your own
+vacuum scripts, as there will be a buildup of unpurgeable data while
+the data is copied and the subscriber starts to catch up. </para>
+</listitem>
+</itemizedlist>
+
+</sect1>

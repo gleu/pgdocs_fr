@@ -1,0 +1,420 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Dernière modification
+     le       $Date$
+     par      $Author$
+     révision $Revision$ -->
+
+<sect1 id="addthings">
+<title>A Task-Oriented View of &slony1;</title>
+
+<indexterm><primary>adding objects to replication</primary></indexterm>
+
+<para>You may discover that you have missed replicating things that
+you wish you were replicating.</para>
+
+<para>This can generally be fairly easily remedied.  This section
+attempts to provide a <quote>task-oriented</quote> view of how to use
+&slony1;; in effect, to answer the question <quote>How do I do
+<emphasis>X</emphasis> with &slony1;?</quote>, for various values of
+<emphasis>X</emphasis>.</para>
+
+<para>You cannot directly use <xref linkend="slonik"/> <xref
+linkend="stmtsetaddtable"/> or <xref linkend="stmtsetaddsequence"/> in
+order to add tables and sequences to a replication set that is
+presently replicating; you must instead create a new replication set.
+Once it is identically subscribed (e.g. - the set of providers and
+subscribers is <emphasis>entirely identical</emphasis> to that for the
+set it is to merge with), the sets may be merged together using <xref
+linkend="stmtmergeset"/>.</para>
+
+<para>Up to and including 1.0.2, there was a potential problem where
+if <xref linkend="stmtmergeset"/> is issued while other
+subscription-related events are pending, it is possible for things to
+get pretty confused on the nodes where other things were pending.
+This problem was resolved in 1.0.5.  Up until 1.2.1, there was still a
+problem where <xref linkend="stmtmergeset"/> could be requested before
+all the subscriptions were complete, which would <quote>muss things
+up</quote> on nodes where subscription activity was still under
+way. </para>
+
+<para> Note that if you add nodes, you will need to add both <xref
+linkend="stmtstorepath"/> statements to indicate how nodes communicate
+with one another, and <xref linkend="stmtstorelisten"/> statements to
+configuration the <quote>communications network</quote> that results
+from that.  See <xref linkend="listenpaths"/> for more details on the
+latter.</para>
+
+<para>It is suggested that you be very deliberate when adding such
+things.  For instance, submitting multiple subscription requests for a
+particular set in one <xref linkend="slonik"/> script often turns out
+quite badly.  If it is <emphasis>truly</emphasis> necessary to
+automate this, you'll probably want to
+submit <xref linkend="stmtwaitevent"/> requests in between subscription
+requests in order that the <xref linkend="slonik"/> script wait for one
+subscription to complete processing before requesting the next
+one.</para>
+
+<para>But in general, it is likely to be easier to cope with complex
+node reconfigurations by making sure that one change has been
+successfully processed before going on to the next.  It's way easier
+to fix one thing that has broken than to piece things together after
+the interaction of five things that have all broken.</para>
+
+<para> Here are a set of <quote>recipes</quote> for how to do various
+sorts of modifications to replication configuration:</para>
+
+<sect2><title> Adding a table to replication </title>
+
+<indexterm><primary> adding a table to replication </primary></indexterm>
+
+<para> &slony1; does not allow you to add a table to a replication set
+that is already being replicated. In principle, it would certainly be
+<emphasis>possible;</emphasis> what would happen is that the
+SET_ADD_TABLE event would lead to the relevant code from the
+SUBSCRIBE_SET event being invoked to initialize the table. That would,
+regrettably, significantly complicate the logic of all of these
+components, so this is not permitted. </para>
+
+<para>Instead, what you must do is thus:</para>
+
+<itemizedlist>
+<listitem><para> Add the new table on each node. </para>
+
+<para> In principle, <xref linkend="stmtddlscript"/> could be used for
+this, but the fact that this leads to <link linkend="locking"> Locking
+Issues </link> and requires altering <emphasis>all</emphasis> tables
+in some existing replication set, on <emphasis>all</emphasis> nodes,
+makes <xref linkend="stmtddlscript"/> an unattractive approach on a
+busy system.  This breaks the &slony1; feature that you <quote>don't
+have to interrupt normal activity to introduce replication.</quote>
+</para>
+
+<para> Instead, you may add the table via
+<application>psql</application> on each node.
+
+</para> </listitem>
+
+<listitem><para> Create a new replication set <xref linkend="stmtcreateset"/>
+</para></listitem>
+<listitem><para> 
+Add the table to the new set <xref linkend="stmtsetaddtable"/> 
+</para></listitem>
+
+<listitem><para> Request subscription <xref
+linkend="stmtsubscribeset"/> for this new set. If there are several
+nodes, you will need to <xref linkend="stmtsubscribeset"/> once for
+each node that should subscribe.  </para></listitem>
+
+<listitem><para> If you wish to know, deterministically, that each
+subscription has completed, you'll need to submit the following sort
+of slonik script for each subscription:
+
+<screen>
+SUBSCRIBE SET (ID=1, PROVIDER=1, RECEIVER=2);
+WAIT FOR EVENT (ORIGIN=2, CONFIRMED = 1);
+SYNC(ID = 1);
+WAIT FOR EVENT (ORIGIN=1, CONFIRMED=2);
+</screen></para>
+</listitem>
+
+<listitem><para> Once the subscriptions have all been set up so that
+the new set has an identical set of subscriptions to the old set, you
+can merge the new set in alongside the old one via <xref
+linkend="stmtmergeset"/> </para></listitem>
+</itemizedlist>
+</sect2>
+
+<sect2><title> How to add columns to a replicated table </title>
+
+<indexterm><primary> adding columns to a replicated table </primary></indexterm>
+
+<para> This also answers the question <quote>How do I rename columns
+on a replicated table?</quote>, and, more generally, other questions
+to the effect of <quote>How do I modify the definitions of replicated
+tables?</quote></para>
+
+<para>If you change the <quote>shape</quote> of a replicated table,
+this needs to take place at exactly the same point in all of the
+<quote>transaction streams</quote> on all nodes that are subscribed to
+the set containing the table.</para>
+
+<para> Thus, the way to do this is to construct an SQL script
+consisting of the DDL changes, and then submit that script to all of
+the nodes via the Slonik command <xref
+linkend="stmtddlscript"/>.</para>
+
+<para> Alternatively, if you have the <link linkend="altperl"> altperl
+scripts </link> installed, you may use
+<command>slonik_execute_script</command> for this purpose: </para>
+
+<para> <command> slonik_execute_script [options] set#
+full_path_to_sql_script_file </command></para>
+
+<para> See <command>slonik_execute_script -h</command> for further
+options; note that this uses <xref linkend="stmtddlscript"/>
+underneath. </para>
+
+<para> There are a number of <quote>sharp edges</quote> to note...</para>
+
+<itemizedlist>
+<listitem><para> You absolutely <emphasis>must not</emphasis> include
+transaction control commands, particularly <command>BEGIN</command>
+and <command>COMMIT</command>, inside these DDL scripts. &slony1;
+wraps DDL scripts with a <command>BEGIN</command>/<command>COMMIT</command> 
+pair; adding extra transaction control will mean that parts of the DDL
+will commit outside the control of &slony1; </para></listitem>
+
+<listitem><para> Before version 1.2, it was necessary to be
+exceedingly restrictive about what you tried to process using
+<xref linkend="stmtddlscript"/>. </para>
+
+<para> You could not have anything <command>'quoted'</command> in the
+script, as this would not be stored and forwarded properly.  As of
+1.2, quoting is now handled properly. </para>
+
+<para> If you submitted a series of DDL statements, the later ones
+could not make reference to objects created in the earlier ones, as
+the entire set of statements was submitted as a single query, where
+the query plan was based on the state of the database at
+the <emphasis>beginning,</emphasis> before any modifications had been
+made.  As of 1.2, if there are 12 SQL statements, they are each
+submitted individually, so that <command> alter table x add column c1
+integer; </command> may now be followed by <command> alter table x
+alter column c1 set not null; </command>.</para></listitem>
+
+</itemizedlist>
+</sect2>
+
+<sect2><title> How to remove replication for a node</title>
+
+<para> You will want to remove the various &slony1; components
+connected to the database(s).</para>
+
+<para> We will just consider, for now, doing this to one node. If you
+have multiple nodes, you will have to repeat this as many times as
+necessary.</para>
+
+<para> Components to be Removed: </para>
+<itemizedlist>
+
+<listitem><para> Log Triggers / Update Denial Triggers
+
+</para></listitem>
+<listitem><para> The <quote>cluster</quote> schema containing &slony1;
+tables indicating the state of the node as well as various stored
+functions
+</para></listitem>
+<listitem><para> &lslon; process that manages the node </para></listitem>
+<listitem><para> Optionally, the SQL and pl/pgsql scripts and &slony1;
+binaries that are part of the &postgres; build. (Of course, this would
+make it challenging to restart replication; it is unlikely that you
+truly need to do this...)
+</para></listitem>
+</itemizedlist>
+
+<para> How To Conveniently Handle Removal</para>
+<itemizedlist>
+
+<listitem><para> You may use the Slonik <xref linkend="stmtdropnode"/>
+command to remove the node from the cluster. This will lead to the
+triggers and everything in the cluster schema being dropped from the
+node. The <xref linkend="slon"/> process will automatically die
+off.</para></listitem>
+
+<listitem><para> In the case of a failed node (where you
+used <xref linkend="stmtfailover"/> to switch to another node), you may
+need to use <xref linkend="stmtuninstallnode"/> to drop out the
+triggers and schema and functions.</para>
+
+<para> If the node failed due to some dramatic hardware failure
+(<emphasis>e.g.</emphasis> disk drives caught fire), there may not be
+a database left on the failed node; it would only be expected to
+survive if the failure was one involving a network failure where
+the <emphasis>database</emphasis> was fine, but you were forced to
+drop it from replication due to (say) some persistent network outage.
+</para></listitem>
+
+<listitem><para> If the above things work out particularly badly, you
+could submit the SQL command <command>DROP SCHEMA "_ClusterName"
+CASCADE;</command>, which will drop out &slony1; functions, tables,
+and triggers alike.  That is generally less suitable
+than <xref linkend="stmtuninstallnode"/>, because that command not only
+drops the schema and its contents, but also removes any columns
+previously added in using <xref linkend= "stmttableaddkey"/>.
+</para></listitem>
+</itemizedlist>
+</sect2>
+
+<sect2><title> Adding A Node To Replication</title>
+
+<para>Things are not fundamentally different whether you are adding a
+brand new, fresh node, or if you had previously dropped a node and are
+recreating it. In either case, you are adding a node to
+replication. </para>
+
+<para>The needful steps are thus... </para>
+<itemizedlist>
+
+<listitem><para> Determine the node number and any relevant DSNs for
+the new node.  Use &postgres; command <command>createdb</command> to
+create the database; add the table definitions for the tables that are
+to be replicated, as &slony1; does not automatically propagate that
+information.
+</para>
+
+<para> If you do not have a perfectly clean SQL script to add in the
+tables, then run the tool <link linkend="extractschema"> <command>
+slony1_extract_schema.sh</command> </link> from the
+<filename>tools</filename> directory to get the user schema from the
+origin node with all &slony1; <quote>cruft</quote> removed.  </para>
+</listitem>
+
+<listitem><para> If the node had been a failed node, you may need to
+issue the <xref linkend="slonik"/>
+command <xref linkend="stmtdropnode"/> in order to get rid of its
+vestiges in the cluster, and to drop out the schema that &slony1;
+creates.
+</para></listitem>
+
+<listitem><para> Issue the slonik
+command <xref linkend="stmtstorenode"/> to establish the new node.
+</para></listitem>
+
+<listitem><para> At this point, you may start a &lslon; daemon against
+the new node. It may not know much about the other nodes yet, so the
+logs for this node may be pretty quiet.
+</para></listitem>
+
+<listitem><para> Issue the slonik
+command <xref linkend="stmtstorepath"/> to indicate
+how <xref linkend="slon"/> processes are to communicate with the new
+node.  In &slony1; version 1.1 and later, this will then automatically
+generate <link linkend="listenpaths"> listen path </link> entries; in
+earlier versions, you will need to
+use <xref linkend="stmtstorelisten"/> to generate them manually.
+</para></listitem>
+
+<listitem><para> At this point, it is an excellent idea to run
+the <filename>tools</filename>
+script <command>test_slony_state-dbi.pl</command>, which rummages
+through the state of the entire cluster, pointing out any anomalies
+that it finds.  This includes a variety of sorts of communications
+problems.</para> </listitem>
+
+<listitem><para> Issue the slonik
+command <xref linkend="stmtsubscribeset"/> to subscribe the node to
+some replication set.
+</para></listitem>
+
+</itemizedlist>
+</sect2>
+
+<sect2><title> How do I reshape subscriptions?</title>
+
+<para> For instance, I want subscriber node 3 to draw data from node
+1, when it is presently drawing data from node 2. </para>
+
+<para> This isn't a case for <xref linkend="stmtmoveset"/>; we're not
+shifting the origin, just reshaping the subscribers. </para>
+
+<para> For this purpose, you can simply submit <xref
+linkend="stmtsubscribeset"/> requests to <emphasis>revise</emphasis>
+the subscriptions.  Subscriptions will not be started from scratch;
+they will merely be reconfigured.  </para></sect2>
+
+<sect2><title> How do I use <link linkend="logshipping">Log Shipping?</link> </title> 
+<para> Discussed in the <link linkend="logshipping"> Log Shipping </link> section... </para>
+</sect2>
+
+<sect2><title> How do I know replication is working?</title> 
+
+<para> The ultimate proof is in looking at whether data added at the
+origin makes it to the subscribers.  That's a <quote>simply matter of
+querying</quote>.</para>
+
+<para> There are several ways of examining replication status, however: </para>
+<itemizedlist>
+<listitem><para> Look in the &lslon; logs.</para> 
+
+<para> They won't say too much, even at very high debugging levels, on
+an origin node; at debugging level 2, you should see, on subscribers,
+that SYNCs are being processed.  As of version 1.2, the information
+reported for SYNC processing includes counts of the numbers of tables
+processed, as well as numbers of tuples inserted, deleted, and
+updated.</para> </listitem>
+
+<listitem><para> Look in the view <command> sl_status </command>, on
+the origin node. </para>
+
+<para> This view will tell how far behind the various subscribing
+nodes are in processing events from the node where you run the query.
+It will only be <emphasis>very</emphasis> informative on a node that
+originates a replication set.</para> </listitem>
+
+<listitem><para> Run the <filename>tools</filename>
+script <command>test_slony_state-dbi.pl</command>, which rummages
+through the state of the entire cluster, pointing out any anomalies
+that it notices, as well as some information on the status of each
+node. </para> </listitem>
+
+</itemizedlist>
+
+</sect2>
+
+<sect2><title>How do I upgrade &slony1; to a newer version? </title>
+
+<para> Discussed  <link linkend="slonyupgrade"> here </link> </para> </sect2>
+
+<sect2><title> What happens when I fail over?</title> 
+
+<para> Some of this is described under <xref linkend="failover"/> but
+more of a procedure should be written...</para> </sect2>
+
+<sect2><title> How do I <quote>move master</quote> to a new node? </title> 
+
+<para> You must first pick a node that is connected to the former
+origin (otherwise it is not straightforward to reverse connections in
+the move to keep everything connected). </para>
+
+<para> Second, you must run a &lslonik; script with the
+command <xref linkend="stmtlockset"/> to lock the set on the origin
+node.  Note that at this point you have an application outage under
+way, as what this does is to put triggers on the origin that rejects
+updates. </para>
+
+<para> Now, submit the &lslonik; <xref linkend="stmtmoveset"/> request.
+It's perfectly reasonable to submit both requests in the same
+&lslonik; script.  Now, the origin gets switched over to the new
+origin node.  If the new node is a few events behind, it may take a
+little while for this to take place. </para> </sect2>
+
+<sect2> <title> How Do I Do A <quote>Full Sync</quote> On A Table? </title>
+
+<para> The &slony1; notion of a <command>SYNC</command> is actually
+always an <emphasis>incremental</emphasis> thing; a
+<command>SYNC</command> represents the set of updates that were
+committed during the scope of a particular <command>SYNC</command>
+event on the origin node.  If a set of updates that altered the entire
+contents of a table were committed in a single
+<command>SYNC</command>, that would affect the entire contents of the
+table.  But as far as &slony1; is concerned, this change is
+<quote>incremental</quote> even though the increment happened to be
+<quote>the whole table.</quote> </para>
+
+<para> The only time that &slony1; <quote>synchronizes</quote> the
+contents of a table is at the time the subscription is set up, at
+which time it uses <command>COPY</command> to draw in the entire
+contents from the provider node.</para>
+
+<para> Since subscriber tables are protected against modification by
+anything other than &slony1;, there should be no way (aside from
+horrible bugs) for tables to fall out of synchronization.  If they do,
+there is some rather serious problem with &slony1;. </para>
+
+<para> If some such severe corruption takes place, the answer is to
+drop the table from replication, then create a new replication set and
+add it back. </para>
+
+</sect2>
+
+</sect1>
