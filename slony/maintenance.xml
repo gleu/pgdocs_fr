@@ -1,0 +1,294 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Dernière modification
+     le       $Date$
+     par      $Author$
+     révision $Revision$ -->
+
+<sect1 id="maintenance"> <title>&slony1; Maintenance</title>
+
+<indexterm><primary>maintaining &slony1;</primary></indexterm>
+
+<para>&slony1; actually does a lot of its necessary maintenance
+itself, in a <quote>cleanup</quote> thread:
+
+<itemizedlist>
+
+<listitem><para> Deletes old data from various tables in the
+<productname>Slony-I</productname> cluster's namespace, notably
+entries in <xref linkend="table.sl-log-1"/>, <xref
+linkend="table.sl-log-2"/> (not yet used), and <xref
+linkend="table.sl-seqlog"/>.</para></listitem>
+
+<listitem><para> Vacuum certain tables used by &slony1;.  As of 1.0.5,
+this includes &pglistener;; in earlier versions, you must vacuum that
+table heavily, otherwise you'll find replication slowing down because
+&slony1; raises plenty of events, which leads to that table having
+plenty of dead tuples.</para>
+
+<para> In some versions (1.1, for sure; possibly 1.0.5) there is the
+option of not bothering to vacuum any of these tables if you are using
+something like <application>pg_autovacuum</application> to handle
+vacuuming of these tables.  Unfortunately, it has been quite possible
+for <application>pg_autovacuum</application> to not vacuum quite
+frequently enough, so you probably want to use the internal vacuums.
+Vacuuming &pglistener; <quote>too often</quote> isn't nearly as
+hazardous as not vacuuming it frequently enough.</para>
+
+<para>Unfortunately, if you have long-running transactions, vacuums
+cannot clear out dead tuples that are newer than the eldest
+transaction that is still running.  This will most notably lead to
+&pglistener; growing large and will slow
+replication.</para></listitem>
+
+<listitem> <para> The <link linkend="dupkey"> Duplicate Key Violation
+</link> bug has helped track down some &postgres; race conditions.
+One remaining issue is that it appears that is a case where
+<command>VACUUM</command> is not reclaiming space correctly, leading
+to corruption of B-trees. </para>
+
+<para> It may be helpful to run the command <command> REINDEX TABLE
+sl_log_1;</command> periodically to avoid the problem
+occurring. </para> </listitem>
+
+<listitem><para> As of version 1.2, <quote>log switching</quote>
+functionality is in place; every so often, it seeks to switch between
+storing data in &sllog1; and &sllog2; so that it may seek
+to <command>TRUNCATE</command> the <quote>elder</quote> data.</para>
+
+<para> That means that on a regular basis, these tables are completely
+cleared out, so that you will not suffer from them having grown to
+some significant size, due to heavy load, after which they are
+incapable of shrinking back down </para> </listitem>
+
+</itemizedlist>
+</para>
+
+<sect2><title> Watchdogs: Keeping Slons Running</title>
+
+<indexterm><primary>watchdogs to keep slon daemons running</primary></indexterm>
+
+<para>There are a couple of <quote>watchdog</quote> scripts available
+that monitor things, and restart the <application>slon</application>
+processes should they happen to die for some reason, such as a network
+<quote>glitch</quote> that causes loss of connectivity.</para>
+
+<para>You might want to run them...</para>
+
+<para> The <quote>best new way</quote> of managing <xref
+linkend="slon"/> processes is via the combination of <xref
+linkend="mkslonconf"/>, which creates a configuration file for each
+node in a cluster, and <xref linkend="launchclusters"/>, which uses
+those configuration files.</para>
+
+<para> This approach is preferable to elder <quote>watchdog</quote>
+systems in that you can very precisely <quote>nail down,</quote> in
+each config file, the exact desired configuration for each node, and
+not need to be concerned with what options the watchdog script may or
+may not give you.  This is particularly important if you are using
+<link linkend="logshipping"> log shipping </link>, where forgetting
+the <command>-a</command> option could ruin your log shipped node, and
+thereby your whole day.</para>
+
+</sect2>
+
+<sect2 id="gensync"><title>Parallel to Watchdog: generate_syncs.sh</title>
+
+<para>A new script for &slony1; 1.1 is
+<application>generate_syncs.sh</application>, which addresses the following kind of
+situation.</para>
+
+<para>Supposing you have some possibly-flakey server where the
+<application>slon</application> daemon that might not run all the time, you might
+return from a weekend away only to discover the following situation.</para>
+
+<para>On Friday night, something went <quote>bump</quote> and while the
+database came back up, none of the <application>slon</application> daemons
+survived.  Your online application then saw nearly three days worth of
+reasonably heavy transaction load.</para>
+
+<para>When you restart <application>slon</application> on Monday, it
+hasn't done a SYNC on the master since Friday, so that the next
+<quote>SYNC set</quote> comprises all of the updates between Friday
+and Monday.  Yuck.</para>
+
+<para>If you run <application>generate_syncs.sh</application> as a cron job every
+20 minutes, it will force in a periodic <command>SYNC</command> on the origin, which
+means that between Friday and Monday, the numerous updates are split
+into more than 100 syncs, which can be applied incrementally, making
+the cleanup a lot less unpleasant.</para>
+
+<para>Note that if <command>SYNC</command>s <emphasis>are</emphasis> running
+regularly, this script won't bother doing anything.</para>
+</sect2>
+
+<sect2><title>Testing &slony1; State </title>
+
+<indexterm><primary>testing cluster status</primary></indexterm>
+
+<para> In the <filename>tools</filename> directory, you may find
+scripts called <filename>test_slony_state.pl</filename> and
+<filename>test_slony_state-dbi.pl</filename>.  One uses the Perl/DBI
+interface; the other uses the Pg interface.
+</para>
+
+<para> Both do essentially the same thing, namely to connect to a
+&slony1; node (you can pick any one), and from that, determine all the
+nodes in the cluster.  They then run a series of queries (read only,
+so this should be quite safe to run) which look at the various
+&slony1; tables, looking for a variety of sorts of conditions
+suggestive of problems, including:
+</para>
+
+<itemizedlist>
+<listitem><para> Bloating of tables like pg_listener, sl_log_1, sl_log_2, sl_seqlog </para></listitem>
+<listitem><para> Listen paths </para></listitem>
+<listitem><para> Analysis of Event propagation </para></listitem>
+<listitem><para> Analysis of Event confirmation propagation </para> 
+
+<para> If communications is a <emphasis>little</emphasis> broken,
+replication may happen, but confirmations may not get back, which
+prevents nodes from clearing out old events and old replication
+data. </para> </listitem>
+</itemizedlist>
+
+<para> Running this once an hour or once a day can help you detect
+symptoms of problems early, before they lead to performance
+degradation. </para>
+</sect2>
+
+<sect2><title>Replication Test Scripts </title>
+
+<para> In the directory <filename>tools</filename> may be found four
+scripts that may be used to do monitoring of &slony1; instances:
+
+<itemizedlist>
+
+<listitem><para> <command>test_slony_replication</command> is a
+Perl script to which you can pass connection information to get to a
+&slony1; node.  It then queries <xref linkend="table.sl-path"/> and
+other information on that node in order to determine the shape of the
+requested replication set.</para>
+
+<para> It then injects some test queries to a test table called
+<envar>slony_test</envar> which is defined as follows, and which needs to be
+added to the set of tables being replicated:
+
+<programlisting>
+CREATE TABLE slony_test (
+    description text,
+    mod_date timestamp with time zone,
+    "_Slony-I_testcluster_rowID" bigint DEFAULT nextval('"_testcluster".sl_rowid_seq'::text) NOT NULL
+);
+</programlisting></para>
+
+<para> The last column in that table was defined by &slony1; as one
+lacking a primary key...</para>
+
+<para> This script generates a line of output for each &slony1; node
+that is active for the requested replication set in a file called
+<filename>cluster.fact.log</filename>.</para>
+
+<para> There is an additional <option>finalquery</option> option that allows
+you to pass in an application-specific SQL query that can determine
+something about the state of your application.</para></listitem>
+
+<listitem><para><command>log.pm</command> is a Perl module that manages logging
+for the Perl scripts.</para></listitem>
+
+<listitem><para><command>run_rep_tests.sh</command> is a <quote>wrapper</quote> script
+that runs <command>test_slony_replication</command>.</para>
+
+<para> If you have several &slony1; clusters, you might set up
+configuration in this file to connect to all those
+clusters.</para></listitem>
+
+<listitem><para><command>nagios_slony_test</command> is a script that
+was constructed to query the log files so that you might run the
+replication tests every so often (we run them every 6 minutes), and
+then a system monitoring tool such as <ulink
+url="http://www.nagios.org/"> <productname>Nagios</productname>
+</ulink> can be set up to use this script to query the state indicated
+in those logs.</para>
+
+<para> It seemed rather more efficient to have a
+<application>cron</application> job run the tests and have
+<productname>Nagios</productname> check the results rather than having
+<productname>Nagios</productname> run the tests directly.  The tests
+can exercise the whole &slony1; cluster at once rather than
+<productname>Nagios</productname> invoking updates over and over
+again.</para></listitem>
+
+</itemizedlist></para>
+</sect2>
+
+<sect2><title> Other Replication Tests </title>
+
+<para> The methodology of the previous section is designed with a view
+to minimizing the cost of submitting replication test queries; on a
+busy cluster, supporting hundreds of users, the cost associated with
+running a few queries is likely to be pretty irrelevant, and the setup
+cost to configure the tables and data injectors is pretty high.</para>
+
+<para> Three other methods for analyzing the state of replication have
+stood out:</para>
+
+<itemizedlist>
+
+<listitem><para> For an application-oriented test, it has been useful
+to set up a view on some frequently updated table that pulls
+application-specific information.  </para>
+
+<para> For instance, one might look either at some statistics about a
+most recently created application object, or an application
+transaction.  For instance:</para>
+
+<para> <command> create view replication_test as select now() -
+txn_time as age, object_name from transaction_table order by txn_time
+desc limit 1; </command> </para>
+
+<para> <command> create view replication_test as select now() -
+created_on as age, object_name from object_table order by id desc
+limit 1; </command> </para>
+
+<para> There is a downside: This approach requires that you have
+regular activity going through the system that will lead to there
+being new transactions on a regular basis.  If something breaks down
+with your application, you may start getting spurious warnings about
+replication being behind, despite the fact that replication is working
+fine.</para>
+
+</listitem>
+
+<listitem><para> The &slony1;-defined view, <envar>sl_status</envar>
+provides information as to how up to date different nodes are.  Its
+contents are only really interesting on origin nodes, as the events
+generated on other nodes are generally ignorable. </para>
+</listitem>
+
+<listitem><para> See also the <xref linkend="slonymrtg"/>
+discussion. </para></listitem>
+
+</itemizedlist>
+</sect2>
+<sect2><title> Log Files</title>
+
+<indexterm><primary>log files</primary></indexterm>
+
+<para><xref linkend="slon"/> daemons generate some more-or-less verbose
+log files, depending on what debugging level is turned on.  You might
+assortedly wish to:
+
+<itemizedlist>
+
+<listitem><para> Use a log rotator like
+<productname>Apache</productname>
+<application>rotatelogs</application> to have a sequence of log files
+so that no one of them gets too big;</para></listitem>
+
+<listitem><para> Purge out old log files,
+periodically.</para></listitem>
+
+</itemizedlist>
+</para>
+</sect2>
+</sect1>
