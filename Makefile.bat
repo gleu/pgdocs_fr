@@ -15,19 +15,20 @@ setlocal
 
 echo Positionnement des variables d environnement.
 
-set DOCBOOK="C:\docbook"
-set PG_ENV_82="E:\Versionning\SVN\docpgfr\trunc_8.2\manuel"
+set DOCBOOK="E:\docbook"
+set PG_ENV_83="E:\Versionning\SVN\docpgfr\trunc_8.3\postgresql"
 set HHC="C:\Program Files\HTML Help Workshop\hhc.exe"
 
 echo Suppression des fichiers temporaires précédents.
 
-del /Q %PG_ENV_82%\chm\*.*
-del %PG_ENV_82%\index.hhk
-del %PG_ENV_82%\htmlhelp.hhp
+del /Q %PG_ENV_83%\chm\*.*
+del %PG_ENV_83%\index.hhk
+del %PG_ENV_83%\toc.hhc
+del %PG_ENV_83%\htmlhelp.hhp
 
 echo Génération des fichiers HTML
 
-%DOCBOOK%\bin\xsltproc --xinclude %PG_ENV_82%\stylesheets\pg-chm.xsl %PG_ENV_82%\postgres.xml
+%DOCBOOK%\bin\xsltproc --xinclude %PG_ENV_83%\stylesheets\pg-chm.xsl %PG_ENV_83%\postgres.xml
 rem %DOCBOOK%\bin\xmllint --noout --xinclude --postvalid postgres.xml
 
 rem /**
@@ -36,7 +37,7 @@ rem  */
 
 echo Copie du fichier CSS.
 
-copy /Y %PG_ENV_82%\stylesheets\pg-chm.css %PG_ENV_82%\chm\
+copy /Y %PG_ENV_83%\stylesheets\pg-chm.css %PG_ENV_83%\chm\
 
 rem /**
 rem  * génération des fichiers avec la feuille de style spécifique.
@@ -44,7 +45,7 @@ rem  */
 
 echo Génération du fichier au format HTMLHelp
 
-%HHC% %PG_ENV_82%\htmlhelp.hhp
+%HHC% %PG_ENV_83%\htmlhelp.hhp
 
 rem /**
 rem  * Transfert FTP du fichier
