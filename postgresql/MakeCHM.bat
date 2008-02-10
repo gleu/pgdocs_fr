@@ -53,7 +53,7 @@ rem  */
 
 echo Transfert FTP.
 
-ftp -n -s:pgfr.ftp
+rem ftp -n -s:pgfr.ftp
 
 endlocal
 
