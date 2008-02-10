@@ -18,6 +18,7 @@ echo Suppression des fichiers temporaires précédents.
 
 del /Q %PG_ENV_82%\chm\*.*
 del %PG_ENV_82%\index.hhk
+del %PG_ENV_82%\toc.hhc
 del %PG_ENV_82%\htmlhelp.hhp
 
 echo Génération des fichiers HTML
