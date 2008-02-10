@@ -11,7 +11,7 @@ setlocal
 echo Positionnement des variables d environnement.
 
 set DOCBOOK="E:\docbook"
-set PG_ENV_82="E:\Versionning\SVN\docpgfr\trunc_8.2\manuel"
+set PG_ENV_82="E:\Versionning\SVN\docpgfr\8.2\manuel"
 set HHC="C:\Program Files\HTML Help Workshop\hhc.exe"
 
 echo Suppression des fichiers temporaires précédents.
@@ -47,7 +47,7 @@ rem  */
 
 echo Transfert FTP.
 
-ftp -n -s:pgfr.ftp
+rem ftp -n -s:pgfr.ftp
 
 endlocal
 
