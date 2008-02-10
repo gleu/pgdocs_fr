@@ -18,7 +18,7 @@
   <!--
   <xsl:import href="/opt/docbook-xsl/htmlhelp/htmlhelp.xsl"/>
   -->
-  <xsl:import href="C:/Docbook/xsl/htmlhelp/htmlhelp.xsl"/>
+  <xsl:import href="E:/Docbook/xsl/htmlhelp/htmlhelp.xsl"/>
 
   <xsl:param name="html.stylesheet" select="'pg-chm.css'"/>
   <xsl:param name="htmlhelp.chm" select="'pg830.chm'"/>
