@@ -470,6 +470,12 @@ INIT CLUSTER (
    existing nodes.
 
    </para> </note>
+   <note> <para> Be aware that some objects are created that contain
+   the cluster name as part of their name.  (Notably, partial indexes
+   on <envar>sl_log_1</envar> and <envar>sl_log_2</envar>.)  As a
+   result, <emphasis>really long</emphasis> cluster names are a bad
+   idea, as they can make object names <quote>blow up</quote> past the
+   typical maximum name length of 63 characters. </para> </note> 
    </refsect1>
    <refsect1> <title> Locking Behaviour </title>
 
@@ -1014,14 +1020,21 @@ STORE PATH ( SERVER = 1, CLIENT = 2,
      declared <command>NOT NULL.</command> Any primary key
      satisfies this requirement.
     </para>
+
     <para>
-     As a last resort, this command can be used to add such an
-     attribute to a table that does not have a primary key. Since
-     this modification can have unwanted side effects, <emphasis>it is
-      strongly recommended that users add a unique and not null
-      attribute by other means.</emphasis>
+     As a last resort, <emphasis>in versions of &slony1; prior to
+     2.0</emphasis>, this command can be used to add such an attribute
+     to a table that does not have a primary key. Since this
+     modification can have unwanted side effects, <emphasis>it is
+     strongly recommended that users add a unique and not null
+     attribute by other means.</emphasis>
     </para>
 
+   <para> If you intend to use &slony1; version 2.0, you
+   <emphasis>must</emphasis> arrange for a more proper primary key.
+   &slony1; will not provide one for you, and if you have cases of
+   keys created via <command>TABLE ADD KEY</command>, you cannot
+   expect &slony1; to function properly. </para>
     <variablelist>
      <varlistentry><term><literal> NODE ID = ival </literal></term>
       <listitem><para> Node ID of the set origin where the table will be
@@ -1087,6 +1100,15 @@ STORE PATH ( SERVER = 1, CLIENT = 2,
    </refsect1>
    <refsect1> <title> Version Information </title>
     <para> This command was introduced in &slony1; 1.0 </para>
+<warning>    <para> This command is <emphasis> no longer supported </emphasis>
+    as of &slony1; version 2.0.  In version 2, the various
+    <quote>catalogue breakages</quote> done in &postgres; versions
+    prior to 8.3 are being eliminated so that schema dumps may be
+    taken from any node.  That leaves the <quote>kludgy</quote>
+    columns created via <command>TABLE ADD KEY</command> as the only
+    thing that prevents <xref linkend="stmtuninstallnode"> from being
+    comprised of the SQL statement <command>drop schema _ClusterName
+    cascade;</command>.</para> </warning>    
    </refsect1>
   </refentry>
   
@@ -1820,6 +1842,17 @@ SET MOVE SEQUENCE (
       </varlistentry>
      </variablelist>
     </para>
+    <note><para> A nifty trick is that you can run <command>STORE
+    TRIGGER</command> <emphasis>before the trigger is
+    installed;</emphasis> that will not cause any errors.  You could
+    thus add &slony1;'s handling of the trigger
+    <emphasis>before</emphasis> it is installed.  That allows you to
+    be certain that it becomes active on all nodes immediately upon
+    its installation via <xref linkend="stmtddlscript">; there is no
+    risk of events getting through in between the <command>EXECUTE
+    SCRIPT</command> and <command>STORE TRIGGER</command>
+    events. </para>
+    </note>    
     <para> This uses &funstoretrigger;. </para>
    </refsect1>
    <refsect1><title>Example</title>
@@ -1834,10 +1867,14 @@ STORE TRIGGER (
 
     <para> This operation will need to acquire an exclusive lock on
     the specified table on each node to which it applies in order to
-    alter table schemas to add back the trigger. </para>
+    alter table schemas to add back the trigger, but only breifly. </para>
    </refsect1>
    <refsect1> <title> Version Information </title>
     <para> This command was introduced in &slony1; 1.0 </para>
+
+    <para> In &slony1; version 2.0, this command is removed as
+    obsolete because triggers are no longer <quote>messed around
+    with</quote> in the system catalogue. </para>    
    </refsect1>
   </refentry>
 
@@ -1900,6 +1937,11 @@ DROP TRIGGER (
    </refsect1>
    <refsect1> <title> Version Information </title>
     <para> This command was introduced in &slony1; 1.0 </para>
+
+    <para> In &slony1; version 2.0, this command is removed as
+    obsolete because triggers are no longer <quote>messed around
+    with</quote> in the system catalogue. </para>    
+    
    </refsect1>
   </refentry>
   
@@ -2561,12 +2603,11 @@ FAILOVER (
      </varlistentry>
      <varlistentry><term><literal> EXECUTE ONLY ON = ival
 
-       </literal></term> <listitem><para> (Optional) The ID of the
-       only node to actually execute the script.  This option causes
-       the script to be executed, by <xref linkend="slonik"/>,
-       <emphasis>only</emphasis> on the one node specified.  The
-       default is to execute the script on all nodes that are
-       subscribed to the set.</para></listitem>
+       </literal></term><listitem><para> (Optional) The ID of the only
+	node to actually execute the script.  This option causes the
+	script to be propagated by all nodes but executed only by one.
+	The default is to execute the script on all nodes that are
+	subscribed to the set.</para></listitem> 
       
      </varlistentry>
     </variablelist>
@@ -2601,23 +2642,31 @@ FAILOVER (
     <programlisting>
 EXECUTE SCRIPT (
    SET ID = 1,
-   FILENAME = '/tmp/changes_2004-05-01.sql',
+   FILENAME = '/tmp/changes_2008-04-01.sql',
    EVENT NODE = 1
 );
     </programlisting>
    </refsect1>
    <refsect1> <title> Locking Behaviour </title>
 
-    <para> Each replicated table receives an exclusive lock, on the
-    origin node, in order to remove the replication triggers; after
-    the DDL script completes, those locks will be cleared. </para>
-
+    <para> Up until the 2.0 branch, each replicated table received an
+    exclusive lock, on the origin node, in order to remove the
+    replication triggers; after the DDL script completes, those locks
+    will be cleared. </para>  
+  
     <para> After the DDL script has run on the origin node, it will
     then run on subscriber nodes, where replicated tables will be
     similarly altered to remove replication triggers, therefore
     requiring that exclusive locks be taken out on each node, in
     turn. </para>
 
+    <para> As of the 2.0 branch, &slony1; uses a GUC that controls
+    trigger behaviour, which allows deactivating the &slony1;-created
+    triggers during this operation <emphasis>without</emphasis> the
+    need to take out exclusive locks on all tables.  Now, the only
+    tables requiring exclusive locks are those tables that are
+    actually altered as a part of the DDL script. </para>  
+  
    </refsect1>
    <refsect1> <title> Version Information </title>
     <para> This command was introduced in &slony1; 1.0. </para>
@@ -2953,4 +3002,90 @@ REPAIR CONFIG (
    </refsect1>
   </refentry>
 
+  <refentry id ="stmtcloneprepare"><refmeta><refentrytitle>CLONE PREPARE</refentrytitle>
+   <manvolnum>7</manvolnum></refmeta>
+   
+   <refnamediv><refname>CLONE PREPARE</refname>
+    
+    <refpurpose> Prepare for cloning a node. </refpurpose>
+   </refnamediv>
+   <refsynopsisdiv>
+    <cmdsynopsis>
+     <command>clone prepare </command>
+     <arg><replaceable class="parameter"> id</replaceable></arg>
+     <arg><replaceable class="parameter"> provider</replaceable></arg>
+     <arg><replaceable class="parameter"> comment</replaceable></arg>
+    </cmdsynopsis>
+   </refsynopsisdiv>
+   <refsect1>
+    <title>Description</title>
+    <para>
+     Prepares for cloning a specified node.
+    </para>
+
+    <para>
+     This duplicates the <quote>provider</quote> node's configuration
+     under a new node ID in preparation for the node to be copied via
+     standard database tools.
+    </para>
+
+    <para> Note that in order that we be certain that this new node be
+    consistent with all nodes, it is important to issue a SYNC event
+    against every node aside from the provider and wait to start
+    copying the provider database at least until all those SYNC events
+    have been confirmed by the provider.  Otherwise, it is possible
+    for the clone to miss some events. </para>
+
+   </Refsect1>
+   <Refsect1><Title>Example</Title>
+    <Programlisting>
+     clone prepare (id = 33, provider = 22, comment='Clone 33');
+     sync (id=11);
+     sync (id=22);
+     </Programlisting>
+   </Refsect1>
+   <refsect1> <title> Version Information </title>
+    <para> This command was introduced in &slony1; 1.2.0. </para>
+   </refsect1>
+  </Refentry>
+
+
+  <refentry id ="stmtclonefinish"><refmeta><refentrytitle>CLONE FINISH</refentrytitle>
+   <manvolnum>7</manvolnum></refmeta>
+   
+   <refnamediv><refname>CLONE FINISH</refname>
+    
+    <refpurpose> Complete cloning a node. </refpurpose>
+   </refnamediv>
+   <refsynopsisdiv>
+    <cmdsynopsis>
+     <command>clone prepare </command>
+     <arg><replaceable class="parameter"> id</replaceable></arg>
+     <arg><replaceable class="parameter"> provider</replaceable></arg>
+    </cmdsynopsis>
+   </refsynopsisdiv>
+   <refsect1>
+    <title>Description</title>
+    <para>
+     Finishes cloning a specified node.
+    </para>
+
+    <para>
+     This completes the work done by <xref
+     linkend="stmtcloneprepare">, establishing confirmation data for
+     the new <quote>clone</quote> based on the status found for the
+     <quote>provider</quote> node.
+    </para>
+   </Refsect1>
+   <Refsect1><Title>Example</Title>
+    <Programlisting>
+     clone finish (id = 33, provider = 22);
+    </Programlisting>
+   </Refsect1>
+   <refsect1> <title> Version Information </title>
+    <para> This command was introduced in &slony1; 1.2.0. </para>
+   </refsect1>
+  </Refentry>
+
+  
  </reference>
