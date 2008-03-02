@@ -4,129 +4,89 @@
      par      $Author$
      révision $Revision$ -->
 
-<sect1 id="versionupgrade"><title>Using &slony1; for &postgres; Upgrades</title>
+<sect1 id="versionupgrade"><title>Utiliser &slony1; pour les mises à jour &postgres;</title>
 
-<indexterm><primary>version upgrades for &postgres; using
-&slony1;</primary></indexterm>
+<indexterm><primary>Mettre à jour la version de &postgres; en utilisant &slony1;</primary></indexterm>
 
-<para> A number of people have found
-&slony1; useful for helping perform upgrades
-between major &postgres; releases
-(<emphasis> e.g.</emphasis> which mandates running
-<application>initdb</application> to create a new database instance)
-without requiring a substantial downtime.</para>
+<para> Un certain nombre de personnes ont trouvé que &slony1; était pratique pour effectuer les mises à jours de versions majeures  ( <emphasis>par exemple</emphasis> celles qui nécessitent d'éxécuter <application>initdb</application> afin de recréer une nouvelle instance ) sans subir une coupure de service importante.
+</para>
 
-<para> The <quote>simple</quote> way that one might imagine doing such
-an upgrade would involve running <application>pg_dump</application> on
-the database running the older version, and then submit the results
-into a <application>psql</application> session connected to a database
-instance running the newer version.  Unfortunately, the time consumed
-from start to end, for this approach, may be prohibitive.  For a
-database containing 40GB of data with numerous indices, the process
-required involves:
+<para>La méthode simple que l'on peut imaginer pour effectuer une telle mise à jour consiste à éxecuter  <application>pg_dump</application> sur l'ancienne version de la base, puis d'envoyer le résultat dans une session <application>psql</application> connectée à la nouvelle version de la base. Malheureusement le temps nécessaire pour cette approche peut être prohibitif. Pour une base contenant 40Go de données ainsi que de nombreux index, le processus nécessite les étapes suivantes :
+<itemizedlist>
+<listitem><para> Arrêtez toutes les applications qui peuvent modifier les données; </para></listitem>
+<listitem><para> Lancez le <application>pg_dump</application>, et charger les données dans la nouvelle base;</para></listitem>
+<listitem><para> Attendez 40 heures que le processus d'extraction/chargement se termine;</para></listitem>
+<listitem><para> Faites pointer les applications <quote>en écriture</quote> vers la nouvelle base</para></listitem>  
+<itemizedlist> 
+</para>  
+
+<para>Notez que cette opération a provoqué une coupure de service de 40 heures.</para>
+
+<para> &slony1; offre une opportunité de remplacer cette longue coupure de service par une autre de quelques minutes, voire quelques secondes. Cette approche consiste à créer un réplicat &slony1; utilisant la nouvelle version de &postgres;. Il est possible que cela prenne plus de 40 heures pour créer ce réplicat, mais une fois qu'il est créé, il peut être rafraîchi rapidement.
+  
+<para> Au moment de basculer vers la nouvelle base de données, la procédure est beaucoup moins longue :
 
 <itemizedlist>
-<listitem><para> Stop all applications that might modify the data</para></listitem>
-<listitem><para> Start the <application>pg_dump</application>, and load that into the new database</para></listitem>
-<listitem><para> Wait 40 hours for the dump/load to complete</para></listitem>
-<listitem><para> Point <quote>write</quote> applications to the new database</para></listitem>
-</itemizedlist></para>
+<listitem><para> Arrêtez toutes les applications qui peuvent modifier les données;</para></listitem>
 
-<para> And note that this led to a 40 hour outage.</para>
+<listitem><para> Verrouillez le set contre les lectures des applications clientes en utilisant <xref linkend="stmtlockset"/>;</para></listitem>
 
-<para> &slony1; offers an opportunity to replace that long outage with
-one a few minutes or even a few seconds long.  The approach taken is
-to create a &slony1; replica in the new version.  It is possible that
-it might take much longer than 40h to create that replica, but once
-it's there, it can be kept very nearly up to date.</para>
+<listitem><para> Lancez le commande Slonik <xref
+linkend="stmtmoveset"/> pour déplacer l'origine de l'ensemble de réplication depuis l'ancienne base vers la nouvelle.</para></listitem>
 
-<para> When it is time to switch over to the new database, the
-procedure is rather less time consuming:
-
-<itemizedlist>
-
-<listitem><para> Stop all applications that might modify the data</para></listitem>
-
-<listitem><para> Lock the set against client application updates using
-<xref linkend="stmtlockset"/></para></listitem>
-
-<listitem><para> Submit the Slonik command <xref
-linkend="stmtmoveset"/> to shift the origin from the old database to
-the new one</para></listitem>
-
-<listitem><para> Point the applications at the new database</para></listitem>
-</itemizedlist></para>
-
-<para> This procedure should only need to take a very short time,
-likely bound more by how quickly you can reconfigure your applications
-than anything else.  If you can automate all the steps, it might take
-less than a second.  If not, somewhere between a few seconds and a few
-minutes is likely.</para>
-
-<para> Note that after the origin has been shifted, updates now flow
-into the <emphasis>old</emphasis> database.  If you discover that due
-to some unforeseen, untested condition, your application is somehow
-unhappy connecting to the new database, you could easily use <xref
-linkend="stmtmoveset"/> again to shift the origin back to the old
-database.</para>
-
-<para> If you consider it particularly vital to be able to shift back
-to the old database in its state at the time of the changeover, so as
-to be able to outright roll back the whole change, and would like as
-well the ability to shift back to the old version (with any updates
-since the changeover), the following steps would accomplish that:
-
-<itemizedlist>
-<listitem><para> Prepare <emphasis> two </emphasis> &slony1; replicas
-of the database:
-
-<itemizedlist>
-<listitem><para> One running the new version of &postgres;</para></listitem>
-<listitem><para> One running the old version of &postgres;</para></listitem>
-</itemizedlist></para>
-
-<para> Thus, you have <emphasis>three</emphasis> nodes, one running
-the new version of &postgres;, and the other two the old version.</para></listitem>
-
-<listitem><para> Once they are roughly <quote>in sync</quote>, stop
-all applications that might modify the data</para></listitem>
-
-<listitem><para> Allow them to get in sync, then
-<command>stop</command> the <application>slon</application> daemon
-that has been feeding the subscriber running the old version of
-&postgres;</para>
-
-<para> You may want to use <xref linkend="stmtuninstallnode"/> to
-decommission this node, making it into a standalone database, or
-merely kill the <application>slon</application>, depending on how
-permanent you want this all to be.</para></listitem>
-
-<listitem><para> Then use <xref linkend="stmtmoveset"/> to shift the
-origin, as before.</para></listitem>
+<listitem><para> Faites pointer les applications vers la nouvelle base;</para></listitem>
 
 </itemizedlist></para>
 
-<para> Supposing a <quote>small</quote> disaster strikes, you might
-recover back to the node running the old database that has been seeing
-updates come through; if you run into larger problems, you would have
-to abandon the two nodes and go to the one which had been shut off.</para>
+<para> Cette procédure devrait prendre un temps très court, qui dépendra principalement de votre rapidité lors de la reconfiguration de vos applications. Si vous pouvez souhaiter automatiser toutes ces étapes, il est possible que cela prenne moins d'une seconde. Sinon il est probable que cela prenne entre quelques secondes et quelques minutes.
+  
+<para>Notez qu'après le déplacement de l'origine, les mises à jour vont vers l'<emphasis>ancienne</emphasis> base. Si vous découvrez qu'à cause d'un problème imprévu ou non-testé, votre application rencontre certains problèmes pour se connecter à la nouvelle base, vous pouvez facilement utiliser  <xref linkend="stmtmoveset"/> à nouveau pour re-déplacer l'origine vers l'ancienne base.
+</para>
 
-<para> This isn't to say that it is routine to have the sorts of
-problems that would mandate such a <quote>paranoid</quote> procedure;
-people worried about process risk assessments can be reassured if you
-have choices like this.
+<para>Si vous considerez qu'il est particulièrement vital de pouvoir revenir à l'ancienne base dans l'état où elle se trouvait avant la bascule, afin de pouvoir revenir complètement en arrière et que vous souhaitez également pouvoir revenir à l'ancienne version (mise à jour depuis la bascule), accomplissez les étapes suivantes :
+  
+<itemizedlist>
+  
+<listitem><para> Préparez <emphasis> deux </emphasis>  réplicats &slony1; de la base;
+<itemizedlist>
+<listitem><para> Un pour la nouvelle version de &postgres;;</para></listitem>
+<listitem><para> Un pour l'ancienne version de &postgres;.</para></listitem>
+</itemizedlist></para>
 
-<note><para> &slony1; does not support versions of &postgres; older
-than 7.3.3 because it needs namespace support that did not solidify
-until that time.  Rod Taylor <quote>hacked up</quote> a version of
-&slony1; to work on 7.2 by allowing the &slony1; objects to live in
-the global schema.  He found it pretty fiddly, and that some queries
-weren't very efficient (the &postgres; query optimizer has improved
-<emphasis>considerably</emphasis> since 7.2), but that this was more
-workable for him than other replication systems such as
-<productname>eRServer</productname>.  If you desperately need that,
-look for him on the &postgres; Hackers mailing list.  It is not
-anticipated that 7.2 will be supported by any official &slony1;
-release.</para></note></para>
+<para>Ainsi vous avez <emphasis>trois</emphasis> noeuds, un avec la nouvelle versin de &postgres;, et deux autres avec l'ancienne version.</para></listitem>
+
+<listitem><para> Une fois qu'ils sont à peu près <quote>synchronisés</quote>, arrêtez toutes les applications qui peuvent modifier les données.
+</para></listitem>
+
+<listitem><para> Lancez la synchronisation des noeuds, puis 
+<command>arrêtez</command> le démon <application>slon</application> qui a synchronisé le noeud esclave qui héberge l'ancienne version de &postgres;
+</para>
+
+<para>Vous voudrez peut-être utiliser <xref linkend="stmtuninstallnode"/> pour
+isoler ce noeud et ainsi le transformer en une base indépendante, ou simplement tuer le démon <application>slon</application>, selon 
+votre volonté de rendre cette transformation permanente ou non.
+</para></listitem>
+
+<listitem><para> Ensuite utilisez <xref linkend="stmtmoveset"/> pour déplacer l'origine, comme décrit précédemment.</para></listitem>
+
+</itemizedlist></para>
+
+<para> Si de <quote>petits</quote> problèmes apparaissent, vous pourrez récupérer
+  le noeud qui héberge l'ancienne base qui a reçues les mises à jours de données; 
+ Si vous découvrez des problèmes plus importants, vous pouvez abandonner les deux noeuds 
+ et revenir à la base qui a été isolée.</para> 
+
+<para>Il ne s'agit pas ici de dire qu'il est courant 
+  de rencontrer des problèmes qui nécessitent une procédure aussi <quote>paranoïaque</quote>; 
+  Toutefois les personnes soucieuses d'évaluer les risques peuvent être rassurées 
+  par de tels choix. 
+  
+<note><para>&slony1; ne supporte pas les versions de &postgres antérieures à la 7.3.3 
+    parcequ'il a besoin des espaces de noms ("namespaces") qui n'étaient pas stable jusque là.
+    Rod Taylor modifia une version de &slony1 pour qu'elle fonctionne avec la 7.2 en autorisant 
+    les objets &slony1; à se placer dans le schéma global. Il trouva cela assez compliqué, de plus 
+    certaines requêtes n'était pas assez rapides ( l'optimiseur de requêtes de &postgres; a été <emphasis>considérablement</emphasis> amélioré depuis la version 7.2), cependant cette solution était plus pratique pour lui que les autres systèmes de réplication tels que <productname>eRServer</productname>. Si vous recherchez désespérement ce type de solution, contactez-le sur la liste des hackers de &postgres;. Il n'est pas prévu que la version 7.2 de &postgres; soit supportée par une version officielle de &slony1;
+
+</para></note></para>
 
 </sect1>
