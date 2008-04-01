@@ -6,15 +6,15 @@
 VERSION := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/')
 VER := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/' -e 's/\.//g')
 
-BASEDIR := $(HOME)/pgsql-$(VERSION)-fr
-HTM_OUTPUT := pgsql-$(VERSION)-fr
-TGZ_OUTPUT := pg$(VER).tar.gz
-ZIP_OUTPUT := pg$(VER).zip
-PDF_OUTPUT := pg$(VER).pdf
+BASEDIR := $(HOME)/slony-$(VERSION)-fr
+HTM_OUTPUT := slony-$(VERSION)-fr
+TGZ_OUTPUT := slony$(VER).tar.gz
+ZIP_OUTPUT := slony$(VER).zip
+PDF_OUTPUT := slony$(VER).pdf
 QUICKPDF_OUTPUT := quickpg$(VER).pdf
-MAN_OUTPUT := pg$(VER).man.tar.gz
-CHM_OUTPUT := pg$(VER).chm.tar.gz
-NOCHUNKS_OUTPUT := pg$(VER).html
+MAN_OUTPUT := slony$(VER).man.tar.gz
+CHM_OUTPUT := slony$(VER).chm.tar.gz
+NOCHUNKS_OUTPUT := slony$(VER).html
 
 CHUNK_QUIET=0
 XSLROOTDIR=/opt/docbook-xsl
@@ -57,7 +57,7 @@ $(PDF_OUTPUT): $(src)
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
 	xsltproc --xinclude --nonet --stringparam profile.condition pdf \
                 -stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
-		--output $(BASEDIR)/pg-pdf.xml stylesheets/pg-profile.xsl postgres.xml
+		--output $(BASEDIR)/pg-pdf.xml stylesheets/pg-profile.xsl slony.xml
 	xsltproc --nonet --output $(BASEDIR)/pg-pdf.fo stylesheets/pg-pdf.xsl \
 		$(BASEDIR)/pg-pdf.xml
 	sed -i -e "s/inherit/all/" $(BASEDIR)/pg-pdf.fo
@@ -81,7 +81,7 @@ $(NOCHUNKS_OUTPUT): $(src)
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
 	xsltproc --xinclude --nonet -stringparam profile.condition html \
 		--output $(BASEDIR)/$(NOCHUNKS_OUTPUT) \
-		stylesheets/pg-nochunks.xsl postgres.xml
+		stylesheets/pg-nochunks.xsl slony.xml
 
 	tidy -config tidy.conf $(BASEDIR)/$(NOCHUNKS_OUTPUT) || true
 
@@ -89,7 +89,7 @@ $(NOCHUNKS_OUTPUT): $(src)
 	  $(BASEDIR)/$(NOCHUNKS_OUTPUT)
 
 validate:
-	xmllint --noout --nonet --xinclude --postvalid postgres.xml
+	xmllint --noout --nonet --xinclude --postvalid slony.xml
 
 INSTALL.html: $(src)
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
@@ -122,7 +122,7 @@ psql.1: $(src)
 htmlhelp:
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
 	xsltproc stylesheets/pg-chm.xsl \
-		postgres.xml
+		slony.xml
 	test -d chm || mkdir chm
 	mv *.html *.h?? chm
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(CHM_OUTPUT) chm
