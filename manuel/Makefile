@@ -36,7 +36,9 @@ index.html: $(src)
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
 
+toto:
 	for filename in `find $(BASEDIR)/$(HTM_OUTPUT) -name "*.html"`; do \
+	  recode iso-8859-15..utf-8 $$filename; \
 	  tidy -config tidy.conf $$filename; \
 	  true; \
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
