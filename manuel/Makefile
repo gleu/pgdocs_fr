@@ -17,7 +17,7 @@ XSLROOTDIR=/opt/docbook-xsl
 VPATH = $(BASEDIR):$(BASEDIR)/ref
 src = *.xml ref/*.xml
 
-all: html pdf htmlhelp manpages INSTALL.html INSTALL.txt
+all: html pdf manpages INSTALL.html INSTALL.txt
 
 html: index.html
 index.html: $(src)
@@ -37,7 +37,6 @@ index.html: $(src)
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
 
-toto:
 	for filename in `find $(BASEDIR)/$(HTM_OUTPUT) -name "*.html"`; do \
 	  recode iso-8859-15..utf-8 $$filename; \
 	  tidy -config tidy.conf $$filename; \
