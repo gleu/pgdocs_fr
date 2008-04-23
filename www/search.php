@@ -49,7 +49,8 @@ $version['803'] = '8.3';
 		</a>
 <form method="post" action="search.php">
   <div>
-  <input id="q" name="q" type="text" size="20" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_POST['q'])>0 ? $_POST['q'] : 'Rechercher' ?>" accesskey="s" /><input id="submit" name="submit" type="submit" value="Rechercher" />
+  <input id="q" name="q" type="text" size="20" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_POST['q'])>0 ? $_POST['q'] : 'Rechercher' ?>" accesskey="s" />
+  <input id="submit" name="submit" type="submit" value="Rechercher" />
   <select id="v" name="v">
 <?
   $query = "SELECT version, count(*) as nb FROM pages GROUP BY version ORDER BY version DESC";
@@ -71,13 +72,13 @@ $version['803'] = '8.3';
   </div>
 </form>
 <?
-$recherche = $_POST['q'];
+$recherche = pg_escape_string($_POST['q']);
 
 $query = "SELECT version, url, titre
 FROM pages
 WHERE (url like 'sql-%".ereg_replace(' ','',$recherche)."%.html' OR url like 'app-%".ereg_replace('_','',$recherche)."%.html' OR url like 'app-%".ereg_replace('_','-',$recherche)."%.html') ";
 if ($filtreversion > 0)
-  $query .= "AND version=".$filtreversion." ";
+  $query .= "AND version=".pg_escape_string($filtreversion)." ";
 $query .= "ORDER BY version desc, titre ";
 $result = pg_query($pgconn, $query);
 if (pg_num_rows($result) > 0) {
@@ -167,7 +168,7 @@ $query = "SELECT version, url, titre, ts_headline(contenu, q) AS resume, to_char
 FROM pages, to_tsquery('".pg_escape_string($searchstring)."') AS q
 WHERE fti @@ q ";
 if ($filtreversion > 0)
-  $query .= "AND version=".$filtreversion." ";
+  $query .= "AND version=".pg_escape_string($filtreversion)." ";
 $query .= "ORDER BY ts_rank(fti, q) DESC
 LIMIT 100";
 $result = pg_query($pgconn, $query);
