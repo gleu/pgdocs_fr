@@ -1,9 +1,21 @@
 <?
 $recherche = $_POST['q'];
 $filtreversion = $_POST['v'];
+
+## No backslashes allowed
+$recherche = preg_replace('/\\\/', '', $recherche);
+## Collapse parens into nearby words:
+$recherche = preg_replace('/\s*\(\s*/', ' (', $recherche);
+$recherche = preg_replace('/\s*\)\s*/', ') ', $recherche);
+## Treat colons as word separators:
+$recherche = preg_replace('/:/', ' ', $recherche);
+
+$recherche_value = strlen($recherche)>0 ? $recherche : 'Rechercher';
+
 $pgconn = @pg_connect("host=localhost dbname=docspgfr user=docspgfr") or die('Connexion impossible');
-//$query = "SELECT set_curcfg('utf8_french')";
-//$result = pg_query($pgconn, $query);
+
+$query = "SET client_encoding TO utf8;";
+$result = pg_query($pgconn, $query);
 
 $version['801'] = '8.1';
 $version['802'] = '8.2';
@@ -16,9 +28,6 @@ $version['803'] = '8.3';
 		<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
 		<link rel="shortcut icon" href="/favicon.ico" />
 		<link rel="stylesheet" href="css/style.css" type="text/css" title="Test" />
-		<!--
-		<link rel="search" type="application/opensearchdescription+xml" title="PgFr Docs 8.1.X" href="http://docs.postgresqlfr.org/addon/pgfr-docs81-ff.osd" />
-		-->
 		<script type="text/javascript">
 		<!--
 		function errorMsg()
@@ -72,13 +81,16 @@ $version['803'] = '8.3';
   </div>
 </form>
 <?
-$recherche = pg_escape_string($_POST['q']);
+$like[0]="'sql-%".pg_escape_string(ereg_replace(' ','',$recherche))."%.html'";
+$like[1]="'app-%".pg_escape_string(ereg_replace('_','',$recherche))."%.html'";
+$like[2]="'app-%".pg_escape_string(ereg_replace('_','-',$recherche))."%.html'";
 
 $query = "SELECT version, url, titre
 FROM pages
-WHERE (url like 'sql-%".ereg_replace(' ','',$recherche)."%.html' OR url like 'app-%".ereg_replace('_','',$recherche)."%.html' OR url like 'app-%".ereg_replace('_','-',$recherche)."%.html') ";
-if ($filtreversion > 0)
+WHERE (url like {$like[0]} OR url like {$like[1]} OR url like {$like[2]}) ";
+if (array_key_exists($filtreversion, $version)) {
   $query .= "AND version=".pg_escape_string($filtreversion)." ";
+}
 $query .= "ORDER BY version desc, titre ";
 $result = pg_query($pgconn, $query);
 if (pg_num_rows($result) > 0) {
@@ -94,8 +106,6 @@ while ($ligne = pg_fetch_array($result)) {
 }
 
   $result = pg_query($pgconn, $query);
-
-pg_close($pgconn);
 ?>
 </ol>
 		</div>
@@ -107,73 +117,51 @@ pg_close($pgconn);
 <ol>
 <?
 
-$pgconn = pg_connect("host=localhost dbname=docspgfr  user=docspgfr") or die('Connexion impossible');
-$query = "SET client_encoding TO utf8;";
-$result = pg_query($pgconn, $query);
+$searchstring = '';
+if( preg_match_all('/([-!]?)(\S+)\s*/', $recherche, $m, PREG_SET_ORDER ) ) {
+  foreach( $m as $terms ) {
+    if (strlen($terms[1])) {
+      $searchstring .= ' & !';
+    }
+    if (strtolower($terms[2]) === 'and') {
+      $searchstring .= ' & ';
+    }
+    else if (strtolower($terms[2]) === 'or' or $terms[2] === '|') {
+      $searchstring .= ' | ';
+    }
+    else if (strtolower($terms[2]) === 'not') {
+      $searchstring .= ' & !';
+    }
+    else {
+      $searchstring .= " & $terms[2]";
+    }
+  }
+}
 
-$term = $_POST['q'];
+## Strip out leading junk
+$searchstring = preg_replace('/^[\s\&\|]+/', '', $searchstring);
 
-        ## No backslashes allowed
-        $term = preg_replace('/\\\/', '', $term);
+## Remove any doubled-up operators
+$searchstring = preg_replace('/([\!\&\|]) +(?:[\&\|] +)+/', "$1 ", $searchstring);
 
-        ## Collapse parens into nearby words:
-        $term = preg_replace('/\s*\(\s*/', ' (', $term);
-        $term = preg_replace('/\s*\)\s*/', ') ', $term);
+## Remove any non-spaced operators (e.g. "Zounds!")
+$searchstring = preg_replace('/([^ ])[\!\&\|]/', "$1", $searchstring);
 
-        ## Treat colons as word separators:
-        $term = preg_replace('/:/', ' ', $term);
+## Remove any trailing whitespace or operators
+$searchstring = preg_replace('/[\s\!\&\|]+$/', '', $searchstring);
 
-        $searchstring = '';
-        if( preg_match_all('/([-!]?)(\S+)\s*/', $term, $m, PREG_SET_ORDER ) ) {
-            foreach( $m as $terms ) {
-                if (strlen($terms[1])) {
-                    $searchstring .= ' & !';
-                }
-                if (strtolower($terms[2]) === 'and') {
-                    $searchstring .= ' & ';
-                }
-                else if (strtolower($terms[2]) === 'or' or $terms[2] === '|') {
-                    $searchstring .= ' | ';
-                }
-                else if (strtolower($terms[2]) === 'not') {
-                    $searchstring .= ' & !';
-                }
-                else {
-                    $searchstring .= " & $terms[2]";
-                }
-            }
-        }
-
-        ## Strip out leading junk
-        $searchstring = preg_replace('/^[\s\&\|]+/', '', $searchstring);
-
-        ## Remove any doubled-up operators
-        $searchstring = preg_replace('/([\!\&\|]) +(?:[\&\|] +)+/', "$1 ", $searchstring);
-
-        ## Remove any non-spaced operators (e.g. "Zounds!")
-        $searchstring = preg_replace('/([^ ])[\!\&\|]/', "$1", $searchstring);
-
-        ## Remove any trailing whitespace or operators
-        $searchstring = preg_replace('/[\s\!\&\|]+$/', '', $searchstring);
-
-        ## Remove unnecessary quotes around everything
-        $searchstring = preg_replace('/^[\'"](.*)[\'"]$/', "$1", $searchstring);
-
-        ## Quote the whole thing
-        //$searchstring = $this->db->addQuotes($searchstring);
-
-//echo "term : $term<br/>\nsearchstring = $searchstring<br/>\n";
+## Remove unnecessary quotes around everything
+$searchstring = preg_replace('/^[\'"](.*)[\'"]$/', "$1", $searchstring);
 
 $query = "SELECT version, url, titre, ts_headline(contenu, q) AS resume, to_char(ts_rank(fti, q)*100, '999.99') AS score
 FROM pages, to_tsquery('".pg_escape_string($searchstring)."') AS q
 WHERE fti @@ q ";
-if ($filtreversion > 0)
+if (array_key_exists($filtreversion, $version)) {
   $query .= "AND version=".pg_escape_string($filtreversion)." ";
-$query .= "ORDER BY ts_rank(fti, q) DESC
+}
+$query .= "ORDER BY ts_rank(fti, q) DESC, version DESC
 LIMIT 100";
 $result = pg_query($pgconn, $query);
-
-//echo $query;
 
 while ($ligne = pg_fetch_array($result)) {
   echo '<li>
@@ -188,16 +176,7 @@ pg_close($pgconn);
 ?>
 </ol>
 		</div>
-<!--
-		<div id="pg81">
-			<h1>Un problème avec la documentation&nbsp;?</h1>
-			<div class="listes">
-				N'hésitez pas à nous en faire part sur notre <a
-				href="http://svn.postgresqlfr.org">site de traduction</a>
-				en remplissant un ticket.
-			</div>
-		</div>
--->
+
 		<div id="basdepage" >
 			<a href="http://www.postgresqlfr.org/">Retour au site</a>
 			&nbsp;|&nbsp;
