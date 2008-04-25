@@ -1,38 +1,172 @@
 #! /usr/bin/php -qC
 <?
-$version_int['8.1.11'] = 801;
-$version_int['8.2.7'] = 802;
-$version_int['8.3.1'] = 803;
 
-$pgconn = pg_connect("host=localhost dbname=docspgfr user=docspgfr")
+function usage() {
+  echo '
+Ceci est is '.$_SERVER["argv"][0].'.
+
+Usage:
+  '.$_SERVER["argv"][0].' [OPTIONS]... REPERTOIRE_HTML VERSION_MAJEURE
+
+Options générales :
+  -d BASE         nom de la base de données de connexion
+                  (par défaut : "'.$PGDATABASE.'")
+  --help          affiche cette aide, puis quitte
+
+Options de connexion :
+  -h HOTE         hôte du serveur de base de données ou répertoire de la
+                  socket (par défaut : "'.$PGHOST.'")
+  -p PORT         port TCP du serveur (par défaut : "'.$PGPORT.'")
+  -U UTILISATEUR  utilisateur PostgreSQL (par défaut : "'.$PGUSER.'")
+  -W              force la demande du mot de passe
+';
+}
+
+// Récupération des variables d'environnement
+$PGHOST = getenv('PGHOST');
+$PGPORT = getenv('PGPORT');
+
+$PGUSER = getenv('PGUSER');
+if (strlen("$PGUSER") == 0) {
+  $PGUSER = getenv('USER');
+}
+
+$PGDATABASE = getenv('PGDATABASE');
+if (strlen("$PGDATABASE") == 0) {
+  $PGDATABASE = $PGUSER;
+}
+
+$PGPASSWORD = getenv('PGPASSWORD');
+
+// Déchiffrage des options en ligne de commande
+for ($i = 1; $i < $_SERVER["argc"]; $i++) {
+  switch($_SERVER["argv"][$i]) {
+    case "-h":
+    case "--host":
+      $PGHOST = $_SERVER['argv'][++$i];
+      break;
+    case "-p":
+    case "--port":
+      $PGPORT = $_SERVER['argv'][++$i];
+      break;
+    case "-U":
+    case "--user":
+      $PGUSER = $_SERVER['argv'][++$i];
+      break;
+    case "-d":
+    case "--database":
+      $PGDATABASE = $_SERVER['argv'][++$i];
+      break;
+    case "-W":
+      $g_passwordrequired = true;
+      break;
+    case "-?":
+    case "-h":
+    case "--help":
+      usage();
+      exit;
+      break;
+    default:
+      if ($i == count($_SERVER['argv']) - 2) {
+        $dir = $_SERVER['argv'][$i];
+      } else if ($i == count($_SERVER['argv']) - 1) {
+        $version = $_SERVER['argv'][$i];
+        switch ($version) {
+          case '8.1':
+            $version_int = 801;
+            break;
+          case '8.2':
+            $version_int = 802;
+            break;
+          case '8.3':
+            $version_int = 803;
+            break;
+          default:
+            echo "Il s'agit d'une version majeure : 8.1, 8.2 ou 8.3\n";
+            exit;
+            break;
+        }
+      }
+      break;
+  }
+}
+
+if (strlen($dir) == 0 or strlen($version) == 0) {
+  usage();
+  exit;
+}
+
+// Vérification du mot de passe
+if ($g_passwordrequired and strlen($PGPASSWORD) == 0) {
+  // On commence par la vérification de .pgpass
+  $pgpassfilename = getenv('HOME').'/.pgpass';
+  if (file_exists($pgpassfilename)) {
+    $permissions = substr(decoct(fileperms($pgpassfilename)), 3);
+    if (!strcmp($permissions, '600')) {
+      $pgpassfile = fopen($pgpassfilename, 'r');
+      $found = false;
+      while (!$found and $line = fgets($pgpassfile)) {
+        list($host, $port, $database, $user, $password) = split (":", trim($line), 5);
+        if ((!strcmp($PGHOST, $host) or !strcmp('*', $host)) and
+            (!strcmp($PGPORT, $port) or !strcmp('*', $port)) and
+            (!strcmp($PGDATABASE, $database) or !strcmp('*', $database)) and
+            (!strcmp($PGUSER, $user) or !strcmp('*', $user))) {
+          $found = true;
+          $PGPASSWORD = $password;
+        }
+      }
+    }
+  }
+  // s'il n'y a toujours pas de mot de passe
+  if (strlen($PGPASSWORD) == 0) {
+    // Attention, le mot de passe apparaîtra en clair sur le terminal...
+    // Au moins, il ne sera pas affiché avec la commande ps :-/
+    echo "Mot de passe : ";
+    $stdin = fopen('php://stdin', 'r');
+    $PGPASSWORD = fgets(STDIN);
+  }
+}
+
+// Connexion à la base de données suivant les variables d'environnement
+
+$DSN = '';
+
+if (strlen("$PGHOST") > 0) {
+  $DSN .= 'host='.$PGHOST.' ';       
+}
+if (strlen("$PGPORT") > 0) {
+  $DSN .= 'port='.$PGPORT.' ';       
+}
+
+$DSN .= 'dbname='.$PGDATABASE.' '.
+       'user='.$PGUSER;
+
+if (strlen("$PGPASSWORD") > 0) {
+  $DSN .= ' password='.$PGPASSWORD;
+}
+
+$pgconn = pg_connect($DSN)
   or die('Connexion impossible');
 
+// l'encodage est l'UTF-8
 $query = "SET client_encoding TO utf8;";
-$result = pg_query($pgconn, $query);
+pg_query($pgconn, $query);
 
-if (strlen($argv[1]) > 0)
-  $version = $argv[1];
-else
-  $version = '8.3';
-
-//$version_int = ereg_replace('\.', '', $version);
-
-$dir = './pgsql-'.$version.'-fr';
-
+// lecture du répertoire
 if ($handle = opendir($dir)) {
   echo "Traitement du répertoire : ";
 
   $result = pg_query($pgconn, 'BEGIN');
 
-  $query = 'DELETE FROM pages WHERE version='.$version_int[$version];
+  $query = 'DELETE FROM pages WHERE version='.$version_int;
   $result = pg_query($pgconn, $query);
 
-  while (false !== ($file = readdir($handle)) and pg_result_status($result) == PGSQL_COMMAND_OK) {
+  while (false !== ($file = readdir($handle))
+         and pg_result_status($result) == PGSQL_COMMAND_OK) {
     if (strcmp($file, '.') and strcmp($file, '..')) {
       echo ".";
       // lecture du contenu en un coup
       $contenu = file_get_contents($dir.'/'.$file);
-      //$contenu = iconv('ISO-8859-1', 'UTF-8', $contenu);
       // récup du titre
       if (preg_match('#<title[^>]*>([^<]+)</title[^>]*>#si', $contenu, $matches)) {
         $titre = $matches[1];
@@ -45,11 +179,8 @@ if ($handle = opendir($dir)) {
       $titre = html_entity_decode($titre,ENT_COMPAT,'utf-8');
       // récup des mots clés d'index
       if (preg_match('#<em class="firstterm"[^>]*>([^<]+)</em[^>]*>#si', $contenu, $matches)) {
-//print_r($matches);
-//echo $file.' : '.count($matches)."\n";
         $tags1 = '';
         for ($index = 1; $index < count($matches); $index=$index+2) {
-//echo "  ".$index.' : '.$tags1."\n";
           if (strlen($tags1) > 0) {
             $tags1 .= ',';
           }
@@ -59,7 +190,6 @@ if ($handle = opendir($dir)) {
       }
       // récup des mots clés d'index
       if (preg_match('#<em class="secondterm"[^>]*>([^<]+)</em[^>]*>#si', $contenu, $matches)) {
-//echo $file.' : '.count($matches)."\n";
         $tags2 = '';
         for ($index = 1; $index < count($matches); $index=$index+2) {
           if (strlen($tags2) > 0) {
@@ -97,7 +227,7 @@ if ($handle = opendir($dir)) {
       // préparation de la requête...
       $query = "INSERT INTO pages (url, version, titre, tags1, tags2, contenu) VALUES (
                '".pg_escape_string($file)."',
-               ".$version_int[$version].",
+               ".$version_int.",
                '".pg_escape_string($titre)."',
                '".pg_escape_string($tags1)."',
                '".pg_escape_string($tags2)."',
@@ -113,9 +243,6 @@ if ($handle = opendir($dir)) {
   else
     echo " ERREUR !\n".pg_last_error($pgconn);
 
-  //$query = "SELECT set_curcfg('utf8_french')";
-  //$result = pg_query($pgconn, $query);
-
   $query = "UPDATE pages SET "
           ."fti = setweight( to_tsvector('french', titre), 'A' ) || setweight( to_tsvector('french', tags1), 'B' ) || setweight( to_tsvector('french', tags2), 'C' ) || setweight( to_tsvector('french', contenu), 'D' )";
   $result = pg_query($pgconn, $query);
@@ -127,9 +254,9 @@ if ($handle = opendir($dir)) {
   $query = "VACUUM ANALYZE pages";
   $result = pg_query($pgconn, $query);
   if (pg_result_status($result) == PGSQL_COMMAND_OK)
-    echo "VacAna OK\n";
+    echo "Vacuum OK\n";
   else
-    echo "ERREUR lors du VacAna !\n".pg_last_error($pgconn);
+    echo "ERREUR lors du Vacuum !\n".pg_last_error($pgconn);
 
   closedir($handle);
 }
