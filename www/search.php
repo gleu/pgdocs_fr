@@ -1,6 +1,6 @@
 <?
-$recherche = $_POST['q'];
-$filtreversion = $_POST['v'];
+$recherche = $_REQUEST['q'];
+$filtreversion = $_REQUEST['v'];
 
 ## No backslashes allowed
 $recherche = preg_replace('/\\\/', '', $recherche);
@@ -58,7 +58,7 @@ $version['803'] = '8.3';
 		</a>
 <form method="post" action="search.php">
   <div>
-  <input id="q" name="q" type="text" size="20" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_POST['q'])>0 ? $_POST['q'] : 'Rechercher' ?>" accesskey="s" />
+  <input id="q" name="q" type="text" size="20" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_REQUEST['q'])>0 ? $_REQUEST['q'] : 'Rechercher' ?>" accesskey="s" />
   <input id="submit" name="submit" type="submit" value="Rechercher" />
   <select id="v" name="v">
 <?
