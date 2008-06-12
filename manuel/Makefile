@@ -94,6 +94,7 @@ INSTALL.html: $(src)
 		--output $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html \
 		stylesheets/pg-nochunks.xsl standalone-install.xml
 
+	recode iso-8859-15..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
 	tidy -config tidy.conf $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html || true
 
 	sed -i -e "s@text/html@application/xhtml+xml@g"  \
@@ -101,8 +102,10 @@ INSTALL.html: $(src)
 
 INSTALL.txt: INSTALL.html
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
+	recode utf-8..iso-8859-15 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
 	html2text -nobs -style pretty $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html > $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.txt
-	recode iso-8859-1..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.txt
+	recode iso-8859-15..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
+	recode iso-8859-15..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.txt
 
 manpages: psql.1
 psql.1: $(src)
