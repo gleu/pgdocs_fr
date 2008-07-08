@@ -52,6 +52,7 @@ index.html: $(src)
 	cd $(BASEDIR); tar cfz $(TGZ_OUTPUT) $(HTM_OUTPUT)
 	cd $(BASEDIR); zip -r $(ZIP_OUTPUT) $(HTM_OUTPUT)
 	mv $(BASEDIR)/$(TGZ_OUTPUT) $(BASEDIR)/$(ZIP_OUTPUT) $(BASEDIR)/$(HTM_OUTPUT)
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Generation HTML terminee !"
 
 pdf: $(PDF_OUTPUT)
 $(PDF_OUTPUT): $(src)
@@ -64,6 +65,7 @@ $(PDF_OUTPUT): $(src)
 	sed -i -e "s/inherit/all/" $(BASEDIR)/pg-pdf.fo
 	fop.sh $(BASEDIR)/pg-pdf.fo $(BASEDIR)/$(HTM_OUTPUT)/$(PDF_OUTPUT)
 	rm $(BASEDIR)/pg-pdf.xml $(BASEDIR)/pg-pdf.fo
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Generation PDF terminee !"
 
 quickpdf: $(QUICKPDF_OUTPUT)
 $(QUICKPDF_OUTPUT): $(src)
@@ -88,9 +90,11 @@ $(NOCHUNKS_OUTPUT): $(src)
 
 	sed -i -e "s@text/html@application/xhtml+xml@g"  \
 	  $(BASEDIR)/$(NOCHUNKS_OUTPUT)
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Generation HTML nochunks terminee !"
 
 validate:
 	xmllint --noout --nonet --xinclude --postvalid postgres.xml
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Validation XML terminee !"
 
 INSTALL.html: $(src)
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
@@ -105,12 +109,15 @@ INSTALL.html: $(src)
 	sed -i -e "s@text/html@application/xhtml+xml@g"  \
 	  $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
 
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Generation INSTALL.html terminee !"
+
 INSTALL.txt: INSTALL.html
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
 	recode utf-8..iso-8859-15 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
 	html2text -nobs -style pretty $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html > $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.txt
 	recode iso-8859-15..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
 	recode iso-8859-15..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.txt
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Generation INSTALL.txt terminee !"
 
 manpages: psql.1
 psql.1: $(src)
@@ -122,6 +129,7 @@ psql.1: $(src)
 	recode iso-8859-1..utf-8 man/man1/*.1
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(MAN_OUTPUT) man
 	rm -r man
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Generation pages man terminee !"
 
 htmlhelp:
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
@@ -129,3 +137,4 @@ htmlhelp:
 	xsltproc stylesheets/pg-chm.xsl postgres.xml
 	mv *.h?? chm
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(CHM_OUTPUT) chm
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Generation htmlhelp terminee !"
