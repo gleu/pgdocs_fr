@@ -2,6 +2,7 @@ rem Dernière modification
 rem   le       $Date$
 rem   par      $Author$
 rem   révision $Revision$
+rem
 
 @echo off
 rem /**
