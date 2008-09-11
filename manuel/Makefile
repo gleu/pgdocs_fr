@@ -3,6 +3,7 @@ VER := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/
 
 BASEDIR := $(HOME)/pgsql-$(VERSION)-fr
 HTM_OUTPUT := pgsql-$(VERSION)-fr
+WEB_OUTPUT := web-$(VERSION)-fr
 TGZ_OUTPUT := pg$(VER).tar.gz
 ZIP_OUTPUT := pg$(VER).zip
 PDF_OUTPUT := pg$(VER).pdf
@@ -16,7 +17,7 @@ XSLROOTDIR=/opt/docbook-xsl
 VPATH = $(BASEDIR):$(BASEDIR)/ref
 src = *.xml ref/*.xml
 
-all: html pdf manpages INSTALL.html INSTALL.txt
+all: html webhtml pdf manpages INSTALL.html INSTALL.txt
 
 html: index.html
 index.html: $(src)
@@ -47,6 +48,33 @@ index.html: $(src)
 	cd $(BASEDIR); tar cfz $(TGZ_OUTPUT) $(HTM_OUTPUT)
 	cd $(BASEDIR); zip -r $(ZIP_OUTPUT) $(HTM_OUTPUT)
 	mv $(BASEDIR)/$(TGZ_OUTPUT) $(BASEDIR)/$(ZIP_OUTPUT) $(BASEDIR)/$(HTM_OUTPUT)
+
+webhtml: $(src)
+	[ -d $(BASEDIR)/$(WEB_OUTPUT) ] || mkdir -p $(BASEDIR)/$(WEB_OUTPUT)
+	xsltproc --xinclude --nonet -stringparam profile.condition html \
+		-stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
+		-stringparam chunk.quietly $(CHUNK_QUIET) \
+		-stringparam use.id.as.filename "yes" \
+		-stringparam base.dir $(BASEDIR)/$(WEB_OUTPUT)/ \
+		stylesheets/pg-chunked-web.xsl postgres.xml
+
+	[ -d $(BASEDIR)/$(WEB_OUTPUT)/stylesheets ] || mkdir $(BASEDIR)/$(WEB_OUTPUT)/stylesheets
+	cp stylesheets/*.css $(BASEDIR)/$(WEB_OUTPUT)/stylesheets
+
+	[ -d $(BASEDIR)/$(WEB_OUTPUT)/images ] || mkdir $(BASEDIR)/$(WEB_OUTPUT)/images
+	cp img/*.png $(BASEDIR)/$(WEB_OUTPUT)/images
+	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
+	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
+
+	for filename in `find $(BASEDIR)/$(WEB_OUTPUT) -name "*.html"`; do \
+	  recode iso-8859-15..utf-8 $$filename; \
+	  tidy -config tidy.conf $$filename; \
+	  true; \
+	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
+	done;
+	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@</body>@</body><script type=\"text/javascript\">var gaJsHost = ((\"https:\" == document.location.protocol) ? \"https://ssl.\" : \"http://www.\"); document.write(unescape(\"%3Cscript src='\" + gaJsHost + \"google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E\")); </script> <script type=\"text/javascript\"> var pageTracker = _gat._getTracker(\"UA-140513-1\"); pageTracker._initData(); pageTracker._trackPageview(); </script>@g" *.html
+
+	test -x $(shell which notify-send) && notify-send "Documentation PostgreSQL" "Generation HTML web terminee !"
 
 pdf: $(PDF_OUTPUT)
 $(PDF_OUTPUT): $(src)
