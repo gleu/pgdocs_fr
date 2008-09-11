@@ -167,11 +167,17 @@
     <xsl:variable name="row" select="count($prev) &gt; 0 or count($up) &gt; 0
             or count($next) &gt; 0 or generate-id($home) != generate-id(.)"/>
     <xsl:if test="$row">
-      <div class="navfooter">
+      <div class="navfooter tblBasic">
         <table summary="Barre de navigation">
+	  <tr class="firstrow">
+	    <td class="left colFirst">
+              <xsl:call-template name="user.header.content"/>
+            </td>
+	    <td class="colLast"></td>
+	  </tr>
           <tr>
           <!-- Précédent -->
-          <td class="left">
+          <td class="left colFirst">
           <xsl:if test="count($prev)&gt;0 and $prev != $home">
               <a accesskey="p">
                 <xsl:attribute name="href">
@@ -202,7 +208,7 @@
           </xsl:if>
           </td>
             <!-- Suivant -->
-            <td class="right">
+            <td class="right colLast">
             <xsl:if test="count($next)&gt;0">
               <a accesskey="n">
                 <xsl:attribute name="href">
