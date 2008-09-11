@@ -39,21 +39,24 @@
     <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_rgt.png" width="7" height="23" alt="" />
   </div>
   <ul class="pgTopNavList">
-   <li> <a href="http://babar.postgresql.fr/~guillaume/dotclear/" title="Lire les actualites">Actualites</a> </li>
-   <li> <a href="http://babar.postgresql.fr/~guillaume/docspgfr" title="Lire la documentation officielle">Documentation</a> </li>
-   <li> <a href="http://babar.postgresql.fr/~guillaume/fluxbb/" title="Pour poser des questions">Forums</a> </li>
-   <li> <a href="http://babar.postgresql.fr/~guillaume/wiki/" title="La vie de l'association">Wiki de l'association</a></li>
+   <li> <a href="http://www.postgresql.fr/" title="Accueil">Accueil</a> </li>
+   <li> <a href="http://blog.postgresql.fr/" title="Lire les actualites">Actualites</a> </li>
+   <li> <a href="http://docs.postgresql.fr/" title="Lire la documentation officielle">Documentation</a> </li>
+   <li> <a href="http://forums.postgresql.fr/" title="Pour poser des questions">Forums</a> </li>
+   <li> <a href="http://asso.postgresql.fr/" title="La vie de l'association">Association</a></li>
+   <li> <a href="http://trac.postgresql.fr" title="Trac des developpeurs">Developpeurs</a></li>
    <li> <a href="http://planete.postgresql.fr" title="La planete francophone sur PostgreSQL">Planete</a></li>
+   <li> <a href="http://support.postgresql.fr" title="Support sur PostgreSQL">Support</a></li>
   </ul>
 </div>
 <div id="pgContent">
   <div id="pgSideWrap">
     <div id="pgSideNav">
-      <form method="post" action="search.php">
+      <form method="post" action="http://docs.postgresql.fr/search.php">
         <div>
           <h2><label for="q">Rechercher</label></h2>
           <input type='hidden' id='v' name='v' value='803' />
-          <input id="q" name="q" type="text" size="15" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="Rechercher" accesskey="r" /><input id="submit" name="submit" type="submit" value="Rechercher" />
+          <input id="q" name="q" type="text" size="10" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="Rechercher" accesskey="r" /><input id="submit" name="submit" type="submit" value="Rechercher" />
         </div>
       </form>
     </div>
