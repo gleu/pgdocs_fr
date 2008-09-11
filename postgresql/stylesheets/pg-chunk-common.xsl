@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="ASCII"?>
+<?xml version="1.0" encoding="iso8859-15"?>
 <!--This file was created automatically by html2xhtml-->
 <!--from the HTML stylesheets.-->
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:exsl="http://exslt.org/common" xmlns:cf="http://docbook.sourceforge.net/xmlns/chunkfast/1.0" xmlns:ng="http://docbook.org/docbook-ng" xmlns:db="http://docbook.org/ns/docbook" xmlns="http://www.w3.org/1999/xhtml" version="1.0" exclude-result-prefixes="exsl cf ng db">
@@ -27,7 +27,7 @@
       <a href="/" title="PostgreSQL"><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_left.png" width="230" height="80" alt="PostgreSQL" /></a>
     </span>
     <span id="pgHeaderLogoRight">
-      <a href="/" title="La base de donnees la plus sophistiquee au monde."><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_right.png" width="210" height="80" alt="La base de donnees la plus sophistiquee au monde." /></a>
+      <a href="/" title="La base de données la plus sophistiquée au monde."><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_right.png" width="210" height="80" alt="La base de données la plus sophistiquée au monde." /></a>
     </span>
   </div>
 </div>
@@ -40,12 +40,12 @@
   </div>
   <ul class="pgTopNavList">
    <li> <a href="http://www.postgresql.fr/" title="Accueil">Accueil</a> </li>
-   <li> <a href="http://blog.postgresql.fr/" title="Lire les actualites">Actualites</a> </li>
+   <li> <a href="http://blog.postgresql.fr/" title="Lire les actualités">Actualités</a> </li>
    <li> <a href="http://docs.postgresql.fr/" title="Lire la documentation officielle">Documentation</a> </li>
    <li> <a href="http://forums.postgresql.fr/" title="Pour poser des questions">Forums</a> </li>
    <li> <a href="http://asso.postgresql.fr/" title="La vie de l'association">Association</a></li>
-   <li> <a href="http://trac.postgresql.fr" title="Trac des developpeurs">Developpeurs</a></li>
-   <li> <a href="http://planete.postgresql.fr" title="La planete francophone sur PostgreSQL">Planete</a></li>
+   <li> <a href="http://trac.postgresql.fr" title="Trac des développeurs">Développeurs</a></li>
+   <li> <a href="http://planete.postgresql.fr" title="La planète francophone sur PostgreSQL">Planète</a></li>
    <li> <a href="http://support.postgresql.fr" title="Support sur PostgreSQL">Support</a></li>
   </ul>
 </div>
@@ -64,7 +64,7 @@
 
   <div id="pgContentWrap">
     <div id="pgContentNav">
-      <xsl:call-template name="user.header.content"/>
+
 
       <xsl:call-template name="footer.navigation">
         <xsl:with-param name="prev" select="$prev"/>
