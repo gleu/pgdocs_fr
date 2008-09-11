@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="ASCII"?>
+<!--This file was created automatically by html2xhtml-->
+<!--from the HTML stylesheets.-->
+<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:exsl="http://exslt.org/common" xmlns:cf="http://docbook.sourceforge.net/xmlns/chunkfast/1.0" xmlns:ng="http://docbook.org/docbook-ng" xmlns:db="http://docbook.org/ns/docbook" xmlns="http://www.w3.org/1999/xhtml" version="1.0" exclude-result-prefixes="exsl cf ng db">
+
+<xsl:template name="chunk-element-content">
+  <xsl:param name="prev"/>
+  <xsl:param name="next"/>
+  <xsl:param name="nav.context"/>
+  <xsl:param name="content">
+    <xsl:apply-imports/>
+  </xsl:param>
+
+  <xsl:call-template name="user.preroot"/>
+
+  <html>
+    <xsl:call-template name="html.head">
+      <xsl:with-param name="prev" select="$prev"/>
+      <xsl:with-param name="next" select="$next"/>
+    </xsl:call-template>
+
+    <body>
+      <xsl:call-template name="body.attributes"/>
+<div id="top">
+  <div id="pgHeader">
+    <span id="pgHeaderLogoLeft">
+      <a href="/" title="PostgreSQL"><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_left.png" width="230" height="80" alt="PostgreSQL" /></a>
+    </span>
+    <span id="pgHeaderLogoRight">
+      <a href="/" title="La base de donnees la plus sophistiquee au monde."><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_right.png" width="210" height="80" alt="La base de donnees la plus sophistiquee au monde." /></a>
+    </span>
+  </div>
+</div>
+<div class="pgTopNav">
+  <div class="pgTopNavLeft"> 
+    <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_lft.png" width="7" height="23" alt="" />
+  </div>
+  <div class="pgTopNavRight">
+    <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_rgt.png" width="7" height="23" alt="" />
+  </div>
+  <ul class="pgTopNavList">
+   <li> <a href="http://babar.postgresql.fr/~guillaume/dotclear/" title="Lire les actualites">Actualites</a> </li>
+   <li> <a href="http://babar.postgresql.fr/~guillaume/docspgfr" title="Lire la documentation officielle">Documentation</a> </li>
+   <li> <a href="http://babar.postgresql.fr/~guillaume/fluxbb/" title="Pour poser des questions">Forums</a> </li>
+   <li> <a href="http://babar.postgresql.fr/~guillaume/wiki/" title="La vie de l'association">Wiki de l'association</a></li>
+   <li> <a href="http://planete.postgresql.fr" title="La planete francophone sur PostgreSQL">Planete</a></li>
+  </ul>
+</div>
+<div id="pgContent">
+  <div id="pgSideWrap">
+    <div id="pgSideNav">
+      <form method="post" action="search.php">
+        <div>
+          <h2><label for="q">Rechercher</label></h2>
+          <input type='hidden' id='v' name='v' value='803' />
+          <input id="q" name="q" type="text" size="15" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="Rechercher" accesskey="r" /><input id="submit" name="submit" type="submit" value="Rechercher" />
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="pgContentWrap">
+    <div id="pgContentNav">
+      <xsl:call-template name="user.header.content"/>
+
+      <xsl:call-template name="footer.navigation">
+        <xsl:with-param name="prev" select="$prev"/>
+        <xsl:with-param name="next" select="$next"/>
+        <xsl:with-param name="nav.context" select="$nav.context"/>
+      </xsl:call-template>
+
+      <xsl:copy-of select="$content"/>
+    </div>
+  </div>
+</div>
+    </body>
+  </html>
+  <xsl:value-of select="$chunk.append"/>
+</xsl:template>
+
+</xsl:stylesheet>
+<?xml version="1.0" encoding="ASCII"?>
+<!--This file was created automatically by html2xhtml-->
+<!--from the HTML stylesheets.-->
+<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:exsl="http://exslt.org/common" xmlns:cf="http://docbook.sourceforge.net/xmlns/chunkfast/1.0" xmlns:ng="http://docbook.org/docbook-ng" xmlns:db="http://docbook.org/ns/docbook" xmlns="http://www.w3.org/1999/xhtml" version="1.0" exclude-result-prefixes="exsl cf ng db">
+
+<xsl:template name="chunk-element-content">
+  <xsl:param name="prev"/>
+  <xsl:param name="next"/>
+  <xsl:param name="nav.context"/>
+  <xsl:param name="content">
+    <xsl:apply-imports/>
+  </xsl:param>
+
+  <xsl:call-template name="user.preroot"/>
+
+  <html>
+    <xsl:call-template name="html.head">
+      <xsl:with-param name="prev" select="$prev"/>
+      <xsl:with-param name="next" select="$next"/>
+    </xsl:call-template>
+
+    <body>
+      <xsl:call-template name="body.attributes"/>
+<div id="top">
+  <div id="pgHeader">
+    <span id="pgHeaderLogoLeft">
+      <a href="/" title="PostgreSQL"><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_left.png" width="230" height="80" alt="PostgreSQL" /></a>
+    </span>
+    <span id="pgHeaderLogoRight">
+      <a href="/" title="La base de donnees la plus sophistiquee au monde."><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_right.png" width="210" height="80" alt="La base de donnees la plus sophistiquee au monde." /></a>
+    </span>
+  </div>
+</div>
+<div class="pgTopNav">
+  <div class="pgTopNavLeft"> 
+    <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_lft.png" width="7" height="23" alt="" />
+  </div>
+  <div class="pgTopNavRight">
+    <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_rgt.png" width="7" height="23" alt="" />
+  </div>
+  <ul class="pgTopNavList">
+   <li> <a href="http://babar.postgresql.fr/~guillaume/dotclear/" title="Lire les actualites">Actualites</a> </li>
+   <li> <a href="http://babar.postgresql.fr/~guillaume/docspgfr" title="Lire la documentation officielle">Documentation</a> </li>
+   <li> <a href="http://babar.postgresql.fr/~guillaume/fluxbb/" title="Pour poser des questions">Forums</a> </li>
+   <li> <a href="http://babar.postgresql.fr/~guillaume/wiki/" title="La vie de l'association">Wiki de l'association</a></li>
+   <li> <a href="http://planete.postgresql.fr" title="La planete francophone sur PostgreSQL">Planete</a></li>
+  </ul>
+</div>
+<div id="pgContent">
+  <div id="pgSideWrap">
+    <div id="pgSideNav">
+      <form method="post" action="search.php">
+        <div>
+          <h2><label for="q">Rechercher</label></h2>
+          <input type='hidden' id='v' name='v' value='803' />
+          <input id="q" name="q" type="text" size="15" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="Rechercher" accesskey="r" /><input id="submit" name="submit" type="submit" value="Rechercher" />
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="pgContentWrap">
+    <div id="pgContentNav">
+      <xsl:call-template name="user.header.content"/>
+
+      <xsl:call-template name="footer.navigation">
+        <xsl:with-param name="prev" select="$prev"/>
+        <xsl:with-param name="next" select="$next"/>
+        <xsl:with-param name="nav.context" select="$nav.context"/>
+      </xsl:call-template>
+
+      <xsl:copy-of select="$content"/>
+    </div>
+  </div>
+</div>
+    </body>
+  </html>
+  <xsl:value-of select="$chunk.append"/>
+</xsl:template>
+
+</xsl:stylesheet>
