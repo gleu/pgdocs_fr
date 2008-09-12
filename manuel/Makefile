@@ -76,6 +76,7 @@ webhtml: $(src)
 	cp img/*.png $(BASEDIR)/$(WEB_OUTPUT)/images
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
+	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e 's@border="1"@border="0"@g' *.html
 
 	for filename in `find $(BASEDIR)/$(WEB_OUTPUT) -name "*.html"`; do \
 	  recode iso-8859-15..utf-8 $$filename; \
