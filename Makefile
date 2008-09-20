@@ -148,7 +148,7 @@ psql.1: $(src)
 		standalone-manpages.xml
 	[ -d man/man1 ] || mkdir -p man/man1
 	mv *.1 man/man1
-	recode iso-8859-1..utf-8 man/man1/*.1
+	recode iso-8859-15..utf-8 man/man1/*.1
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(MAN_OUTPUT) man
 	rm -r man
 
