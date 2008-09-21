@@ -1,3 +1,8 @@
+# Dernière modification
+#   le       $Date: 2008-09-20 10:55:52 +0200 (sam, 20 sep 2008) $
+#   par      $Author: gleu $
+#   révision $Revision: 1140 $
+
 VERSION := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/')
 VER := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/' -e 's/\.//g')
 
@@ -7,7 +12,6 @@ WEB_OUTPUT := web-$(VERSION)-fr
 TGZ_OUTPUT := pg$(VER).tar.gz
 ZIP_OUTPUT := pg$(VER).zip
 PDF_OUTPUT := pg$(VER).pdf
-FO_OUTPUT := pg$(VER).fo
 QUICKPDF_OUTPUT := quickpg$(VER).pdf
 MAN_OUTPUT := pg$(VER).man.tar.gz
 CHM_OUTPUT := pg$(VER).chm.tar.gz
@@ -19,6 +23,8 @@ VPATH = $(BASEDIR):$(BASEDIR)/ref
 src = *.xml ref/*.xml
 
 all: html webhtml pdf manpages INSTALL.html INSTALL.txt
+
+dumbo: html webhtml manpages INSTALL.html INSTALL.txt
 
 html: index.html
 index.html: $(src)
@@ -45,20 +51,14 @@ index.html: $(src)
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
 	done;
 
-	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@</body>@</body><script type=\"text/javascript\">var gaJsHost = ((\"https:\" == document.location.protocol) ? \"https://ssl.\" : \"http://www.\"); document.write(unescape(\"%3Cscript src='\" + gaJsHost + \"google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E\")); </script> <script type=\"text/javascript\"> var pageTracker = _gat._getTracker(\"UA-140513-1\"); pageTracker._initData(); pageTracker._trackPageview(); </script>@g" *.html
-
 	cd $(BASEDIR); tar cfz $(TGZ_OUTPUT) $(HTM_OUTPUT)
 	cd $(BASEDIR); zip -r $(ZIP_OUTPUT) $(HTM_OUTPUT)
 	mv $(BASEDIR)/$(TGZ_OUTPUT) $(BASEDIR)/$(ZIP_OUTPUT) $(BASEDIR)/$(HTM_OUTPUT)
 
-fo: $(FO_OUTPUT)
-$(FO_OUTPUT): $(src)
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	xsltproc --xinclude --nonet --stringparam profile.condition pdf \
-                -stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
-		--output $(BASEDIR)/pg-pdf.xml stylesheets/pg-profile.xsl postgres.xml
-	xsltproc --nonet --output $(BASEDIR)/pg-pdf.fo stylesheets/pg-pdf.xsl \
-		$(BASEDIR)/pg-pdf.xml
+	rm -f $(BASEDIR)/$(HTM_OUTPUT)/*.html
+	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/images
+	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/prologue
+	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
 
 webhtml: $(src)
 	[ -d $(BASEDIR)/$(WEB_OUTPUT) ] || mkdir -p $(BASEDIR)/$(WEB_OUTPUT)
@@ -85,7 +85,6 @@ webhtml: $(src)
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
 	done;
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@</body>@</body><script type=\"text/javascript\">var gaJsHost = ((\"https:\" == document.location.protocol) ? \"https://ssl.\" : \"http://www.\"); document.write(unescape(\"%3Cscript src='\" + gaJsHost + \"google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E\")); </script> <script type=\"text/javascript\"> var pageTracker = _gat._getTracker(\"UA-140513-1\"); pageTracker._initData(); pageTracker._trackPageview(); </script>@g" *.html
-
 
 pdf: $(PDF_OUTPUT)
 $(PDF_OUTPUT): $(src)
@@ -139,6 +138,7 @@ INSTALL.html: $(src)
 	sed -i -e "s@text/html@application/xhtml+xml@g"  \
 	  $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
 
+
 INSTALL.txt: INSTALL.html
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
 	recode utf-8..iso-8859-15 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
@@ -153,7 +153,7 @@ psql.1: $(src)
 		standalone-manpages.xml
 	[ -d man/man1 ] || mkdir -p man/man1
 	mv *.1 man/man1
-	recode iso-8859-1..utf-8 man/man1/*.1
+	recode iso-8859-15..utf-8 man/man1/*.1
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(MAN_OUTPUT) man
 	rm -r man
 
