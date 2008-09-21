@@ -24,6 +24,8 @@ src = *.xml ref/*.xml
 
 all: html webhtml pdf manpages INSTALL.html INSTALL.txt
 
+dumbo: html webhtml manpages INSTALL.html INSTALL.txt
+
 html: index.html
 index.html: $(src)
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
@@ -48,11 +50,15 @@ index.html: $(src)
 	  true; \
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
 	done;
-	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@</body>@</body><script type=\"text/javascript\">var gaJsHost = ((\"https:\" == document.location.protocol) ? \"https://ssl.\" : \"http://www.\"); document.write(unescape(\"%3Cscript src='\" + gaJsHost + \"google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E\")); </script> <script type=\"text/javascript\"> var pageTracker = _gat._getTracker(\"UA-140513-1\"); pageTracker._initData(); pageTracker._trackPageview(); </script>@g" *.html
 
 	cd $(BASEDIR); tar cfz $(TGZ_OUTPUT) $(HTM_OUTPUT)
 	cd $(BASEDIR); zip -r $(ZIP_OUTPUT) $(HTM_OUTPUT)
 	mv $(BASEDIR)/$(TGZ_OUTPUT) $(BASEDIR)/$(ZIP_OUTPUT) $(BASEDIR)/$(HTM_OUTPUT)
+
+	rm -f $(BASEDIR)/$(HTM_OUTPUT)/*.html
+	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/images
+	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/prologue
+	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
 
 webhtml: $(src)
 	[ -d $(BASEDIR)/$(WEB_OUTPUT) ] || mkdir -p $(BASEDIR)/$(WEB_OUTPUT)
@@ -79,7 +85,6 @@ webhtml: $(src)
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
 	done;
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@</body>@</body><script type=\"text/javascript\">var gaJsHost = ((\"https:\" == document.location.protocol) ? \"https://ssl.\" : \"http://www.\"); document.write(unescape(\"%3Cscript src='\" + gaJsHost + \"google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E\")); </script> <script type=\"text/javascript\"> var pageTracker = _gat._getTracker(\"UA-140513-1\"); pageTracker._initData(); pageTracker._trackPageview(); </script>@g" *.html
-
 
 pdf: $(PDF_OUTPUT)
 $(PDF_OUTPUT): $(src)
