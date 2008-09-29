@@ -10,40 +10,41 @@
   <para>
    Ce chapitre définit l'interface entre le système
    <productname>PostgreSQL</productname> et les <firstterm>méthodes d'accès
-   aux index</firstterm>, qui gére les types d'index individuels. Le système principal
-   ne sait rien des index en dehors de ce qui est spécifié ici, donc il est
-   possible de développer de nouveaux types d'index en écrivant un code
+   aux index</firstterm>, qui gérent les types d'index individuels. Le système principal
+   ne sait rien des index en dehors de ce qui est spécifié ici. Il est donc
+   possible de développer de nouveaux types d'index en écrivant du code
    supplémentaire.
   </para>
 
   <para>
    Tous les index de <productname>PostgreSQL</productname> sont connus
    techniquement en tant qu'<firstterm>index secondaires</firstterm>&nbsp;; c'est-à-dire
-   que l'index est séparé physiquement de la table qu'il décrit. Chaque index
-   est stocké dans sa propre <firstterm>relation</firstterm> physique et est donc décrit
+   que l'index est séparé physiquement du fichier de table qu'il décrit. Chaque index
+   est stocké dans sa propre <firstterm>relation</firstterm> physique et donc décrit
    par une entrée dans le catalogue <structname>pg_class</structname>. Le contenu d'un
-   index est entièrement sous le contrôle de la méthode d'accès à l'index. En
-   pratique, toutes les méthodes d'accès aux index se divisent en pages de
-   taille standard pour qu'elles puissent utiliser le gestionnaire de stockage
-   et le gestionnaire de tampon pour accéder au contenu de l'index (de plus,
+   index est entièrement contrôlé par la méthode d'accès à l'index. En
+   pratique, toutes les méthodes d'accès aux index les divisent en pages de
+   taille standard de façon à utiliser le gestionnaire de stockage
+   et le gestionnaire de tampon pour accéder au contenu de l'index. De plus,
    toutes les méthodes existantes d'accès aux index utilisent la disposition
-   de la page standard décrite dans <xref linkend="storage-page-layout"/>, et
-   elles utilisent toutes le même format pour les en-têtes de ligne de
+   de page standard décrite dans <xref linkend="storage-page-layout"/> et
+   le même format pour les en-têtes de ligne de
    l'index&nbsp;; mais ces décisions ne sont pas contraintes sur une méthode
-   d'index).
+   d'index.
   </para>
 
   <para>
-   En fait, un index est une correspondance de valeurs clés de données en
+   Dans les faits, un index est une correspondance entre les valeurs des clés
+   de données et les
    identifiants de lignes (<firstterm>tuple identifiers</firstterm>, ou <acronym>TIDs</acronym>)
    des versions de lignes dans la table parent de l'index. Un TID consiste en un
    numéro de bloc et un numéro d'élément à l'intérieur de ce bloc (voir <xref
    linkend="storage-page-layout"/>). C'est une information suffisante pour
    récupérer une version de ligne particulière à partir de la table. Les index
-   ne sont pas directement conscients que, sous MVCC, il pourrait y avoir
-   plusieurs versions de la même ligne logique&nbsp;; pour un index, chaque ligne
+   n'ont pas directement la connaissance de l'existence éventuelle, sous MVCC,
+   de plusieurs versions de la même ligne logique&nbsp;; pour un index, chaque ligne
    est un objet indépendant qui a besoin de sa propre entrée dans l'index. Du
-   coup, une mise à jour d'une ligne crée toujours toutes les nouvelles entrées
+   coup, la mise à jour d'une ligne crée toujours toutes les nouvelles entrées
    d'index pour la ligne, même si les valeurs de la clé ne changent pas. Les
    entrées d'index pour les lignes mortes sont réclamées (par le VACUUM) lorsque
    les lignes mortes elles-même sont réclamées.
@@ -58,14 +59,14 @@
    Le contenu principal d'une ligne de <structname>pg_am</structname> est
    constitué de références à des entrées de
    <link linkend="catalog-pg-proc"><structname>pg_proc</structname></link>
-   identifiant les fonctions d'accès à l'index fournis par la méthode d'accès.
-   Les API pour ces fonctions sont définies plus tard dans ce chapitre. De plus,
+   qui identifient les fonctions d'accès à l'index fournies par la méthode d'accès.
+   Les API de ces fonctions sont définies plus loin dans ce chapitre. De plus,
    la ligne de <structname>pg_am</structname> spécifie quelques propriétés fixes
-   de la méthode d'accès, comme le support des index à plusieurs colonnes. Il
+   de la méthode d'accès, comme le support des index multi-colonnes. Il
    n'existe pas de support spécial pour la création ou la suppression d'entrées
    dans <structname>pg_am</structname>&nbsp;; toute personne capable d'écrire
-   une nouvelle méthode d'accès est supposée assez compétente pour insérer une
-   ligne appropriée elle-même.
+   une nouvelle méthode d'accès est supposée assez compétente pour insérer la
+   ligne appropriée.
   </para>
 
   <para>
@@ -76,8 +77,8 @@
    <link linkend="catalog-pg-opclass"><structname>pg_opclass</structname></link>,
    <link linkend="catalog-pg-amop"><structname>pg_amop</structname></link> et
    <link linkend="catalog-pg-amproc"><structname>pg_amproc</structname></link>.
-   Ces entrées autorisent le planificateur à déterminer le type de qualification
-   des requêtes pouvant être utilisé avec les index de cette méthode d'accès.
+   Ces entrées permettent au planificateur de déterminer les types de qualification
+   des requêtes qui peuvent être utilisés avec les index de cette méthode d'accès.
    Les familles et classes d'opérateurs sont décrites dans <xref
    linkend="xindex"/>, qui est un élément requis pour comprendre ce chapitre.
   </para>
@@ -87,60 +88,61 @@
    <link linkend="catalog-pg-class"><structname>pg_class</structname></link>
    le définissant comme une relation physique, et une entrée dans
    <link linkend="catalog-pg-index"><structname>pg_index</structname></link>
-   affichant le contenu logique de l'index &mdash; c'est-à-dire des colonnes
-   d'index qu'il a et de la sémantique de ces colonnes, de la façon dont elles
-   sont récupérées par les classes d'opérateur associées. Les colonnes de
-   l'index (valeurs clés) peuvent être soit des colonnes simples de la table
-   sous-jacente soit des expressions sur les lignes de la table. Habituellement,
-   la méthode d'accès à l'index n'a aucun intérêt dans l'emplacement d'où
-   provient les valeurs clés de l'index (ce sont toujours des valeurs clés
-   pré-traitées) mais il sera très intéressé dans les informations de la classe
-   d'opérateur dans <structname>pg_index</structname>. Ces entrées de catalogue
-   peuvent être accédées car elles font partie de la structure de données de
-   <structname>Relation</structname> qui est passée dans toutes les opérations de l'index.
+   affichant le contenu logique de l'index &mdash; c'est-à-dire ses colonnes
+   d'index et la sémantique de ces colonnes, telles que
+   récupérées par les classes d'opérateur associées. Les colonnes de
+   l'index (valeurs clés) peuvent être des colonnes simples de la table
+   sous-jacente ou des expressions sur les lignes de la table. Habituellement,
+   la méthode d'accès à l'index ne s'intérese pas à la provenance
+   des valeurs clés de l'index (ce sont toujours des valeurs clés
+   pré-traitées), mais trouve beaucoup d'intérêt aux informations de la classe
+   d'opérateur dans <structname>pg_index</structname>. Les entrées de ces deux
+   catalogues peuvent être accédées comme partie de la structure de données de
+   <structname>Relation</structname> passée à toute opération sur l'index.
   </para>
 
   <para>
-   Certaines des colonnes d'options de <structname>pg_am</structname> ont des
-   obligations peu évidentes. Les besoins de <structfield>amcanunique</structfield>
+   Certaines colonnes d'options de <structname>pg_am</structname> ont des
+   implications peu évidentes. Les besoins de <structfield>amcanunique</structfield>
    sont discutés dans  <xref linkend="index-unique-checks"/>.
-   L'option <structfield>amcanmulticol</structfield> assure que la méthode
-   d'accès supporte les index multicolonnes alors que 
-   <structfield>amoptionalkey</structfield> assure qu'il fera des parcours où
-   aucune clause indexable de restriction n'est donnée pour la première colonne
+   L'option <structfield>amcanmulticol</structfield> indique que la méthode
+   d'accès supporte les index multi-colonnes alors que 
+   <structfield>amoptionalkey</structfield> indique que des parcours sont
+   autorisés lorsqu'aucune clause de restriction indexable n'est donnée pour la première colonne
    de l'index. Quand <structfield>amcanmulticol</structfield> est faux,
    <structfield>amoptionalkey</structfield> indique essentiellement si la méthode
    d'accès autorise les parcours complets de l'index sans clause de restriction.
-   Les méthodes d'accès qui supportent plusieurs colonnes d'index
-   <emphasis>doivent</emphasis> supporter les parcours omettant les restrictions d'une
-   ou de toutes les colonnes suivant la première&nbsp;; néanmoins, elles sont
-   autorisées à réclamer quelque restrictions pour apparaître  dès la première
-   colonne de l'index, et ceci est signalé en initialisant
+   Les méthodes d'accès qui supportent les colonnes d'index multiples
+   <emphasis>doivent</emphasis> supporter les parcours qui omettent des
+   restrictions sur une ou toutes les colonnes après la première&nbsp;;
+   néanmoins, elles peuvent imposées qu'une restriction apparaisse pour la
+   première colonne de l'index, ce qui est signalé par l'initialisation de
    <structfield>amoptionalkey</structfield> à faux.
-   <structfield>amindexnulls</structfield> assure que les index de l'entrée sont
-   créés pour les valeurs clés NULL. Comme la plupart des opérateurs indexables
+   <structfield>amindexnulls</structfield> indique que des entrées d'index sont
+   créées pour les valeurs de clés NULL. Comme la plupart des opérateurs indexables
    sont stricts et, du coup, ne peuvent pas renvoyer TRUE pour des entrées NULL,
-   il est à première vue attratif de ne pas stocker les entrées d'index pour les
-   valeurs NULL&nbsp;: de toute façon, elles ne peuvent pas être renvoyées par
-   un parcours d'index. Néanmoins, cet argument échoue quand un parcours d'index
+   il est à première vue attractif de ne pas stocker les entrées d'index pour les
+   valeurs NULL&nbsp;: un parcours d'index ne peut, de toute façon, pas les
+   retourner. Néanmoins, cet argument tombe lorsqu'un parcours d'index
    n'a pas de clause de restriction pour une colonne d'index donnée. En pratique,
    cela signifie que les index dont <structfield>amoptionalkey</structfield> vaut
-   true doivent indexer les valeurs NULL car le planificateur pourrait décider
-   d'utiliser un tel index sans clés parcourus. Une restriction relative est
-   qu'une méthode d'accès à l'index qui supporte plusieurs colonnes d'index
-   <emphasis>doit</emphasis> supporter l'indexage des valeurs NULL dans les colonnes
-   suivant la première car le planificateur supposera que l'index peut être
+   true doivent indexer les valeurs NULL, car le planificateur peut décider
+   d'utiliser un tel index sans aucune clé de parcours. Une restriction en
+   découle&nbsp;: une méthode d'accès qui supporte des colonnes d'index
+   multiples <emphasis>doit</emphasis> supporter l'indexage des valeurs NULL dans les colonnes
+   qui suivent la première, car le planificateur suppose que l'index peut être
    utilisé pour les requêtes qui ne restreignent pas ces colonnes. Par exemple,
-   considérez un index sur (a,b) et une requête avec <literal>WHERE a =
-   4</literal>. Le système supposera que l'index peut être utilisé pour les lignes
-   avec <literal>a = 4</literal>, ce qui est mauvais si l'index omet les lignes où
-   <literal>b</literal> est null. Néanmoins, il est correct d'omettre les lignes où la
+   si l'on considère un index sur (a,b) et une requête avec <literal>WHERE a =
+   4</literal>, le système suppose que l'index peut être utilisé pour
+   rechercher les lignes pour lesquelles <literal>a = 4</literal>, ce qui est
+   faux si l'index omet les lignes où <literal>b</literal> est null.
+   Néanmoins, il est correct d'omettre les lignes où la
    première colonne indexée est NULL. Du coup,
    <structfield>amindexnulls</structfield> doit valoir true seulement si la
-   méthode d'accès à l'index indexe toutes les lignes, ceci incluant les
-   combinaisons arbitraires des valeurs NULL. Une méthode d'accès d'index qui
+   méthode d'accès à l'index indexe toutes les lignes, en incluant les
+   combinaisons arbitraires de valeurs NULL. Une méthode d'accès d'index qui
    initialise <structfield>amindexnulls</structfield> peut aussi initialiser
-   <structfield>amsearchnulls</structfield>, indiquant ainsi qu'il supporte
+   <structfield>amsearchnulls</structfield>, indiquant ainsi qu'elle supporte
    les clauses <literal>IS NULL</literal> dans les conditions de recherche.
   </para>
 
@@ -160,16 +162,17 @@ ambuild (Relation heapRelation,
          Relation indexRelation,
          IndexInfo *indexInfo);
 </programlisting>
-   Construit un nouvel index. La relation de l'index a été créée physiquement
-   mais elle est vide. Elle doit être remplie avec les données fixes dont a besoin
-   la méthode d'accès, ainsi que les entrées pour toutes les lignes existant
-   déjà dans la table. D'habitude, la fonction <function>ambuild</function> appellera
-   <function>IndexBuildHeapScan()</function> pour parcourir la table avec les lignes
-   qui existent déjà et pour calculer les clés qui doivent être insérées dans
+   Construire un nouvel index. La relation de l'index a été créée physiquement
+   mais elle est vide. Elle doit être remplie avec toute donnée fixe nécessaire
+   à la méthode d'accès, ainsi que les entrées pour toutes les lignes existant
+   déjà dans la table. Habituellement, la fonction <function>ambuild</function> appelle
+   <function>IndexBuildHeapScan()</function> pour parcourir la table à la
+   recherche des lignes qui existent déjà et calculer les clés à insérer dans
    l'index. La fonction doit renvoyer une structure allouée par palloc contenant
-   les statistiques sur le nouvel index.
+   les statistiques du nouvel index.
   </para>
 
+<!-- SAS::ICI -->
   <para>
 <programlisting>bool
 aminsert (Relation indexRelation,
@@ -179,11 +182,11 @@ aminsert (Relation indexRelation,
           Relation heapRelation,
           bool check_uniqueness);
 </programlisting>
-   Insère une nouvelle ligne dans un index existant. Les tableaux
+   Insérer une nouvelle ligne dans un index existant. Les tableaux
    <literal>values</literal> et <literal>isnull</literal> donnent les valeurs clés à indexer.
    <literal>heap_tid</literal> est le TID à indexer. Si la méthode d'accès supporte les
    index uniques (son drapeau <structname>pg_am</structname>.<structfield>amcanunique</structfield>
-   vaut true), alors <literal>check_uniqueness</literal> pourrait aussi valoir true,
+   vaut true), alors <literal>check_uniqueness</literal> peut aussi valoir true,
    auquel cas la méthode d'accès doit vérifier qu'il n'y a pas de lignes en
    conflit&nbsp;; c'est la seule situation dans laquelle la méthode d'accès a
    habituellement besoin du paramètre <literal>heapRelation</literal>. Voir
