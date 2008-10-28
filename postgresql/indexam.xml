@@ -413,17 +413,17 @@ amrestrpos (IndexScanDesc scan);
 
  </sect1>
 
-<!-- SAS::ICI -->
  <sect1 id="index-scanning">
   <title>Parcours d'index</title>
 
+<!-- régurgitation est un drôle de terme dans ce contexte. L'auteur a-t-il
+voulu mettre en avant une idée négative du fonctionnement du parcours ? -->
   <para>
-   Dans un parcours d'index, la méthode d'accès à l'index est responsable
-   de l'ingurgitation des TID de toutes les lignes indiquées comme correspondant
-   aux <firstterm>clés de parcours</firstterm>. La méthode d'accès n'est réellement
-   impliquée <emphasis>ni</emphasis> dans la récupération de ces lignes à partir de la
-   table parent de l'index ni dans la détermination du passage du test de
-   qualification ou d'autres conditions.
+   Dans un parcours d'index, la méthode d'accès à l'index retourne les TID
+   de toutes les lignes annoncées correspondre
+   aux <firstterm>clés de parcours</firstterm>. La méthode d'accès n'est
+   impliquée <emphasis>ni</emphasis> dans la récupération de ces lignes dans la
+   table parent de l'index, ni dans les tests de qualification temporelle ou autre.
   </para>
 
   <para>
@@ -432,35 +432,38 @@ amrestrpos (IndexScanDesc scan);
    <replaceable>opérateur</replaceable> <replaceable>constante</replaceable>,
    où la clé d'index est une des colonnes de l'index et l'opérateur est un des
    membres de la famille d'opérateur associée avec cette colonne d'index. Un
-   parcours d'index a aucune ou plusieurs clés de parcours qui sont assemblées
+   parcours d'index contient entre aucune et plusieurs clés de parcours qui sont assemblées
    implicitement avec des AND &mdash; les lignes renvoyées doivent satisfaire
    toutes les conditions indiquées.
   </para>
 
+<!-- lossy: à pertes ? c'est valable quand on parle de compression, qui
+supprime des données, mais dans le cas de l'index ? -->
   <para>
    La famille d'opérateur peut indiquer que l'index est <firstterm>à perte</firstterm>
    pour un opérateur particulier&nbsp;; ceci implique que le parcours d'index
-   renverra toutes les entrées qui correspondent à la clé de parcours, avec
-   les entrées supplémentaires qui ne correspondent pas. La machinerie du
-   parcours d'index du système principal s'appliquera ensuite cet opérateur
-   pour vérifier s'il doit bien être utilisé. Pour les opérateurs sans perte,
+   renvoie toutes les entrées qui correspondent à la clé de parcours, avec
+   éventuellement des entrées supplémentaires qui ne correspondent pas. La machinerie du
+   parcours d'index du système principal applique alors cet opérateur au tuple
+   pour vérifier s'il doit bien effectivement être retenu. Pour les opérateurs sans perte,
    le parcours d'index doit renvoyer exactement l'ensemble d'entrées
-   correspondantes cet il n'y aura pas de nouvelle vérification.
+   correspondantes, car il n'y a pas de revérification.
   </para>
 
   <para>
-   Notez qu'il est entièrement à la charge de la méthode d'accès de s'assurer
+   La méthode d'accès doit s'assurer 
    qu'elle trouve correctement toutes les entrées correspondantes aux clés de
    parcours données, et seulement celles-ci. De plus, le système principal
-   donnera toutes les clauses <literal>WHERE</literal> correspondant aux clés d'index
-   et aux familles d'opérateurs, sans analyse sémantique déterminant si elles
-   sont redondantes ou contradictoires. Comme exemple, étant donné
+   transfert toutes les clauses <literal>WHERE</literal> qui correspondent aux clés d'index
+   et aux familles d'opérateurs, sans analyse sémantique permettant de
+   déterminer si elles sont redondantes ou contradictoires. Par exemple, étant donné
    <literal>WHERE x &gt; 4 AND x &gt; 14</literal> où <literal>x</literal> est une colonne
-   indexée B-tree, elle est passée à la fonction B-tree <function>amrescan</function>
-   pour déterminer que la première clé de parcours est redondante et peut être
+   indexée B-tree, c'est à la fonction B-tree <function>amrescan</function>
+   de déterminer que la première clé de parcours est redondante et peut être
    annulée. Le supplément de pré-traitement nécessaire lors de
-   <function>amrescan</function> dépendra du supplément dont la méthode d'accès à l'index
-   a besoin pour réduire les clés de parcours en une forme <quote>normalisée</quote>.
+   <function>amrescan</function> dépend du niveau de réduction des clés de
+   parcours en une forme <quote>normalisée</quote> nécessaire à la
+   méthode d'accès à l'index.
   </para>
 
   <para>
@@ -468,42 +471,48 @@ amrestrpos (IndexScanDesc scan);
    défini, d'autres non. Si les entrées sont renvoyées triées, la méthode
    d'accès doit initialiser
    <structname>pg_am</structname>.<structfield>amcanorder</structfield> à
-   true pour indiquer qu'il supporte les parcours triés. Toutes les méthodes
-   d'accès doivent utiliser les numéros de stratégie compatibles btree pour les
-   opérateurs d'égalité et d'ordre.
+   true pour indiquer qu'elle supporte les parcours triés. Toutes les méthodes
+   d'accès doivent utiliser des numéros de stratégie compatibles btree pour les
+   opérateurs d'égalité et de tri.
   </para>
 
   <para>
    La fonction <function>amgettuple</function> dispose d'un argument <literal>direction</literal>,
    qui peut être soit <literal>ForwardScanDirection</literal> (le cas normal) soit
    <literal>BackwardScanDirection</literal>. Si le premier appel après
-   <function>amrescan</function> spécifie <literal>BackwardScanDirection</literal>, alors
-   l'ensemble d'entrées d'index correspondantes est à parcourir de l'arrière
-   vers l'avant plutôt que dans la direction normale, donc
-   <function>amgettuple</function> doit renvoyer la dernière ligne correspondante dans
-   l'index, plutôt que la première (ceci arrivera seulement pour les méthodes
-   d'accès qui indiquent qu'elles supportent les parcours ordonnés). Après le premier appel, <function>amgettuple</function>
-   doit être préparé pour continuer le parcours dans une direction à partir de
+   <function>amrescan</function> précise <literal>BackwardScanDirection</literal>, alors
+   l'ensemble des entrées d'index correspondantes est à parcourir de l'arrière
+   vers l'avant plutôt que dans la direction normale (d'avant en arrière). 
+   <function>amgettuple</function> doit donc renvoyer la dernière ligne correspondante dans
+   l'index, plutôt que la première, comme cela se fait normalement. (Cela ne
+   survient que pour les méthodes
+   d'accès qui indiquent qu'elles supportent les parcours ordonnés.) Après
+   le premier appel, <function>amgettuple</function>
+   doit être préparé pour continuer le parcours dans la direction adaptée à partir de
    l'entrée la plus récemment renvoyée.
   </para>
 
   <para>
    La méthode d'accès doit supporter le <quote>marquage</quote> d'une position dans
    un parcours et le renvoi ultérieur à une position marquée. La même position
-   pourrait être restaurée plusieurs fois. Néanmoins, seule une position doit
-   être en mémoire par parcours&nbsp;; un nouveau appel à <function>ammarkpos</function>
-   surcharge la position marquée précédemment.
+   peut être restaurée plusieurs fois. Néanmoins, seule une position doit
+   être mémorisée par parcours&nbsp;; tout nouvel appel à <function>ammarkpos</function>
+   surcharge la position précédemment marquée.
   </para>
 
   <para>
-   La position du parcours et du marquage doivent être conservées de façon
-   cohérente dans le cas d'insertions et de suppressions concurrentes pendant
-   le parcours. Il est considéré correct qu'une entrée tout juste insérée ne
-   soit pas renvoyée par un parcours qui aurait trouvé cette entrée si elle
-   avait existé au moment où le parcours a commencé, ou que le parcours renvoie
-   une telle entrée lors d'un nouveau parcours même si elle n'a pas été renvoyée
-   la première fois. De façon similaire, une suppression concurrente pourrait ou
-   non être réfléchie dans les résultats d'un parcours. Ce qui est important est
+   Les positions du parcours et du marquage doivent être conservées de façon
+   cohérente dans le cas d'insertions et de suppressions concurrentes dans
+   l'index. Il est tout à fait correct qu'une entrée tout juste insérée ne soit
+   pas retournée par un parcours, qui si l'entrée avait existé au démarrage du
+   parcours, aurait été retournée. De même est-il correct qu'un parcours
+   retourne une telle entrée lors d'un re-parcours ou d'un retour arrière,
+   alors même qu'il ne l'a pas retourné lors du parcours initial.
+   À l'identique, une suppression concurrente peut être, ou non, visible dans
+   les résultats d'un parcours. 
+<!-- SAS::ICI -->
+   
+   Ce qui est important est
    que les insertions ou suppressions ne causent pas un manque ou un renvoi
    multiple des entrées qui n'ont pas été insérées ou supprimées.
   </para>
