@@ -514,23 +514,25 @@ supprime des données, mais dans le cas de l'index ? -->
    pas elles-même insérées ou supprimées.
   </para>
 
-<!-- SAS::ICI -->
   <para>
-   Au lieu d'utiliser <function>amgettuple</function>, un parcours d'index peut se faire
-   via <function>amgetmulti</function> pour récupérer différentes lignes par appel. Cela
-   peut être notablement plus efficace que <function>amgettuple</function> parce que cela
+   <function>amgetmulti</function> peut être utilisé à la place de 
+   <function>amgettuple</function> pour un parcours d'index. Cela permet de
+   récupérer plusieurs lignes par appel. Cette méthode peut s'avérer 
+   notablement plus efficace que <function>amgettuple</function> parce qu'elle
    permet d'éviter les cycles de verrouillage/déverrouillage à l'intérieur de la
-   méthode d'accès. En principe, <function>amgetmulti</function> devrait avoir les mêmes
-   effets que des appels répétés à <function>amgettuple</function>, mais nous imposons
-   plusieurs restrictions pour simplifier la gestion. En premier lieu,
-   <function>amgetmulti</function> ne prend pas d'argument <literal>direction</literal>. Du coup,
-   il ne supporte ni les parcours inverses ni le changement de direction lors d'un
-   parcours. La méthode d'accès n'a pas besoin de supporter le marquage ou la
+   méthode d'accès. En principe, <function>amgetmulti</function> a les mêmes
+   effets que des appels répétés à <function>amgettuple</function>, mais 
+   plusieurs restrictions ont été imposées pour simplifier la procédure. En premier lieu,
+   <function>amgetmulti</function> ne prend pas d'argument
+   <literal>direction</literal>, et de ce fait, ne supporte ni parcours inverse
+   ni changement de direction au sein d'un parcours.
+   La méthode d'accès n'a pas non plus à supporter le marquage et la
    restauration des positions de parcours lors d'un parcours
-   <function>amgetmulti</function> (ces restrictions ne coûtent rien car il serait difficile
-   d'utiliser ces fonctionnalités y compris dans le cas d'un parcours
-   <function>amgetmulti</function>&nbsp;: ajuster la liste en tampon des TIDs de l'appelant
-   serait complexe). Enfin, <function>amgetmulti</function> ne garantit pas un verrouillage
+   <function>amgetmulti</function>. (Ces restrictions sont minimes, car
+   l'utilisation de ces fonctionnalités lors d'un parcours
+   <function>amgetmulti</function> s'avère difficile&nbsp;: l'ajustement du
+   tampon de la liste des TIDs de l'appelant est complexe). Enfin,
+   <function>amgetmulti</function> ne garantit pas le verrouillage
    des lignes renvoyées, avec les implications précisées dans <xref
    linkend="index-locking"/>.
   </para>
@@ -538,18 +540,18 @@ supprime des données, mais dans le cas de l'index ? -->
  </sect1>
 
  <sect1 id="index-locking">
-  <title>Considérations pour le verrouillage d'index</title>
+  <title>Considérations sur le verrouillage d'index</title>
 
   <para>
    Les méthodes d'accès aux index doivent gérer des mises à jour
    concurrentes de l'index par plusieurs processus.
    Le système principal <productname>PostgreSQL</productname> obtient
    <literal>AccessShareLock</literal> sur l'index lors d'un parcours d'index et
-   <literal>RowExclusiveLock</literal> quand il le met à jour (ceci incluant le
+   <literal>RowExclusiveLock</literal> lors de sa mise à jour (ce qui inclut le
    <command>VACUUM</command> simple). Comme ces types de
-   verrous ne sont pas en conflit, la méthode d'accès est responsable de la
-   gestion d'un verrouillage plus précis si nécessaire. Un verrou exclusif sur
-   l'index entier sera seulement pris lors de la création, destruction de l'index,
+   verrous ne sont pas conflictuels, la méthode d'accès est responsable de la
+   finesse du verrouillage dont elle a besoin. Un verrou exclusif sur
+   l'intégralité de l'index entier n'est pris qu'à la création de l'index, sa destruction,
    dans une opération <literal>REINDEX</literal> ou lors d'un <command>VACUUM
    FULL</command>.
   </para>
@@ -557,7 +559,8 @@ supprime des données, mais dans le cas de l'index ? -->
   <para>
    Construire un type d'index qui supporte les mises à jour concurrentes
    requiert une analyse complète et subtile du comportement requis. Pour les
-   types d'index B-tree et hash, vous pouvez lire les décisions du concept dans
+   types d'index B-tree et hash, on peut lire les implication sur les décisions
+   de conception dans
    <filename>src/backend/access/nbtree/README</filename> et
    <filename>src/backend/access/hash/README</filename>.
   </para>
@@ -565,81 +568,84 @@ supprime des données, mais dans le cas de l'index ? -->
   <para>
    En plus des besoins de cohérence interne de l'index, les mises à jour
    concurrentes créent des problèmes de cohérence entre la table parent
-   (l'<firstterm>en-tête</firstterm>) et l'index. Comme
-   <productname>PostgreSQL</productname> sépare les accès et les mises à
-   jour de l'en-tête de ceux de l'index, il existe des possibilités pour que
-   l'index ne soit pas à jour par rapport à l'en-tête. Nous gérons ce problème
-   avec les règles suivantes&nbsp;:
+   (l'<firstterm>en-tête</firstterm>, ou <foreignphrase>heap</foreignphrase>)
+   et l'index. Comme <productname>PostgreSQL</productname> sépare les accès et les mises à
+   jour de l'en-tête de ceux de l'index, il existe des fenêtres temporelles
+   pendant lesquelles l'index et l'en-tête peuvent être incohérents. Ce problème
+   est géré avec les règles suivantes&nbsp;:
 
     <itemizedlist>
      <listitem>
       <para>
-       Une nouvelle entrée dans l'en-tête est effectuée avant sa contrepartie
-       dans l'index (du coup, un parcours d'index concurrent pourrait ne pas
-       voir l'entrée dans l'en-tête&nbsp;; ceci est bon car le lecteur de
-       l'index ne sera pas intéressé par une ligne non validée... voir
-       <xref linkend="index-unique-checks"/>).
+       une nouvelle entrée dans l'en-tête est effectuée avant son entrée
+       dans l'index. (Un parcours d'index concurrent peutt alors ne pas
+       voir l'entrée dans l'en-tête. Ce n'est pas gênant dans la mesure où un
+       lecteur de l'index ne s'intéresse pas à une ligne non validée. Voir
+       <xref linkend="index-unique-checks"/>);
       </para>
      </listitem>
      <listitem>
       <para>
-       Quand une entrée de l'en-tête doit être supprimée (par <command>VACUUM</command>),
-       toutes les entrées de l'index doivent d'abord être supprimées.
+       Lorsqu'entrée de l'en-tête va être supprimée (par <command>VACUUM</command>),
+       toutes les entrées de l'index doivent d'abord être supprimées&nbsp;;
       </para>
      </listitem>
      <listitem>
       <para>
-       Un parcours d'index doit maintenir
+       un parcours d'index doit maintenir
        un lien sur la page d'index contenant le dernier élément renvoyé par
        <function>amgettuple</function>, et <function>ambulkdelete</function> ne peut pas
-       supprimer les entrées de pages qui sont liées à d'autres processus. Le
-       besoin de cette règle est expliqué plus bas.
+       supprimer des entrées de pages liées à d'autres processus. La
+       raison de cette règle est expliquée plus bas.
       </para>
      </listitem>
     </itemizedlist>
 
    Sans la troisième règle, il est possible qu'un lecteur d'index voit
    une entrée dans l'index juste avant qu'elle ne soit supprimée par un
-   <command>VACUUM</command>, puis d'arriver à l'entrée correspondante de
-   l'en-tête après qu'elle soit supprimée par le <command>VACUUM</command>.
-   Ceci ne crée pas de problèmes sérieux si ce numéro d'élément
-   est toujours inutilisé quand le lecteur l'atteint car un emplacement d'élément
-   vide sera ignoré par <function>heap_fetch()</function>. Mais que se passe-t'il si
+   <command>VACUUM</command>, et arrive à l'entrée correspondante de
+   l'en-tête après sa suppression par le <command>VACUUM</command>.
+   Cela ne pose aucun problème sérieux si ce numéro d'élément
+   est toujours inutilisé quand le lecteur l'atteint, car tout emplacement d'élément
+   vide est ignoré par <function>heap_fetch()</function>. Mais que se passe-t-il si
    un troisième moteur a déjà ré-utilisé l'emplacement de l'élément pour quelque
-   chose d'autre&nbsp;? Lors de l'utilisation d'une image compatible MVCC, il n'y
+   chose d'autre&nbsp;? Lors de l'utilisation d'un instantané compatible MVCC, il n'y
    a pas de problème car le nouvel occupant de l'emplacement est certain d'être
-   trop nouveau pour accepter ou renvoyer une ligne qui, en fait, ne correspond
-   pas aux clés de parcours. Nous pouvons nous défendre contre ce scénario en
-   réclamant que les clés de parcours soient de nouveau vérifiées avec la ligne
-   d'en-tête dans tous les cas mais c'est bien trop coûteux. À la place, nous
-   utilisons un lien sur une page d'index comme un proxy, pour indiquer que le
-   lecteur pourrait toujours être <quote>en parcours</quote> à partir de l'entrée de
-   l'index jusqu'à l'entrée correspondante. Faire bloquer <function>ambulkdelete</function>
-   sur un tel lien nous assure qu'un <command>VACUUM</command> ne peut pas supprimer
-   l'entrée de l'en-tête avant que le lecteur n'en ait terminé avec lui. Cette
-   solution coûte peu en temps d'exécution mais ajoute un délai dans le blocage
-   dans de rares cas où il existe réellement un conflit.
+   trop récent pour réussir le test de l'insstantané. En revanche, avec un
+   instantané non-compatible MVCC (tel que <literal>SnapshotNow</literal>), une
+   ligne qui ne correspond pas aux clés de parcours peut être acceptée ou
+   retournée. Ce scénario peut être évité en imposant que les clés de parcours
+   soient re-confrontées à la ligne d'en-tête dans tous les cas, mais cela est
+   trop coûteux. À la place, un lien sur une page d'index est utilisé comme
+   <foreignphrase>proxy</foreignphrase> pour indiquer que le
+   lecteur peut être <quote>en parcours</quote> entre l'entrée de
+   l'index et l'entrée de l'en-tête correspondante. Bloquer <function>ambulkdelete</function>
+   sur un tel lien assure que <command>VACUUM</command> ne peut pas supprimer
+   l'entrée de l'en-tête avant que le lecteur n'en ait terminé avec elle. Cette
+   solution est peu coûteuse en temps d'exécution, et n'ajoute de surcharge du
+   fait du blocage que dans de rares cas réellement un conflictuels.
   </para>
 
   <para>
    Cette solution requiert que les parcours d'index soient
-   <quote>synchrones</quote>&nbsp;: nous devons récupérer chaque ligne d'en-tête
-   immédiatement après avoir parcouru l'entrée d'index correspondante. Ceci
-   est coûteux pour plusieurs raisons. Un parcours <quote>asynchrone</quote> dans
-   lequel nous récupérons les TID de l'index et dans lequel nous visitons
-   seulement les en-têtes de lignes un peu plus tard, requiert moins de temps
-   de verrouillage de l'index et pourrait autoriser un modèle d'accès à
-   l'en-tête plus efficace. En plus de l'analyse ci-dessus, nous devons
-   utiliser l'approche synchronisée pour les images non compatibles avec
-   MVCC mais un parcours asynchrone est possible pour une requête utilisant
-   une image MVCC.
+   <quote>synchrones</quote>&nbsp;: chaque ligne d'en-tête doit être récupérée
+   immédiatement après le parcours de l'entrée d'index correspondante.
+   C'est coûteux pour plusieurs raisons. Un parcours <quote>asynchrone</quote> dans
+   lequel de nombreux TID sont récupérés de l'index, et pour lequel
+   les en-têtes de lignes ne sont visités que plus tard, requiert moins de
+   surcharge de verrouillage d'index et autorise un modèle d'accès à
+   l'en-tête plus efficace. D'après l'analyse ci-dessus,
+   l'approche synchronisée doit être utilisée pour les instantanés non compatibles avec
+   MVCC, mais un parcours asynchrone est possible pour une requête utilisant
+   une instantané MVCC.
   </para>
 
   <para>
    Dans un parcours d'index <function>amgetmulti</function>, la méthode d'accès n'a pas
-   besoin de garantir la conservation d'un lien à l'index sur aucune des lignes
-   renvoyées, ce qui est impraticable pour toutes sauf la dernière). Du coup, il
-   est plus sage d'utiliser plusieurs parcours avec des images compatibles MVCC.
+   besoin de garantir la conservation d'un lien à l'index sur quelque ligne
+   renvoyée. (Il est de toute façon impossible de lier autre chose que la
+   dernière.) C'est pourquoi, il est préférable d'utiliser de tels parcours
+   avec les instantanés compatibles MVCC.
   </para>
 
  </sect1>
@@ -647,49 +653,52 @@ supprime des données, mais dans le cas de l'index ? -->
  <sect1 id="index-unique-checks">
   <title>Vérification de l'unicité de l'index</title>
 
+<!-- SAS :: L'index n'est pas unique, il garantit l'unicité -->
   <para>
-   <productname>PostgreSQL</productname> renforce les contraintes SQL d'unicité
-   en utilisant les <firstterm>index uniques</firstterm>, qui sont des index qui refusent
-   les entrées multiples avec des clés identiques. Une méthode d'accès qui
+   <productname>PostgreSQL</productname> assure les contraintes d'unicité SQL
+   en utilisant des <firstterm>index d'unicité</firstterm>, qui sont des index qui refusent
+   les entrées multiples à clés identiques. Une méthode d'accès qui
    supporte cette fonctionnalité initialise
-   <structname>pg_am</structname>.<structfield>amcanunique</structfield> à true (à présent, seul
-   B-tree le supporte).
+   <structname>pg_am</structname>.<structfield>amcanunique</structfield> à
+   true. (À ce jour, seul B-tree le supporte).
   </para>
 
   <para>
-   Grâce à MVCC, il est toujours nécessaire d'autoriser les entrées dupliquées
-   à exister physiquement dans un index&nbsp;: mes entrées pourraient faire
+   Du fait de MVCC, il est toujours nécessaire de permettre à des entrées dupliquées
+   d'exister physiquement dans un index&nbsp;: les entrées peuvent faire
    référence à des versions successives d'une même ligne logique. Le comportement
-   que nous voulons réellement renforcer est qu'aucune image MVCC n'inclut deux
-   lignes avec les mêmes clés d'index. Ceci crée les différents cas suivants
-   devant être vérifiés lors de l'insertion d'une nouvelle ligne dans un index
-   unique&nbsp;:
+   qu'il est réellement souhaitable d'assurer est qu'aucune image MVCC n'inclut deux
+   lignes avec les mêmes clés d'index. Cela se résume aux cas suivants, qu'il
+   est nécessaire de vérifier à l'insertion d'une nouvelle ligne dans un index
+   d'unicité&nbsp;:
 
     <itemizedlist>
      <listitem>
       <para>
-       Si une ligne valide en conflit a été supprimée par une transaction
-       concurrente, tout va bien (en particulier, comme un UPDATE supprime
+       si une ligne valide conflictuelle a été supprimée par la transaction
+       courante, pas de problème. (En particulier, comme un UPDATE supprime
        toujours l'ancienne version de la ligne avant d'insérer la nouvelle
-       version, ceci permettra un UPDATE sur une ligne sans changer la clé).
+       version, cela permet un UPDATE sur une ligne sans changer la clé)&nbsp;;
       </para>
      </listitem>
      <listitem>
+     <!-- dans toto ? kesako ? in toto (locution latine) : en entier, intégralement cf.
+     http://www.merriam-webster.com/dictionary/in+toto -->
       <para>
-	Si une ligne en conflit a été insérée par une transaction encore non
-	validée, le soi-disant inséreur doit attendre de voir si la transaction
+	si une ligne conflictuelle a été insérée par une transaction non encore
+	validée, l'inséreur potentiel doit attendre de voir si la transaction
 	est validée. Si la transaction est annulée, alors il n'y a pas de conflit.
-	Si la transaction est validée sans que la ligne en conflit ait été
-	supprimée, il y a une violation de la contrainte d'unicité (en pratique,
-	nous attendons juste que l'autre transaction finisse et puis nous
-	refaisons le contrôle de visibilité dans toto).
+	Si la transaction est validée sans que la ligne conflictuelle soit
+	supprimée, il y a violation de la contrainte d'unicité. (En pratique,
+	on attend que l'autre transaction finisse et le contrôle de visibilité
+	est effectué à nouveau dans son intégralité)&nbsp;;
       </para>
      </listitem>
      <listitem>
       <para>
-       De façon similaire, si une ligne valide en conflit a été supprimée par
-       une transaction encore non validée, l'inserteur doit attendre la
-       validation ou l'annulation de cette transaction, puis recommence le test.
+       de façon similaire, si une ligne valide conflictuelle est supprimée par
+       une transaction non encore validée, l'inserant potentiel doit attendre la
+       validation ou l'annulation de cette transaction et recommencer le test.
       </para>
      </listitem>
     </itemizedlist>
@@ -697,31 +706,31 @@ supprime des données, mais dans le cas de l'index ? -->
 
   <para>
    De plus, immédiatement avant de lever une violation d'unicité
-   suivant les règles ci-dessus, la méthode d'accès doit de
-   nouveau vérifier l'état de la ligne en cours d'insertion. Si elle
-   est validée tout en étant morte, alors aucune erreur ne devrait
-   survenir. (Ce cas ne peut pas survenir lors du scénario ordinaire
-   d'insertion d'une ligne qui a été tout juste créée par la
-   transaction en cours. Cela peut néanmoins arriver pendant
+   en fonction des règles ci-dessus, la méthode d'accès doit
+   revérifier l'état de la ligne en cours d'insertion. Si elle
+   est validée tout en étant morte, alors aucune erreur ne
+   survient. (Ce cas ne peut pas survenir lors du scénario ordinaire
+   d'insertion d'une ligne tout juste créée par la
+   transaction en cours. Cela peut néanmoins arriver lors d'un
    <command>CREATE UNIQUE INDEX CONCURRENTLY</command>.)
   </para>
 
   <para>
-   Nous réclamons que la méthode d'accès à l'index applique ces tests eux-même,
-   ce qui signifient qu'ils doivent attendre l'en-tête pour vérifier le
-   statut de validation d'une ligne qui est affichée comme une clé dupliquée
-   suivant le contenu de l'index. Ceci est sans aucun doute moche et non
-   modulaire, mais il permet d'éviter un travail redondant&nbsp;: si nous
-   faisons un test séparé, alors la recherche d'index pour une ligne en
-   conflit pourrait être essentiellement répétée lors de la découverte d'emplacement
-   pour insérer la nouvelle entrée d'index de ligne. De plus, il n'existe
-   aucun moyen pour éviter des conditions rares sans que la vérification de
-   contrainte ne soit une partie intégrale d'insertion du nouvel entrée d'index.
+   La méthode d'accès à l'index doit appliquer elle-même ces tests,
+   ce qui signifie qu'elle doit accéder à l'en-tête pour vérifier le
+   statut de validation de toute ligne présentée avec une clé dupliquée
+   au regard du contenu de l'index. C'est sans aucun doute moche et non
+   modulaire, mais cela permet d'éviter un travail redondant&nbsp;: si un test
+   séparé est effectué, alors la recherche d'une ligne conflictuelle dans
+   l'index est en grande partie répétée lors de la recherche d'une place pour
+   insérer l'entrée d'index de la nouvelle ligne. Qui plus, est, il n'y a pas
+   de façon triviale d'éviter les conflits, sauf si la recherche de conflit
+   est partie intégrante de l'insertion de la nouvelle entrée d'index.
   </para>
 
   <para>
-   Le principale limitation de ce schéma est qu'il n'existe pas de façon aisée
-   de supporter les vérifications d'unicité déferrées.
+   Le principale limitation de ce schéma est l'absence de solution simple 
+   de support des vérifications retardées d'unicité.
   </para>
 
  </sect1>
@@ -730,16 +739,16 @@ supprime des données, mais dans le cas de l'index ? -->
   <title>Fonctions d'estimation des coûts d'index</title>
 
   <para>
-   La fonction amcostestimate se voit donner une liste de clauses WHERE qui ont
-   été déterminées pour être utilisables avec l'index. Il doit renvoyer une
-   estimation du coût de l'accès d'index et de la sélectivité des clauses
+   La fonction amcostestimate reçoit une liste de clauses WHERE qui ont
+   été déterminées pour être utilisables avec l'index. Elle doit renvoyer une
+   estimation du coût de l'accès à l'index et de la sélectivité des clauses
    WHERE (c'est-à-dire la fraction des lignes de la table parent qui seront
    récupérées lors du parcours de l'index). Pour les cas simples, pratiquement
    tout le travail de l'estimateur de coût peut être effectué en appelant des
-   routines standards dans l'optimiseur&nbsp;; la raison d'avoir une fonction
-   amcostestimate est d'autoriser les méthodes d'accès aux index pour fournir
-   une connaissance spécifique au type d'index, au cas où il est possible
-   d'améliorer les estimations standards.
+   routines standard dans l'optimiseur&nbsp;; la raison d'avoir une fonction
+   amcostestimate est d'autoriser les méthodes d'accès aux index à fournir
+   une connaissance spécifique au type d'index, au cas où il serait possible
+   d'améliorer les estimations standard.
   </para>
 
   <para>
@@ -781,9 +790,10 @@ amcostestimate (PlannerInfo *root,
      <term>indexQuals</term>
      <listitem>
       <para>
-       Liste des clauses qual d'index (implicitement assemblées avec des AND)&nbsp;;
+       Liste des clauses de qualifications (<foreignphrase>qual
+       clauses</foreignphrase>) d'index (implicitement assemblées avec des AND)&nbsp;;
        une liste NIL indique qu'aucun qualificateur n'est disponible.
-       Notez que la liste contient des arbres d'expression, pas ScanKeys.
+       La liste contient des arbres d'expression, pas des ScanKeys.
       </para>
      </listitem>
     </varlistentry>
@@ -793,11 +803,11 @@ amcostestimate (PlannerInfo *root,
      <listitem>
       <para>
        Si l'utilisation de l'index est considérée dans un parcours d'index pour
-       une jointure interne, le planificateur dispose des informations sur le
-       côté externe de la jointure. Sinon NULL. Quand non NULL, certaines des
-       clauses qual seront des clauses de jointure avec cette relation plutôt
+       une jointure interne, c'est l'information du planificateur concernant le
+       côté externe de la jointure. Sinon NULL. Quand non NULL, certaines
+       clauses de qualifications sont des clauses de jointure avec cette relation plutôt
        que de simples clauses de restriction. De plus, le processus d'estimation
-       du coût devrait s'attendre à ce que le parcours d'index soit répété pour
+       du coût doit s'attendre à ce que le parcours d'index soit répété pour
        chaque ligne de la relation externe.
       </para>
      </listitem>
@@ -806,14 +816,14 @@ amcostestimate (PlannerInfo *root,
   </para>
 
   <para>
-   Les quatre derniers paramètres sont passés par leur référence&nbsp;:
+   Les quatre derniers paramètres sont les sorties passées par référence&nbsp;:
 
    <variablelist>
     <varlistentry>
      <term>*indexStartupCost</term>
      <listitem>
       <para>
-       Initialisé au coût du lancement du traitement de l'index
+       Initialisé au coût du lancement du traitement de l'index.
       </para>
      </listitem>
     </varlistentry>
@@ -822,7 +832,7 @@ amcostestimate (PlannerInfo *root,
      <term>*indexTotalCost</term>
      <listitem>
       <para>
-       Initialisé au coût du traitement total par l'index
+       Initialisé au coût du traitement total de l'index.
       </para>
      </listitem>
     </varlistentry>
@@ -831,7 +841,7 @@ amcostestimate (PlannerInfo *root,
      <term>*indexSelectivity</term>
      <listitem>
       <para>
-       Initialisé à la sélectivité de l'index
+       Initialisé à la sélectivité de l'index.
       </para>
      </listitem>
     </varlistentry>
@@ -841,7 +851,7 @@ amcostestimate (PlannerInfo *root,
      <listitem>
       <para>
        Initialisé au coefficient de corrélation entre l'ordre du parcours de
-       l'index et l'ordre sous-jacent de la table
+       l'index et l'ordre sous-jacent de la table.
       </para>
      </listitem>
     </varlistentry>
@@ -849,8 +859,8 @@ amcostestimate (PlannerInfo *root,
   </para>
 
   <para>
-   Notez que les fonctions d'estimation de coûts doivent être écrits en C, pas
-   en SQL ou dans un autre langage de procédure, parce qu'elles doivent accéder
+   Les fonctions d'estimation de coûts doivent être écrites en C, pas
+   en SQL ou dans tout autre langage de procédure, parce qu'elles doivent accéder
    aux structures de données internes du planificateur/optimiseur.
   </para>
 
@@ -874,43 +884,43 @@ amcostestimate (PlannerInfo *root,
   </para>
 
   <para>
-   Le <quote>coût de lancement</quote> est la partie du coût du parcours total
-   devant être étendu avant que nous commencions à récupérer la première ligne.
-   Pour la plupart des index, cela peut être considéré comme zéro mais un type
-   d'index avec un grand coût de lancement pourrait vouloir le configurer à
+   Le <quote>coût de lancement</quote> est la partie du coût total de parcours
+   à dépenser avant de commencer à récupérer la première ligne.
+   Pour la plupart des index, cela s'évalue à zéro, mais un type
+   d'index avec un grand coût de lancement peut vouloir le configurer à
    une autre valeur que zéro.
   </para>
 
   <para>
-   indexSelectivity devrait être initialisé à la fraction estimée des lignes
-   de la table parent qui seront récupérées lors du parcours d'index. Au cas
-   où il s'agit d'un index à perte, cela sera typiquement plus haut que la
-   fraction des lignes qui réussissent les conditions qual données.
+   indexSelectivity doit être initialisé à la fraction estimée des lignes
+   de la table parent qui sera récupérée lors du parcours d'index. Dans le cas
+   d'un index à perte, c'est typiquement plus élevé que la
+   fraction des lignes qui satisfont les conditions de qualification données.
   </para>
 
   <para>
-   indexCorrelation devrait être initialisé à la corrélation (valeur entre
-   -1,0 et 1,0) entre l'ordre de l'index et celui de la table. Cela permet
-   d'ajuster l'estimation pour le coût de récupération des lignes de la table
+   indexCorrelation doit être initialisé à la corrélation (valeur entre
+   -1.0 et 1.0) entre l'ordre de l'index et celui de la table. Cela permet
+   d'ajuster l'estimation du coût de récupération des lignes de la table
    parent.
   </para>
 
   <para>
-   Dans le cas de la jointure, les nombres renvoyés devraient être des moyennes
+   Dans le cas de la jointure, les nombres renvoyés doivent être les moyennes
    attendues pour tout parcours de l'index.
   </para>
 
   <procedure>
    <title>Estimation du coût</title>
    <para>
-    Un estimateur typique de coût exécutera le traitement ainsi&nbsp;:
+    Un estimateur typique de coût exécute le traitement ainsi&nbsp;:
    </para>
 
    <step>
     <para>
-     Estime et renvoie la fraction des lignes de la table parent qui seront
-     visitées suivant les conditions qual données. En l'absence de toute
-     connaissance spécifique sur le type de l'index, utilisez la fonction
+     Estime et renvoie la fraction des lignes de la table parent 
+     visitées d'après les conditions de qualification données. En l'absence de toute
+     connaissance spécifique sur le type de l'index, on utilise la fonction
      de l'optimiseur standard <function>clauselist_selectivity()</function>:
 
 <programlisting>*indexSelectivity = clauselist_selectivity(root, indexQuals,
@@ -921,9 +931,9 @@ amcostestimate (PlannerInfo *root,
 
    <step>
     <para>
-     Estime le nombre de lignes d'index qui seront visitées lors du parcours. Pour
-     de nombreux types d'index, ceci vaut indexSelectivity fois le nombre de
-     lignes dans l'index, mais cela pourrait valoir plus (notez que la taille
+     Estime le nombre de lignes d'index visitées lors du parcours. Pour
+     de nombreux types d'index, il s'agit de indexSelectivity multiplié par le nombre de
+     lignes dans l'index, mais cela peut valoir plus (la taille
      de l'index en pages et lignes est disponible à partir de la structure
      IndexOptInfo).
     </para>
@@ -931,15 +941,15 @@ amcostestimate (PlannerInfo *root,
 
    <step>
     <para>
-     Estime le nombre de pages d'index qui seront récupérées pendant le parcours.
-     Ceci pourrait être simplement indexSelectivity fois la taille de l'index
+     Estime le nombre de pages d'index récupérées pendant le parcours.
+     Ceci peutt être simplement indexSelectivity multiplié par la taille de l'index
      en pages.
     </para>
    </step>
 
    <step>
     <para>
-     Calcule le coût d'accès à l'index. Un estimateur générique pourrait le
+     Calcule le coût d'accès à l'index. Un estimateur générique peut le
      faire ainsi&nbsp;:
 
 <programlisting>    /*
@@ -954,8 +964,8 @@ amcostestimate (PlannerInfo *root,
         (cpu_index_tuple_cost + index_qual_cost.per_tuple) * numIndexTuples;
 </programlisting>
 
-     Néanmoins, l'exemple ci-dessus ne prend pas en compte l'amortissement des
-     lectures des index via les parcours répétés d'index dans le cas de la
+     Néanmoins, le calcul ci-dessus ne prend pas en compte l'amortissement des
+     lectures des index à travers les parcours répétés d'index dans le cas de la
      jointure.
     </para>
    </step>
@@ -963,7 +973,7 @@ amcostestimate (PlannerInfo *root,
    <step>
     <para>
      Estime la corrélation de l'index. Pour un index ordonné sur un seul champ,
-     ceci peut se récupérer de pg_statistic. Si la corrélation est inconnue,
+     cela peut s'extraire de pg_statistic. Si la corrélation est inconnue,
      l'estimation conservative est zéro (pas de corrélation).
     </para>
    </step>
