@@ -258,6 +258,28 @@ if ($handle = opendir($dir)) {
   else
     echo "ERREUR lors du Vacuum !\n".pg_last_error($pgconn);
 
+  $query = "DROP TABLE mots CASCADE";
+  $result = pg_query($pgconn, $query);
+  if (pg_result_status($result) == PGSQL_COMMAND_OK)
+    echo "Suppression de la table mots OK\n";
+  else
+    echo "ERREUR lors de la suppression !\n".pg_last_error($pgconn);
+
+  $query = "CREATE TABLE mots AS
+  SELECT word AS mot FROM ts_stat('SELECT to_tsvector(''simple'', contenu) FROM pages')";
+  $result = pg_query($pgconn, $query);
+  if (pg_result_status($result) == PGSQL_COMMAND_OK)
+    echo "Création de la table mots OK\n";
+  else
+    echo "ERREUR lors de la création !\n".pg_last_error($pgconn);
+
+  $query = "CREATE INDEX mots_idx ON mots USING gin(mot gin_trgm_ops)";
+  $result = pg_query($pgconn, $query);
+  if (pg_result_status($result) == PGSQL_COMMAND_OK)
+    echo "Création de l'index pour la table mots OK\n";
+  else
+    echo "ERREUR lors de la création !\n".pg_last_error($pgconn);
+
   closedir($handle);
 }
 

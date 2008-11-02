@@ -4,6 +4,8 @@ $filtreversion = $_REQUEST['v'];
 
 ## No backslashes allowed
 $recherche = preg_replace('/\\\/', '', $recherche);
+$recherche = preg_replace('/\(/', '', $recherche);
+$recherche = preg_replace('/\)/', '', $recherche);
 ## Collapse parens into nearby words:
 $recherche = preg_replace('/\s*\(\s*/', ' (', $recherche);
 $recherche = preg_replace('/\s*\)\s*/', ') ', $recherche);
@@ -51,15 +53,43 @@ $version['803'] = '8.3';
 		</script>		
 	</head>
 	<body>
-	<div id="content">
-		<a id="bandeau" href="http://www.postgresqlfr.org/">
-			<img src="img/gauche.png" id="gauche" alt="PostgreSQL" />
-			<img src="img/droite.png" id="droite" alt="PostgreSQL" />
-		</a>
-<form method="post" action="search.php">
-  <div>
-  <input id="q" name="q" type="text" size="20" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_REQUEST['q'])>0 ? $_REQUEST['q'] : 'Rechercher' ?>" accesskey="s" />
-  <input id="submit" name="submit" type="submit" value="Rechercher" />
+<div id="top">
+  <div id="pgHeader">
+    <span id="pgHeaderLogoLeft">
+      <a href="/" title="PostgreSQL"><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_left.png" width="230" height="80" alt="PostgreSQL" /></a>
+    </span>
+    <span id="pgHeaderLogoRight">
+      <a href="/" title="La base de donnees la plus sophistiquee au monde."><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_right.png" width="210" height="80" alt="La base de donnees la plus sophistiquee au monde." /></a>
+    </span>
+  </div>
+</div>
+
+<div class="pgTopNav">
+  <div class="pgTopNavLeft"> 
+    <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_lft.png" width="7" height="23" alt="" />
+  </div>
+  <div class="pgTopNavRight">
+    <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_rgt.png" width="7" height="23" alt="" />
+  </div>
+  <ul class="pgTopNavList">
+    <li><a href="http://www.postgresql.fr/" title="Accueil">Accueil</a></li>
+    <li><a href="http://blog.postgresql.fr/" title="Lire les actualités">Actualités</a></li>
+    <li><a href="http://docs.postgresql.fr/" title="Lire la documentation officielle">Documentation</a></li>
+    <li><a href="http://forums.postgresql.fr/" title="Pour poser des questions">Forums</a></li>
+    <li><a href="http://asso.postgresql.fr/" title="La vie de l'association">Association</a></li>
+    <li><a href="http://trac.postgresql.fr" title="Trac des développeurs">Développeurs</a></li>
+    <li><a href="http://planete.postgresql.fr" title="La planète francophone sur PostgreSQL">Planète</a></li>
+    <li><a href="http://support.postgresql.fr" title="Support sur PostgreSQL">Support</a></li>
+  </ul>
+</div>
+<div id="pgContent">
+
+  <div id="pgSideWrap">
+  <div id="pgSideNav">
+      <form method="post" action="search.php">
+      <div>
+      <h2><label for="q">Rechercher</label></h2>
+      <input id="q" name="q" type="text" size="16" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_REQUEST['q'])>0 ? $_REQUEST['q'] : 'Rechercher' ?>" accesskey="s" />
   <select id="v" name="v">
 <?
   $query = "SELECT version, count(*) as nb FROM pages GROUP BY version ORDER BY version DESC";
@@ -78,8 +108,15 @@ $version['803'] = '8.3';
   }
 ?>
   </select>
+  <input id="submit" name="submit" type="submit" value="Rechercher" />
   </div>
-</form>
+    </form>
+  </div>
+  </div>
+
+  <div id="pgContentWrap">
+  <div id="pgDownloadsWrap">
+  <div id="content">
 <?
 $like[0]="'sql-%".pg_escape_string(ereg_replace(' ','',$recherche))."%.html'";
 $like[1]="'app-%".pg_escape_string(ereg_replace('_','',$recherche))."%.html'";
@@ -163,11 +200,35 @@ $query .= "ORDER BY ts_rank(fti, q) DESC, version DESC
 LIMIT 100";
 $result = pg_query($pgconn, $query);
 
-while ($ligne = pg_fetch_array($result)) {
-  echo '<li>
+if (pg_num_rows($result) > 0) {
+
+  while ($ligne = pg_fetch_array($result)) {
+    echo '<li>
 <a href="http://docs.postgresqlfr.org/'.$version[$ligne['version']].'/'.$ligne['url'].'">Manuel PostgreSQL '.$version[$ligne['version']].', '.$ligne['titre'].'</a> ['.$ligne['score'].' %]<br/>
 ...'.$ligne['resume'].'...<br/>&nbsp;<br/>
 </li>';
+  }
+
+} else {
+  echo '<b>Aucun résultat trouvé</b><br/>';
+
+  $query = "SELECT mot, to_char(similarity(mot, '".pg_escape_string($searchstring)."')*100,'999.99') AS sml
+FROM mots
+WHERE mot % '".pg_escape_string($searchstring)."'
+ORDER BY sml DESC, mot";
+
+  $result = pg_query($pgconn, $query);
+
+  if (pg_num_rows($result) > 0) {
+
+    echo "<p>Peut-être cherchez-vous :</p><ul>";
+    while ($ligne = pg_fetch_array($result)) {
+      echo '<li>
+<a href="http://docs.postgresqlfr.org/search.php?v='.$filtreversion.'&q='.$ligne['mot'].'">'.$ligne['mot'].'</a> ['.$ligne['sml'].' %]</li>';
+    }
+    echo "</ul>";
+}
+
 }
 
   $result = pg_query($pgconn, $query);
@@ -177,15 +238,6 @@ pg_close($pgconn);
 </ol>
 		</div>
 
-		<div id="basdepage" >
-			<a href="http://www.postgresqlfr.org/">Retour au site</a>
-			&nbsp;|&nbsp;
-			<a href="http://www.postgresqlfr.org/?q=forum">Forums Web</a>
-			&nbsp;|&nbsp;
-			<a href="http://www.freebsd.org/copyright/license.html">Documentations sous licence BSD</a>
-			&nbsp;|&nbsp;
-			<a href="http://www.mozilla-europe.org/fr/products/firefox/"><img border="0" alt="Get Firefox!" title="Get Firefox!" src="http://sfx-images.mozilla.org/affiliates/Buttons/80x15/white_1.gif"/></a>
-		</div>
 	</div>
 	</div>
   </body>
@@ -197,6 +249,7 @@ pg_close($pgconn);
 </script>
 <script type="text/javascript">
    var pageTracker = _gat._getTracker("UA-140513-1");
+   pageTracker._addOrganic("pgfrsearch", "q");
    pageTracker._initData();
    pageTracker._trackPageview();
 </script>
