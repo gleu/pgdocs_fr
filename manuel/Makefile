@@ -1,21 +1,22 @@
-# Dernière modification
+# DerniÃ¨re modification
 #   le       $Date: 2008-09-20 10:55:52 +0200 (sam, 20 sep 2008) $
 #   par      $Author: gleu $
-#   révision $Revision: 1140 $
+#   rÃ©vision $Revision: 1140 $
 
+MAJORVER := $(shell grep major version.xml | sed -e 's/<!ENTITY majorversion "\(.*\)">/\1/' -e 's/\.//g')
 VERSION := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/')
 VER := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/' -e 's/\.//g')
 
 BASEDIR := $(HOME)/pgsql-$(VERSION)-fr
-HTM_OUTPUT := pgsql-$(VERSION)-fr
-WEB_OUTPUT := web-$(VERSION)-fr
-TGZ_OUTPUT := pg$(VER).tar.gz
-ZIP_OUTPUT := pg$(VER).zip
-PDF_OUTPUT := pg$(VER).pdf
-QUICKPDF_OUTPUT := quickpg$(VER).pdf
-MAN_OUTPUT := pg$(VER).man.tar.gz
-CHM_OUTPUT := pg$(VER).chm.tar.gz
-NOCHUNKS_OUTPUT := pg$(VER).html
+HTM_OUTPUT := pgsql-$(VER)-fr
+WEB_OUTPUT := web-$(VER)-fr
+TGZ_OUTPUT := pg$(MAJORVER).tar.gz
+ZIP_OUTPUT := pg$(MAJORVER).zip
+PDF_OUTPUT := pg$(MAJORVER).pdf
+QUICKPDF_OUTPUT := quickpg$(MAJORVER).pdf
+MAN_OUTPUT := pg$(MAJORVER).man.tar.gz
+CHM_OUTPUT := pg$(MAJORVER).chm.tar.gz
+NOCHUNKS_OUTPUT := pg$(MAJORVER).html
 
 CHUNK_QUIET=0
 XSLROOTDIR=/opt/docbook-xsl
@@ -137,7 +138,6 @@ INSTALL.html: $(src)
 
 	sed -i -e "s@text/html@application/xhtml+xml@g"  \
 	  $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
-
 
 INSTALL.txt: INSTALL.html
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
