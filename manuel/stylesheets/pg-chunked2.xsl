@@ -21,6 +21,7 @@
   <xsl:param name="html.stylesheet" select="'../stylesheets/pg.css'"/>
   <xsl:template name='user.head.content'>
      <link rel="stylesheet" href="../stylesheets/pg-print.css" type="text/css" media="print"/>
+     <link rel="search" type="application/opensearchdescription+xml" title="PgFr Docs 8.1" href="http://docs.postgresqlfr.org/addon/pgfr-docs81.xml" />
   </xsl:template>
 
     <!-- Dropping some unwanted style attributes -->
