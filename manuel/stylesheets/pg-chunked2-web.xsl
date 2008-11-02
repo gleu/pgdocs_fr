@@ -21,7 +21,7 @@
   <xsl:param name="html.stylesheet" select="'../stylesheets/fixed.css'"/>
   <xsl:template name='user.head.content'>
      <link rel="stylesheet" href="../stylesheets/pg-print.css" type="text/css" media="print"/>
-     <link rel="search" type="application/opensearchdescription+xml" title="Docs: V 8.2" href="http://docs.postgresqlfr.org/addon/pgfr-docs82.xml" />
+     <link rel="search" type="application/opensearchdescription+xml" title="PgFr Docs 8.2" href="http://docs.postgresqlfr.org/addon/pgfr-docs82.xml" />
      <!--[if lt IE 7.]>
        <script defer type="text/javascript" src="stylesheets/pngfix.js"></script>
      <![endif]-->     
