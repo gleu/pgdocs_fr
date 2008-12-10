@@ -160,13 +160,14 @@ if( preg_match_all('/([-!]?)(\S+)\s*/', $recherche, $m, PREG_SET_ORDER ) ) {
     if (strlen($terms[1])) {
       $searchstring .= ' & !';
     }
-    if (strtolower($terms[2]) === 'and') {
+    if (strtolower($terms[2]) === 'and' && strlen($terms[3]) > 0) {
       $searchstring .= ' & ';
     }
-    else if (strtolower($terms[2]) === 'or' or $terms[2] === '|') {
+    else if ((strtolower($terms[2]) === 'or' or $terms[2] === '|') &&
+              strlen($terms[3]) > 0) {
       $searchstring .= ' | ';
     }
-    else if (strtolower($terms[2]) === 'not') {
+    else if (strtolower($terms[2]) === 'not' && strlen($terms[3]) > 0) {
       $searchstring .= ' & !';
     }
     else {
