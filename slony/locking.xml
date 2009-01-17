@@ -4,194 +4,266 @@
      par      $Author$
      révision $Revision$ -->
 
-<sect1 id="locking"> <title>Problèmes de verrous</title>
-
+<sect1 id="locking">
+<title>Problèmes de verrous</title>
 <indexterm><primary>problèmes de verrous</primary></indexterm>
 
-<para> L'un des avantages de &postgres; et de son contrôleur de concurrence de 
-  multiple version ( "Multi-Version Concurrency Control", nommé 
-  <acronym>MVCC</acronym> par la suite ) est qu'il élimine de nombreuses
-  raison de verrouiller les objets de base de données. Sur certains 
-  systèmes de gestion de bases de données, vous devez verrouiller une table
-  lorsque vous souhaitez insérer des données dans celle-ci; cela peut entraver
+<para>
+  L'un des avantages de &postgres; et de son contrôle d'accès simultané
+  («&nbsp;Multi-Version Concurrency Control&nbsp;», nommé
+  <acronym>MVCC</acronym> par la suite) est qu'il élimine de nombreuses raisons
+  de verrouiller les objets de base de données. Sur certains systèmes de
+  gestion de bases de données, vous devez verrouiller une table lorsque vous
+  souhaitez insérer des données dans celle-ci&nbsp;; cela peut gêner
   <emphasis>sévèrement</emphasis> les performances. Sur d'autres systèmes,
-  les lectures bloque les écritures concurrentes. Avec <acronym>MVCC</acronym>, &postgres;
-  supprime tous une catégorie de verrous, dans le sens ou les 
-  <quote>vieilles lectures</quote> peuvent accéder aux <quote>anciens tuples</quote>.
-  La pluspart du temps, cela évite aux aimables utilisateurs de 
-  &postgres; de trop se préoccuper des verrous.</para>
+  les lectures bloquent les écritures concurrentes. Avec
+  <acronym>MVCC</acronym>, &postgres; supprime toute une catégorie de verrous,
+  dans le sens où les <quote>vieilles lectures</quote> peuvent accéder aux
+  <quote>anciennes lignes</quote>. La plupart du temps, cela évite aux aimables
+  utilisateurs de &postgres; de trop se préoccuper des verrous.
+</para>
 
-<para> Malheureusement, il existe plusieurs sortes d'événements &slony1; 
-  qui nécessite des verrous exclusifs sur les tables  &postgres;,
-  ce qui entraine que la modification de la configuration &slony1;,
-  peut provoquer des <quote>verrous génants</quote>.
-  En particulier:</para>
+<para>
+  Malheureusement, il existe plusieurs sortes d'événements &slony1; qui
+  nécessitent des verrous exclusifs sur les tables  &postgres;, ce qui entraine
+  que la modification de la configuration &slony1; peut provoquer des
+  <quote>verrous gênants</quote>. En particulier&nbsp;:
+</para>
+
+  <itemizedlist>
+
+    <listitem>
+      <para><link linkend="stmtsetaddtable"><command>set add table</command></link></para>
+
+      <para>
+        Un verrou exclusif et momentané doit être posé sur une table du
+	n&oelig;ud <quote>origine</quote> afin d'ajouter le trigger qui
+	collecte les mises à jour de cette table. Il doit simplement être posé
+	assez longtemps pour établir le nouveau trigger.
+      </para>
+    </listitem>
+
+    <listitem>
+      <para><link linkend="stmtmoveset"><command> move set</command></link></para>
+
+      <para>
+        Lorsqu'un ensemble sur un n&oelig;ud origine est déplacé vers un autre
+	n&oelig;ud, des verrous exclusifs sont posés sur chaque table répliquée
+	à la fois sur l'ancien et le nouveau n&oelig;ud origine afin de
+	modifier les triggers sur ces tables.
+      </para>
+    </listitem>
+
+    <listitem>
+      <para><link linkend="stmtlockset"><command>lock set</command></link></para>
+
+      <para>
+        Cette opération demande explicitement des verrous sur chaque table dans
+	un ensemble de réplication donné sur le n&oelig;ud origine.
+      </para>
+    </listitem>
+
+    <listitem>
+      <para><link linkend="stmtddlscript"><command>execute script</command></link></para>
+
+      <para>
+        Cette opération lance un ensemble de requêtes SQL&nbsp;; pour qu'elle
+	fonctionne, les triggers &slony1; doivent être retirés, ensuite les
+	requêtes sont exécutées (ce qui peut modifier les données), enfin les
+	triggers sont restaurés. Pour cela, l'opération doit acquérir des
+	verrous sur toutes les tables de chaque n&oelig;ud.
+      </para>
+    </listitem>
+
+    <listitem>
+      <para>
+        Pendant un événement <command>SUBSCRIBE_SET</command> sur un nouvel
+	abonné
+      </para>
+
+      <para>
+        Dans un sens, c'est le scénario le moins perturbant car, avant que
+	l'ensemble de réplication soit complet, on peut penser que le n&oelig;ud
+	<quote>inutilisable</quote> et que &slony1; peut raisonnablement
+	demander l'accès exclusif sur le n&oelig;ud.
+      </para>
+
+      <para>
+        Un changement dans la version 1.2 provoque une requête SQL <command>LOCK
+        TABLE</command> explicite qui est placée dans la boucle qui valide que
+	toutes les tables sont présentes. Cela signifie que
+	<emphasis>toutes</emphasis> les tables de l'ensemble de réplication sont
+	verrouillées avec un verrou exclusif pour la durée totale du processus
+        de souscription. En verrouillant les tables très tôt, on s'assure que
+        la souscription n'échouera pas à cause d'un autre processus ayant un
+        verrou sur une table.
+      </para>
+
+      <para>
+        Dans tous les cas, notez que ce script opère <quote>sur un nouveau
+	n&oelig;ud abonné</quote>. Les verrous sont posés <quote>sur un
+	nouveau n&oelig;ud abonné</quote>. Ils ne s'appliquent
+	<emphasis>pas</emphasis> au n&oelig;ud fournisseur ou au n&oelig;ud
+	origine.
+      </para>
+    </listitem>
+
+    <listitem>
+      <para>
+        <application>pg_autovacuum</application> ne fait pas partie de
+	&slony1; mais il se réveille une fois par minute et peut, à tout
+	moment, se lancer dans le nettoyage d'une table, et ainsi poser un
+	verrou <envar>ShareUpdateExclusiveLock</envar>. Ceci peut bloquer les
+	autres événements pendant une période imprévisible.
+      </para>
+    </listitem>
+  </itemizedlist>
+
+<para>
+  Chacune de ces actions nécessite, à un certain de point, de modifier chaque
+  table de l'ensemble de réplication, ce qui implique l'acquisition d'un verrou
+  exclusif sur les tables. Certains utilisateurs ont tenté d'effectuer ces
+  opérations sur des n&oelig;uds qui étaient activement sollicités par la
+  couche applicative&nbsp;; ils ont rencontré des problèmes d'inter-blocages
+  («&nbsp;deadlocks&nbsp;») et/ou des arrêts de réplication.
+</para>
+
+<para>
+  La question évident est&nbsp;: <quote>que faire pour éviter ces
+  inter-blocages&nbsp;?</quote>
+</para>
+
+<para>
+  Plusieurs possibilités sont envisageables&nbsp;:
+</para>
 
 <itemizedlist>
 
-<listitem><para><link linkend="stmtsetaddtable"> <command>set add
-table</command> </link></para>
-
-<para> Un verrou exclusif et momentané doit être posé sur
-  une table du noeud <quote>origine</quote> afin de d'ajouter le trigger
-  qui collecte les mises à jour de cette table. I doit simplement être
-  posé assez longtemps pour établir le nouveau trigger.</para>
-</listitem>
-
-<listitem><para><link linkend="stmtmoveset"> <command> move
-set</command> </link></para>
-
-<para> Lorsqu'un ensemble sur un noeud origine est déplacé vers un autre noeud,
-  des verrous exclusifs sont posé sur chaque table répliquée à la fois sur 
-  l'ancien et le nouveau noeud origine afin de modifier les triggers sur ces tables.
-  </para></listitem>
-
-<listitem><para><link linkend="stmtlockset"> <command> lock set
-</command> </link> </para>
-
-<para> Cette opération demande explicitement des verrous sur chaque
-  table dans un ensemble de réplication donné sur le noeud origine.
-  </para>
-</listitem>
-
-<listitem><para><link linkend="stmtddlscript"> <command>execute
-script</command> </link> </para>
-
-<para> Cette opération lance un ensemble de requête SQL;
-  pour qu'elle fonctionne, les triggers  &slony1; doivent être
-  retirés, ensuite les requêtes sont exécutées ( ce qui peut modifier
-  les données ), enfin les triggers sont restaurés. Pour cela, 
-  l'opération doit acquérir des verrous sur toutes les tables de
-  chaque noeuds. </para>
-</listitem>
-
-<listitem><para> Pendant un événement <command>SUBSCRIBE_SET</command> sur 
-    un nouvel abonné </para>
-
-<para> Dans un sens, c'est le scénario le moins perturbant, car
-  avant que l'ensemble de réplication soit complet, on peut
-  penser que le noeud <quote>inutilisable</quote> et que 
-   &slony1; peut raisonnablement demander l'accès exclusif sur le noeud.
+  <listitem>
+    <para>
+      Annoncer une coupure de service pour éviter les inter-blocages.
     </para>
 
-<para> Un changement dans la version 1.2 provoque une requête SQL <command>LOCK
-TABLE</command> explicite qui est placé dans la boucle qui valide que toutes les
-tables sont présentes. Cela signifie que 
-<emphasis>toutes</emphasis> les tables de l'ensemble de réplication
-sont verrouiller avec un verrou exclusif pour la durée totale du processus
-de souscription. En verrouillant les tables très tôt, on s'assure que
-le souscription n'échouera pas à cause d'un autre processus ayant un 
-verrou sur une table.
-</para>
+    <para>
+      Si vous pouvez empêcher temporairement les applications d'accéder à la
+      base de données, cela vous offrira une fenêtre de temps pendant laquelle
+      aucune opération ne sera effectuée sur la base de données, à l'exception
+      des processus d'administration que vous controllerez.
+    </para>
+  </listitem>
 
-<para> Dans tous les cas, notez que ce script opère 
-<quote>sur un nouveau noeud abonné</quote>. Les verrous sont posés
-<quote>sur un nouveau noeud abonné</quote>. Ils s'appliquent <emphasis>pas</emphasis>  
-au noeud fournisseur ou au noeud origine. </para>
+  <listitem>
+    <para>
+      Tenter l'operation, en espérant que cela fonctionne.
+    </para> 
 
-</listitem>
+    <para>
+      Puisque rien n'empêche les application de laisser des verrous sur votre
+      chemin, vous pourrez vous retrouver dans une situation de blocage. Mais
+      si le nombre de verrous restant est faible, vous pouvez négocier avec
+      les utilisateurs pour <quote>avoir la priorité</quote>.
+    </para>
+  </listitem>
 
-<listitem><para> <application>pg_autovacuum</application> ne fait pas partie
-de &slony1;, mais il se réveille une fois par minute et peut, à tout moment,
-se lancer dans le nettoyage d'une table, et ainsi poser un verrou
-<envar>ShareUpdateExclusiveLock</envar>. Ceci peut bloquer les autres événements
-pendant un période imprévisible.</para>
-</listitem>
+  <listitem>
+    <para>
+      Utiliser pgpool.
+    </para> 
 
-</itemizedlist>
+    <para>
+      Si vous pouvez utiliser pgpool ou un <quote>gestionnaire de
+      connexions</quote> similaire, vous pouvez configurer le programme pour
+      qu'il n'utilise plus la base pendant un petit moment, et ainsi le
+      laisser <quote>bloquer</quote> les applications pour vous. L'idéal étant
+      que le gestionnaire de connexions retienne les requêtes assez longtemps
+      pour que la coupure de service apparaisse comme un simple ralentissement.
+    </para>
+  </listitem>
 
-<para> Chacune de ces actions nécessite, à un certain de point, de 
-  modifier chaque table de l'ensemble de réplication, ce qui implique
-  l'acquisition d'un verrou exclusif sur les tables. Certains utilisateurs
-  ont tenté d'effectuer ces opérations sur des noeuds qui étaient activement
-  sollicités par la couche applicative; ils ont rencontré des problèmes
-  d'inter-blocages ("deadlocks") et/ou des arrêts de réplication. </para>
-
-<para> La question évident est : <quote>Que faire pour éviter ces inter-blocages ?</quote> </para>
-
-<para> Plusieurs possibilités sont envisageables : </para>
-
-<itemizedlist>
-
-<listitem><para> Annoncer une coupure de service pour éviter les inter-blocages 
+  <listitem>
+    <para>
+      Gestion rapide de coupure de service.
     </para>
 
-<para>Si vous pouvez empêcher temporairement les applications 
-  d'accéder à la base de données, cela vous offrira une fenêtre de temps
-  pendant laquelle aucune opération ne sera effectuée sur la base de données,
-  à l'exception des processus d'administration que vous controllerez.
-  </para> </listitem>
+    <para>
+      La procédure suivante minimisera le temps de coupure de service&nbsp;:
 
-<listitem><para> Tenter l'operation, en espérant que cela fonctionne </para> 
+      <itemizedlist>
 
-<para> Puisque rien n'empêche les application de laisser de verrous sur
-  votre chemin, vous pourrez vous retrouver dans une situation de blocage.
-  Mais si le nombre de verrous restant est faible, vous pouvez négocier 
-  avec les utilisateurs pour <quote>avoir la priorité</quote>. </para>
-</listitem>
+        <listitem>
+	  <para>
+	    Modifier <filename>pg_hba.conf</filename> afin que seul l'<link
+	    linkend="slonyuser">utilisateur <command>slony</command></link>
+            ait accès à la base de données.
+	  </para>
+	</listitem>
 
-<listitem><para> Utiliser pgpool </para> 
+        <listitem>
+	  <para>
+	    Envoyer un <command>kill -SIGHUP</command> au postmaster de
+            &postgres;.
+	  </para>
 
-<para> Si vous pouvez utiliser pgpool ou un <quote>gestionnaire de connexion
-</quote> similaire, vous pouvez configurer le programme pour
-qu'il n'utilise plus la base pendant un petit moment, et ainsi 
-le laisser <quote>bloquer</quote> les applications pour vous.
-L'idéal étant que le gestionnaire de connexion retiennent les requêtes
-assez longtemps pour que la coupure de service apparaisse comme un
-simple ralentissement. </para></listitem>
+          <para>
+	    Ceci ne tuera pas les longues requêtes qui pourraient être en
+	    cours d'exécution mais cela empêchera les nouvelles d'entrer. Cela
+	    a un impact sur l'application puisque les requêtes entrantes seront
+	    rejetées jusqu'à la fin de la procédure.
+          </para>
+        </listitem>
 
-<listitem><para> Gestion rapide de coupure de service </para> 
+        <listitem>
+	  <para>
+	    Si <quote>tout va bien</quote>, alors on peut effectuer sans danger
+	    l'opération &slony1;.
+	  </para>
+	</listitem>
 
-<para> La procédure suivante minimisera le temps de coupure de service:
+        <listitem>
+	  <para>
+	    Si une requête est toujours en cours, vous devrez peut-être
+	    effectuer un <command>kill -SIGQUIT</command> sur un des processus
+            &postgres;. Cela relancera le moteur et tuera toutes les requêtes
+            en attente. Vous devrez probablement relancer les processus
+            <xref linkend="slon"/> qui sont attachés à ce n&oelig;ud.
+	  </para> 
 
-<itemizedlist>
+          <para>
+	    À ce point, l'opération &slony1; peut être effectuée sans
+	    danger&nbsp;; il n'y aura aucun autre processus concurrent.
+          </para>
+	</listitem>
 
-<listitem><para> Modifier <filename>pg_hba.conf</filename> afin que seul
-<link linkend="slonyuser">l'utilisateur <command>slony</command> user </link>
-ait accès à la base de données.</para> </listitem>
+        <listitem>
+	  <para>
+	    Recharger l'ancienne version du fichier
+	    <filename>pg_hba.conf</filename> pour autoriser les utilisateurs,
+	    et envoyer un <command>kill -SIGHUP</command> au processus
+	    postmaster pour qu'il recharge la configuration de sécurité.
+	  </para>
+	</listitem>
+      </itemizedlist>
+    </para>
+  </listitem>
 
-<listitem><para> Envoyer un  <command>kill -SIGHUP</command> au postmaster de
-&postgres;.</para>
-
-<para> Ceci ne tuera pas les longues requêtes qui pourraient être en cours d'exécution
-  mais cela empêchera les nouvelles d'entrer. Cela a un impact sur l'application
-  puisque les requêtes entrantes seront rejetées jusqu'à la fin de la procédure.
-</para>
-</listitem>
-
-<listitem><para> Si <quote>tout va bien</quote>, alors on peut
-    effectuer sans danger l'opération &slony1;. </para> </listitem>
-
-<listitem><para> si une requête est toujours en cours, vous devrez peut-être
-    effectuer un  <command>kill -SIGQUIT</command> sur un des processus
-    &postgres;. Cela relancera le moteur et tuera toutes les requêtes 
-    en attente. Vous devrez probablement relancer les processus  
-    <xref linkend="slon"/> qui sont attachés à ce noeud. </para> 
-
-<para> A ce point, l'opération &slony1; peut être effectuée sans danger;
-  Il n'y aura aucun autre processus concurrent.
-  </para></listitem>
-
-<listitem><para> Recharger l'ancienne version du fichier <filename>pg_hba.conf</filename>
-    pour autoriser les utilisateurs, et envoyer un <command>kill -SIGHUP</command>
-    au processus postmaster pour qu'il recharge la configuration de sécurité. </para> </listitem>
+  <listitem>
+    <para>
+      La section &rddlchanges; suggère des techniques supplémentaires qui
+      peuvent être utiles, telles que le déplacement des tables vers d'autres
+      ensemble de réplication afin de minimiser le nombre de tables qu'il faut
+      verrouiller.
+    </para>
+  </listitem>
 </itemizedlist>
 
+<para>
+  Malheureusement, il n'y a pas de solution miracle. S'il est
+  <emphasis>nécessaire</emphasis> de soumettre une requête <xref
+  linkend="stmtmoveset"/>, alors il est probablement
+  <emphasis>nécessaire</emphasis> d'accepter une courte coupure de service.
+  Au fur et à mesure que les relations entre &slony1; et <link
+  linkend="pgpool">pgpool</link> s'améliorent, ce couple semble être la
+  meilleure méthode pour éviter les inter-blocages.
 </para>
-</listitem>
 
-<listitem><para> La section  &rddlchanges; suggère des techniques
-    supplémentaires qui peuvent être utiles, telles que le déplacement
-    des tables vers d'autres ensemble de réplication afin de minimiser
-    le nombre de tables qu'il faut verrouiller.</para></listitem>
-
-</itemizedlist>
-
-<para> Malheureusement, il n'y a pas de solution miracle. 
-  Si il est <emphasis>nécessaire</emphasis> de soumettre une requête
-  <xref linkend="stmtmoveset"/>, alors il est probablement
-<emphasis>nécessaire</emphasis> d'accepter une courte coupure de service.
-Au fur et à mesure que les relations entre &slony1; et <link linkend="pgpool"> pgpool </link>,
-s'améliore, ce couple semble être la meilleure méthode pour éviter les inter-blocages. 
-</para>
 </sect1>
