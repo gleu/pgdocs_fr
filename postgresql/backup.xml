@@ -408,6 +408,16 @@ pg_restore -d <replaceable class="parameter">nom_base</replaceable> <replaceable
   </para>
 
   <para>
+   If simultaneous snapshots are not possible, one option is to shut down
+   the database server long enough to establish all the frozen snapshots.
+   Another option is perform a continuous archiving base backup (<xref
+   linkend="backup-base-backup">) because such backups are immune to file
+   system changes during the backup.  This requires enabling continuous
+   archiving just during the backup process; restore is done using
+   continuous archive recovery (<xref linkend="backup-pitr-recovery">).
+  </para>
+
+  <para>
    Une autre option consiste à utiliser <application>rsync</application> pour réaliser une
    sauvegarde du système de fichiers. Ceci se fait tout d'abord en lançant
    <application>rsync</application> alors que le serveur de bases de données est en cours
@@ -760,7 +770,7 @@ pg_restore -d <replaceable class="parameter">nom_base</replaceable> <replaceable
     </para>
 
     <para>
-     <function>pg_start_backup</function> peut prendre beaucoup de temps
+     By default, <function>pg_start_backup</function> peut prendre beaucoup de temps
      pour arriver à son terme. Ceci est dû au fait qu'il réalise un
      point de retournement, et que les entrées/sorties pour l'établissement
      de ce point de retournement seront réparties sur une grande période
@@ -769,11 +779,11 @@ pg_restore -d <replaceable class="parameter">nom_base</replaceable> <replaceable
      <xref linkend="guc-checkpoint-completion-target"/>). Habituellement,
      ce comportement est appréciable car il minimise l'impact du traitement
      des requêtes. Pour commencer la sauvegarde aussi rapidement
-     que possible, on exécute la commande <command>CHECKPOINT</command> (qui
-     déclenche un point de vérification dès que possible), puis
-     on exécute immédiatement <function>pg_start_backup</function>. Le point
-     de vérification de <function>pg_start_backup</function> n'a alors plus
-     grand chose à faire, et s'exécute donc rapidement.
+     que possible, use:
+<programlisting>
+SELECT pg_start_backup('label', true);
+</programlisting>
+     This forces the checkpoint to be done as quickly as possible.
     </para>
    </listitem>
    <listitem>
@@ -800,12 +810,20 @@ pg_restore -d <replaceable class="parameter">nom_base</replaceable> <replaceable
     <para>
      Une fois que les fichiers des segments WAL utilisés lors de la sauvegarde
      sont archivés, c'est terminé. Le fichier identifié par le résultat de
-     <function>pg_stop_backup</function> est le dernier segment à archiver pour
-     terminer la sauvegarde. L'archivage de ces fichiers intervient automatiquement
-     car <varname>archive_command</varname> est déjà configuré. Dans de
-     nombreux cas, c'est assez rapide mais il est conseillé de
-     surveiller le système d'archivage pour s'assurer que celui-ci s'effectue
-     correctement et que la sauvegarde est complète.
+     <function>pg_stop_backup</function> est le dernier segment that is required
+     to form a complete set of backup files.
+     <function>pg_stop_backup</> does not return until the last segment has
+     been archived.
+     Archiving of these files happens automatically since you have
+     already configured <varname>archive_command</>. In most cases this
+     happens quickly, but you are advised to monitor your archive
+     system to ensure there are no delays.
+     If the archive process has fallen behind
+     because of failures of the archive command, it will keep retrying
+     until the archive succeeds and the backup is complete.
+     If you wish to place a time limit on the execution of
+     <function>pg_stop_backup</>, set an appropriate
+     <varname>statement_timeout</varname> value.
     </para>
    </listitem>
   </orderedlist>
@@ -988,8 +1006,6 @@ pg_restore -d <replaceable class="parameter">nom_base</replaceable> <replaceable
      Si <filename>pg_xlog/</filename> n'a pas été archivé, il suffit de 
      recréer ce répertoire en faisant attention à le créer en tant que
      lien symbolique si c'était le cas auparavant.
-     Le sous-répertoire
-     <filename>pg_xlog/archive_status/</filename> doit aussi être créé.
     </para>
    </listitem>
    <listitem>
@@ -1062,10 +1078,12 @@ pg_restore -d <replaceable class="parameter">nom_base</replaceable> <replaceable
 
    <para>
     Il est important que la commande retourne un code de sortie différent de
-    zéro en cas d'échec. Des journaux absents de l'archive
+    zéro en cas d'échec. Des fichiers absents de l'archive
     <emphasis>seront</emphasis> demandés à la commande&nbsp;; elle doit
-    renvoyer autre chose que
-    zéro dans ce cas. Ce n'est pas une condition d'erreur. Il faut également
+    renvoyer autre chose que zéro dans ce cas. Ce n'est pas une condition
+    d'erreur. Not all of the requested files will be WAL segment
+    files; you should also expect requests for files with a suffix of
+    <literal>.backup</> or <literal>.history</>. Il faut également
     garder à l'esprit que le nom de base du chemin <literal>%p</literal>
     diffère de <literal>%f</literal>&nbsp;; il ne sont pas interchangeables.
    </para>
@@ -1107,8 +1125,8 @@ pg_restore -d <replaceable class="parameter">nom_base</replaceable> <replaceable
    <note>
      <para>
       Le point d'arrêt doit être postérieur à la fin de la sauvegarde
-      de la base (le moment où <function>pg_stop_backup</function> a été
-      exécuté). Une sauvegarde ne peut pas être utilisée pour repartir d'un
+      de la base (le moment où <function>pg_stop_backup</function> se
+      termine). Une sauvegarde ne peut pas être utilisée pour repartir d'un
       instant où elle était encore en cours (pour ce faire,
       il faut récupérer la sauvegarde précédente et rejouer à partir de là).
      </para>
@@ -1243,20 +1261,6 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows</programli
 	il est nécessaire de retourner à un état postérieur à une récupération
 	d'instantané. Voir la <xref linkend="backup-timelines"/> pour plus
 	d'informations.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry id="log-restartpoints" 
-                   xreflabel="log_restartpoints">
-      <term><varname>log_restartpoints</varname> 
-        (<type>boolean</type>)
-      </term>
-      <listitem>
-       <para>
-	Indique si chaque point de redémarrage doit être tracé. Cela peut être
-	utile pour suivre la progression d'une restauration longue.
-	<literal>false</literal> par défaut.
        </para>
       </listitem>
      </varlistentry>
@@ -1407,6 +1411,24 @@ tar -rf /var/lib/pgsql/backup.tar /var/lib/pgsql/archive/
       de transaction archivés sont ensuite ajoutés à la sauvegarde pour que
       la sauvegarde de base et les journaux requis fassent partie du même
       fichier <application>tar</application>.
+      Please remember to add error handling to your backup scripts.
+     </para>
+
+     <para>
+      If archive storage size is a concern, use <application>pg_compresslog</>,
+      <ulink url="http://pglesslog.projects.postgresql.org"></ulink>, to
+      remove unnecessary <xref linkend="guc-full-page-writes"> and trailing
+      space from the WAL files.  You can then use
+      <application>gzip</application> to further compress the output of
+      <application>pg_compresslog</>:
+<programlisting>
+archive_command = 'pg_compresslog %p - | gzip &gt; /var/lib/pgsql/archive/%f'
+</programlisting>
+      You will then need to use <application>gunzip</> and
+      <application>pg_decompresslog</> during recovery:
+<programlisting>
+restore_command = 'gunzip &lt; /mnt/server/archivedir/%f | pg_decompresslog - %p'
+</programlisting>
      </para>
     </sect3>
 
@@ -1718,11 +1740,14 @@ archive_command = 'local_backup_script.sh'
     prochain fichier WAL en provenance du serveur principal.
     <varname>restore_command</varname> est indiqué dans le fichier
     <filename>recovery.conf</filename> du serveur de secours.
-    En fonctionnement normal, le processus de récupération attend un fichier
-    dans l'archive WAL, remontant une erreur si le fichier est indisponible.
+    En fonctionnement normal, le processus de récupération attend un journal
+    de transactions dans le répertoire d'archivage des WAL, remontant une erreur
+    si le fichier est indisponible.
     Dans le cas du serveur de secours, il est normal que le fichier suivant
     n'existe pas. Il ne reste donc
-    qu'à attendre son arrivée. Une <varname>restore_command</varname>
+    qu'à attendre son arrivée. For files ending in <literal>.backup</> or
+    <literal>.history</> there is no need to wait, and a non-zero return
+    code must be returned. Une <varname>restore_command</varname>
     d'attente peut être obtenue par l'écriture d'un script personnalisé
     qui boucle sur un test d'apparition du prochain fichier WAL. Il faut
     également définir un moyen de déclencher la bascule
@@ -1751,7 +1776,9 @@ if (!triggered)
    <para>
     Un exemple fonctionnel de <varname>restore_command</varname> 
     d'attente est fourni dans un module <filename>contrib</filename> appelé
-    <application>pg_standby</application>. Cet exemple peut être étendu
+    <application>pg_standby</application>. It
+    should be used as a reference on how to correctly implement the logic
+    described above. Cet exemple peut être étendu
     si nécessaire pour supporter des configurations ou environnements
     spécifiques.
    </para>
@@ -2015,7 +2042,7 @@ if (!triggered)
     <application>pg_controldata</application> sur le serveur de secours pour
     inspecter le fichier de contrôle et déterminer
     l'emplacement du point de contrôle WAL courant, ou en utilisant l'option 
-    <varname>log_restartpoints</varname> pour afficher les valeurs sur les
+    <varname>log_checkpoints</varname> pour afficher les valeurs sur les
     traces du serveur.
    </para>
   </sect2>
@@ -2101,13 +2128,6 @@ if (!triggered)
   </para>
 
   <para>
-   En pratique, on souhaite souvent tester son application sur le
-   nouveau serveur avant de basculer définitivement. C'est une autre raison
-   de configurer des installations concurrentes de l'ancienne et de la nouvelle
-   versions.
-  </para>
-
-  <para>
    Si n'est pas souhaité, ou pas possible, de lancer les deux serveurs en 
    parallèle, il faut réaliser l'étape de sauvegarde avant d'installer la 
    nouvelle version, éteindre le serveur, déplacer l'ancienne version vers un autre
@@ -2149,5 +2169,68 @@ psql -f sauvegarde.sql postgres</programlisting>
     fonctionné.)
    </para>
   </note>
+
+  <para>
+   In practice you probably want to test your client applications on the
+   new version before switching over completely.  This is another reason
+   for setting up concurrent installations of old and new versions.  When
+   testing a <productname>PostgreSQL</> major upgrade, consider the
+   following categories of possible changes:
+  </para>
+
+  <variablelist>
+
+   <varlistentry>
+    <term>Administration</term>
+    <listitem>
+     <para>
+      The capabilities available for administrators to monitor and control
+      the server often change and improve in each major release.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>SQL</term>
+    <listitem>
+     <para>
+      Typically this includes new SQL command capabilities and not changes
+      in behavior, unless specifically mentioned in the release notes.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>Library API</term>
+    <listitem>
+     <para>
+      Typically libraries like <application>libpq</> only add new
+      functionality, again unless mentioned in the release notes.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>System Catalogs</term>
+    <listitem>
+     <para>
+      System catalog changes usually only affect database management tools.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>Server C-language API</term>
+    <listitem>
+     <para>
+      This involved changes in the backend function API, which is written
+      in the C programming language.  Such changes effect code that
+      references backend functions deep inside the server.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+
  </sect1>
 </chapter>

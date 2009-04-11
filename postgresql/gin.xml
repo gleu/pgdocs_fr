@@ -63,7 +63,7 @@
 
  <para>
    Pour obtenir une méthode d'accès <acronym>GIN</acronym>
-   fonctionnelle, il suffit d'implanter quatre méthodes utilisateur. Celles-ci
+   fonctionnelle, il suffit d'implanter quatre (ou cinq) méthodes utilisateur. Celles-ci
    définissent le comportement des clés dans l'arbre
    et les relations entre clés, valeurs indexées et requêtes
    indexables. En résumé, <acronym>GIN</acronym> combine extensibilité,
@@ -72,7 +72,7 @@
  </para>
 
  <para>
-   Les quatre méthodes qu'une classe d'opérateur d'index
+   Les quatre méthodes qu'une classe d'opérateur
    <acronym>GIN</acronym> doit fournir sont&nbsp;:
  </para>
 
@@ -89,7 +89,7 @@
     </varlistentry>
 
     <varlistentry>
-     <term>Datum* extractValue(Datum inputValue, int32 *nkeys)</term>
+     <term>Datum *extractValue(Datum inputValue, int32 *nkeys)</term>
      <listitem>
       <para>
 	   Renvoie un tableau de clés à partir d'une valeur à indexer. Le nombre
@@ -99,8 +99,8 @@
     </varlistentry>
 
     <varlistentry>
-     <term>Datum* extractQuery(Datum query, int32 *nkeys,
-		StrategyNumber n)</term>
+     <term>Datum *extractQuery(Datum query, int32 *nkeys,
+		StrategyNumber n, bool **pmatch, Pointer **extra_data)</term>
      <listitem>
       <para>
        Renvoie un tableau de clés en fonction de la valeur à requêter&nbsp;; c'est-à-dire
@@ -113,39 +113,101 @@
        <literal>query</literal> et les valeurs de clés à extraire.
        Le nombre de clés renvoyées doit être stocké dans
        <literal>*nkeys</literal>.
-       Si le nombre de clés est égal à zéro, alors <function>extractQuery</function>
-       doit enregistrer 0 ou -1 dans <literal>*nkeys</literal>. 0 signifie que
-       toutes les lignes répondent à la <literal>requête</literal> et qu'un
-       parcours séquentiel doit être lancé. -1 signifie que rien ne satisfait
-       la requête (<literal>query</literal>). Le choix de la valeur est basé
-       sur la signification sémantique de l'opération correspondant au numéro de
-       stratégie indiqué.
+       If the query contains no keys then <function>extractQuery</>
+       should store 0 or -1 into <literal>*nkeys</>, depending on the
+       semantics of the operator.  0 means that every
+       value matches the <literal>query</> and a full-index scan should be
+       performed (but see <xref linkend="gin-limit">).
+       -1 means that nothing can match the <literal>query</>, and
+       so the index scan can be skipped entirely.
+       <literal>pmatch</> is an output argument for use when partial match
+       is supported.  To use it, <function>extractQuery</> must allocate
+       an array of <literal>*nkeys</> booleans and store its address at
+       <literal>*pmatch</>.  Each element of the array should be set to TRUE
+       if the corresponding key requires partial match, FALSE if not.
+       If <literal>*pmatch</> is set to NULL then GIN assumes partial match
+       is not required.  The variable is initialized to NULL before call,
+       so this argument can simply be ignored by operator classes that do
+       not support partial match.
+       <literal>extra_data</> is an output argument that allows
+       <function>extractQuery</> to pass additional data to the
+       <function>consistent</> and <function>comparePartial</> methods.
+       To use it, <function>extractQuery</> must allocate
+       an array of <literal>*nkeys</> Pointers and store its address at
+       <literal>*extra_data</>, then store whatever it wants to into the
+       individual pointers.  The variable is initialized to NULL before
+       call, so this argument can simply be ignored by operator classes that
+       do not require extra data.  If <literal>*extra_data</> is set, the
+       whole array is passed to the <function>consistent</> method, and
+       the appropriate element to the <function>comparePartial</> method.
       </para>
      </listitem>
     </varlistentry>
 
     <varlistentry>
-     <term>bool consistent(bool check[], StrategyNumber n, Datum query)</term>
+     <term>bool consistent(bool check[], StrategyNumber n, Datum query,
+                           int32 nkeys, Pointer extra_data[], bool *recheck)</term>
      <listitem>
       <para>
-       Renvoie TRUE si la valeur indexée satisfait l'opérateur de la requête
-       pour le numéro de stratégie <literal>n</literal> (ou peut satisfaire
-       si l'opérateur est marqué RECHECK dans la classe d'opérateur).
-       Le tableau <literal>check</literal> a la même longueur que le nombre de
-       clés précédemment renvoyées par <function>extractQuery</function> pour
-       cette requête. Chaque élément du tableau <literal>check</literal> est
+       Returns TRUE if the indexed value satisfies the query operator with
+       strategy number <literal>n</> (or might satisfy, if the recheck
+       indication is returned).  The <literal>check</> array has length
+       <literal>nkeys</>, which is the same as the number of keys previously
+       returned by <function>extractQuery</> for this <literal>query</> datum.
+       Chaque élément du tableau <literal>check</literal> est
        TRUE si la valeur indexée contient la clé correspondante de la requête,
        c'est-à-dire que si (check[i] == TRUE), la i-ème clé du tableau résultant
        d'<function>extractQuery</function> est présente dans la valeur indexée.
        Le datum <literal>query</literal> d'origine (pas le tableau de clés
        extrait&nbsp;!) est passé au cas où la méthode
        <function>consistent</function> a besoin de le consulter.
+       <literal>extra_data</> is the extra-data array returned by
+       <function>extractQuery</>, or NULL if none.
+       On success, <literal>*recheck</> should be set to TRUE if the heap
+       tuple needs to be rechecked against the query operator, or FALSE if
+       the index test is exact.
       </para>
      </listitem>
     </varlistentry>
 
   </variablelist>
 
+
+ <para>
+  Optionally, an operator class for
+  <acronym>GIN</acronym> can supply a fifth method:
+ </para>
+
+  <variablelist>
+
+    <varlistentry>
+     <term>int comparePartial(Datum partial_key, Datum key, StrategyNumber n,
+                              Pointer extra_data)</term>
+     <listitem>
+      <para>
+       Compare a partial-match query to an index key.  Returns an integer
+       whose sign indicates the result: less than zero means the index key
+       does not match the query, but the index scan should continue; zero
+       means that the index key does match the query; greater than zero
+       indicates that the index scan should stop because no more matches
+       are possible.  The strategy number <literal>n</> of the operator
+       that generated the partial match query is provided, in case its
+       semantics are needed to determine when to end the scan.  Also,
+       <literal>extra_data</> is the corresponding element of the extra-data
+       array made by <function>extractQuery</>, or NULL if none.
+      </para>
+     </listitem>
+    </varlistentry>
+
+  </variablelist>
+
+ <para>
+  To support <quote>partial match</> queries, an operator class must
+  provide the <function>comparePartial</> method, and its
+  <function>extractQuery</> method must set the <literal>pmatch</>
+  parameter when a partial-match query is encountered.  See
+  <xref linkend="gin-partial-match"> for details.
+ </para>
 </sect1>
 
 <sect1 id="gin-implementation">
@@ -159,6 +221,63 @@
   pointeurs heap (PL, posting list) si la liste est suffisamment petite.
  </para>
 
+ <sect2 id="gin-fast-update">
+  <title>GIN fast update technique</title>
+
+  <para>
+   Updating a <acronym>GIN</acronym> index tends to be slow because of the
+   intrinsic nature of inverted indexes: inserting or updating one heap row
+   can cause many inserts into the index (one for each key extracted
+   from the indexed value). As of <productname>PostgreSQL</productname> 8.4,
+   <acronym>GIN</> is capable of postponing much of this work by inserting
+   new tuples into a temporary, unsorted list of pending entries.
+   When the table is vacuumed, or if the pending list becomes too large
+   (larger than <xref linkend="guc-work-mem">), the entries are moved to the
+   main <acronym>GIN</acronym> data structure using the same bulk insert
+   techniques used during initial index creation.  This greatly improves
+   <acronym>GIN</acronym> index update speed, even counting the additional
+   vacuum overhead.  Moreover the overhead can be done by a background
+   process instead of in foreground query processing.
+  </para>
+
+  <para>
+   The main disadvantage of this approach is that searches must scan the list
+   of pending entries in addition to searching the regular index, and so
+   a large list of pending entries will slow searches significantly.
+   Another disadvantage is that, while most updates are fast, an update
+   that causes the pending list to become <quote>too large</> will incur an
+   immediate cleanup cycle and thus be much slower than other updates.
+   Proper use of autovacuum can minimize both of these problems.
+  </para>
+
+  <para>
+   If consistent response time is more important than update speed,
+   use of pending entries can be disabled by turning off the
+   <literal>FASTUPDATE</literal> storage parameter for a
+   <acronym>GIN</acronym> index.  See <xref linkend="sql-createindex"
+   endterm="sql-createindex-title"> for details.
+  </para>
+ </sect2>
+
+ <sect2 id="gin-partial-match">
+  <title>Partial match algorithm</title>
+
+  <para>
+   GIN can support <quote>partial match</> queries, in which the query
+   does not determine an exact match for one or more keys, but the possible
+   matches fall within a reasonably narrow range of key values (within the
+   key sorting order determined by the <function>compare</> support method).
+   The <function>extractQuery</> method, instead of returning a key value
+   to be matched exactly, returns a key value that is the lower bound of
+   the range to be searched, and sets the <literal>pmatch</> flag true.
+   The key range is then searched using the <function>comparePartial</>
+   method.  <function>comparePartial</> must return zero for an actual
+   match, less than zero for a non-match that is still within the range
+   to be searched, or greater than zero if the index key is past the range
+   that could match.
+  </para>
+ </sect2>
+
 </sect1>
 
 <sect1 id="gin-tips">
@@ -169,12 +288,19 @@
    <term>Création vs insertion</term>
    <listitem>
 	<para>
-	 Dans la plupart des cas, l'insertion dans un index <acronym>GIN</acronym>
-	 est lente du fait de la probabilité d'insertion de nombreuses clés pour
+	 L'insertion dans un index <acronym>GIN</acronym> peut être
+	 lente du fait de la probabilité d'insertion de nombreuses clés pour
 	 chaque valeur. C'est pourquoi, pour les chargements massifs dans une table, il
 	 est conseillé de supprimer l'index GIN et de le re-créer après
 	 le chargement.
 	</para>
+
+    <para>
+     As of <productname>PostgreSQL</productname> 8.4, this advice is less
+     necessary since delayed indexing is used (see <xref
+     linkend="gin-fast-update"> for details).  But for very large updates
+     it may still be best to drop and recreate the index.
+    </para>
    </listitem>
   </varlistentry>
 
@@ -186,6 +312,23 @@
      Le temps de construction d'un index <acronym>GIN</acronym> dépend
      grandement du paramètre <varname>maintenance_work_mem</varname>&nbsp;;
      il est contre-productif de limiter la mémoire de travail lors de la création d'un index.
+    </para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry>
+   <term><xref linkend="guc-work-mem"></term>
+   <listitem>
+    <para>
+     During a series of insertions into an existing <acronym>GIN</acronym>
+     index that has <literal>FASTUPDATE</> enabled, the system will clean up
+     the pending-entry list whenever it grows larger than
+     <varname>work_mem</>.  To avoid fluctuations in observed response time,
+     it's desirable to have pending-list cleanup occur in the background
+     (i.e., via autovacuum).  Foreground cleanup operations can be avoided by
+     increasing <varname>work_mem</> or making autovacuum more aggressive.
+     However, enlarging <varname>work_mem</> means that if a foreground
+     cleanup does occur, it will take even longer.
     </para>
    </listitem>
   </varlistentry>
@@ -229,32 +372,44 @@
  <title>Limitations</title>
 
  <para>
-  <acronym>GIN</acronym> ne supporte pas les parcours d'index complets&nbsp;:
-  comme il y a souvent de nombreuses clés par valeur, chaque pointeur de pile
-  serait renvoyé plusieurs fois, or il n'existe pas de moyen simple d'empêcher
-  cela.
+  <acronym>GIN</acronym> doesn't support full index scans.  The reason for
+  this is that <function>extractValue</> is allowed to return zero keys,
+  as for example might happen with an empty string or empty array.  In such
+  a case the indexed value will be unrepresented in the index.  It is
+  therefore impossible for <acronym>GIN</acronym> to guarantee that a
+  scan of the index can find every row in the table.
  </para>
 
  <para>
-  Quand <function>extractQuery</function> ne renvoie aucune clé,
-  <acronym>GIN</acronym> émet une erreur. En fonction de l'opérateur, une requête
-  vide peut correspondre à toutes, quelques, ou aucune des valeurs indexées (par
-  exemple, tout tableau contient le tableau vide mais ne recouvre pas le
-  tableau vide). <acronym>GIN</acronym> ne peut alors pas déterminer la bonne
-  réponse, pas plus qu'il ne peut fournir un résultat de parcours d'index
-  complet en déterminant la justesse de cette opération.
+  Because of this limitation, when <function>extractQuery</function> returns
+  <literal>nkeys = 0</> to indicate that all values match the query,
+  <acronym>GIN</acronym> will emit an error.  (If there are multiple ANDed
+  indexable operators in the query, this happens only if they all return zero
+  for <literal>nkeys</>.)
  </para>
 
  <para>
-  Qu'<function>extractValue</function> ne retourne aucune clé n'est pas une
-  erreur, mais dans ce cas, la valeur indexée n'est pas représentée dans l'index. C'est une
-  autre raison pour laquelle le parcours d'index complet est inutile &mdash;
-  il manquerait ce type de lignes.
+  It is possible for an operator class to circumvent the restriction against
+  full index scan.  To do that, <function>extractValue</> must return at least
+  one (possibly dummy) key for every indexed value, and
+  <function>extractQuery</function> must convert an unrestricted search into
+  a partial-match query that will scan the whole index.  This is inefficient
+  but might be necessary to avoid corner-case failures with operators such
+  as <literal>LIKE</> or subset inclusion.
  </para>
 
  <para>
-  <acronym>GIN</acronym> ne recherche les clés que par égalité. Cela doit être
-  amélioré.
+  <acronym>GIN</acronym> assumes that indexable operators are strict.
+  This means that <function>extractValue</> will not be called at all on
+  a NULL value (so the value will go unindexed), and
+  <function>extractQuery</function> will not be called on a NULL comparison
+  value either (instead, the query is presumed to be unmatchable).
+ </para>
+
+ <para>
+  A possibly more serious limitation is that <acronym>GIN</acronym> cannot
+  handle NULL keys &mdash; for example, an array containing a NULL cannot
+  be handled except by ignoring the NULL.
  </para>
 </sect1>
 
@@ -265,11 +420,20 @@
   Les sources de <productname>PostgreSQL</productname> incluent
   des classes d'opérateur <acronym>GIN</acronym> pour <type>tsvector</type> et
   pour les tableaux unidimensionnel de tous
-  les types internes. Les modules <filename>contrib</filename> suivants
+  les types internes. Prefix searching in
+  <type>tsvector</> is implemented using the <acronym>GIN</> partial match
+  feature. Les modules <filename>contrib</filename> suivants
   contiennent aussi des classes d'opérateurs <acronym>GIN</acronym>&nbsp;:
  </para>
  
  <variablelist>
+  <varlistentry>
+   <term>btree-gin</term>
+   <listitem>
+    <para>B-Tree equivalent functionality for several data types</para>
+   </listitem>
+  </varlistentry>
+
   <varlistentry>
    <term>hstore</term>
    <listitem>
