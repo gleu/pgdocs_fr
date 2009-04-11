@@ -45,7 +45,9 @@
    de plusieurs versions de la même ligne logique&nbsp;; pour un index, chaque ligne
    est un objet indépendant qui a besoin de sa propre entrée dans l'index. Du
    coup, la mise à jour d'une ligne crée toujours toutes les nouvelles entrées
-   d'index pour la ligne, même si les valeurs de la clé ne changent pas. Les
+   d'index pour la ligne, même si les valeurs de la clé ne changent pas.
+   (HOT tuples are an exception to this
+   statement; but indexes do not deal with those, either.) Les
    entrées d'index pour les lignes mortes sont réclamées (par le VACUUM) lorsque
    les lignes mortes elles-même sont réclamées.
   </para>
@@ -192,8 +194,8 @@ aminsert (Relation indexRelation,
    <literal>heapRelation</literal> est nécessaire dans la méthode d'accès.
    Voir <xref linkend="index-unique-checks"/> pour les détails. Le résultat vaut
    TRUE si une entrée de l'index a été insérée, FALSE sinon. (Un résultat FALSE
-   n'indique pas une erreur, car il est utilisé dans divers cas, dont l'index AM
-   qui refuse d'indexer une valeur NULL.)
+   n'indique pas une erreur, car il est utilisé dans divers cas, dont la méthode
+   d'indexage qui refuse d'indexer une valeur NULL.)
   </para>
 
   <para>
@@ -250,6 +252,16 @@ amvacuumcleanup (IndexVacuumInfo *info,
   </para>
 
   <para>
+   As of <productname>PostgreSQL</productname> 8.4,
+   <function>amvacuumcleanup</> will also be called at completion of an
+   <command>ANALYZE</> operation.  In this case <literal>stats</> is always
+   NULL and any return value will be ignored.  This case can be distinguished
+   by checking <literal>info-&gt;analyze_only</literal>.  It is recommended
+   that the access method do nothing except post-insert cleanup in such a
+   call, and that only in an autovacuum worker process.
+  </para>
+
+  <para>
 <programlisting>
 void
 amcostestimate (PlannerInfo *root,
@@ -279,8 +291,8 @@ amoptions (ArrayType *reloptions,
    La fonction construit une valeur de type <type>bytea</type> à
    copier dans le champ <structfield>rd_options</structfield> de l'entrée relcache
    de l'index. Les données contenues dans la valeur <type>bytea</type> sont
-   définies par la méthode d'accès, mais les méthodes d'accès standard utilisent actuellement
-   toutes la structure <structname>StdRdOptions</structname>.
+   définies par la méthode d'accès. La plupart des méthodes d'accès standard utilisent
+   la structure <structname>StdRdOptions</structname>.
    Lorsque <parameter>validate</parameter> est true, la fonction remonte
    un message d'erreur clair si une option n'est pas reconnue ou a des
    valeurs invalides&nbsp;; quand <parameter>validate</parameter> est false, les
@@ -299,8 +311,9 @@ amoptions (ArrayType *reloptions,
    (<foreignphrase>qualifier</foreignphrase>) ou <firstterm>clé de
    parcours</firstterm> (<foreignphrase>scan key</foreignphrase>). La sémantique
    du parcours d'index est décrite plus complètement dans <xref linkend="index-scanning"/>,
-   ci-dessous. Les fonctions liées au parcours qu'une méthode d'accès à
-   l'index doit fournir sont&nbsp;:
+   ci-dessous. An index access method can support <quote>plain</> index scans,
+   <quote>bitmap</> index scans, or both. Les fonctions liées au parcours qu'une méthode d'accès à
+   l'index doit ou devrait fournir sont&nbsp;:
   </para>
 
   <para>
@@ -331,29 +344,53 @@ amgettuple (IndexScanDesc scan,
    <literal>scan</literal>. <quote>success</quote> signifie uniquement que
    l'index contient une entrée qui correspond aux clés de parcours, pas que
    la ligne existe toujours dans la pile ou qu'elle peut réussir le test
-   d'instantané de l'appelant.
+   d'instantané de l'appelant.On success, <function>amgettuple</>
+   must also set <literal>scan-&gt;xs_recheck</> to TRUE or FALSE.
+   FALSE means it is certain that the index entry matches the scan keys.
+   TRUE means this is not certain, and the conditions represented by the
+   scan keys must be rechecked against the heap tuple after fetching it.
+   This provision supports <quote>lossy</> index operators.
+   Note that rechecking will extend only to the scan conditions; a partial
+   index predicate (if any) is never rechecked by <function>amgettuple</>
+   callers.
   </para>
 
   <para>
-<programlisting>boolean
-amgetmulti (IndexScanDesc scan,
-            ItemPointer tids,
-            int32 max_tids,
-            int32 *returned_tids);
+   The <function>amgettuple</> function need only be provided if the access
+   method supports <quote>plain</> index scans.  If it doesn't, the
+   <structfield>amgettuple</> field in its <structname>pg_am</> row must
+   be set to zero.
+  </para>
+
+  <para>
+<programlisting>
+int64
+amgetbitmap (IndexScanDesc scan,
+             TIDBitmap *tbm);
 </programlisting>
-   Récupérer plusieurs lignes d'un parcours donné. Renvoie TRUE si le parcours
-   peut continuer, FALSE s'il ne subsiste plus aucune ligne.
-   <literal>tids</literal> pointe sur un tableau fournit par l'appelant de
-   <literal>max_tids</literal> enregistrements <structname>ItemPointerData</structname>,
-   remplit, à l'appel, des TID des lignes correspondantes. <literal>*returned_tids</literal> est
-   initialisé au nombre de TID réellement renvoyés. Il peut y en avoir moins
-   que <literal>max_tids</literal>, voire zéro, même si la valeur de retour vaut
-   TRUE. (Cette provision permet à la méthode d'accès de choisir les points d'arrêt les
-   plus efficaces dans son parcours, par exemple les limites de la page d'index).
-   <function>amgetmulti</function> et <function>amgettuple</function> ne peuvent pas être utilisés
-   dans le même parcours d'index&nbsp;; l'utilisation de
-   <function>amgetmulti</function> est soumise à d'autres restrictions, comme expliqué dans <xref
-   linkend="index-scanning"/>.
+   Fetch all tuples in the given scan and add them to the caller-supplied
+   TIDBitmap (that is, OR the set of tuple IDs into whatever set is already
+   in the bitmap).  The number of tuples fetched is returned (this might be
+   just an approximate count, for instance some AMs do not detect duplicates).
+   While inserting tuple IDs into the bitmap, <function>amgetbitmap</> can
+   indicate that rechecking of the scan conditions is required for specific
+   tuple IDs.  This is analogous to the <literal>xs_recheck</> output parameter
+   of <function>amgettuple</>.  Note: in the current implementation, support
+   for this feature is conflated with support for lossy storage of the bitmap
+   itself, and therefore callers recheck both the scan conditions and the
+   partial index predicate (if any) for recheckable tuples.  That might not
+   always be true, however.
+   <function>amgetbitmap</> and
+   <function>amgettuple</> cannot be used in the same index scan; there
+   are other restrictions too when using <function>amgetbitmap</>, as explained
+   in <xref linkend="index-scanning">.
+  </para>
+
+  <para>
+   The <function>amgetbitmap</> function need only be provided if the access
+   method supports <quote>bitmap</> index scans.  If it doesn't, the
+   <structfield>amgetbitmap</> field in its <structname>pg_am</> row must
+   be set to zero.
   </para>
 
   <para>
@@ -440,14 +477,15 @@ voulu mettre en avant une idée négative du fonctionnement du parcours ? -->
 <!-- lossy: à pertes ? c'est valable quand on parle de compression, qui
 supprime des données, mais dans le cas de l'index ? -->
   <para>
-   La famille d'opérateur peut indiquer que l'index est <firstterm>à perte</firstterm>
-   pour un opérateur particulier&nbsp;; ceci implique que le parcours d'index
+   La méthode d'accès peut indiquer que l'index est <firstterm>à perte</firstterm>
+   or requires rechecks, for a particular query&nbsp;; ceci implique que le parcours d'index
    renvoie toutes les entrées qui correspondent à la clé de parcours, avec
    éventuellement des entrées supplémentaires qui ne correspondent pas. La machinerie du
-   parcours d'index du système principal applique alors cet opérateur au tuple
-   pour vérifier s'il doit bien effectivement être retenu. Pour les opérateurs sans perte,
+   parcours d'index du système principal applique alors les conditions de l'index au tuple
+   pour vérifier s'il doit bien effectivement être retenu. If the recheck option is not
+   specified,
    le parcours d'index doit renvoyer exactement l'ensemble d'entrées
-   correspondantes, car il n'y a pas de revérification.
+   correspondantes.
   </para>
 
   <para>
@@ -489,15 +527,20 @@ supprime des données, mais dans le cas de l'index ? -->
    d'accès qui indiquent qu'elles supportent les parcours ordonnés.) Après
    le premier appel, <function>amgettuple</function>
    doit être préparé pour continuer le parcours dans la direction adaptée à partir de
-   l'entrée la plus récemment renvoyée.
+   l'entrée la plus récemment renvoyée.(But if
+   <structname>pg_am</>.<structfield>amcanbackward</> is false, all subsequent
+   calls will have the same direction as the first one.)
   </para>
 
   <para>
-   La méthode d'accès doit supporter le <quote>marquage</quote> d'une position dans
-   un parcours et le renvoi ultérieur à une position marquée. La même position
-   peut être restaurée plusieurs fois. Néanmoins, seule une position doit
-   être mémorisée par parcours&nbsp;; tout nouvel appel à <function>ammarkpos</function>
-   surcharge la position précédemment marquée.
+   Access methods that support ordered scans must support <quote>marking</> a
+   position in a scan and later returning to the marked position.  The same
+   position might be restored multiple times.  However, only one position need
+   be remembered per scan; a new <function>ammarkpos</> call overrides the
+   previously marked position.  An access method that does not support
+   ordered scans should still provide mark and restore functions in
+   <structname>pg_am</>, but it is sufficient to have them throw errors if
+   called.
   </para>
 
   <para>
@@ -515,28 +558,30 @@ supprime des données, mais dans le cas de l'index ? -->
   </para>
 
   <para>
-   <function>amgetmulti</function> peut être utilisé à la place de 
+   <function>amgetbitmap</function> peut être utilisé à la place de 
    <function>amgettuple</function> pour un parcours d'index. Cela permet de
-   récupérer plusieurs lignes par appel. Cette méthode peut s'avérer 
+   récupérer toutes les lignes en un appel. Cette méthode peut s'avérer 
    notablement plus efficace que <function>amgettuple</function> parce qu'elle
    permet d'éviter les cycles de verrouillage/déverrouillage à l'intérieur de la
-   méthode d'accès. En principe, <function>amgetmulti</function> a les mêmes
+   méthode d'accès. En principe, <function>amgetbitmap</function> a les mêmes
    effets que des appels répétés à <function>amgettuple</function>, mais 
    plusieurs restrictions ont été imposées pour simplifier la procédure. En premier lieu,
-   <function>amgetmulti</function> ne prend pas d'argument
-   <literal>direction</literal>, et de ce fait, ne supporte ni parcours inverse
-   ni changement de direction au sein d'un parcours.
-   La méthode d'accès n'a pas non plus à supporter le marquage et la
-   restauration des positions de parcours lors d'un parcours
-   <function>amgetmulti</function>. (Ces restrictions sont minimes, car
-   l'utilisation de ces fonctionnalités lors d'un parcours
-   <function>amgetmulti</function> s'avère difficile&nbsp;: l'ajustement du
-   tampon de la liste des TIDs de l'appelant est complexe). Enfin,
+   <function>amgetbitmap</function> returns all
+   tuples at once and marking or restoring scan positions isn't
+   supported. Secondly, the tuples are returned in a bitmap which doesn't
+   have any specific ordering, which is why <function>amgetbitmap</> doesn't
+   take a <literal>direction</> argument. Enfin,
    <function>amgetmulti</function> ne garantit pas le verrouillage
    des lignes renvoyées, avec les implications précisées dans <xref
    linkend="index-locking"/>.
   </para>
 
+  <para>
+   Note that it is permitted for an access method to implement only
+   <function>amgetbitmap</> and not <function>amgettuple</>, or vice versa,
+   if its internal implementation is unsuited to one API or the other.
+  </para>
+  
  </sect1>
 
  <sect1 id="index-locking">
@@ -641,10 +686,9 @@ supprime des données, mais dans le cas de l'index ? -->
   </para>
 
   <para>
-   Dans un parcours d'index <function>amgetmulti</function>, la méthode d'accès n'a pas
-   besoin de garantir la conservation d'un lien à l'index sur quelque ligne
-   renvoyée. (Il est de toute façon impossible de lier autre chose que la
-   dernière.) C'est pourquoi, il est préférable d'utiliser de tels parcours
+   Dans un parcours d'index <function>amgetbitmap</function>, la méthode d'accès
+   ne conserve pas de lien à l'index sur quelque ligne
+   renvoyée. C'est pourquoi, il est préférable d'utiliser de tels parcours
    avec les instantanés compatibles MVCC.
   </para>
 
@@ -894,7 +938,7 @@ amcostestimate (PlannerInfo *root,
   <para>
    indexSelectivity doit être initialisé à la fraction estimée des lignes
    de la table parent qui sera récupérée lors du parcours d'index. Dans le cas
-   d'un index à perte, c'est typiquement plus élevé que la
+   d'une requête à perte, c'est typiquement plus élevé que la
    fraction des lignes qui satisfont les conditions de qualification données.
   </para>
 
@@ -924,7 +968,8 @@ amcostestimate (PlannerInfo *root,
      de l'optimiseur standard <function>clauselist_selectivity()</function>:
 
 <programlisting>*indexSelectivity = clauselist_selectivity(root, indexQuals,
-                                           index-&gt;rel-&gt;relid, JOIN_INNER);
+                                           index-&gt;rel-&gt;relid,
+                                           JOIN_INNER, NULL);
 </programlisting>
     </para>
    </step>
