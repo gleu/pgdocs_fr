@@ -31,9 +31,12 @@
    <firstterm>requête</firstterm>. En SQL, la commande <xref linkend="sql-select"
    endterm="sql-select-title"/> est utilisée pour spécifier des requêtes. La
    syntaxe générale de la commande <command>SELECT</command> est
-<synopsis>SELECT <replaceable>liste_select</replaceable> FROM <replaceable>expression_table</replaceable> <optional><replaceable>specification_tri</replaceable></optional></synopsis>
+<synopsis>
+<optional>WITH <replaceable>with_requêtes</replaceable></optional> SELECT <replaceable>liste_select</replaceable> FROM <replaceable>expression_table</replaceable> <optional><replaceable>specification_tri</replaceable></optional>
+</synopsis>
    Les sections suivantes décrivent le détail de la liste de sélection,
-   l'expression des tables et la spécification du tri.
+   l'expression des tables et la spécification du tri. <literal>WITH</>
+   queries are treated last since they are an advanced feature.
   </para>
 
   <para>
@@ -930,6 +933,57 @@ SELECT ... FROM fdt WHERE EXISTS (SELECT c1 FROM t2 WHERE c2 &gt; fdt.c1)</progr
     ventes dépasse 5000. Notez que les expressions d'agrégats n'ont pas besoin
     d'être identiques dans toutes les parties d'une requête.
    </para>
+
+   <para>
+    If a query contains aggregate function calls, but no <literal>GROUP BY</>
+    clause, grouping still occurs: the result is a single group row (or
+    perhaps no rows at all, if the single row is then eliminated by
+    <literal>HAVING</>).
+    The same is true if it contains a <literal>HAVING</> clause, even
+    without any aggregate function calls or <literal>GROUP BY</> clause.
+   </para>
+  </sect2>
+
+  <sect2 id="queries-window">
+   <title>Window Function Processing</>
+
+   <indexterm zone="queries-window">
+    <primary>window function</primary>
+    <secondary>order of execution</>
+   </indexterm>
+
+   <para>
+    If the query contains any window functions (see
+    <xref linkend="tutorial-window"> and
+    <xref linkend="syntax-window-functions">), these functions are evaluated
+    after any grouping, aggregation, and <literal>HAVING</> filtering is
+    performed.  That is, if the query uses any aggregates, <literal>GROUP
+    BY</>, or <literal>HAVING</>, then the rows seen by the window functions
+    are the group rows instead of the original table rows from
+    <literal>FROM</>/<literal>WHERE</>.
+   </para>
+
+   <para>
+    When multiple window functions are used, all the window functions having
+    syntactically equivalent <literal>PARTITION BY</> and <literal>ORDER BY</>
+    clauses in their window definitions are guaranteed to be evaluated in a
+    single pass over the data. Therefore they will see the same sort ordering,
+    even if the <literal>ORDER BY</> does not uniquely determine an ordering.
+    However, no guarantees are made about the evaluation of functions having
+    different <literal>PARTITION BY</> or <literal>ORDER BY</> specifications.
+    (In such cases a sort step is typically required between the passes of
+    window function evaluations, and the sort is not guaranteed to preserve
+    ordering of rows that its <literal>ORDER BY</> sees as equivalent.)
+   </para>
+
+   <para>
+    Currently, window functions always require presorted data, and so the
+    query output will be ordered according to one or another of the window
+    functions' <literal>PARTITION BY</>/<literal>ORDER BY</> clauses.
+    It is not recommendable to rely on this, however.  Use an explicit
+    top-level <literal>ORDER BY</> clause if you want to be sure the
+    results are sorted in a particular way.
+   </para>
   </sect2>
  </sect1>
 
@@ -1016,10 +1070,30 @@ aussi être donné comme dans&nbsp;:
 
    <para>
     Si aucun nom de colonne en sortie n'est spécifié en utilisant
-    <literal>AS</literal>, le système affecte un nom par défaut. Pour les références de
+    <literal>AS</literal>, le système affecte un nom de colonne par défaut.
+    Pour les références de
     colonne simple, c'est le nom de la colonne référencée. Pour les appels de
     fonction, il s'agit du nom de la fonction. Pour les expressions complexes,
     le système générera un nom générique.
+   </para>
+
+   <para>
+    The <literal>AS</> keyword is optional, but only if the new column
+    name does not match any
+    <productname>PostgreSQL</productname> keyword (see <xref
+    linkend="sql-keywords-appendix">).  To avoid an accidental match to
+    a keyword, you can double-quote the column name.  For example,
+    <literal>VALUE</> is a keyword, so this does not work:
+<programlisting>
+SELECT a value, b + c AS sum FROM ...
+</programlisting>
+    but this does:
+<programlisting>
+SELECT a "value", b + c AS sum FROM ...
+</programlisting>
+    For protection against possible
+    future keyword additions, it is recommended that you always either
+    write <literal>AS</literal> or double-quote the output column name.
    </para>
 
    <note>
@@ -1299,7 +1373,8 @@ SELECT a + b AS sum, c FROM table1 ORDER BY sum + c;          -- mauvais
   <para>
    <literal>OFFSET</literal> indique de passer ce nombre de lignes avant de renvoyer 
    les lignes restantes. <literal>OFFSET 0</literal> revient à oublier la clause
-   <literal>OFFSET</literal>. Si à la fois <literal>OFFSET</literal> et <literal>LIMIT</literal>
+   <literal>OFFSET</literal>, and <literal>LIMIT NULL</> is the same
+   as omitting the <literal>LIMIT</> clause. Si à la fois <literal>OFFSET</literal> et <literal>LIMIT</literal>
    apparaissent, alors les <literal>OFFSET</literal> lignes sont laissées avant de
    commencer le renvoi des <literal>LIMIT</literal> lignes.
   </para>
@@ -1397,6 +1472,282 @@ SELECT 3, 'trois';
   <para>
    Pour plus d'informations, voir <xref linkend="sql-values"
    endterm="sql-values-title"/>.
+  </para>
+
+ </sect1>
+
+
+ <sect1 id="queries-with">
+  <title><literal>WITH</literal> Queries</title>
+
+  <indexterm zone="queries-with">
+   <primary>WITH</primary>
+   <secondary>in SELECT</secondary>
+  </indexterm>
+
+  <indexterm>
+   <primary>common table expression</primary>
+   <see>WITH</see>
+  </indexterm>
+
+  <para>
+   <literal>WITH</> provides a way to write subqueries for use in a larger
+   <literal>SELECT</> query.  The subqueries can be thought of as defining
+   temporary tables that exist just for this query.  One use of this feature
+   is to break down complicated queries into simpler parts.  An example is:
+
+<programlisting>
+WITH regional_sales AS (
+        SELECT region, SUM(amount) AS total_sales
+        FROM orders
+        GROUP BY region
+     ), top_regions AS (
+        SELECT region
+        FROM regional_sales
+        WHERE total_sales &gt; (SELECT SUM(total_sales)/10 FROM regional_sales)
+     )
+SELECT region,
+       product,
+       SUM(quantity) AS product_units,
+       SUM(amount) AS product_sales
+FROM orders
+WHERE region IN (SELECT region FROM top_regions)
+GROUP BY region, product;
+</programlisting>
+
+   which displays per-product sales totals in only the top sales regions.
+   This example could have been written without <literal>WITH</>,
+   but we'd have needed two levels of nested sub-SELECTs.  It's a bit
+   easier to follow this way.
+  </para>
+
+  <para>
+   The optional <literal>RECURSIVE</> modifier changes <literal>WITH</>
+   from a mere syntactic convenience into a feature that accomplishes
+   things not otherwise possible in standard SQL.  Using
+   <literal>RECURSIVE</>, a <literal>WITH</> query can refer to its own
+   output.  A very simple example is this query to sum the integers from 1
+   through 100:
+
+<programlisting>
+WITH RECURSIVE t(n) AS (
+    VALUES (1)
+  UNION ALL
+    SELECT n+1 FROM t WHERE n &lt; 100
+)
+SELECT sum(n) FROM t;
+</programlisting>
+
+   The general form of a recursive <literal>WITH</> query is always a
+   <firstterm>non-recursive term</>, then <literal>UNION</> (or
+   <literal>UNION ALL</>), then a
+   <firstterm>recursive term</>, where only the recursive term can contain
+   a reference to the query's own output.  Such a query is executed as
+   follows:
+  </para>
+
+  <procedure>
+   <title>Recursive Query Evaluation</title>
+
+   <step performance="required">
+    <para>
+     Evaluate the non-recursive term.  For <literal>UNION</> (but not
+     <literal>UNION ALL</>), discard duplicate rows.  Include all remaining
+     rows in the result of the recursive query, and also place them in a
+     temporary <firstterm>working table</>.
+    </para>
+   </step>
+
+   <step performance="required">
+    <para>
+     So long as the working table is not empty, repeat these steps:
+    </para>
+    <substeps>
+     <step performance="required">
+      <para>
+       Evaluate the recursive term, substituting the current contents of
+       the working table for the recursive self-reference.
+       For <literal>UNION</> (but not <literal>UNION ALL</>), discard
+       duplicate rows and rows that duplicate any previous result row.
+       Include all remaining rows in the result of the recursive query, and
+       also place them in a temporary <firstterm>intermediate table</>.
+      </para>
+     </step>
+
+     <step performance="required">
+      <para>
+       Replace the contents of the working table with the contents of the
+       intermediate table, then empty the intermediate table.
+      </para>
+     </step>
+    </substeps>
+   </step>
+  </procedure>
+
+  <note>
+   <para>
+    Strictly speaking, this process is iteration not recursion, but
+    <literal>RECURSIVE</> is the terminology chosen by the SQL standards
+    committee.
+   </para>
+  </note>
+
+  <para>
+   In the example above, the working table has just a single row in each step,
+   and it takes on the values from 1 through 100 in successive steps.  In
+   the 100th step, there is no output because of the <literal>WHERE</>
+   clause, and so the query terminates.
+  </para>
+
+  <para>
+   Recursive queries are typically used to deal with hierarchical or
+   tree-structured data.  A useful example is this query to find all the
+   direct and indirect sub-parts of a product, given only a table that
+   shows immediate inclusions:
+
+<programlisting>
+WITH RECURSIVE included_parts(sub_part, part, quantity) AS (
+    SELECT sub_part, part, quantity FROM parts WHERE part = 'our_product'
+  UNION ALL
+    SELECT p.sub_part, p.part, p.quantity
+    FROM included_parts pr, parts p
+    WHERE p.part = pr.sub_part
+  )
+SELECT sub_part, SUM(quantity) as total_quantity
+FROM included_parts
+GROUP BY sub_part
+</programlisting>
+  </para>
+
+  <para>
+   When working with recursive queries it is important to be sure that
+   the recursive part of the query will eventually return no tuples,
+   or else the query will loop indefinitely.  Sometimes, using
+   <literal>UNION</> instead of <literal>UNION ALL</> can accomplish this
+   by discarding rows that duplicate previous output rows.  However, often a
+   cycle does not involve output rows that are completely duplicate: it may be
+   necessary to check just one or a few fields to see if the same point has
+   been reached before.  The standard method for handling such situations is
+   to compute an array of the already-visited values.  For example, consider
+   the following query that searches a table <structname>graph</> using a
+   <structfield>link</> field:
+
+<programlisting>
+WITH RECURSIVE search_graph(id, link, data, depth) AS (
+        SELECT g.id, g.link, g.data, 1
+        FROM graph g
+      UNION ALL
+        SELECT g.id, g.link, g.data, sg.depth + 1
+        FROM graph g, search_graph sg
+        WHERE g.id = sg.link
+)
+SELECT * FROM search_graph;
+</programlisting>
+
+   This query will loop if the <structfield>link</> relationships contain
+   cycles.  Because we require a <quote>depth</> output, just changing
+   <literal>UNION ALL</> to <literal>UNION</> would not eliminate the looping.
+   Instead we need to recognize whether we have reached the same row again
+   while following a particular path of links.  We add two columns
+   <structfield>path</> and <structfield>cycle</> to the loop-prone query:
+
+<programlisting>
+WITH RECURSIVE search_graph(id, link, data, depth, path, cycle) AS (
+        SELECT g.id, g.link, g.data, 1,
+          ARRAY[g.id],
+          false
+        FROM graph g
+      UNION ALL
+        SELECT g.id, g.link, g.data, sg.depth + 1,
+          path || g.id,
+          g.id = ANY(path)
+        FROM graph g, search_graph sg
+        WHERE g.id = sg.link AND NOT cycle
+)
+SELECT * FROM search_graph;
+</programlisting>
+
+   Aside from preventing cycles, the array value is often useful in its own
+   right as representing the <quote>path</> taken to reach any particular row.
+  </para>
+
+  <para>
+   In the general case where more than one field needs to be checked to
+   recognize a cycle, use an array of rows.  For example, if we needed to
+   compare fields <structfield>f1</> and <structfield>f2</>:
+
+<programlisting>
+WITH RECURSIVE search_graph(id, link, data, depth, path, cycle) AS (
+        SELECT g.id, g.link, g.data, 1,
+          ARRAY[ROW(g.f1, g.f2)],
+          false
+        FROM graph g
+      UNION ALL
+        SELECT g.id, g.link, g.data, sg.depth + 1,
+          path || ROW(g.f1, g.f2),
+          ROW(g.f1, g.f2) = ANY(path)
+        FROM graph g, search_graph sg
+        WHERE g.id = sg.link AND NOT cycle
+)
+SELECT * FROM search_graph;
+</programlisting>
+  </para>
+
+  <tip>
+   <para>
+    Omit the <literal>ROW()</> syntax in the common case where only one field
+    needs to be checked to recognize a cycle.  This allows a simple array
+    rather than a composite-type array to be used, gaining efficiency.
+   </para>
+  </tip>
+
+  <tip>
+   <para>
+    The recursive query evaluation algorithm produces its output in
+    breadth-first search order.  You can display the results in depth-first
+    search order by making the outer query <literal>ORDER BY</> a
+    <quote>path</> column constructed in this way.
+   </para>
+  </tip>
+
+  <para>
+   A helpful trick for testing queries
+   when you are not certain if they might loop is to place a <literal>LIMIT</>
+   in the parent query.  For example, this query would loop forever without
+   the <literal>LIMIT</>:
+
+<programlisting>
+WITH RECURSIVE t(n) AS (
+    SELECT 1
+  UNION ALL
+    SELECT n+1 FROM t
+)
+SELECT n FROM t LIMIT 100;
+</programlisting>
+
+   This works because <productname>PostgreSQL</productname>'s implementation
+   evaluates only as many rows of a <literal>WITH</> query as are actually
+   fetched by the parent query.  Using this trick in production is not
+   recommended, because other systems might work differently.  Also, it
+   usually won't work if you make the outer query sort the recursive query's
+   results or join them to some other table.
+  </para>
+
+  <para>
+   A useful property of <literal>WITH</> queries is that they are evaluated
+   only once per execution of the parent query, even if they are referred to
+   more than once by the parent query or sibling <literal>WITH</> queries.
+   Thus, expensive calculations that are needed in multiple places can be
+   placed within a <literal>WITH</> query to avoid redundant work.  Another
+   possible application is to prevent unwanted multiple evaluations of
+   functions with side-effects.
+   However, the other side of this coin is that the optimizer is less able to
+   push restrictions from the parent query down into a <literal>WITH</> query
+   than an ordinary sub-query.  The <literal>WITH</> query will generally be
+   evaluated as stated, without suppression of rows that the parent query
+   might discard afterwards.  (But, as mentioned above, evaluation might stop
+   early if the reference(s) to the query demand only a limited number of
+   rows.)
   </para>
 
  </sect1>

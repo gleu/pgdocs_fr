@@ -252,21 +252,20 @@
    </indexterm>
 
    <para>
-    <firstterm>Read Commited</firstterm>
-    est le niveau d'isolation par défaut de
-    <productname>PostgreSQL</productname>. Lorsqu'une transaction fonctionne
-    avec ce niveau d'isolation, une requête <command>SELECT</command> voit
-    uniquement les données validées avant que la requête soit lancée&nbsp;;
-    elle ne voit jamais, lors de l'exécution de la requête, ni les données 
-    non validées ni les modifications validées par les transactions concurrentes
-    (néanmoins, le <command>SELECT</command> voit les effets des
-    précédentes mises à jour dans sa propre transaction, et ce même si elles ne
-    sont pas validées). Dans les faits, une requête <command>SELECT</command> voit
-    une image de la base de données à l'instant où la requête a été lancée.
-    Notez que des commandes <command>SELECT</command> successives peuvent voir
-    des données différentes, y compris si elles font partie de la même
-    transaction, si d'autres transactions valident des modifications de données
-    pendant l'exécution du premier <command>SELECT</command>.
+    <firstterm>Read Committed</firstterm> is the default isolation
+    level in <productname>PostgreSQL</productname>.  When a transaction
+    uses this isolation level, a <command>SELECT</command> query
+    (without a <literal>FOR UPDATE/SHARE</> clause) sees only data
+    committed before the query began; it never sees either uncommitted
+    data or changes committed during query execution by concurrent
+    transactions.  In effect, a <command>SELECT</command> query sees
+    a snapshot of the database as of the instant the query begins to
+    run.   However, <command>SELECT</command> does see the effects
+    of previous updates executed within its own transaction, even
+    though they are not yet committed.  Also note that two successive
+    <command>SELECT</command> commands can see different data, even
+    though they are within a single transaction, if other transactions
+    commit changes during execution of the first <command>SELECT</command>.
    </para>
 
    <para>
@@ -288,23 +287,23 @@
     condition de la recherche de la commande (la clause <literal>WHERE</literal>) est
     ré-évaluée pour savoir si la version mise à jour de la ligne correspond
     toujours à la condition de recherche. Dans ce cas, la deuxième mise à jour
-    continue son opération en commençant par la version mise à jour de la
-    ligne (dans le cas des commandes <command>SELECT FOR UPDATE</command> et
+    continue son opération en utilisant la version mise à jour de la
+    ligne. Dans le cas des commandes <command>SELECT FOR UPDATE</command> et
     <command>SELECT FOR SHARE</command>, cela signifie que la version mise à
-    jour de la ligne est verrouillée et renvoyée au client).
+    jour de la ligne est verrouillée et renvoyée au client.
    </para>
 
    <para>
     À cause de la règle ci-dessus, une commande de mise à jour a la
     possibilité de voir une image non cohérente&nbsp;: elle peut voir les effets
-    de commandes de mises à jour concurrentes affectant les mêmes lignes que
+    de commandes de mises à jour concurrentes sur les mêmes lignes que
     celles qu'elle essaie de mettre à jour mais elle ne voit pas les effets de
     ces commandes sur les autres lignes de la base de données. Ce comportement
     rend le mode de lecture validée non convenable pour les commandes qui
-    impliquent des conditions de recherche complexes. Néanmoins, il est
+    impliquent des conditions de recherche complexes&nbsp;; néanmoins, il est
     intéressant pour
     les cas simples. Par exemple, considérons la mise à jour de balances de
-    banque avec des transactions comme
+    banque avec des transactions comme&nbsp;:
 
 <screen>BEGIN;
 UPDATE comptes SET balance = balance + 100.00 WHERE no_compte = 12345;
@@ -319,21 +318,45 @@ COMMIT;</screen>
    </para>
 
    <para>
-    Comme dans le mode de lecture validée, chaque nouvelle commande commence
-    avec une nouvelle image incluant toutes les transactions validées jusque là,
-    les commandes suivantes dans la transaction verront les effets
-    de la transaction concurrente validée dans tous les cas. La problématique
-    ici est de savoir si à l'intérieur d'une <emphasis>même</emphasis> commande, nous
-    avons ou non une vision totalement cohérente de la base de données.
+    More complex usage can produce undesirable results in Read Committed
+    mode.  For example, consider a <command>DELETE</command> command
+    operating on data that is being both added and removed from its
+    restriction criteria by another command, e.g. assume
+    <literal>website</literal> is a two-row table with
+    <literal>website.hits</literal> equaling <literal>9</literal> and
+    <literal>10</literal>:
+
+<screen>
+BEGIN;
+UPDATE website SET hits = hits + 1;
+-- run from another session:  DELETE FROM website WHERE hits = 10;
+COMMIT;
+</screen>
+
+    The <command>DELETE</command> will have no effect even though
+    there is a <literal>website.hits = 10</literal> row before and
+    after the <command>UPDATE</command>. This occurs because the
+    pre-update row value <literal>9</> is skipped, and when the
+    <command>UPDATE</command> completes and <command>DELETE</command>
+    obtains a lock, the new row value is no longer <literal>10</> but
+    <literal>11</>, which no longer matches the criteria.
    </para>
 
    <para>
-    L'isolation partielle de la transaction fournie par le mode de lecture
-    validée est adéquate pour de nombreuses applications et ce mode est rapide
-    et simple à utiliser. Néanmoins, pour les applications réalisant des
-    requêtes et mises à jour complexes, il pourrait être nécessaire de garantir
-    une vue plus cohérente de la base de données que ce que fournit le mode
-    Read Commited.
+    Because Read Committed mode starts each command with a new snapshot
+    that includes all transactions committed up to that instant,
+    subsequent commands in the same transaction will see the effects
+    of the committed concurrent transaction in any case.  The point
+    at issue above is whether or not a <emphasis>single</> command
+    sees an absolutely consistent view of the database.
+   </para>
+
+   <para>
+    The partial transaction isolation provided by Read Committed mode
+    is adequate for many applications, and this mode is fast and simple
+    to use;  however, it is not sufficient for all cases.  Applications
+    that do complex queries and updates might require a more rigorously
+    consistent view of the database than Read Committed mode provides.
    </para>
   </sect2>
 

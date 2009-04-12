@@ -805,6 +805,20 @@ SELECT to_tsquery('english', 'Fat | Rats:AB');
  'fat' | 'rat':AB
 </programlisting>
 
+    Also, <literal>*</> can be attached to a lexeme to specify prefix matching:
+
+<programlisting>
+SELECT to_tsquery('supern:*A &amp; star:A*B');
+        to_tsquery        
+--------------------------
+ 'supern':*A &amp; 'star':*AB
+</programlisting>
+
+    Such a lexeme will match any word in a <type>tsvector</> that begins
+    with the given string.
+   </para>
+
+   <para>
     <function>to_tsquery</function> peut aussi accepter des phrases avec des
     guillemets simples. C'est utile quand la configuration inclut un
     dictionnaire
@@ -850,7 +864,7 @@ SELECT to_tsquery('''supernovae stars'' &amp; !crab');
 </programlisting>
 
     Notez que <function>plainto_tsquery</function> ne peut pas reconnaître un
-    opérateur booléen ou des labels de poids en entrée&nbsp;:
+    opérateur booléen, des labels de poids en entrée ou prefix-match labels&nbsp;:
 
 <programlisting>
 SELECT plainto_tsquery('english', 'The Fat &amp; Rats:C');
@@ -1150,6 +1164,29 @@ ORDER BY rank DESC LIMIT 10;
      </listitem>
      <listitem>
       <para>
+       <literal>MaxFragments</literal>: maximum number of text excerpts 
+       or fragments that matches the query words. It also triggers a 
+       different headline generation function than the default one. This
+       function finds text fragments with as many query words as possible and 
+       stretches  those fragments around the query words. As a result 
+       query words are close to the middle of each fragment and have words on 
+       each side. Each fragment will be of at  most MaxWords and will not 
+       have words of size less than or equal to ShortWord at the start or 
+       end of a  fragment. If all query words are not found in the document, 
+       then  a single fragment of MinWords will be displayed.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>FragmentDelimiter</literal>: When more than one fragments are 
+       displayed, then the fragments will be separated by this delimiter. This 
+       option is effective only if MaxFragments is greater than 1 and there are
+       more than one fragments to be diplayed. This option has no effect on the
+       default headline generation function.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
        <literal>HighlightAll</literal>&nbsp;: booléen&nbsp;; si
        <literal>true</literal>, le document complet sera surligné.
       </para>
@@ -1159,7 +1196,7 @@ ORDER BY rank DESC LIMIT 10;
     Toute option omise recevra une valeur par défaut&nbsp;:
 
 <programlisting>
-StartSel=&lt;b&gt;, StopSel=&lt;/b&gt;, MaxWords=35, MinWords=15, ShortWord=3, HighlightAll=FALSE
+StartSel=&lt;b&gt;, StopSel=&lt;/b&gt;, MaxFragments=0, FragmentDelimiter=" ... ", MaxWords=35, MinWords=15, ShortWord=3, HighlightAll=FALSE
 </programlisting>
    </para>
 
@@ -1973,7 +2010,7 @@ LIMIT 10;
   <note>
    <para>
     La notion de l'analyseur d'une <quote>lettre</quote> est déterminée par la
-    configuration de la locale sur le serveur, spécifiquement par
+    configuration de la locale sur la base de données, spécifiquement par
     <varname>lc_ctype</varname>. Les mots contenant seulement des lettres ASCII
     basiques sont reportés comme un type de jeton séparé car il est parfois
     utile de les distinguer. Dans la plupart des langues européennes, les types
@@ -2316,7 +2353,8 @@ SELECT ts_lexize('public.simple_dict','The');
     linguistiques, par exemple pour empêcher un dictionnaire stemmer anglais de
     réduire le mot «&nbsp;Paris&nbsp;» en 'pari'. Il suffit d'avoir une ligne
     <literal>Paris paris</literal> dans le dictionnaire des synonymes et de le
-    placer avant le dictionnaire <literal>english_stem</literal>&nbsp;:
+    placer avant le dictionnaire <literal>english_stem</literal>. Par
+    exemple&nbsp;:
 
 <programlisting>
 SELECT * FROM ts_debug('english', 'Paris');
@@ -2351,6 +2389,15 @@ SELECT * FROM ts_debug('english', 'Paris');
     par son synonyme séparé par un espace blanc. Les lignes vierges et les
     espaces après les mots sont ignorés, les lettres majuscules sont mises
     en minuscules.
+   </para>
+
+   <para>
+    The <literal>synonym</> template also has an optional parameter
+    <literal>CaseSensitive</>, which defaults to <literal>false</>.  When
+    <literal>CaseSensitive</> is <literal>false</>, words in the synonym file
+    are folded to lower case, as are input tokens.  When it is
+    <literal>true</>, words and tokens are not folded to lower case,
+    but are compared as-is.
    </para>
 
   </sect2>
@@ -3262,20 +3309,7 @@ SELECT plainto_tsquery('supernovae stars');
    Un index GiST est <firstterm>à perte</firstterm>, signifiant que l'index
    peut produire des faux positifs, et il est nécessaire de vérifier la
    ligne de la table pour les éliminer.
-   <productname>PostgreSQL</productname> le fait automatiquement&nbsp;; par
-   exemple, dans le plan de requête ci-dessous, la ligne
-   <literal>Filter:</literal> indique que la sortie de l'index est de nouveau
-   vérifiée&nbsp;:
-
-<programlisting>
-EXPLAIN SELECT * FROM apod WHERE textsearch @@ to_tsquery('supernovae');
-                               QUERY PLAN
--------------------------------------------------------------------------
- Index Scan using textsearch_gidx on apod  (cost=0.00..12.29 rows=2 width=1469)
-   Index Cond: (textsearch @@ '''supernova'''::tsquery)
-   Filter: (textsearch @@ '''supernova'''::tsquery)
-</programlisting>
-
+   <productname>PostgreSQL</productname> le fait automatiquement si nécessire.
    Les index GiST sont à perte car chaque document est représenté dans l'index
    par une signature à longueur fixe. La signature est générée par le hachage de
    chaque mot en un bit aléatoire dans une chaîne à n bit, tous ces bits étant
@@ -3297,59 +3331,11 @@ EXPLAIN SELECT * FROM apod WHERE textsearch @@ to_tsquery('supernovae');
   </para>
 
   <para>
-   Les index GIN ne sont pas à perte mais leur performance dépendent
-   logarithmiquement du nombre de mots uniques.
-  </para>
-
-  <para>
-   En fait, les index GIN stockent seulement les mots (lexemes) des
-   valeurs <type>tsvector</type>, et non pas leur poids. Du coup, alors qu'un
-   index GIN peut être considéré sans perte pour une requête qui ne précise pas
-   de poids, il l'est pour les autres. Une deuxième vérification d'une
-   ligne de table est nécessaire lors de l'utilisation d'une requête impliquant
-   des poids. Malheureusement, dans la conception actuelle de
-   <productname>PostgreSQL</productname>, savoir si une nouvelle vérification
-   est nécessaire est une propriété statique d'un opérateur particulier et n'est
-   pas quelque chose qui peut être activé ou désactivé en ligne suivant les
-   valeurs données à l'opérateur. Pour gérer cette situation sans imposer une
-   surcharge dûe aux vérifications sur des requêtes qui n'en ont pas besoin,
-   l'approche suivant a été adoptée&nbsp;:
-  </para>
-
-  <itemizedlist  spacing="compact" mark="bullet">
-   <listitem>
-    <para>
-     L'opérateur standard de correspondance de texte <literal>@@</literal> est
-     marqué comme sans perte pour les index GIN.
-    </para>
-   </listitem>
-
-   <listitem>
-    <para>
-     Un opérateur de correspondance supplémentaire, <literal>@@@</literal>,
-     est fourni et marqué comme à perte pour les index GIN. Sinon, cet
-     opérateur se comporte exactement comme <literal>@@</literal>.
-    </para>
-   </listitem>
-
-   <listitem>
-    <para>
-     Quand une recherche par index GIN est lancée avec l'opérateur
-     <literal>@@</literal>, le code de support d'index va renvoyer une erreur
-     si la requête spécifie un poids. Ceci protège contre les mauvaises réponses
-     dûes à un échec de la vérification des poids.
-    </para>
-   </listitem>
-  </itemizedlist>
-
-  <para>
-   En bref, vous devez utiliser <literal>@@@</literal> plutôt que
-   <literal>@@</literal> pour traiter les recherches par index GIN sur des
-   requêtes qui impliquent des restrictions de poids. Pour les requêtes
-   qui n'ont pas ces restrictions, les deux opérateurs fonctionneront mais
-   <literal>@@</literal> sera plus rapide. Cette bizarreté sera certainement
-   corrigée dans une prochaine version de
-   <productname>PostgreSQL</productname>.
+   Les index GIN ne sont pas à perte for standard queries, but their performance
+   depends logarithmically on the number of unique words.
+   (However, GIN indexes store only the words (lexemes) of <type>tsvector</>
+   values, and not their weight labels.  Thus a table row recheck is needed
+   when using a query that involves weights.)
   </para>
 
   <para>
@@ -3371,8 +3357,10 @@ EXPLAIN SELECT * FROM apod WHERE textsearch @@ to_tsquery('supernovae');
     </listitem>
     <listitem>
      <para>
-      Les index GIN sont environ dix fois plus lents à mettre à jour que les
-      index GiST.
+      Les index GIN sont un peu plus lents à mettre à jour que les
+      index GiST, but
+      about 10 times slower if fast-update support was disabled
+      (see <xref linkend="gin-fast-update"> for details)
      </para>
     </listitem>
     <listitem>
@@ -3404,7 +3392,7 @@ EXPLAIN SELECT * FROM apod WHERE textsearch @@ to_tsquery('supernovae');
    Le partitionnement de gros ensembles et l'utilisation intelligente des index
    GIN et GiST autorise l'implémentation de recherches très rapides avec une
    mise à jour en ligne. Le partitionnement peut se faire au niveau de la base
-   en utilisant l'héritage et <varname>constraint_exclusion</varname>, ou
+   en utilisant l'héritage, ou
    en distribuant les documents sur des serveurs et en récupérant les résultats
    de la recherche en utilisant le module <filename>contrib/dblink</filename>.
    Ce dernier est possible car les fonctions de score utilisent les
