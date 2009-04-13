@@ -8,6 +8,7 @@
 <refentry id="sql-createcast">
  <refmeta>
   <refentrytitle id="sql-createcast-title">CREATE CAST</refentrytitle>
+  <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Instructions du langage</refmiscinfo>
  </refmeta>
 
@@ -23,6 +24,10 @@
 
 CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</replaceable>)
     WITHOUT FUNCTION
+    [ AS ASSIGNMENT | AS IMPLICIT ]
+
+CREATE CAST (<replaceable>sourcetype</replaceable> AS <replaceable>targettype</replaceable>)
+    WITH INOUT
     [ AS ASSIGNMENT | AS IMPLICIT ]
 </synopsis>
  </refsynopsisdiv>
@@ -45,11 +50,25 @@ CREATE CAST (<replaceable>typesource</replaceable> AS <replaceable>typecible</re
   </para>
 
   <para>
-   Deux types peuvent être <firstterm>binairement compatibles</firstterm>,
-   ce qui signifie que la conversion d'un type en l'autre est
-   <quote>gratuite</quote> et ne nécessite pas d'appel de fonction. Les
-   valeurs correspondantes doivent pour cela utiliser la même représentation interne.
-   Les types <type>text</type> et <type>varchar</type>, par exemple, sont binairement compatibles.
+   Two types can be <firstterm>binary coercible</firstterm>, which
+   means that the conversion can be performed <quote>for free</quote>
+   without invoking any function.  This requires that corresponding
+   values use the same internal representation.  For instance, the
+   types <type>text</type> and <type>varchar</type> are binary
+   coercible both ways.  Binary coercibility is not necessarily a
+   symmetric relationship.  For example, the cast
+   from <type>xml</type> to <type>text</type> can be performed for
+   free in the present implementation, but the reverse direction
+   requires a function that performs at least a syntax check.  (Two
+   types that are binary coercible both ways are also referred to as
+   binary compatible.)
+  </para>
+
+  <para>
+   You can define a cast as an <firstterm>I/O conversion cast</> using
+   the <literal>WITH INOUT</literal> syntax. An I/O conversion cast is
+   performed by invoking the output function of the source data type, and
+   passing the result to the input function of the target data type.
   </para>
 
   <para>
@@ -128,6 +147,18 @@ SELECT CAST ( 2 AS numeric ) + 4.0;
    sont préférablement exécutés dans le seul mode explicite.
   </para>
 
+  <note>
+   <para>
+    Sometimes it is necessary for usability or standards-compliance reasons
+    to provide multiple implicit casts among a set of types, resulting in
+    ambiguity that cannot be avoided as above.  The parser has a fallback
+    heuristic based on <firstterm>type categories</> and <firstterm>preferred
+    types</> that can help to provide desired behavior in such cases.  See
+    <xref linkend="sql-createtype" endterm="sql-createtype-title"> for
+    more information.
+   </para>
+  </note>
+
   <para>
    Pour créer un transtypage, il faut être propriétaire
    du type source ou destination. Seul le superutilisateur peut créer 
@@ -180,12 +211,24 @@ SELECT CAST ( 2 AS numeric ) + 4.0;
 
      <listitem>
       <para>
-       Indication d'une compatibilité binaire des types source et cible. 
-       Aucune fonction n'est ainsi requise pour effectuer la conversion.
+       Indication d'une compatibilité binaire entre le type source et le type
+       cible pour qu'aucune fonction ne soit requise pour effectuer la
+       conversion.
       </para>
      </listitem>
     </varlistentry>
 
+    <varlistentry>
+     <term><literal>WITH INOUT</literal></term>
+
+     <listitem>
+      <para>
+       Indicates that the cast is an I/O conversion cast, performed by
+       invoking the output function of the source data type, and passing the
+       result to the input function of the target data type.
+      </para>
+     </listitem>
+    </varlistentry>
     <varlistentry>
      <term><literal>AS ASSIGNMENT</literal></term>
 
@@ -209,16 +252,22 @@ SELECT CAST ( 2 AS numeric ) + 4.0;
 
   <para>
    Les fonctions de transtypage ont un à trois arguments. Le
-   premier argument est du même type que le type source. Le deuxième argument, si fourni,
+   premier argument est du même type que le type source ou doit être compatible
+   avec ce type. Le deuxième argument, si fourni,
    doit être de type <type>integer</type>. Il stocke le modificateur de type associé au type de
    destination, ou <literal>-1</literal> en l'absence de modificateur. Le troisième
    argument, si fourni,  doit être de type <type>boolean</type>. Il vaut
    <literal>true</literal> si la conversion est explicite, <literal>false</literal> dans le
-   cas contraire. Bizarrement, les spécifications SQL appellent des comportements
+   cas contraire. Bizarrement, le standard SQL appelle des comportements
    différents pour les transtypages explicites et implicites dans certains
    cas. Ce paramètre est fourni pour les fonctions qui implémentent
    de tel transtypages. Il n'est pas recommandé de concevoir des types de
    données utilisateur entrant dans ce cas de figure.
+  </para>
+
+  <para>
+   The return type of a cast function must be identical to or
+   binary-coercible to the cast's target type.
   </para>
 
   <para>
@@ -263,16 +312,14 @@ SELECT CAST ( 2 AS numeric ) + 4.0;
   <para>
    Il est habituellement nécessaire de créer des conversions entre des types
    définis par l'utilisateur et des types de chaîne standards (<type>text</type>,
-   <type>varchar</type> et<type>char(<replaceable>n</replaceable>)</type>). 
-   <productname>PostgreSQL</productname> gèrera automatiquement une conversion
-   vers un type chaîne à l'appel d'une autre fonction en sortie d'un type ou
-   gèrera une conversion vers un type chaîne en appelent l'autre fonction en
-   entrée du type. Ces conversions automatiques sont connues sous le nom de
-   <firstterm>conversions I/O</firstterm>. Ces conversions vers des types
-   chaîne sont traitées comme des conversions d'affectation, alors que ces
-   conversions à partir de type chaîne sont seulement explicites. Vous
+   <type>varchar</type> et<type>char(<replaceable>n</replaceable>)</type>), as well as user-defined types that
+   are defined to be in the string category). 
+   <productname>PostgreSQL</productname> provides automatic I/O conversion casts for that. The automatic casts to
+   string types are treated as assignment casts, while the automatic casts
+   from string types are
+   explicit-only. Vous
    pouvez changer ce comportement en déclarant votre propre conversion
-   pour rempalcer une conversion I/O mais, habituellement, la seule
+   pour rempalcer une conversion automatique mais, habituellement, la seule
    raison de le faire est si vous voulez que la conversion soit plus facilement
    appelable que la forme standard de conversion par affectation ou le
    paramètre pour ue conversion explicite seulement. Une autre raison possible
@@ -338,10 +385,10 @@ SELECT CAST ( 2 AS numeric ) + 4.0;
   <title>Exemples</title>
 
   <para>
-   Création d'un transtypage du type <type>bigint</type> vers le type
+   Création d'un transtypage d'affectation du type <type>bigint</type> vers le type
    <type>int4</type> à l'aide de la fonction
    <literal>int4(bigint)</literal>&nbsp;:
-<programlisting>CREATE CAST (bigint AS int4) WITH FUNCTION int4(bigint);
+<programlisting>CREATE CAST (bigint AS int4) WITH FUNCTION int4(bigint) AS ASSIGNMENT;
 </programlisting>
    (Ce transtypage est déjà prédéfini dans le système.)
   </para>

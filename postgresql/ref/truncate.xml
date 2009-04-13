@@ -8,6 +8,7 @@
 <refentry id="sql-truncate">
  <refmeta>
   <refentrytitle id="sql-truncate-title">TRUNCATE</refentrytitle>
+  <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Instructions du langage</refmiscinfo>
  </refmeta>
 
@@ -17,7 +18,8 @@
  </refnamediv>
 
  <refsynopsisdiv>
-	 <synopsis>TRUNCATE [ TABLE ] <replaceable class="parameter">nom</replaceable> [, ...] [ CASCADE | RESTRICT ]
+TRUNCATE [ TABLE ] [ ONLY ] <replaceable class="PARAMETER">nom</replaceable> [, ... ]
+    [ RESTART IDENTITY | CONTINUE IDENTITY ] [ CASCADE | RESTRICT ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -46,7 +48,28 @@
     <term><replaceable class="parameter">name</replaceable></term>
     <listitem>
      <para>
-      Le nom d'une table à vider (peut être qualifié par le schéma).
+      Le nom d'une table à vider (peut être qualifié par le schéma).  If <literal>ONLY</> is specified, only that table is
+      truncated.  If <literal>ONLY</> is not specified, the table and
+      all its descendant tables (if any) are truncated.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>RESTART IDENTITY</literal></term>
+    <listitem>
+     <para>
+      Automatically restart sequences owned by columns of
+      the truncated table(s).
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>CONTINUE IDENTITY</literal></term>
+    <listitem>
+     <para>
+      Do not change the values of sequences.  This is the default.
      </para>
     </listitem>
    </varlistentry>
@@ -67,7 +90,7 @@
     <listitem>
      <para>
       Refuse le vidage si une des tables a des références de clés étrangères
-      sur une table qui ne doit pas être vidée. Cette option est active par
+      sur une table qui ne sont pas listed in the command. Cette option est active par
       défaut.
      </para>
     </listitem>
@@ -79,7 +102,15 @@
   <title>Notes</title>
 
   <para>
-   Seul le propriétaire d'une table peut la vider (<command>TRUNCATE</command>).
+   You must have the <literal>TRUNCATE</literal> privilege on a table
+   to truncate it.
+  </para>
+
+  <para>
+   <command>TRUNCATE</> acquires an access exclusive lock on the
+   tables in operates on, which blocks all other concurrent operations
+   on the table.  If concurrent access to a table is required, then
+   the <command>DELETE</> command should be used instead.
   </para>
 
   <para>
@@ -95,8 +126,16 @@
   </para>
 
   <para>
-   <command>TRUNCATE</command> n'exécutera aucun trigger <literal>ON
-   DELETE</literal> qui pourrait exister sur les tables.
+   <command>TRUNCATE</command> ne déclenchera aucun trigger <literal>ON
+   DELETE</literal> qui pourrait exister sur les tables. But it will fire
+   <literal>ON TRUNCATE</literal> triggers.
+   If <literal>ON TRUNCATE</> triggers are defined for any of
+   the tables, then all <literal>BEFORE TRUNCATE</literal> triggers are
+   fired before any truncation happens, and all <literal>AFTER
+   TRUNCATE</literal> triggers are fired after the last truncation is
+   performed.  The triggers will fire in the order that the tables are
+   to be processed (first those listed in the command, and then any
+   that were added due to cascading).
   </para>
 
   <warning>
@@ -121,6 +160,39 @@
     cours n'est pas validée.
    </para>
   </warning>
+
+  <para>
+   <command>TRUNCATE</> is transaction-safe with respect to the data
+   in the tables: the truncation will be safely rolled back if the surrounding
+   transaction does not commit.
+  </para>
+
+  <warning>
+   <para>
+    Any <command>ALTER SEQUENCE RESTART</> operations performed as a
+    consequence of using the <literal>RESTART IDENTITY</> option are
+    nontransactional and will not be rolled back on failure.  To minimize
+    the risk, these operations are performed only after all the rest of
+    <command>TRUNCATE</>'s work is done.  However, there is still a risk
+    if <command>TRUNCATE</> is performed inside a transaction block that is
+    aborted afterwards.  For example, consider
+
+<programlisting>
+BEGIN;
+TRUNCATE TABLE foo RESTART IDENTITY;
+COPY foo FROM ...;
+COMMIT;
+</programlisting>
+
+    If the <command>COPY</> fails partway through, the table data
+    rolls back correctly, but the sequences will be left with values
+    that are probably smaller than they had before, possibly leading
+    to duplicate-key failures or other problems in later transactions.
+    If this is likely to be a problem, it's best to avoid using
+    <literal>RESTART IDENTITY</>, and accept that the new contents of
+    the table will have higher serial numbers than the old.
+   </para>
+  </warning>
  </refsect1>
 
  <refsect1>
@@ -134,6 +206,14 @@
 </programlisting>
   </para>
   
+  <para>
+   The same, and also reset any associated sequence generators:
+
+<programlisting>
+TRUNCATE bigtable, fattable RESTART IDENTITY;
+</programlisting>
+  </para>
+
   <para>
    Vide la table <literal>uneautretable</literal>, et cascade cela à toutes
    les tables qui référencent <literal>uneautretable</literal> via des
@@ -149,7 +229,13 @@ TRUNCATE uneautretable CASCADE;
   <title>Compatibilité</title>
 
   <para>
-   Il n'existe pas de commande <command>TRUNCATE</command> dans le standard SQL.
+   The SQL:2008 standard includes a <command>TRUNCATE</command> command with the syntax
+   <literal>TRUNCATE TABLE <replaceable>tablename</replaceable></literal>.
+   The clauses <literal>CONTINUE IDENTITY</literal>/<literal>RESTART IDENTITY</literal>
+   also appear in that standard but have slightly different but related meanings.
+   Some of the concurrency behavior of this command is left implementation-defined
+   by the standard, so the above notes should be considered and compared with
+   other implementations if necessary.
   </para>
  </refsect1>
 </refentry>
