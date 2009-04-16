@@ -153,6 +153,20 @@
    aussi connue sous le nom de REDO).
   </para>
 
+   <tip>
+    <para>
+     Because <acronym>WAL</acronym> restores database file
+     contents after a crash, journaled filesystems are not necessary for
+     reliable storage of the data files or WAL files.  In fact, journaling
+     overhead can reduce performance, especially if journaling
+     causes file system <emphasis>data</emphasis> to be flushed
+     to disk.  Fortunately, data flushing during journaling can
+     often be disabled with a filesystem mount option, e.g.
+     <literal>data=writeback</> on a Linux ext3 file system.
+     Journaled file systems do improve boot speed after a crash.
+    </para>
+   </tip>
+
    <para>
     Utiliser les journaux de transaction permet de réduire de façon
     significative le nombre d'écritures sur le disque puisque seul le journal
@@ -346,18 +360,27 @@
    point de contrôle.  Au moment du point de contrôle, toutes les
    pages de données non propres sont écrites sur le disque et une
    entrée spéciale, pour le point de contrôle, est écrite dans le
-   journal. En cas de défaillance, la procédure de récupération recherche le
+   journal. (The changes were previously flushed to the <acronym>WAL</acronym> files.)
+   En cas de défaillance, la procédure de récupération recherche le
    dernier enregistrement d'un point de vérification dans les traces
    (enregistrement connus sous le nom de <quote>redo log</quote>) à partir
    duquel il devra lancer l'opération
    REDO. Toute modification effectuée sur les fichiers de données avant ce point
-   est sûre d'avoir été enregistrée sur disque. Du coup, après qu'un point de
-   vérification est réalisé, tous les segments représentant des journaux de
+   est garantie d'avoir été enregistrée sur disque. Du coup, après un point de
+   vérification, tous les segments représentant des journaux de
    transaction précédant celui
    contenant le <quote>redo record</quote> ne sont plus nécessaires et peuvent
    être soit recyclés soit supprimés (quand l'archivage des journaux de
    transaction est activé, ces derniers doivent être archivés avant d'être
    recyclés ou supprimés).
+  </para>
+
+  <para>
+   The checkpoint requirement of flushing all dirty data pages to disk
+   can cause a significant I/O load.  For this reason, checkpoint
+   activity is throttled so I/O begins at checkpoint start and completes
+   before the next checkpoint starts;  this minimizes performance
+   degradation during checkpoints.
   </para>
 
   <para>
@@ -550,8 +573,11 @@
   <para>
    Les journaux de transaction sont stockés dans le répertoire
    <filename>pg_xlog</filename> sous le répertoire de données, comme un ensemble
-   de fichiers, chacun d'une taille de 16&nbsp;Mo généralement. Chaque
-   fichier est divisé en pages de généralement 8&nbsp;Ko. Les en-têtes de
+   de fichiers, chacun d'une taille de 16&nbsp;Mo généralement (but the size can be changed
+   by altering the <option>--with-wal-segsize</> configure option when
+   building the server). Chaque
+   fichier est divisé en pages de généralement 8&nbsp;Ko (this size can be changed via the <option>--with-wal-blocksize</>
+   configure option). Les en-têtes de
    l'entrée du journal sont décrites dans
    <filename>access/xlog.h</filename>&nbsp;; le contenu de l'entrée dépend
    du type de l'événement qui est enregistré.  Les fichiers
@@ -595,7 +621,8 @@
    l'avant à partir de la position du journal indiquée dans l'entrée du
    point de contrôle. Parce que l'ensemble du contenu des pages de
    données est sauvegardé dans le journal à la première modification de
-   page après un point de contrôle, toutes les pages changées depuis
+   page après un point de contrôle (assuming
+   <xref linkend="guc-full-page-writes"> is not disabled), toutes les pages changées depuis
    le point de contrôle seront restaurées dans un état cohérent.
   </para>
 

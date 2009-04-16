@@ -55,6 +55,13 @@
     </itemizedlist>
    </para>
 
+    <para>
+     <application>PL/pgSQL</> functions can be declared to accept a variable
+     number of arguments by using the <literal>VARIADIC</> marker.  This
+     works exactly the same way as for SQL functions, as discussed in
+     <xref linkend="xfunc-sql-variadic-functions">.
+    </para>
+
    <para>
     Les fonctions écrites en <application>PL/pgSQL</application> peuvent être
     utilisées partout où une fonction intégrée peut l'être.
@@ -161,6 +168,8 @@
      du code de retour. Ceci n'ajoute pas de fonctionnalité fondamentale au
      langage mais c'est un moyen agréable principalement pour renvoyer
      plusieurs valeurs.
+     The <literal>RETURNS TABLE</> notation can also be used in place
+     of <literal>RETURNS SETOF</>.
     </para>
 
     <para>
@@ -298,9 +307,11 @@ $$ LANGUAGE plpgsql;
     <para>
      Toutes les variables utilisées dans un bloc doivent être déclarées 
      dans la section déclaration du bloc.
-     La seule exception est que la variable de boucle d'une boucle <literal>FOR</literal>
+     Les seules exceptions sont que la variable de boucle d'une boucle <literal>FOR</literal>
      effectuant une itération sur des valeurs entières est automatiquement déclarée
-     comme variable entière (type integer).
+     comme variable entière (type integer), and likewise the loop variable of a <literal>FOR</> loop
+     iterating over a cursor's result is automatically declared as a
+     record variable.
      </para>
 
     <para>
@@ -460,6 +471,23 @@ $$ LANGUAGE plpgsql;
       ceci crée réellement un type d'enregistrement anonyme pour les résultats
       de la fonction. Si une clause <literal>RETURNS</literal> est donnée, elle doit
       spécifier <literal>RETURNS record</literal>.
+     </para>
+
+     <para>
+      Another way to declare a <application>PL/pgSQL</application> function
+      is with <literal>RETURNS TABLE</>, for example:
+
+<programlisting>
+CREATE FUNCTION extended_sales(p_itemno int) RETURNS TABLE(quantity int, total numeric) AS $$
+BEGIN
+    RETURN QUERY SELECT quantity, quantity * price FROM sales WHERE itemno = p_itemno;
+END;
+$$ LANGUAGE plpgsql;
+</programlisting>
+
+      This is exactly equivalent to declaring one or more <literal>OUT</>
+      parameters and specifying <literal>RETURNS SETOF
+      <replaceable>sometype</></literal>.
      </para>
 
      <para>
@@ -988,21 +1016,24 @@ END;
      fonctionneront pas dans de tels scénarios. Pour gérer ce type
      de problème, l'instruction <command>EXECUTE</command> est proposée&nbsp;:
 
-<synopsis>EXECUTE <replaceable class="command">chaîne-commande</replaceable> <optional> INTO <optional>STRICT</optional> <replaceable>cible</replaceable> </optional>;
+<synopsis>EXECUTE <replaceable class="command">command-string</replaceable> <optional> INTO <optional>STRICT</optional> <replaceable>target</replaceable> </optional> <optional> USING <replaceable>expression</replaceable> <optional>, ...</optional> </optional>;
 </synopsis>
 
      où <replaceable>chaîne-commande</replaceable> est une expression manipulant
-     une chaîne (de type <type>text</type>) contenant la commande à exécuter
-     et où<replaceable>cible</replaceable> est une variable record ou ligne ou
+     une chaîne (de type <type>text</type>) contenant la commande à exécuter.
+     The optional <replaceable>cible</replaceable> est une variable record ou ligne ou
      même une liste de variables simples ou de champs de lignes/enregistrements
-     séparées par des virgules.
+     séparées par des virgules, into which the results of
+     the command will be stored.  The optional <literal>USING</> expressions
+     supply values to be inserted into the command.
     </para>
 
     <para>
      Aucune substitution des variables <application>PL/pgSQL</application> ne
      se fait dans la chaîne de commande calculée. Toutes les valeurs des
      variables requises doivent être insérées dans la chaîne de commande au
-     moment de sa construction.
+     moment de sa construction; or you can use parameters
+     as described below.
     </para>
 
     <para>
@@ -1033,6 +1064,51 @@ END;
     </para>
 
     <para>
+     The command string can use parameter values, which are referenced
+     in the command as <literal>$1</>, <literal>$2</>, etc.
+     These symbols refer to values supplied in the <literal>USING</>
+     clause.  This method is often preferable to inserting data values
+     into the command string as text: it avoids run-time overhead of
+     converting the values to text and back, and it is much less prone
+     to SQL-injection attacks since there is no need for quoting or escaping.
+     An example is:
+<programlisting>
+EXECUTE 'SELECT count(*) FROM mytable WHERE inserted_by = $1 AND inserted &lt;= $2'
+   INTO c
+   USING checked_user, checked_date;
+</programlisting>
+
+     Note that parameter symbols can only be used for data values
+     &mdash; if you want to use dynamically determined table or column
+     names, you must insert them into the command string textually.
+     For example, if the preceding query needed to be done against a
+     dynamically selected table, you could do this:
+<programlisting>
+EXECUTE 'SELECT count(*) FROM '
+    || tabname::regclass
+    || ' WHERE inserted_by = $1 AND inserted &lt;= $2'
+   INTO c
+   USING checked_user, checked_date;
+</programlisting>
+    </para>
+
+    <para>
+     An <command>EXECUTE</> with a simple constant command string and some
+     <literal>USING</> parameters, as in the first example above, is
+     functionally equivalent to just writing the command directly in
+     <application>PL/pgSQL</application> and allowing replacement of
+     <application>PL/pgSQL</application> variables to happen automatically.
+     The important difference is that <command>EXECUTE</> will re-plan
+     the command on each execution, generating a plan that is specific
+     to the current parameter values; whereas
+     <application>PL/pgSQL</application> normally creates a generic plan
+     and caches it for re-use.  In situations where the best plan depends
+     strongly on the parameter values, <command>EXECUTE</> can be
+     significantly faster; while when the plan is not sensitive to parameter
+     values, re-planning will be a waste.
+    </para>
+
+    <para>
      <command>SELECT INTO</command> n'est actuellement pas supporté à
      l'intérieur de <command>EXECUTE</command>&nbsp;; à la place, exécutez une
      commande <command>SELECT</command> et spécifiez <literal>INTO</literal>
@@ -1051,7 +1127,23 @@ END;
     </para>
    </note>
 
+   <example id="plpgsql-quote-literal-example">
+   <title>Quoting values in dynamic queries</title>
 
+    <indexterm>
+     <primary>quote_ident</primary>
+     <secondary>use in PL/PgSQL</secondary>
+    </indexterm>
+
+    <indexterm>
+     <primary>quote_literal</primary>
+     <secondary>use in PL/PgSQL</secondary>
+    </indexterm>
+
+    <indexterm>
+     <primary>quote_nullable</primary>
+     <secondary>use in PL/PgSQL</secondary>
+    </indexterm>
 
     <para>
      En travaillant avec des commandes dynamiques, vous aurez souvent à gérer
@@ -1077,26 +1169,58 @@ END;
     || quote_literal(valeur_cle);</programlisting>
     </para>
 
-    <indexterm>
-     <primary>quote_ident</primary>
-     <secondary>utilisation dans PL/PgSQL</secondary>
-    </indexterm>
-
-    <indexterm>
-     <primary>quote_literal</primary>
-     <secondary>utilisation dans PL/PgSQL</secondary>
-    </indexterm>
-
     <para>
      Cet exemple démontre l'utilisation des fonctions
-     <function>quote_ident</function> et <function>quote_literal</function>.
+     <function>quote_ident</function> et <function>quote_literal</function> (see <xref
+     linkend="functions-string">).
      Pour plus de sûreté, les expressions contenant
      les identifiants des colonnes et des tables doivent être passées à la
-     fonction <function>quote_ident</function>. Les expressions contenant des
+     fonction <function>quote_ident</function> before insertion in a dynamic query. Les expressions contenant des
      valeurs de type chaîne de caractères doivent être
      passées à <function>quote_literal</function>. Ce sont les étapes
      appropriées pour renvoyer le texte en entrée entouré par des guillemets 
      doubles ou simples respectivement, en échappant tout caractère spécial.
+    </para>
+
+    <para>
+     Because <function>quote_literal</function> is labelled
+     <literal>STRICT</literal>, it will always return null when called with a
+     null argument.  In the above example, if <literal>newvalue</> or
+     <literal>keyvalue</> were null, the entire dynamic query string would
+     become null, leading to an error from <command>EXECUTE</command>.
+     You can avoid this problem by using the <function>quote_nullable</>
+     function, which works the same as <function>quote_literal</> except that
+     when called with a null argument it returns the string <literal>NULL</>.
+     For example,
+<programlisting>
+EXECUTE 'UPDATE tbl SET '
+        || quote_ident(colname)
+        || ' = '
+        || quote_nullable(newvalue)
+        || ' WHERE key = '
+        || quote_nullable(keyvalue);
+</programlisting>
+     If you are dealing with values that might be null, you should usually
+     use <function>quote_nullable</> in place of <function>quote_literal</>.
+    </para>
+
+    <para>
+     As always, care must be taken to ensure that null values in a query do
+     not deliver unintended results.  For example the <literal>WHERE</> clause
+<programlisting>
+     'WHERE key = ' || quote_nullable(keyvalue)
+</programlisting>
+     will never succeed if <literal>keyvalue</> is null, because the
+     result of using the equality operator <literal>=</> with a null operand
+     is always null.  If you wish null to work like an ordinary key value,
+     you would need to rewrite the above as
+<programlisting>
+     'WHERE key IS NOT DISTINCT FROM ' || quote_nullable(keyvalue)
+</programlisting>
+     (At present, <literal>IS NOT DISTINCT FROM</> is handled much less
+     efficiently than <literal>=</>, so don't do this unless you must.
+     See <xref linkend="functions-comparison"> for
+     more information on nulls and <literal>IS DISTINCT</>.)
     </para>
 
     <para>
@@ -1113,8 +1237,10 @@ END;
      <literal>$$</literal>. La même objection s'applique à tout délimiteur dollar
      que vous pourriez choisir. Donc, pour mettre un texte inconnu entre
      guillemets de façon sûr, vous <emphasis>devez</emphasis> utiliser
-     <function>quote_literal</function>.
+     <function>quote_literal</function>,
+     <function>quote_nullable</>, or <function>quote_ident</>, as appropriate.
     </para>
+   </example>
 
     <para>
      Un exemple bien plus important d'une commande dynamique et
@@ -1197,10 +1323,11 @@ END;
 	   <para>
 		La commande <command>FOR</command> positionne <literal>FOUND</literal> à true
 		si elle effectue une itération une ou plusieurs fois, sinon elle renvoie
-		false. Ceci s'applique aux trois variantes de l'instruction 
+		false. Ceci s'applique aux quatre variantes de l'instruction 
 		<command>FOR</command> (boucles <command>FOR</command> integer,
 		<command>FOR</command> record-set,
-		et <command>FOR</command> record-set dynamique). <literal>FOUND</literal>
+		et <command>FOR</command> record-set dynamique and cursor
+                <command>FOR</> loops). <literal>FOUND</literal>
 		n'est positionnée de cette façon que quand la boucle <command>FOR</command>
 		s'achève&nbsp;;
 		dans l'exécution de la chaîne, <literal>FOUND</literal> 
@@ -1209,6 +1336,14 @@ END;
 		dans le corps de la boucle.
 	   </para>
 	  </listitem>
+          <listitem>
+           <para>
+            A <command>RETURN QUERY</command> and <command>RETURN QUERY
+            EXECUTE</command> statements set <literal>FOUND</literal>
+            true if the query returns at least one row, false if no row
+            is returned.
+           </para>
+          </listitem>
 	 </itemizedlist>
 	 
      <literal>FOUND</literal> est une variable locale à l'intérieur de chaque
@@ -1337,6 +1472,7 @@ END;
 <synopsis>
 RETURN NEXT <replaceable>expression</replaceable>;
 RETURN QUERY <replaceable>requete</replaceable>;
+RETURN QUERY EXECUTE <replaceable class="command">command-string</replaceable> <optional> USING <replaceable>expression</replaceable> <optional>, ...</optional> </optional>;
 </synopsis>
 
      <para>
@@ -1368,6 +1504,14 @@ RETURN QUERY <replaceable>requete</replaceable>;
       augmente. Un <command>RETURN</command>, sans argument, permet
       de quitter la fonction mais vous pouvez aussi continuer jusqu'à la fin
       de la fonction.
+     </para>
+
+     <para>
+      <command>RETURN QUERY</command> has a variant
+      <command>RETURN QUERY EXECUTE</command>, which specifies the
+      query to be executed dynamically.  Parameter expressions can
+      be inserted into the computed query string via <literal>USING</>,
+      in just the same way as in the <command>EXECUTE</> command.
      </para>
 
      <para>
@@ -1410,11 +1554,6 @@ LANGUAGE 'plpgsql' ;
 
 SELECT * FROM obtenirTousLesTrucs();
 </programlisting>
-
-      Notez que les fonctions utilisant <command>RETURN NEXT</command> ou
-      <command>RETURN QUERY</command> doivent être appelées comme une source de
-      type table dans une clause <literal>FROM</literal>.
-
      </para>
 
      <note>
@@ -1445,8 +1584,8 @@ SELECT * FROM obtenirTousLesTrucs();
     <title>Contrôles conditionnels</title>
 
     <para>
-     Les instructions <literal>IF</literal> vous permettent d'exécuter des commandes
-     basées sur certaines conditions. <application>PL/pgSQL</application> a cinq formes de
+     Les instructions <command>IF</> et <command>CASE</> vous permettent d'exécuter des commandes
+     basées sur certaines conditions. <application>PL/pgSQL</application> a trois formes de
      <literal>IF</literal>&nbsp;:
     <itemizedlist>
      <listitem>
@@ -1456,13 +1595,17 @@ SELECT * FROM obtenirTousLesTrucs();
       <para><literal>IF ... THEN ... ELSE</literal></para>
      </listitem>
      <listitem>
-      <para><literal>IF ... THEN ... ELSE IF</literal></para>
-     </listitem>
-     <listitem>
       <para><literal>IF ... THEN ... ELSIF ... THEN ... ELSE</literal></para>
      </listitem>
+    </itemizedlist>
+
+    and two forms of <command>CASE</>:
+    <itemizedlist>
      <listitem>
-      <para><literal>IF ... THEN ... ELSEIF ... THEN ... ELSE</literal></para>
+      <para><literal>CASE ... WHEN ... THEN ... ELSE ... END CASE</></>
+     </listitem>
+     <listitem>
+      <para><literal>CASE WHEN ... THEN ... ELSE ... END CASE</></>
      </listitem>
     </itemizedlist>
     </para>
@@ -1504,7 +1647,8 @@ END IF;
        <para>
         Les instructions <literal>IF-THEN-ELSE</literal> s'ajoutent au
         <literal>IF-THEN</literal> en vous permettant de spécifier un autre ensemble
-	d'instructions à exécuter si la condition est fausse.
+	d'instructions à exécuter si la condition n'est pas vraie   (Note this includes the case where the
+        condition evaluates to NULL.).
 	</para>
 
        <para>
@@ -1528,34 +1672,7 @@ END IF;
     </sect3>
 
      <sect3>
-      <title><literal>IF-THEN-ELSE IF</literal></title>
-
-       <para>
-        Les instructions <literal>IF</literal> peuvent être imbriquées, comme dans 
-	l'exemple suivant&nbsp;:
-<programlisting>IF demo_ligne.sexe = 'm' THEN
-    texte_sexe := ''homme'';
-ELSE
-    IF demo_ligne.sexe = 'f' THEN
-        texte_sexe := 'femme';
-    END IF;
-END IF;
-</programlisting>
-       </para>
-
-       <para>
-        Lorsque vous utilisez cette forme, vous imbriquez une instruction
-        <literal>IF</literal> dans la partie <literal>ELSE</literal> d'une
-	instruction <literal>IF</literal> extérieure. Ainsi, vous avez besoin
-	d'une instruction <literal>END IF</literal> pour chaque <literal>IF</literal>
-	imbriqué et une pour le <literal>IF-ELSE</literal> parent. Ceci fonctionne mais
-	devient fastidieux quand il y a de nombreuses alternatives à traiter.
-	Considérez alors la forme suivante.
-       </para>
-     </sect3>
-
-     <sect3>
-      <title><literal>IF-THEN-ELSIF-ELSE</literal></title>
+      <title><literal>IF-THEN-ELSIF</literal></title>
 
 <synopsis>IF <replaceable>expression-booleenne</replaceable> THEN
     <replaceable>instructions</replaceable>
@@ -1572,10 +1689,16 @@ END IF;
 </synopsis>
 
        <para>
-        <literal>IF-THEN-ELSIF-ELSE</literal> est une méthode plus pratique pour vérifier 
-	de nombreuses alternatives en une instruction. Elle est équivalente fonctionnellement
-	aux commandes <literal>IF-THEN-ELSE-IF-THEN</literal> imbriquées, mais un seul
-        <literal>END IF</literal> est nécessaire.
+        Sometimes there are more than just two alternatives.
+        <literal>IF-THEN-ELSIF</> provides a convenient
+        method of checking several alternatives in turn.
+        The <literal>IF</> conditions are tested successively
+        until the first one that is true is found.  Then the
+        associated statement(s) are executed, after which control
+        passes to the next statement after <literal>END IF</>.
+        (Any subsequent <literal>IF</> conditions are <emphasis>not</>
+        tested.)  If none of the <literal>IF</> conditions is true,
+        then the <literal>ELSE</> block (if any) is executed.
        </para>
 
        <para>
@@ -1593,15 +1716,128 @@ ELSE
 END IF;
 </programlisting>
        </para>
+
+       <para>
+        The key word <literal>ELSIF</> can also be spelled
+        <literal>ELSEIF</>.
+       </para>
+
+       <para>
+        An alternative way of accomplishing the same task is to nest
+        <literal>IF-THEN-ELSE</literal> statements, as in the
+        following example:
+
+<programlisting>
+IF demo_row.sex = 'm' THEN
+    pretty_sex := 'man';
+ELSE
+    IF demo_row.sex = 'f' THEN
+        pretty_sex := 'woman';
+    END IF;
+END IF;
+</programlisting>
+       </para>
+
+       <para>
+        However, this method requires writing a matching <literal>END IF</>
+        for each <literal>IF</>, so it is much more cumbersome than
+        using <literal>ELSIF</> when there are many alternatives.
+       </para>
      </sect3>
 
      <sect3>
-      <title><literal>IF-THEN-ELSEIF-ELSE</literal></title>
+      <title>Simple <literal>CASE</></title>
 
-     <para>
-      <literal>ELSEIF</literal> est un alias pour <literal>ELSIF</literal>.
-     </para>
-    </sect3>
+<synopsis>
+CASE <replaceable>search-expression</replaceable>
+    WHEN <replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> <optional> ... </optional></optional> THEN
+      <replaceable>statements</replaceable>
+  <optional> WHEN <replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> <optional> ... </optional></optional> THEN
+      <replaceable>statements</replaceable>
+    ... </optional>
+  <optional> ELSE
+      <replaceable>statements</replaceable> </optional>
+END CASE;
+</synopsis>
+
+      <para>
+       The simple form of <command>CASE</> provides conditional execution
+       based on equality of operands.  The <replaceable>search-expression</>
+       is evaluated (once) and successively compared to each
+       <replaceable>expression</> in the <literal>WHEN</> clauses.
+       If a match is found, then the corresponding
+       <replaceable>statements</replaceable> are executed, and then control
+       passes to the next statement after <literal>END CASE</>.  (Subsequent
+       <literal>WHEN</> expressions are not evaluated.)  If no match is
+       found, the <literal>ELSE</> <replaceable>statements</replaceable> are
+       executed; but if <literal>ELSE</> is not present, then a
+       <literal>CASE_NOT_FOUND</literal> exception is raised.
+      </para>
+
+      <para>
+       Here is a simple example:
+
+<programlisting>
+CASE x
+    WHEN 1, 2 THEN
+        msg := 'one or two';
+    ELSE
+        msg := 'other value than one or two';
+END CASE;
+</programlisting>
+      </para>
+     </sect3>
+
+     <sect3>
+      <title>Searched <literal>CASE</></title>
+
+<synopsis>
+CASE
+    WHEN <replaceable>boolean-expression</replaceable> THEN
+      <replaceable>statements</replaceable>
+  <optional> WHEN <replaceable>boolean-expression</replaceable> THEN
+      <replaceable>statements</replaceable>
+    ... </optional>
+  <optional> ELSE
+      <replaceable>statements</replaceable> </optional>
+END CASE;
+</synopsis>
+
+      <para>
+       The searched form of <command>CASE</> provides conditional execution
+       based on truth of boolean expressions.  Each <literal>WHEN</> clause's
+       <replaceable>boolean-expression</replaceable> is evaluated in turn,
+       until one is found that yields <literal>true</>.  Then the
+       corresponding <replaceable>statements</replaceable> are executed, and
+       then control passes to the next statement after <literal>END CASE</>.
+       (Subsequent <literal>WHEN</> expressions are not evaluated.)
+       If no true result is found, the <literal>ELSE</>
+       <replaceable>statements</replaceable> are executed;
+       but if <literal>ELSE</> is not present, then a
+       <literal>CASE_NOT_FOUND</literal> exception is raised.
+      </para>
+
+      <para>
+       Here is an example:
+
+<programlisting>
+CASE
+    WHEN x BETWEEN 0 AND 10 THEN
+        msg := 'value is between zero and ten';
+    WHEN x BETWEEN 11 AND 20 THEN
+        msg := 'value is between eleven and twenty';
+END CASE;
+</programlisting>
+      </para>
+
+      <para>
+       This form of <command>CASE</> is entirely equivalent to
+       <literal>IF-THEN-ELSIF</>, except for the rule that reaching
+       an omitted <literal>ELSE</> clause results in an error rather
+       than doing nothing.
+      </para>
+
+     </sect3>
    </sect2>
 
    <sect2 id="plpgsql-control-structures-loops">
@@ -1898,7 +2134,7 @@ $$ LANGUAGE plpgsql;
      L'instruction <literal>FOR-IN-EXECUTE</literal> est un moyen d'itérer sur des 
      lignes&nbsp;:
 <synopsis><optional>&lt;&lt;<replaceable>label</replaceable>&gt;&gt;</optional>
-FOR <replaceable>cible</replaceable> IN EXECUTE <replaceable>expression_texte</replaceable> LOOP 
+FOR <replaceable>target</replaceable> IN EXECUTE <replaceable>text_expression</replaceable> <optional> USING <replaceable>expression</replaceable> <optional>, ...</optional> </optional> LOOP
     <replaceable>instructions</replaceable>
 END LOOP <optional> <replaceable>label</replaceable> </optional>;
 </synopsis>
@@ -1908,6 +2144,14 @@ END LOOP <optional> <replaceable>label</replaceable> </optional>;
      permet au développeur de choisir entre la vitesse d'une requête préplanifiée et la 
      flexibilité d'une requête dynamique, uniquement avec l'instruction 
      <command>EXECUTE</command>.
+     As with <command>EXECUTE</command>, parameter values can be inserted
+     into the dynamic command via <literal>USING</>.
+    </para>
+
+    <para>
+     Another way to specify the query whose results should be iterated
+     through is to declare it as a cursor.  This is described in
+     <xref linkend="plpgsql-cursor-for-loop">.
     </para>
   </sect2>
 
@@ -1968,7 +2212,12 @@ END LOOP <optional> <replaceable>label</replaceable> </optional>;
       <literal>OTHERS</literal> correspond à tout type d'erreur sauf
       <literal>QUERY_CANCELED</literal> (il est possible, mais pas recommandé, de
       récupérer <literal>QUERY_CANCELED</literal> par son nom). Les noms des
-      conditions ne sont pas sensibles à la casse.
+      conditions ne sont pas sensibles à la casse. Also, an error condition can be specified
+     by <literal>SQLSTATE</> code; for example these are equivalent:
+<programlisting>
+        WHEN division_by_zero THEN ...
+        WHEN SQLSTATE '22012' THEN ...
+</programlisting>
     </para>
 
     <para>
@@ -2141,6 +2390,14 @@ SELECT fusionne_base(1, 'dennis');
      l'instruction <command>OPEN</command>, dont deux utilisent des variables curseur non liées
      et la dernière une variable curseur liée.
     </para>
+
+    <note>
+     <para>
+      Bound cursors can also be used without explicitly opening them,
+      via the <command>FOR</> statement described in
+      <xref linkend="plpgsql-cursor-for-loop">.
+     </para>
+    </note>
 
     <sect3>
      <title><command>OPEN FOR</command> <replaceable>requête</replaceable></title>
@@ -2370,8 +2627,10 @@ DELETE FROM <replaceable>table</replaceable> WHERE CURRENT OF <replaceable>curse
        <para>
         Quand un curseur est positionné sur une ligne d'une table, cette ligne
 	peut être mise à jour ou supprimée en utilisant le curseur qui identifie
-	la ligne. Notez que ceci fonctionne seulement pour des requêtes simples
-	de curseur (sans jointure, sans groupement). Pour des informations
+	la ligne. There are
+        restrictions on what the cursor's query can be (in particular,
+        no grouping) and it's best to use <literal>FOR UPDATE</> in the
+        cursor.  Pour des informations
 	supplémentaires, voir la page de référence
         <xref linkend="sql-declare" endterm="sql-declare-title"/>.
        </para>
@@ -2513,6 +2772,35 @@ COMMIT;
        </para>
      </sect3>
    </sect2>
+   <sect2 id="plpgsql-cursor-for-loop">
+    <title>Looping Through a Cursor's Result</title>
+
+    <para>
+     There is a variant of the <command>FOR</> statement that allows
+     iterating through the rows returned by a cursor.  The syntax is:
+
+<synopsis>
+<optional> &lt;&lt;<replaceable>label</replaceable>&gt;&gt; </optional>
+FOR <replaceable>recordvar</replaceable> IN <replaceable>bound_cursor</replaceable> <optional> ( <replaceable>argument_values</replaceable> ) </optional> LOOP
+    <replaceable>statements</replaceable>
+END LOOP <optional> <replaceable>label</replaceable> </optional>;
+</synopsis>
+
+     The cursor variable must have been bound to some query when it was
+     declared, and it <emphasis>cannot</> be open already.  The
+     <command>FOR</> statement automatically opens the cursor, and it closes
+     the cursor again when the loop exits.  A list of actual argument value
+     expressions must appear if and only if the cursor was declared to take
+     arguments.  These values will be substituted in the query, in just
+     the same way as during an <command>OPEN</>.
+     The variable <replaceable>recordvar</replaceable> is automatically
+     defined as type <type>record</> and exists only inside the loop (any
+     existing definition of the variable name is ignored within the loop).
+     Each row returned by the cursor is successively assigned to this
+     record variable and the loop body is executed.
+    </para>
+   </sect2>
+
   </sect1>
 
   <sect1 id="plpgsql-errors-and-messages">
@@ -2531,12 +2819,18 @@ COMMIT;
     Utilisez l'instruction <command>RAISE</command> pour rapporter des messages et 
     lever des erreurs.
 
-<synopsis>RAISE <replaceable class="parameter">niveau</replaceable> '<replaceable class="parameter">format</replaceable>' <optional>, <replaceable class="parameter">expression</replaceable> <optional>, ...</optional></optional>;
+<synopsis>RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> '<replaceable class="parameter">format</replaceable>' <optional>, <replaceable class="parameter">expression</replaceable> <optional>, ...</optional></optional> <optional> USING <replaceable class="parameter">option</replaceable> = <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
+RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> <replaceable class="parameter">condition_name</> <optional> USING <replaceable class="parameter">option</replaceable> = <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
+RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> SQLSTATE '<replaceable class="parameter">sqlstate</>' <optional> USING <replaceable class="parameter">option</replaceable> = <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
+RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> USING <replaceable class="parameter">option</replaceable> = <replaceable class="parameter">expression</replaceable> <optional>, ... </optional>;
+RAISE ;
 </synopsis>
 
-    Les niveaux possibles sont <literal>DEBUG</literal>,
+    The <replaceable class="parameter">level</replaceable> option specifies
+    the error severity.  Allowed niveaux sont <literal>DEBUG</literal>,
     <literal>LOG</literal>, <literal>INFO</literal>, <literal>NOTICE</literal>,
-    <literal>WARNING</literal>  et <literal>EXCEPTION</literal>.
+    <literal>WARNING</literal>  et <literal>EXCEPTION</literal>, with <literal>EXCEPTION</literal>
+    being the default.
     <literal>EXCEPTION</literal> lève une erreur (ce qui annule habituellement
     la transaction en cours). Les autres niveaux ne font que générer des messages aux
     différents niveaux de priorité.
@@ -2547,18 +2841,16 @@ COMMIT;
    </para>
 
    <para>
-    Au sein de la chaîne de formatage, <literal>%</literal> est remplacé par
-    la représentation de la chaîne argument optionnelle suivante. Écrivez
-    <literal>%%</literal> pour signifier un caractère <literal>%</literal>. Les
-    arguments peuvent être de simples variables ou des expressions mais le format
-    doit être une simple chaîne de caractères.
+    After <replaceable class="parameter">level</replaceable> if any,
+    you can write a <replaceable class="parameter">format</replaceable>
+    (which must be a simple string literal, not an expression).  The
+    format string specifies the error message text to be reported.
+    The format string can be followed
+    by optional argument expressions to be inserted into the message.
+    Inside the format string, <literal>%</literal> is replaced by the
+    string representation of the next optional argument's value. Write
+    <literal>%%</literal> to emit a literal <literal>%</literal>.
    </para>
-
-   <!--
-   Cet exemple devrait fonctionner mais ce n'est pas le cas&nbsp;:
-   	RAISE NOTICE 'Id nombre ' || key || ' not found!';
-   Remettez le quand nous permettront les formats autres que chaînes de caractères.
-    -->
 
    <para>
     Dans cet exemple, la valeur de <literal>v_job_id</literal> remplace le <literal>%</literal>
@@ -2568,18 +2860,89 @@ COMMIT;
    </para>
 
    <para>
-    Cet exemple interromp la transaction avec le message d'erreur donné.
-<programlisting>RAISE EXCEPTION 'ID inexistant --> %', id_utilisateur;
+    You can attach additional information to the error report by writing
+    <literal>USING</> followed by <replaceable
+    class="parameter">option</replaceable> = <replaceable
+    class="parameter">expression</replaceable> items.  The allowed
+    <replaceable class="parameter">option</replaceable> keywords are
+    <literal>MESSAGE</>, <literal>DETAIL</>, <literal>HINT</>, and
+    <literal>ERRCODE</>, while each <replaceable
+    class="parameter">expression</replaceable> can be any string-valued
+    expression.
+    <literal>MESSAGE</> sets the error message text (this option can't
+    be used in the form of <command>RAISE</> that includes a format
+    string before <literal>USING</>).
+    <literal>DETAIL</> supplies an error detail message, while
+    <literal>HINT</> supplies a hint message.
+    <literal>ERRCODE</> specifies the error code (SQLSTATE) to report,
+    either by condition name as shown in <xref linkend="errcodes-appendix">,
+    or directly as a five-character SQLSTATE code.
+   </para>
+
+   <para>
+    This example will abort the transaction with the given error message
+    and hint:
+<programlisting>
+RAISE EXCEPTION 'Nonexistent ID --> %', user_id USING HINT = 'Please check your user id';
 </programlisting>
    </para>
 
    <para>
-    <command>RAISE EXCEPTION</command> génère toujours le même code <varname>SQLSTATE</varname>,
-    <literal>P0001</literal>, quelque soit le message avec lequel il a été invoqué. Il
-    est possible d'intercepter cette exception avec
-    <literal>EXCEPTION ... WHEN RAISE_EXCEPTION THEN ...</literal> 
-    mais l'origine du <command>RAISE</command> déclencheur est inconnue.
+    These two examples show equivalent ways of setting the SQLSTATE:
+<programlisting>
+RAISE 'Duplicate user ID: %', user_id USING ERRCODE = 'unique_violation';
+RAISE 'Duplicate user ID: %', user_id USING ERRCODE = '23505';
+</programlisting>
    </para>
+
+   <para>
+    There is a second <command>RAISE</> syntax in which the main argument
+    is the condition name or SQLSTATE to be reported, for example:
+<programlisting>
+RAISE division_by_zero;
+RAISE SQLSTATE '22012';
+</programlisting>
+    In this syntax, <literal>USING</> can be used to supply a custom
+    error message, detail, or hint.  Another way to do the earlier
+    example is
+<programlisting>
+RAISE unique_violation USING MESSAGE = 'Duplicate user ID: ' || user_id;
+</programlisting>
+   </para>
+
+   <para>
+    Still another variant is to write <literal>RAISE USING</> or <literal>RAISE
+    <replaceable class="parameter">level</replaceable> USING</> and put
+    everything else into the <literal>USING</> list.
+   </para>
+
+   <para>
+    The last variant of <command>RAISE</> has no parameters at all.
+    This form can only be used inside a <literal>BEGIN</> block's
+    <literal>EXCEPTION</> clause;
+    it causes the error currently being handled to be re-thrown to the
+    next enclosing block.
+   </para>
+
+   <para>
+    If no condition name nor SQLSTATE is specified in a
+    <command>RAISE EXCEPTION</command> command, the default is to use
+    <literal>RAISE_EXCEPTION</> (<literal>P0001</>).  If no message
+    text is specified, the default is to use the condition name or
+    SQLSTATE as message text.
+   </para>
+
+   <note>
+    <para>
+     When specifying an error code by SQLSTATE code, you are not
+     limited to the predefined error codes, but can select any
+     error code consisting of five digits and/or upper-case ASCII
+     letters, other than <literal>00000</>.  It is recommended that
+     you avoid throwing error codes that end in three zeroes, because
+     these are category codes and can only be trapped by trapping
+     the whole category.
+    </para>
+   </note>
  </sect1>
 
  <sect1 id="plpgsql-trigger">
@@ -2614,7 +2977,8 @@ COMMIT;
        Type de données <type>RECORD</type>&nbsp;; variable contenant la nouvelle ligne 
        de base de données pour les opérations <command>INSERT</command>/<command>UPDATE</command> 
        dans les triggers de niveau ligne. Cette variable est
-       <symbol>NULL</symbol> dans un trigger de niveau instruction.
+       <symbol>NULL</symbol> dans un trigger de niveau instruction
+       and for <command>DELETE</command> operations.
       </para>
      </listitem>
     </varlistentry>
@@ -2626,7 +2990,7 @@ COMMIT;
        Type de données <type>RECORD</type>&nbsp;; variable contenant l'ancienne ligne de 
        base de données pour les opérations <command>UPDATE</command>/<command>DELETE</command> 
        dans les triggers de niveau ligne. Cette variable est <symbol>NULL</symbol>
-       dans les triggers de niveau instruction.
+       dans les triggers de niveau instruction and for <command>INSERT</command> operations.
       </para>
      </listitem>
     </varlistentry>
@@ -2666,8 +3030,8 @@ COMMIT;
      <listitem>
       <para>
        Type de données <type>text</type>&nbsp;; une chaîne, <literal>INSERT</literal>,
-       <literal>UPDATE</literal> ou <literal>DELETE</literal>, indiquant
-       pour quelle opération le trigger a été lancé.
+       <literal>UPDATE</literal>, <literal>DELETE</literal> ou <literal>TRUNCATE</>,
+       indiquant pour quelle opération le trigger a été lancé.
       </para>
      </listitem>
     </varlistentry>
@@ -3636,14 +4000,6 @@ then return '$$  || referrer_keys.referrer_type
 
      <listitem>
       <para>
-       Pas besoin de curseurs dans <application>PL/pgSQL</application>, mettez juste la requête
-       dans l'instruction <literal>FOR</literal> (voir <xref
-       linkend="plpgsql-porting-ex2"/>).
-      </para>
-     </listitem>
-
-     <listitem>
-      <para>
        Dans <productname>PostgreSQL</productname>, le corps de la fonction doit être
        écrit comme une chaîne litérale. Du coup, vous avez besoin d'utiliser
        les guillemets dollar ou l'échappement des simples guillemets dans le
@@ -3676,6 +4032,23 @@ then return '$$  || referrer_keys.referrer_type
        boucle soient échangées lors du portage. Cette incompatibilité
        est malheureuse mais a peu de chance d'être changée. (Voir <xref
        linkend="plpgsql-integer-for"/>.)
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       <command>FOR</> loops over queries (other than cursors) also work
+       differently: the target variable(s) must have been declared,
+       whereas <application>PL/SQL</> always declares them implicitly.
+       An advantage of this is that the variable values are still accessible
+       after the loop exits.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       There are various notational differences for the use of cursor
+       variables.
       </para>
      </listitem>
 
@@ -3771,8 +4144,7 @@ $$ LANGUAGE plpgsql;
     <para>
      La procédure suivante récupère des lignes d'une instruction <command>SELECT</command>
      et construit une grande fonction dont les résultats sont dans une instruction
-     <literal>IF</literal> pour favoriser l'efficacité. Notez particulièrement les 
-     différences dans le curseur et la boucle <literal>FOR</literal>.
+     <literal>IF</literal> pour favoriser l'efficacité.
     </para>
 
     <para>
@@ -3809,14 +4181,13 @@ show errors;
 
 <programlisting>CREATE OR REPLACE FUNCTION cs_update_referrer_type_proc() RETURNS void AS $func$
 DECLARE
-    referrer_key RECORD;  -- declare a generic record to be used in a FOR
+    CURSOR referrer_keys IS
+        SELECT * FROM cs_referrer_keys
+        ORDER BY try_order;
     func_body text;
     func_cmd text;
 BEGIN 
     func_body := 'BEGIN' ;
-
-    -- Remarquez comment nous parcourons les résultats d'une requête dans une boucle FOR
-    -- en utilisant la construction FOR &lt;record&gt;.
 
     FOR referrer_key IN SELECT * FROM cs_referrer_keys ORDER BY try_order LOOP
 	func_body := func_body ||
@@ -4077,7 +4448,9 @@ $$ LANGUAGE plpgsql;
      <callout arearefs="co.plpgsql-porting-raise">
       <para>
        La syntaxe de <literal>RAISE</literal> est considérablement différente de
-       l'instruction Oracle similaire.
+       l'instruction Oracle similaire., although the basic case <literal>RAISE</>
+       <replaceable class="parameter">exception_name</replaceable> works
+       similarly.
       </para>
      </callout>
      
