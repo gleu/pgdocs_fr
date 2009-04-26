@@ -153,6 +153,7 @@ psql.1: $(src)
 	xsltproc $(XSLROOTDIR)/manpages/docbook.xsl \
 		standalone-manpages.xml
 	[ -d man/man1 ] || mkdir -p man/man1
+	[ -d man/man7 ] || mkdir -p man/man7
 	mv *.1 man/man1
 	mv *.7 man/man7
 	recode iso-8859-15..utf-8 man/man1/*.1 man/man7/*.7
