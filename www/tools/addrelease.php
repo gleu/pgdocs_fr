@@ -81,8 +81,11 @@ for ($i = 1; $i < $_SERVER["argc"]; $i++) {
           case '8.3':
             $version_int = 803;
             break;
+          case '8.4':
+            $version_int = 804;
+            break;
           default:
-            echo "Il s'agit d'une version majeure : 8.1, 8.2 ou 8.3\n";
+            echo "Il s'agit d'une version majeure : 8.1, 8.2, 8.3 ou 8.4.\n";
             exit;
             break;
         }
