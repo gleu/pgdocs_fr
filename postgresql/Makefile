@@ -166,4 +166,3 @@ htmlhelp:
 	xsltproc stylesheets/pg-chm.xsl postgres.xml
 	mv *.h?? chm
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(CHM_OUTPUT) chm
-
