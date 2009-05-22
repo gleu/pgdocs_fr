@@ -394,13 +394,19 @@
    </para>
 
    <para>
-    Le comportement de <command>VACUUM</command> est contrôlé par deux paramètres
-    de configuration&nbsp;: <xref linkend="guc-vacuum-freeze-min-age"/> et
-    <xref linkend="guc-vacuum-freeze-table-age"/>.
-    <varname>vacuum_freeze_table_age</varname> contrôle quand
-    <command>VACUUM</command> doit exécuter une passe sur l'ensemble de la table
-    afin de remplacer les vieilles valeurs de XID par <literal>FrozenXID</literal>.
-    <varname>vacuum_freeze_min_age</varname> contrôle l'âge que doit avoir une
+    <command>VACUUM</command> normally skips pages that don't have any dead row
+    versions, but those pages might still have tuples with old XID values.
+    To replace them too, a scan of the whole table is needed.
+    <xref linkend="guc-vacuum-freeze-table-age"/> controls when
+    <command>VACUUM</command> does that: a whole table sweep is forced if
+    the table hasn't been fully scanned for <varname>vacuum_freeze_table_age</varname>
+    - <varname>vacuum_freeze_min_age</varname> transactions. Setting it to 0
+    makes <command>VACUUM</command> to ignore the visibility map and always scan all
+    pages.
+   </para>
+
+   <para>
+    <xref linkend="guc-vacuum-freeze-min-age"/> contrôle l'âge que doit avoir une
     valeur XID avant qu'elle soit remplacée par <literal>FrozenXID</literal>. Les
     valeurs plus importantes de ces deux paramètres préservent l'information
     transactionnelle plus longtemps alors que les valeurs plus petites
@@ -436,8 +442,25 @@
    </para>
 
    <para>
-    Le seul inconvénient à augmenter <varname>vacuum_freeze_table_age</varname> et
-    <varname>autovacuum_freeze_max_age</varname>
+    The effective maximum for <varname>vacuum_table_age</varname> is 0.95 * 
+    <varname>autovacuum_freeze_max_age</varname>; a setting higher than that will be
+    capped to that maximum. A value higher than
+    <varname>autovacuum_freeze_max_age</varname> wouldn't make sense because an
+    anti-wraparound autovacuum would be triggered at that point anyway, and
+    the 0.95 multiplier leaves some breathing room to run a manual
+    <command>VACUUM</command> before that happens.  As a rule of thumb,
+    <command>vacuum_freeze_table_age</command> should be set to a value somewhat
+    below <varname>autovacuum_freeze_max_age</varname>, leaving enough gap so that
+    a regularly scheduled <command>VACUUM</command> or an autovacuum triggered by
+    normal delete and update activity is run in that window.  Setting it too
+    close could lead to anti-wraparound autovacuums, even though the table
+    was recently vacuumed to reclaim space, whereas lower values lead to more
+    frequent whole-table scans.
+   </para>
+
+   <para>
+    Le seul inconvénient à augmenter <varname>autovacuum_freeze_max_age</varname>
+    (and <varname>vacuum_freeze_table_age</varname> along with it)
     est que le sous-répertoire <filename>pg_clog</filename> du cluster prendre
     plus de place car il doit stocker le statut du COMMIT pour toutes les
     transactions depuis <varname>autovacuum_freeze_max_age</varname>. L'état de
@@ -489,24 +512,20 @@
 SELECT datname, age(datfrozenxid) FROM pg_database;</programlisting>
 
     La colonne <literal>age</literal> mesure le nombre de transactions à partir
-    du XID final vers le XID de transaction en cours. Après que
+    du XID final vers le XID de transaction en cours. <command>VACUUM</command> normally
+    only scans pages that have been modified since last vacuum, but
+    <structfield>relfrozenxid</structfield> can only be advanced when the whole table is
+    scanned. The whole table is scanned when <structfield>relfrozenxid</structfield> is
+    more than <varname>vacuum_freeze_table_age</varname> transactions old, if
+    <command>VACUUM FREEZE</command> command is used, or if all pages happen to
+    require vacuuming to remove dead row versions. Après que
     <command>VACUUM</command> ait parcouru la table complète
     <literal>age(relfrozenxid)</literal> devrait être un peu plus grande que
     le paramètre <varname>vacuum_freeze_min_age</varname> qui a été utilisé
     (la différence étant due au nombre de transactions démarrées depuis que
-    <command>VACUUM</command> a commencé son travail).
-   </para>
-
-   <para>
-    <command>VACUUM</command> n'examine normalement que les pages qui ont été
-    modifiées depuis le dernier vacuum, mais <structfield>relfrozenxid</structfield>
-    ne peut être avancé que suite à un parcours complet de la table. La table est
-    parcourue dans son ensemble quand <structfield>relfrozenxid</structfield>
-    est plus vieux (en transactions) que <varname>vacuum_freeze_table_age</varname>,
-    si <command>VACUUM FREEZE</command> est lancé, ou si toutes les pages
-    doivent être parcourues pour supprimer des enregistrements morts. Si aucune
-    commande <command>VACUUM</command> forçant un parcours complet de table n'est
-    exécuté jusqu'à ce que <varname>autovacuum_freeze_max_age</varname> soit
+    <command>VACUUM</command> a commencé son travail). If no whole-table-scanning
+    <command>VACUUM</command>
+    is issued on the table until  <varname>autovacuum_freeze_max_age</varname> soit
     atteint, un autovacuum sera rapidement forcé sur la table.
    </para>
 
@@ -620,7 +639,12 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
     statistiques&nbsp;; c'est un nombre à peu près précis, mis à jour après
     chaque instruction <command>UPDATE</command> et <command>DELETE</command>
     (il est seulement à peu près précis car certaines informations pourraient
-    être perdues en cas de grosse charge).
+    être perdues en cas de grosse charge). If the <structfield>relfrozenxid</structfield>
+    value of the table is more
+    than <varname>vacuum_freeze_table_age</varname> transactions old, the whole
+    table is scanned to freeze old tuples and advance
+    <structfield>relfrozenxid</structfield>, otherwise only pages that have been modified
+    since last vacuum are vacuumed.
    </para>
 
    <para>

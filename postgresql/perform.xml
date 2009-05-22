@@ -13,7 +13,7 @@
 
   <para>
    La performance des requêtes peut être affectée par un grand nombre d'éléments.
-   Certains peuvent être manipulés par l'utilisateur, d'autres sont
+   Certains peuvent être contrôlés par l'utilisateur, d'autres sont
    fondamentaux au concept sous-jacent du système. Ce chapitre fournit des
    conseils sur la compréhension et sur la configuration fine des performances
    de <productname>PostgreSQL</productname>.
@@ -35,7 +35,7 @@
     de requête</firstterm> pour chaque requête qu'il reçoit. Choisir le bon
     plan correspondant à la structure de la requête et aux propriétés des
     données est absolument critique pour de bonnes performances, donc le système
-    inclut un <firstterm>planificateur</firstterm> complexe qui tente de sélectionner
+    inclut un <firstterm>planificateur</firstterm> complexe qui tente de choisir
     les bons plans. Vous pouvez
     utiliser la commande <xref linkend="sql-explain" endterm="sql-explain-title"/>
     pour voir quel plan de requête le planificateur crée pour une requête particulière.
@@ -51,10 +51,8 @@
     d'accès aux tables&nbsp;: parcours séquentiel, parcours d'index et parcours
     d'index bitmap. Si la requête requiert des jointures, agrégations, tris
     ou d'autres opérations sur les lignes brites, ce seront des n&oelig;uds
-    supplémentaires <quote>au-dessus</quote> des n&oelig;uds de parcours qui
-    réaliseront ces opérations. De nouveau, il y a habituellement plus d'une
-    façon possible de réaliser ces opérations, donc différents types de
-    n&oelig;uds peuvent aussi apparaître ici. La sortie
+    supplémentaires au-dessus des n&oelig;uds de parcours pour réaliser ces
+    opérations. D'autres types de n&oelig;uds sont aussi supportés. La sortie
     d'<command>EXPLAIN</command> comprend une ligne pour chaque n&oelig;ud dans
     l'arbre du plan, montrant le type de n&oelig;ud basique avec les estimations
     de coût que le planificateur a fait pour l'exécution de ce n&oelig;ud du
@@ -85,7 +83,7 @@
    </para>
 
    <para>
-    Les nombres donnés par <command>EXPLAIN</command> sont&nbsp;:
+    Les nombres donnés par <command>EXPLAIN</command> sont (de gauche à droite)&nbsp;:
 
     <itemizedlist>
      <listitem>
@@ -137,13 +135,14 @@
     que le coût reflète seulement les éléments d'importance pour le
     planificateur. En particulier, le coût ne considère pas le temps
     dépensé dans la transmission des lignes de résultat au client, ce qui
-    pourrait être un facteur important dans le temps réellement passé&nbsp;; mais
+    pourrait être un facteur important dans le temps total passé&nbsp;; mais
     le planificateur l'ignore parce qu'il ne peut pas le changer en modifiant
     le plan (chaque plan correct sortira le même ensemble de lignes).
    </para>
 
    <para>
-    La sortie des lignes est un peu difficile car il ne s'agit
+    La valeur <literal>rows=</literal> de l'<command>EXPLAIN</command> est un
+    peu difficile car il ne s'agit
     <emphasis>pas</emphasis> du nombre de lignes traitées ou parcourues par le
     plan de n&oelig;uds. C'est habituellement moins, reflétant la sélectivité
     estimée des conditions de la clause <literal>WHERE</literal> qui sont appliquées au
@@ -168,7 +167,7 @@
 <programlisting>SELECT relpages, reltuples FROM pg_class WHERE relname = 'tenk1';</programlisting>
 
     vous trouverez que <classname>tenk1</classname> a 358 pages disque et 10000
-    lignes. Le coût estimé est de (nombre de pages lues *
+    lignes. Le coût estimé est calculé avec (nombre de pages lues *
     <xref linkend="guc-seq-page-cost"/>) + (lignes parcourues *
     <xref linkend="guc-cpu-tuple-cost"/>).  Par défaut,
     <varname>seq_page_cost</varname> vaut 1.0 et <varname>cpu_tuple_cost</varname>
@@ -177,7 +176,7 @@
    </para>
 
    <para>
-    Maintenant, modifions la requête pour ajouter une condition
+    Maintenant, modifions la requête originale pour ajouter une condition
     <literal>WHERE</literal>&nbsp;:
 
 <programlisting>EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 7000;
@@ -201,7 +200,8 @@
 
    <para>
     Le nombre réel de lignes que cette requête sélectionnera est 7000 mais
-    l'estimation est approximative. Si vous tentez de dupliquer cette
+    l'estimation <literal>rows=</literal> est approximative. Si vous tentez
+    de dupliquer cette
     expérience, vous obtiendrez probablement une estimation légèrement
     différente&nbsp;; de plus, elle changera après chaque commande
     <command>ANALYZE</command> parce que les statistiques produites par
@@ -237,7 +237,8 @@
 
    <para>
     Si la condition <literal>WHERE</literal> est assez sélective, le planificateur
-    pourrait basculer vers un plan de parcours d'index <quote>simple</quote>&nbsp;:
+    pourrait basculer vers un plan de parcours d'index
+    <emphasis>simple</emphasis>&nbsp;:
 
 <programlisting>EXPLAIN SELECT * FROM tenk1 WHERE unique1 &lt; 3;
 
@@ -275,7 +276,7 @@
    </para>
 
    <para>
-    S'il existe des index sur plusieurs colonnes utilisées dans la condition
+    S'il existe des index sur plusieurs colonnes référencées dans la condition
     <literal>WHERE</literal>, le planificateur pourrait choisir d'utiliser une
     combinaison AND ou OR des index&nbsp;:
 
@@ -301,7 +302,9 @@
     Maintenant, essayons de joindre deux tables, en utilisant les colonnes dont
     nous avons discuté&nbsp;:
 
-<programlisting>EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
+<programlisting>EXPLAIN SELECT *
+FROM tenk1 t1, tenk2 t2
+WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
 
                                       QUERY PLAN
 --------------------------------------------------------------------------------------
@@ -346,13 +349,16 @@
 
    <para>
     Une façon de rechercher des plans différents est de forcer le planificateur
-    à oublier certaines stratégies qu'il aurait donné vainqueur en utilisant les
+    à oublier certaines stratégies qu'il aurait trouvé moins coûteuses en
+    utilisant les
     options d'activation (enable)/désactivation (disable) décrites dans la <xref
     linkend="runtime-config-query-enable"/> (c'est un outil complexe mais utile&nbsp;;
     voir aussi la <xref linkend="explicit-joins"/>).
 
 <programlisting>SET enable_nestloop = off;
-EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
+EXPLAIN SELECT *
+FROM tenk1 t1, tenk2 t2
+WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
 
                                         QUERY PLAN
 ------------------------------------------------------------------------------------------
@@ -389,7 +395,9 @@ EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique
     ceux affichés par un simple <command>EXPLAIN</command>. Par exemple, nous
     pourrions obtenir un résultat comme celui-ci&nbsp;:
 
-<screen>EXPLAIN ANALYZE SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
+<screen>EXPLAIN ANALYZE SELECT *
+FROM tenk1 t1, tenk2 t2
+WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
 
                                                             QUERY PLAN
 ----------------------------------------------------------------------------------------------------------------------------------
@@ -431,9 +439,10 @@ EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique
     indiqué par le no&oelig;ud du plan de haut niveau. Pour les commandes
     <command>INSERT</command>, <command>UPDATE</command> et <command>DELETE</command>, le temps total
     d'exécution pourrait être considérablement plus important parce qu'il inclut
-    le temps passé au traitement des lignes de résultat. Dans ces commandes, le
+    le temps passé au traitement des lignes de résultat. Pour ces commandes, le
     temps pour le n&oelig;ud du plan principal est essentiellement le temps
-    passé à calculer les nouvelles lignes et/ou l'emplacement des anciennes mais
+    passé à trouver l'emplacement des anciennes lignes et/ou à calculer les
+    nouvelles lignes mais
     il n'inclut pas le temps passé à faire des modifications.
     Le temps passé à lancer les déclencheurs, s'il y en a, est aussi en dehors
     du n&oelig;ud du plan principal et est affiché séparément pour chaque
@@ -480,7 +489,9 @@ EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique
    <structfield>relpages</structfield>. Nous pouvons la regarder avec des
    requêtes comme celle-ci&nbsp;:
 
-<screen>SELECT relname, relkind, reltuples, relpages FROM pg_class WHERE relname LIKE 'tenk1%';
+<screen>SELECT relname, relkind, reltuples, relpages
+FROM pg_class
+WHERE relname LIKE 'tenk1%';
 
        relname        | relkind | reltuples | relpages
 ----------------------+---------+-----------+----------
@@ -546,7 +557,9 @@ EXPLAIN SELECT * FROM tenk1 t1, tenk2 t2 WHERE t1.unique1 &lt; 100 AND t1.unique
    pour afficher seulement les lignes des tables lisibles par l'utilisateur courant).
    Par exemple, nous pourrions lancer&nbsp;:
 
-<screen>SELECT attname, n_distinct, most_common_vals FROM pg_stats WHERE tablename = 'road';
+<screen>SELECT attname, n_distinct, most_common_vals
+FROM pg_stats
+WHERE tablename = 'road';
 
  attname | n_distinct |                                                                                                                                                                                  most_common_vals                                                                                                                                                                                   
 ---------+------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -771,7 +784,8 @@ WHERE quelquechosedautre;</programlisting>
    </indexterm>
 
    <para>
-    Désactivez la validation automatique et faites une seule validation à la
+    Lors d'<command>INSERT</command>, désactivez la validation automatique et faites
+    une seule validation à la
     fin (en SQL, ceci signifie de lancer <command>BEGIN</command> au début et
    <command>COMMIT</command> à la fin. Quelques bibliothèques client pourraient
    le faire derrière votre dos auquel cas vous devez vous assurer que la
@@ -814,7 +828,7 @@ WHERE quelquechosedautre;</programlisting>
    <para>
     Notez que charger un grand nombre de lignes en utilisant
     <command>COPY</command> est pratiquement toujours plus rapide que d'utiliser
-    <command>INSERT</command>, même si <command>PREPARE</command> est utilisé lorsque
+    <command>INSERT</command>, même si <command>PREPARE ... INSERT</command> est utilisé lorsque
     de nombreuses insertions sont groupées en une seule transaction.
    </para>
 
@@ -825,7 +839,7 @@ WHERE quelquechosedautre;</programlisting>
     transactions ne sont pas impactés car, en cas d'erreur, les fichiers
     contenant les données nouvellement chargées seront supprimés de toute
     façon. Néanmoins, cette considération ne s'applique pas quand
-    <xref linkend="guc-archive-mode"/> est configuré, car toutes les
+    <xref linkend="guc-archive-mode"/> est activé, car toutes les
     commandes doivent écrire dans les journaux de transaction dans ce cas.
    </para>
 
@@ -835,7 +849,7 @@ WHERE quelquechosedautre;</programlisting>
    <title>Supprimez les index</title>
 
    <para>
-    Si vous chargez une table tout juste créée, la façon la plus rapide est de
+    Si vous chargez une table tout juste créée, la méthode la plus rapide est de
     créer la table, de charger en lot les données de cette table en utilisant
     <command>COPY</command>, puis de créer tous les index nécessaires pour la
     table. Créer un index sur des données déjà existantes est plus rapide que de
@@ -845,10 +859,9 @@ WHERE quelquechosedautre;</programlisting>
    <para>
     Si vous ajoutez beaucoup de données à une table existante, il pourrait être
     avantageux de supprimer l'index, de charger la table, puis de recréer l'index.
-    Bien sûr, les performances de la
-    base de données pour les autres utilisateurs pourraient être sévèrement
-    affectées tout le temps où l'index sera manquant. Vous devez aussi y penser
-    à deux fois avant de supprimer des index uniques car la vérification
+    Bien sûr, les performances de la base de données pour les autres utilisateurs
+    pourraient souffrir tout le temps où l'index sera manquant. Vous devez aussi
+    y penser à deux fois avant de supprimer des index uniques car la vérification
     d'erreur apportée par la contrainte unique sera perdue tout le temps où
     l'index est manquant.
    </para>
