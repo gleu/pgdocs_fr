@@ -41,8 +41,14 @@
     <listitem>
       <para>
         Vous avez la ligne <option>tcpip_socket=true</option> dans votre
-        <filename>postgresql.conf</filename> et
+        <filename>postgresql.conf</filename>&nbsp;;
       </para>
+      
+      <note>
+        <para>
+	  This is no longer needed for &postgres; 8.0 and later versions.
+	</para>
+      </note>
     </listitem>
 
     <listitem>
@@ -126,6 +132,24 @@
 createdb -O $PGBENCHUSER -h $SLAVEHOST $SLAVEDBNAME
 pgbench -i -s 1 -U $PGBENCHUSER -h $MASTERHOST $MASTERDBNAME</programlisting>
 
+<para> One of the tables created by
+<application>pgbench</application>, <envar>history</envar>, does not
+have a primary key.  In earlier versions of &slony1;, a &lslonik;
+command called <xref linkend="stmttableaddkey"/> could be used to
+introduce one.  This caused a number of problems, and so this feature
+has been removed in version 2 of &slony1;.  It now
+<emphasis>requires</emphasis> that there is a suitable candidate
+primary key. </para>
+
+<para> The following SQL requests will establish a proper primary key on this table: </para>
+
+<programlisting>
+psql -U $PGBENCHUSER -h $HOST1 -d $MASTERDBNAME -c "begin; alter table
+history add column id serial; update history set id =
+nextval('history_id_seq'); alter table history add primary key(id);
+commit"
+</programlisting>
+
 <para>
   Puisque &slony1; dépend de la présence du langage procédural pl/pgSQL, nous
   devons l'installer maintenant. Il est possible que vous ayez installé
@@ -179,40 +203,23 @@ pgbench -i -s 1 -U $PGBENCHUSER -h $MASTERHOST $MASTERDBNAME</programlisting>
   principalement des procédures stockées sur les n&oelig;uds maître et esclaves.
 </para>
 
-<sect3><title>Utiliser les scripts altperl</title>
-<indexterm><primary>Utilisation des scripts altperl</primary></indexterm>
+<para> The example that follows uses <xref linkend="slonik"/> directly
+(or embedded directly into scripts).  This is not necessarily the most
+pleasant way to get started; there exist tools for building <xref
+linkend="slonik"/> scripts under the <filename>tools</filename>
+directory, including:</para>
+<itemizedlist>
+<listitem><para> <xref linkend="altperl"/> - a set of Perl scripts that
+build <xref linkend="slonik"/> scripts based on a single
+<filename>slon_tools.conf</filename> file. </para> </listitem>
 
-<para>
-  L'utilisation des scripts <xref linkend="altperl"/> est une façon simple de
-  faire ses premiers pas. Le script <command>slonik_build_env</command> génère
-  une sortie fournissant les détails nécessaires à la construction complète
-  d'un fichier <filename>rslon_tools.conf</filename>. Un exemple de fichier
-  <filename>slon_tools.conf</filename> est fournit dans la distribution afin
-  d'aider à la prise en main. Les script altperl font tous référence à ce
-  fichier central de configuration afin de simplifier l'administration. Une
-  fois le fichier slon_tools.conf créé, vous pouvez poursuivre comme ceci&nbsp;:
-</para>
+<listitem><para> <xref linkend="mkslonconf"/> - a shell script
+(<emphasis>e.g.</emphasis> - works with Bash) which, based either on
+self-contained configuration or on shell environment variables,
+generates a set of <xref linkend="slonik"/> scripts to configure a
+whole cluster. </para> </listitem>
 
-<programlisting># Initialisation du cluster:
-$ slonik_init_cluster  | slonik 
-
-# Démarrage de slon  (ici 1 et 2 sont les numéros de n&oelig;uds)
-$ slon_start 1    
-$ slon_start 2
-
-# Création des ensemble (ici 1 est le numéro de l'ensemble)
-$ slonik_create_set 1             
-
-# Abonner l'ensemble dans le second n&oelig;ud (1= n° d'ensemble, 2= n° de n&oelig;ud)
-$ slonik_subscribe_set  1 2 | slonik</programlisting>
-
-<para>
-  Vous avez répliqué votre première base de données. Vous pouvez sauter la
-  section suivante de la documentation si vous le souhaitez car il s'agit
-  d'une approche plus <quote>rustre</quote>.
-</para>
-
-</sect3>
+</itemizedlist>
 
 <sect3>
 <title>Utiliser directement les commandes slonik</title>
@@ -254,18 +261,6 @@ slonik <<_EOF_
 	init cluster ( id=1, comment = 'Master Node');
  
 	#--
-	# Puisque la table history n'a pas de clé primaire, ni de contrainte
-	# unique qui pourrait être utilisée pour identifier une ligne, nous
-	# devons en ajouter une.
-	# La commande suivante ajoute à la table une colonne bigint nommée
-	# _Slony-I_$CLUSTERNAME_rowID. Elle comme valeur par défaut
-	# nextval('_$CLUSTERNAME.s1_rowid_seq'), et dispose des contraintes
-	# UNIQUE et NOT NULL. Toutes les lignes existantes seront initialisées
-	# avec un dentifiant.
-	#--
-	table add key (node id = 1, fully qualified name = 'public.history');
-
-	#--
 	# Slony-I regroupe les tables dans des ensembles.
 	# La plus petite unité qu'un noeud peut répliquer est un ensemble.
 	# Les commandes suivantes crées un ensemble contenant 4 tables pgbench.
@@ -275,14 +270,14 @@ slonik <<_EOF_
 	set add table (set id=1, origin=1, id=1, fully qualified name = 'public.accounts', comment='accounts table');
 	set add table (set id=1, origin=1, id=2, fully qualified name = 'public.branches', comment='branches table');
 	set add table (set id=1, origin=1, id=3, fully qualified name = 'public.tellers', comment='tellers table');
-	set add table (set id=1, origin=1, id=4, fully qualified name = 'public.history', comment='history table', key = serial);
+	set add table (set id=1, origin=1, id=4, fully qualified name = 'public.history', comment='history table');
 
 	#--
 	# Création du second noeud (l'esclave) 
 	# décrit comment les 2 noeuds vont se connecter l'un à l'autre
 	# et quelle manière ils vont écouter les événements..
 	#--
-	store node (id=2, comment = 'Slave node');
+	store node (id=2, comment = 'Slave node', event node=1);
 	store path (server = 1, client = 2, conninfo='dbname=$MASTERDBNAME host=$MASTERHOST user=$REPLICATIONUSER');
 	store path (server = 2, client = 1, conninfo='dbname=$SLAVEDBNAME host=$SLAVEHOST user=$REPLICATIONUSER');
 _EOF_
@@ -359,12 +354,20 @@ _EOF_]]></programlisting>
   Lorsque le processus de copie est terminé, le démon de réplication sur le
   n&oelig;ud <envar>$SLAVEHOST</envar> commencera à se synchroniser en
   appliquant les journaux de réplication qui auront été accumulés. Cela se
-  fera par petit à petit, par tranches de 10 secondes de travail applicatifs.
+  fera par petit à petit, par tranches d'environ 10 secondes de travail applicatifs.
   Selon les performances des deux systèmes impliqués, la taille des deux bases
   de données, la charge de transaction et la qualité de l'optimisation et de la
   maintenance effectuées sur les deux bases de données, ce processus de
   synchronisation peut durer quelques minutes, quelques heures ou quelques
   siècles.
+</para>
+
+<para>
+  If you encounter problems getting this working, check over the
+  logs for the &lslon; processes, as error messages are likely to be
+  suggestive of the nature of the problem.  The tool &lteststate; is
+  also useful for diagnosing problems with nearly-functioning
+  replication clusters.
 </para>
 
 <para>
@@ -427,6 +430,48 @@ fi
   Si ce script renvoie <command>FAILED</command>, merci de contacter les
   développeurs sur <ulink url="http://slony.info/">http://slony.info/</ulink>.
 </para>
+
+<para>
+.  Be sure to be prepared with useful
+diagnostic information including the logs generated by &lslon;
+processes and the output of &lteststate;. </para></sect3>
+
+<sect3><title>Using the altperl scripts</title>
+
+<indexterm><primary> altperl script example </primary></indexterm>
+
+<para>
+Using the <xref linkend="altperl"/> scripts is an alternative way to
+get started; it allows you to avoid writing slonik scripts, at least
+for some of the simple ways of configuring &slony1;.  The
+<command>slonik_build_env</command> script will generate output
+providing details you need to build a
+<filename>slon_tools.conf</filename>, which is required by these
+scripts.  An example <filename>slon_tools.conf</filename> is provided
+in the distribution to get you started.  The altperl scripts all
+reference this central configuration file centralize cluster
+configuration information. Once slon_tools.conf has been created, you
+can proceed as follows:
+</para>
+
+<programlisting>
+# Initialize cluster:
+$ slonik_init_cluster  | slonik 
+
+# Start slon  (here 1 and 2 are node numbers)
+$ slon_start 1    
+$ slon_start 2
+
+# Create Sets (here 1 is a set number)
+$ slonik_create_set 1 | slonik             
+
+# subscribe set to second node (1= set ID, 2= node ID)
+$ slonik_subscribe_set 1 2 | slonik
+</programlisting>
+
+<para> You have now replicated your first database.  You can skip the
+following section of documentation if you'd like, which documents more
+of a <quote>bare-metal</quote> approach.</para>
 
 </sect3>
 

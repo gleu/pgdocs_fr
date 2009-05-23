@@ -16,9 +16,8 @@
     <listitem>
       <para>
         supprime les anciennes données sur les différentes tables du schéma
-        de <productname>Slony-I</productname>, notamment <xref
-	linkend="table.sl-log-1"/>, <xref linkend="table.sl-log-2"/> et <xref
-        linkend="table.sl-seqlog"/>&nbsp;;
+        de <productname>Slony-I</productname>, notamment &sllog1;, &sllog2;
+	et &slseqlog;&nbsp;;
       </para>
     </listitem>
 
@@ -54,22 +53,18 @@
     <listitem>
       <para>
         Le bogue <link linkend="dupkey">violation par clef dupliquée</link> a
-	permis d'isoler des situations de concurrence dans &postgres;. Des
-	problèmes subsistent notamment lorsque <command>VACUUM</command> ne
-        réclame pas correctement l'espace menant à une corruption des index de
-	type B-tree.
-      </para>
-
-      <para>
-        Il peut être utile de lancer la commande <command>REINDEX TABLE
-	sl_log_1;</command> périodiquement pour éviter ce problème.
+	permis d'isoler a number of rather obscure
+        &postgres; race conditions, so that in modern versions of &slony1; and
+	&postgres;, there should be little to worry about.
       </para>
     </listitem>
 
     <listitem>
       <para>
         À partir de la version 1.2, la fonctionnalité <quote>log
-	switching</quote> est arrivée&nbsp;;de temps en temps, elle tente
+	switching</quote> est arrivée&nbsp;;de temps en temps (by default, once per week,
+        though you may induce it by calling the stored
+        function <function>logswitch_start()</function>), elle tente
 	d'interchanger les données entre &sllog1; et &sllog2; afin de réaliser
 	un <command>TRUNCATE</command> sur les <quote>plus vieilles</quote>
 	données.
@@ -80,9 +75,69 @@
 	nettoyées ce qui évite qu'elles ne grossissent trop lors d'une charge
 	importante et qu'elles deviennent impossibles à nettoyer.
       </para>
+      
+<para> In version 2.0, <command>DELETE</command> is no longer used to
+clear out data in &sllog1; and &sllog2;; instead, the log switch logic
+is induced frequently, every time the cleanup loop does not find a
+switch in progress, and these tables are purely cleared out
+via <command>TRUNCATE</command>.  This eliminates the need to vacuum
+these tables. </para>
+
     </listitem>
   </itemizedlist>
 </para>
+
+<sect2 id="maintenance-autovac"> <title> Interaction with &postgres;
+autovacuum </title>
+
+<indexterm><primary>autovacuum interaction</primary></indexterm>
+
+<para> Recent versions of &postgres; support an
+<quote>autovacuum</quote> process which notices when tables are
+modified, thereby creating dead tuples, and vacuums those tables,
+<quote>on demand.</quote> It has been observed that this can interact
+somewhat negatively with &slony1;'s own vacuuming policies on its own
+tables. </para>
+
+<para> &slony1; requests vacuums on its tables immediately after
+completing transactions that are expected to clean out old data, which
+may be expected to be the ideal time to do so.  It appears as though
+autovacuum may notice the changes a bit earlier, and attempts
+vacuuming when transactions are not complete, rendering the work
+pretty useless.  It seems preferable to configure autovacuum to avoid
+vacuum &slony1;-managed configuration tables. </para>
+
+<para> The following query (change the cluster name to match your
+local configuration) will identify the tables that autovacuum should
+be configured not to process: </para>
+
+<programlisting>
+mycluster=# select oid, relname from pg_class where relnamespace = (select oid from pg_namespace where nspname = '_' || 'MyCluster') and relhasindex;
+  oid  |   relname    
+-------+--------------
+ 17946 | sl_nodelock
+ 17963 | sl_setsync
+ 17994 | sl_trigger
+ 17980 | sl_table
+ 18003 | sl_sequence
+ 17937 | sl_node
+ 18034 | sl_listen
+ 18017 | sl_path
+ 18048 | sl_subscribe
+ 17951 | sl_set
+ 18062 | sl_event
+ 18069 | sl_confirm
+ 18074 | sl_seqlog
+ 18078 | sl_log_1
+ 18085 | sl_log_2
+(15 rows)
+</programlisting>
+
+<para> The following query will populate
+<envar>pg_catalog.pg_autovacuum</envar> with suitable configuration
+information: <command> INSERT INTO pg_catalog.pg_autovacuum (vacrelid, enabled, vac_base_thresh, vac_scale_factor, anl_base_thresh, anl_scale_factor, vac_cost_delay, vac_cost_limit, freeze_min_age, freeze_max_age) SELECT oid, 'f', -1, -1, -1, -1, -1, -1, -1, -1 FROM pg_catalog.pg_class WHERE relnamespace = (SELECT OID FROM pg_namespace WHERE nspname = '_' || 'MyCluster') AND relhasindex; </command>
+</para>
+</sect2>
 
 <sect2><title>Chiens de garde&nbsp;: garder les Slons en vie</title>
 <indexterm><primary>Chiens de garde pour garder en vie les démons slon</primary></indexterm>
@@ -121,6 +176,7 @@
 <sect2 id="gensync"><title>En parallèle aux chiens de garde&nbsp;:
 generate_syncs.sh</title>
 
+<indexterm><primary>generate SYNCs</primary></indexterm>
 <para>
   Un nouveau script est apparu dans &slony1; 1.1, il s'agit de
   <application>generate_syncs.sh</application>, qui est utilise dans les
@@ -166,8 +222,8 @@ generate_syncs.sh</title>
 <indexterm><primary>tester le statut du cluster</primary></indexterm>
 
 <para>
-  Dans le répertoire <filename>tools</filename>, vous trouverez des scripts
-  nommés <filename>test_slony_state.pl</filename> et
+  Dans le répertoire <filename>tools</filename>, vous trouverez les scripts
+  &lteststate; nommés <filename>test_slony_state.pl</filename> et
   <filename>test_slony_state-dbi.pl</filename>. Le premier utilise l'interface
   Perl/DBI, l'autre utilise l'interface PostgreSQL.
 </para>
@@ -313,6 +369,8 @@ generate_syncs.sh</title>
 
 <sect2><title>Autres tests de réplication</title>
 
+<indexterm><primary>testing replication</primary></indexterm>
+
 <para>
   La méthodologie de la section précédente est conçu avec un vue pour minimiser
   le coût des requêtes de tests&nbsp;; sur un cluster très chargé, supportant
@@ -408,6 +466,103 @@ LIMIT 1;</command>
     </listitem>
   </itemizedlist>
 </para>
+
+</sect2>
+
+<sect2><title>mkservice </title>
+<indexterm><primary>mkservice for BSD </primary></indexterm>
+
+<sect3><title>slon-mkservice.sh</title>
+
+<para> Create a slon service directory for use with svscan from
+daemontools.  This uses multilog in a pretty basic way, which seems to
+be standard for daemontools / multilog setups. If you want clever
+logging, see logrep below. Currently this script has very limited
+error handling capabilities.</para>
+
+<para> For non-interactive use, set the following environment
+variables.  <envar>BASEDIR</envar> <envar>SYSUSR</envar>
+<envar>PASSFILE</envar> <envar>DBUSER</envar> <envar>HOST</envar>
+<envar>PORT</envar> <envar>DATABASE</envar> <envar>CLUSTER</envar>
+<envar>SLON_BINARY</envar> If any of the above are not set, the script
+asks for configuration information interactively.</para>
+
+<itemizedlist>
+<listitem><para>
+<envar>BASEDIR</envar> where you want the service directory structure for the slon
+to be created. This should <emphasis>not</emphasis> be the <filename>/var/service</filename> directory.</para></listitem>
+<listitem><para>
+<envar>SYSUSR</envar> the unix user under which the slon (and multilog) process should run.</para></listitem>
+<listitem><para>
+<envar>PASSFILE</envar> location of the <filename>.pgpass</filename> file to be used. (default <filename>~sysusr/.pgpass</filename>)</para></listitem>
+<listitem><para>
+<envar>DBUSER</envar> the postgres user the slon should connect as (default slony)</para></listitem>
+<listitem><para>
+<envar>HOST</envar> what database server to connect to (default localhost)</para></listitem>
+<listitem><para>
+<envar>PORT</envar> what port to connect to (default 5432)</para></listitem>
+<listitem><para>
+<envar>DATABASE</envar> which database to connect to (default dbuser)</para></listitem>
+<listitem><para>
+<envar>CLUSTER</envar> the name of your Slony1 cluster? (default database)</para></listitem>
+<listitem><para>
+<envar>SLON_BINARY</envar> the full path name of the slon binary (default <command>which slon</command>)</para></listitem>
+</itemizedlist>
+</sect3>
+
+<sect3><title>logrep-mkservice.sh</title>
+
+<para>This uses <command>tail -F</command> to pull data from log files allowing
+you to use multilog filters (by setting the CRITERIA) to create
+special purpose log files. The goal is to provide a way to monitor log
+files in near realtime for <quote>interesting</quote> data without either
+hacking up the initial log file or wasting CPU/IO by re-scanning the
+same log repeatedly.
+</para>
+
+<para>For non-interactive use, set the following environment
+variables.  <envar>BASEDIR</envar> <envar>SYSUSR</envar> <envar>SOURCE</envar>
+<envar>EXTENSION</envar> <envar>CRITERIA</envar> If any of the above are not set,
+the script asks for configuration information interactively.
+</para>
+
+<itemizedlist>
+<listitem><para>
+<envar>BASEDIR</envar> where you want the service directory structure for the logrep
+to be created. This should <emphasis>not</emphasis> be the <filename>/var/service</filename> directory.</para></listitem>
+<listitem><para><envar>SYSUSR</envar> unix user under which the service should run.</para></listitem>
+<listitem><para><envar>SOURCE</envar> name of the service with the log you want to follow.</para></listitem>
+<listitem><para><envar>EXTENSION</envar> a tag to differentiate this logrep from others using the same source.</para></listitem>
+<listitem><para><envar>CRITERIA</envar> the multilog filter you want to use.</para></listitem>
+</itemizedlist>
+
+<para> A trivial example of this would be to provide a log file of all slon
+ERROR messages which could be used to trigger a nagios alarm.
+<command>EXTENSION='ERRORS'</command>
+<command>CRITERIA="'-*' '+* * ERROR*'"</command>
+(Reset the monitor by rotating the log using <command>svc -a $svc_dir</command>)
+</para>
+
+<para> A more interesting application is a subscription progress log.
+<command>EXTENSION='COPY'</command>
+<command>CRITERIA="'-*' '+* * ERROR*' '+* * WARN*' '+* * CONFIG enableSubscription*' '+* * DEBUG2 remoteWorkerThread_* prepare to copy table*' '+* * DEBUG2 remoteWorkerThread_* all tables for set * found on subscriber*' '+* * DEBUG2 remoteWorkerThread_* copy*' '+* * DEBUG2 remoteWorkerThread_* Begin COPY of table*' '+* * DEBUG2 remoteWorkerThread_* * bytes copied for table*' '+* * DEBUG2 remoteWorkerThread_* * seconds to*' '+* * DEBUG2 remoteWorkerThread_* set last_value of sequence*' '+* * DEBUG2 remoteWorkerThread_* copy_set*'"</command>
+</para>
+
+<para>If you have a subscription log then it's easy to determine if a given
+slon is in the process of handling copies or other subscription activity.
+If the log isn't empty, and doesn't end with a 
+<command>"CONFIG enableSubscription: sub_set:1"</command>
+(or whatever set number you've subscribed) then the slon is currently in
+the middle of initial copies.</para>
+
+<para> If you happen to be monitoring the mtime of your primary slony logs to 
+determine if your slon has gone brain-dead, checking this is a good way
+to avoid mistakenly clobbering it in the middle of a subscribe. As a bonus,
+recall that since the the slons are running under svscan, you only need to
+kill it (via the svc interface) and let svscan start it up again laster.
+I've also found the COPY logs handy for following subscribe activity 
+interactively.</para>
+</sect3>
 
 </sect2>
 

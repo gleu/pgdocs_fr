@@ -102,11 +102,16 @@
       <listitem>
         <para>Niveau de traces de débogage (plus la valeur est haute, plus les
 	      messages sont verbeux).
-	      Valeurs possibles&nbsp;: de 0 à 4. Valeur par défaut&nbsp;: 2.</para>
+	      Valeurs possibles&nbsp;: de 0 à 4. Valeur par défaut&nbsp;: 0.</para>
 
 	      <para>Il y a <link linkend="nineloglevels">neuf niveaux de messages
 	      de trace</link>&nbsp;; en utilisant cette option, une partie ou l'ensemble
-	      des niveaux <quote>debug</quote> peut être désactivé.</para>
+	      des niveaux <quote>debug</quote> peut être désactivé. In &slony1; version 2, a lot of log message levels have
+	been revised in an attempt to ensure the <quote>interesting
+	stuff</quote> comes in at CONFIG/INFO levels, so that you
+	could run at level 0, omitting all of the <quote>DEBUG</quote>
+	messages, and still have meaningful contents in the
+	logs.</para>
       </listitem>
     </varlistentry>
     
@@ -133,6 +138,12 @@
       <listitem>
         <para>Détermine si l'horodatage de chaque événement doit
 	      apparaître dans chaque ligne du journal applicatif.</para>
+
+        <para> Note that if <envar>syslog</envar> usage is configured,
+        then this is ignored; it is assumed that
+        <application>syslog</application> will be supplying
+        timestamps, and timestamps are therefore suppressed.
+        </para>
       </listitem>
     </varlistentry>
 
@@ -291,6 +302,13 @@
         <para>Fréquence maximale (en millisecondes) de vérification des mises à jour.
 	  Valeurs possibles&nbsp;: de 10 à 60000, La valeur par défaut est 100.
         </para>
+
+        <para> This parameter is primarily of concern on nodes that
+          originate replication sets.  On a non-origin node, there
+          will never be update activity that would induce a SYNC;
+          instead, the timeout value described below will induce a
+          SYNC every so often <emphasis>despite absence of changes to
+          replicate.</emphasis> </para>
       </listitem>
     </varlistentry>
 
@@ -321,6 +339,41 @@
           <envar>sync_interval_timeout</envar>. 
 	  Valeurs possibles&nbsp;: [0-120000]. Valeur par défaut&nbsp;: 1000.
         </para>
+
+        <para> This parameter is likely to be primarily of concern on
+          nodes that originate replication sets, though it does affect
+          how often events are generated on other nodes.</para>
+
+	<para>
+          On a non-origin node, there never is activity to cause a
+          SYNC to get generated; as a result, there will be a SYNC
+          generated every <envar>sync_interval_timeout</envar>
+          milliseconds.  There are no subscribers looking for those
+          SYNCs, so these events do not lead to any replication
+          activity.  They will, however, clutter sl_event up a little,
+          so it would be undesirable for this timeout value to be set
+          too terribly low.  120000ms represents 2 minutes, which is
+          not a terrible value.
+        </para>
+
+	<para> The two values function together in varying ways: </para>
+
+	<para> On an origin node, <envar>sync_interval</envar> is
+	the <emphasis>minimum</emphasis> time period that will be
+	covered by a SYNC, and during periods of heavy application
+	activity, it may be that a SYNC is being generated
+	every <envar>sync_interval</envar> milliseconds. </para>
+
+	<para> On that same origin node, there may be quiet intervals,
+	when no replicatable changes are being submitted.  A SYNC will
+	be induced, anyways,
+	every <envar>sync_interval_timeout</envar>
+	milliseconds. </para>
+
+	<para> On a subscriber node that does not originate any sets,
+	only the <quote>timeout-induced</quote> SYNCs will
+	occur.  </para>
+
       </listitem>
     </varlistentry>
 
@@ -332,15 +385,19 @@
       </term>
       <listitem>
         <para>
-          Nombre maximum d'événements <command>SYNC</command> qui seront regroupés
-	  ensemble lorsqu'un n&oelig;ud abonné tombe en panne.
-	  Les événements <command>SYNC</command>s ne sont empaquetés 
-	  que s'ils sont nombreux et qu'ils sont contiguës.
-	  S'il n'y qu'un seul événement <command>SYNC</command> disponible,
-	  même l'option <option>-g60</option> s'appliquera à cet évènement unique.
-	  Dès qu'un n&oelig;ud abonné rattrape son retard, il appliquera chaque événement
-	  <command>SYNC</command> individuellement.
-	  Valeurs possibles&nbsp;: [0,10000]. Valeur par défaut&nbsp;: 20.
+          Maximum number of <command>SYNC</command> events that a
+          subscriber node will group together when/if a subscriber
+          falls behind.  <command>SYNC</command>s are batched only if
+          there are that many available and if they are
+          contiguous.  Every other event type in between leads to a
+          smaller batch.  And if there is only
+          one <command>SYNC</command> available, even though you used
+          <option>-g600</option>, the &lslon; will apply just the one
+          that is available.  As soon as a subscriber catches up, it
+          will tend to apply each
+          <command>SYNC</command> by itself, as a singleton, unless
+          processing should fall behind for some reason.  Range:
+          [0,10000], default: 20
         </para>
       </listitem>
     </varlistentry>
@@ -357,6 +414,35 @@
 	  VACUUM ne soit exécuté. O désactive les VACUUM internes, utilisés
 	  avec le démon <application>pg_autovacuum</application>.
 	  Valeurs possibles&nbsp;: [0,100]. Valeur par défaut&nbsp;: 3.
+        </para>
+      </listitem>
+    </varlistentry>
+
+    <varlistentry id="slon-config-cleanup-interval" xreflabel="slon_config_cleanup_interval">
+      <term><varname>cleanup_interval</varname> (<type>interval</type>)</term>
+      <indexterm>
+        <primary><varname>cleanup_interval</varname> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+        <para>
+          Controls how quickly old events are trimmed out.  That
+          subsequently controls when the data in the log tables,
+          <envar>sl_log_1</envar> and <envar>sl_log_2</envar>, get
+          trimmed out.  Default: '10 minutes'.
+        </para>
+      </listitem>
+    </varlistentry>
+
+    <varlistentry id="slon-config-cleanup-deletelogs" xreflabel="slon_conf_cleanup_deletelogs">
+      <term><varname>cleanup_deletelogs</varname> (<type>boolean</type>)</term>
+      <indexterm>
+        <primary><varname>cleanup_deletelogs</varname> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+        <para>
+          Controls whether or not we use DELETE to trim old data from the log tables,
+          <envar>sl_log_1</envar> and <envar>sl_log_2</envar>.
+          Default: false
         </para>
       </listitem>
     </varlistentry>
