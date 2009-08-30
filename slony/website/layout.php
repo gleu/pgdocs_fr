@@ -15,11 +15,11 @@ $output = '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
 <div class="header">
   <div class="left">
   <div class="menu">
-    <a href="/" title="Go to the Slony homepage">Home</a>
-    <a href="/scm/" title="Go to Slony CVS information">CVS</a>
-    <a href="http://lists.slony.info/mailman/listinfo" title="Slony mailinglists">Mailinglists</a>
-    <a href="/documentation/" title="Go to the documentation section.">Documentation</a>
-    <a href="/downloads/" title="Get Slony!">Download</a>
+    <a href="/" title="Aller sur la page principale">Accueil</a>
+    <a href="/scm/" title="Aller sur le dépôt CVS de slony">CVS</a>
+    <a href="http://lists.slony.info/mailman/listinfo" title="Slony mailinglists">Listes de diffusion</a>
+    <a href="/documentation/" title="Aller vers la section documentation">Documentation</a>
+    <a href="/downloads/" title="Téléchargez Slony!">Téléchargez !</a>
     <a href="http://bugs.slony.info/bugzilla/" title="Slony-I Bugzilla"> Bugs </a>
   </div>
   </div>
@@ -38,7 +38,7 @@ $output ='
   <div class="footer">
     <div class="intro-header">
       <div class="left"></div>
-      <div class="right"><div class="copyright">Content &copy; 2007-2009 Slony Development Group - Hosting provided by <a href="http://www.commandprompt.com" title="Thanks guys!">Command Prompt, Inc.</a></div></div>
+      <div class="right"><div class="copyright">Contenu &copy; 2007-2009 Slony Development Group / Traduction et hébergement par <a href="http://www.postgresql.fr">PostgreSQLFr</a></div></div>
     </div>
   </div>
 </div>
