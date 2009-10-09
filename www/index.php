@@ -119,12 +119,9 @@ $version['804'] = '8.4';
   <div id="content">
     <div id="docs">
     <h1>Documentation</h1>
-    Pour rapporter tout probl&egrave;me dans la traduction, merci d'enregistrer
-    un ticket. Pour cela, consulter le document
-    <a href="http://svn.postgresqlfr.org/wiki/SeLogguerPourUnTicket">Se
-    connecter pour ajouter un nouveau ticket</a>.<br/>
-    Vous pouvez aussi envoyer un mail &agrave; <a href="mailto:guillaume chez
-    lelarge point info">Guillaume Lelarge</a>.
+    Pour rapporter tout probl&egrave;me dans la traduction, merci d'envoyer un
+    mail &agrave; <a href="mailto:guillaume chez lelarge point info">Guillaume
+    Lelarge</a>.
     <div id="pg84">
       <h2>Documentation PostgreSQL, version 8.4 BETA</h2>
       <div class="listes">
