@@ -123,7 +123,7 @@ $version['804'] = '8.4';
     mail &agrave; <a href="mailto:guillaume chez lelarge point info">Guillaume
     Lelarge</a>.
     <div id="pg84">
-      <h2>Documentation PostgreSQL, version 8.4 BETA</h2>
+      <h2>Documentation PostgreSQL, version 8.4</h2>
       <div class="listes">
         <ul>
             <li>Manuel au format HTML&nbsp;:
