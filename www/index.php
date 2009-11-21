@@ -135,11 +135,9 @@ $version['804'] = '8.4';
                 <a onclick="pageTracker._trackPageview('/pg84.tar.gz');"
                 href="http://docs.postgresql.fr/8.4/pg84.tar.gz">TAR.GZ</a>
             </li>
-<!--
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg84.pdf');"
               href="http://docs.postgresql.fr/8.4/pg84.pdf">PDF</a>
             </li>
--->
             <li>Document d'installation au format <a
               onclick="pageTracker._trackPageview('/INSTALL84.html');"
               href="http://docs.postgresql.fr/8.4/INSTALL.html">HTML</a> et
