@@ -421,6 +421,28 @@ server: Error 0</screen>
       </para>
     </answer>
   </qandaentry>
+
+<qandaentry>
+
+<question> <para> I found conflicting types for <envar>yyleng</envar>
+between <filename>parser.c</filename> and <filename>scan.c</filename>.
+In one case, it used type <type>int</type>, conflicting with
+<type>yy_size_t</type>.  What shall I do?</para> </question>
+
+<answer><para> This has been observed on <application>MacOS</application>,
+where <application>flex</application> (which generates
+<filename>scan.c</filename>) and <application>bison</application>
+(which generates <filename>parser.c</filename>) diverged in their
+handling of this variable. </para> 
+<itemizedlist>
+<listitem><para> You might might <quote>hack</quote> <filename>scan.c</filename> by hand to use the matching type. </para> </listitem>
+<listitem><para> You might select different versions of <application>bison</application> or <application>flex</application> so as to get versions whose data types match. </para> </listitem>
+<listitem><para> Note that you may have multiple versions of <application>bison</application> or <application>flex</application> around, and might need to modify <envar>PATH</envar> in order to select the appropriate one.</para></listitem>
+</answer>
+
+
+
+</qandaentry>
 </qandadiv>
 
 <qandadiv id="faqhowto"> <title> &slony1; FAQ: How Do I? </title>
@@ -1933,6 +1955,78 @@ CONTEXT:  PL/pgSQL function "setaddtable_int" line 71 at SQL statement</screen>
       </para>
     </answer>
   </qandaentry>
+
+<qandaentry>
+
+<question> <para>As of version 8.3, &postgres; offers a
+<envar>synchronous_commit</envar> parameter which may be set either
+via GUC or <filename>postgresql.conf</filename> which can provide some
+performance gains by not logging results in WAL.  Would it be sensible
+to turn off synchronous commit on a subscriber node?  </para>
+</question>
+
+<answer><para> Unfortunately, there is an unpleasant failure case
+which this would introduce. </para>
+
+<para>Consider...</para>
+
+<itemizedlist>
+
+<listitem><para> Node #2 claims to have committed up to transaction
+T5, but the WAL only really has records up to T3.</para></listitem>
+
+<listitem><para> Node #1, the "master", got the report back that #2 is
+up to date to T5.</para></listitem>
+
+<listitem><para> Node #2 experiences a failure (e.g. - power
+outage).</para></listitem>
+
+</itemizedlist>
+
+<para>There are two possible outcomes, now, one OK, and one not so OK...</para>
+
+<itemizedlist>
+
+<listitem><para> OK </para>
+
+<para> Node #2 gets restarted, replays WAL, knows it's only got data
+up to T3, and heads back to node #1, asking for transaction T4 and
+others.</para>
+
+<para> No problem.</para></listitem>
+
+<listitem><para> Not so OK.</para>
+
+<para> Before node #2 gets back up, node #1 has run an iteration of
+the cleanup thread, which trims out all the data up to T5, because the
+other nodes confirmed up to that point.</para>
+
+<para> Node #2 gets restarted, replays WAL, knows it's only got data
+up to T3, and heads back to node #1, asking for transaction T4 and
+T5.</para>
+
+<para> Oops.  Node #1 just trimmed those log entries
+out.</para></listitem>
+</itemizedlist>
+
+<para>The race condition here is quite easy to exercise - you just
+need to suppress the restart of node 2 for a while, long enough for
+node 1 to run the cleanup thread.</para>
+
+<para>You might evade the problem somewhat by setting the &lslon; parameter
+<xref linkend="slon-config-cleanup-interval"/> to a larger value.</para>
+
+<para>Unfortunately, any time the outage of node 2 could exceed that
+interval, the risk of losing log data inexorably emerges.</para>
+
+</answer>
+
+<answer><para> As a result, it cannot be recommended that users run
+&slony1; in a fashion where it suppresses WAL writing via
+<envar>synchronous_commit</envar>. </para> </answer>
+
+</qandaentry>
+
 </qandadiv>
 
 <qandadiv id="faqperformance">

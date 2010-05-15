@@ -378,4 +378,226 @@ and n.oid = c.relnamespace order by n.nspname, c.relname;</command>
 
 </sect2>
 
+<sect2 id="upgrade20">
+<title>Mettre à jour en version 2</title>
+
+<para>
+  La version 2 est <emphasis>vraiment</emphasis> différente des versions
+  précédentes, supprimant le support des versions de &postgres; antérieures à la
+  8.3 car la version 8.3 a ajouté la notion de <quote>rôle de
+  réplication</quote>, éliminant du coup d'avoir recours à des modifications du
+  catalogue système ainsi que du type de données <envar>xxid</envar> pas
+  complètement supporté.
+</para>
+
+<para>
+  Grâce au remplacement du type <envar>xxid</envar> par un type XID natif en
+  8.3, la commande &lslonik; <xref linkend="stmtupdatefunctions"/> n'est pas
+  adéquate pour mettre à jour d'une ancienne version de &slony1; à la version
+  2.
+</para>
+
+<para>
+  En version 2.0.2, nous avons ajouté une nouvelle option à <xref
+  linkend="stmtsubscribeset"/>, <command>OMIT COPY</command>, qui permet de
+  prendre une approche alternative pour la mise à jour. Cette approche revient
+  à&nbsp;:
+</para>
+
+<itemizedlist>
+  <listitem>
+    <para>
+      Désinstaller l'ancienne version de &slony1;.
+    </para>
+
+    <para>
+      Quand &slony1; se désinstalle, les corruptions des catalogues sont
+      corrigées.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Installer &slony1; version 2
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Réabonner les n&oelig;uds avec l'option <command>OMIT COPY</command>
+    </para>
+  </listitem>
+</itemizedlist>
+
+<warning>
+  <para>
+    Cela représente un gros risque. Durant le processus de mise à jour,
+    &slony1; n'est pas installé et si une application met à jour l'une ou
+    l'autre base de données, le ré-abonnement, omettant de copier les données,
+    se finira avec des données <emphasis>non synchronisées</emphasis>.
+  </para>
+
+  <para>
+    L'administrateur <emphasis>doit être très attentif</emphasis> car &slony1;
+    ne dispose d'aucun moyen pour s'assurer de l'intégrité des données lors
+    de ce processus.
+  </para>
+</warning>
+
+<para>
+  Le processus suivant est suggéré pour s'assurer d'avoir une mise à jour aussi
+  sûre que possible, étant donné les risques évoqués ci-dessus.
+</para>
+
+<itemizedlist>
+  <listitem>
+    <para>
+      Utiliser <xref linkend="slonikconfdump"/> pour générer un script &lslonik;
+      de création du cluster de réplication.
+    </para>
+
+    <para>
+      Assurez-vous de vérifier les instructions <xref linkend="admconninfo"/>,
+      car les valeurs sont récupérées de la configuration du PATH, qui ne sont
+      pas forcément convenables pour exécuter &lslonik;.
+    </para>
+
+    <para>
+      Cette étape peut se faire avant la mise hors ligne de l'application.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Détermine les triggers qui ont la configuration <xref
+      linkend="stmtstoretrigger"/> sur les n&oelig;uds abonnés.
+    </para>
+
+    <para>
+      Comme indiqué sur <xref linkend="triggers"/>, la gestion a changé
+      fondamentalement entre &slony1; 1.2 et 2.0.
+    </para>
+
+    <para>
+      En général, il faut lancer une requête sur la table
+      <envar>sl_table</envar> de chaque n&oelig;ud et, pour chaque trigger
+      trouvé dans <envar>sl_table</envar>, il est généralement approprié de
+      configurer un script indiquant soit <command>ENABLE REPLICA
+      TRIGGER</command> soit <command>ENABLE ALWAYS TRIGGER</command> pour
+      ces triggers.
+    </para>
+
+    <para>
+      Cette étape peut se faire avant la mise hors ligne de l'application.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Mettre hors ligne l'application le temps de la mise à jour pour qu'aucune
+      modification ne puisse venir de l'utilisation de l'application.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Pour vous assurer que les applications ne feront pas de modifications,
+      il pourrait être approprié d'empêcher les connexions en modifiant le
+      fichier de configuration <filename>pg_hba.conf</filename>.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Assurez-vous que la réplication est synchrone, en examinant la vue
+      <envar>sl_status</envar> et toute donnée de l'application qui serait
+      appropriée.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Arrêter les processus &lslon;.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Désinstaller l'ancienne version de &slony1; de la base de données.
+    </para> 
+
+    <para>
+      Ceci implique d'exécuter un script &lslonik; qui exécute <xref
+      linkend="stmtuninstallnode"/> sur chaque n&oelig;ud du cluster.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Assurer vous que les nouveaux exécutables &slony1; sont en place.
+    </para> 
+
+    <para>
+      Une méthode simple de le faire est d'avoir les anciens et les nouveaux
+      exécutables dans des répertoires différents, de stopper
+      <application>postmaster</application>, de pointer vers le bon répertoire,
+      et de relancer <application>postmaster</application>.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Lancer le script qui reconfigure la réplication générée précédemment.
+    </para> 
+
+    <para>
+      Ce script devrait être divisé en deux parties à exécuter séparément&nbsp;:
+    </para> 
+
+    <itemizedlist>
+      <listitem>
+        <para>
+          En premier, configurer les n&oelig;uds, les chemins, les ensembles,
+          et ainsi de suite.
+        </para>
+      </listitem>
+      
+      <listitem>
+        <para>
+          Maintenant, lancer les processus &lslon;.
+        </para>
+      </listitem>
+      
+      <listitem>
+        <para>
+          Enfin, exécuter la portion qui lance <xref
+          linkend="stmtsubscribeset"/>.
+        </para>
+      </listitem>
+    </itemizedlist>
+
+    <para>
+      Diviser le script <xref linkend="slonikconfdump"/> comme décrit ci-dessus
+      est laissé en exercice au lecteur.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Si des triggers doivent être activés sur les n&oelig;uds abonnés, c'est
+      le bon moment pour le faire.
+    </para>
+  </listitem>
+
+  <listitem>
+    <para>
+      Maintenant, le cluster est nouveau disponible et fonctionnel, prêt à être
+      reconfiguré pour que les applications puissent de nouveau y accéder.
+    </para>
+  </listitem>
+
+</itemizedlist>
+
+</sect2>
+
 </sect1>
