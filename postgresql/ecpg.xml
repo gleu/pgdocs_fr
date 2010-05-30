@@ -2309,7 +2309,7 @@ void PGTYPESdecimal_free(decimal *var);
      </varlistentry>
 
      <varlistentry>
-      <term><literal>PGTYPES_NUM_OVERFLOW</literal></term>
+      <term><literal>PGTYPES_NUM_UNDERFLOW</literal></term>
       <listitem>
        <para>
 	Un dépassement (<foreignphrase>overflow</foreignphrase>) est survenu.
@@ -2443,6 +2443,478 @@ void PGTYPESdecimal_free(decimal *var);
   </sect2>
  </sect1>
 
+ <sect1 id="ecpg-descriptors">
+  <title>Using Descriptor Areas</title>
+
+  <para>
+   An SQL descriptor area is a more sophisticated method for processing
+   the result of a <command>SELECT</command>, <command>FETCH</command> or
+   a <command>DESCRIBE</command> statement. An SQL descriptor area groups
+   the data of one row of data together with metadata items into one
+   data structure.  The metadata is particularly useful when executing
+   dynamic SQL statements, where the nature of the result columns might
+   not be known ahead of time. PostgreSQL provides two ways to use
+   Descriptor Areas: the named SQL Descriptor Areas and the C-structure
+   SQLDAs.
+  </para>
+
+  <sect2 id="ecpg-named-descriptors">
+   <title>Named SQL Descriptor Areas</title>
+
+   <para>
+    A named SQL descriptor area consists of a header, which contains
+    information concerning the entire descriptor, and one or more item
+    descriptor areas, which basically each describe one column in the
+    result row.
+   </para>
+
+   <para>
+    Before you can use an SQL descriptor area, you need to allocate one:
+<programlisting>
+EXEC SQL ALLOCATE DESCRIPTOR <replaceable>identifier</replaceable>;
+</programlisting>
+    The identifier serves as the <quote>variable name</quote> of the
+    descriptor area.  <remark>The scope of the allocated descriptor is WHAT?.</remark>
+    When you don't need the descriptor anymore, you should deallocate
+    it:
+<programlisting>
+EXEC SQL DEALLOCATE DESCRIPTOR <replaceable>identifier</replaceable>;
+</programlisting>
+   </para>
+
+   <para>
+    To use a descriptor area, specify it as the storage target in an
+    <literal>INTO</literal> clause, instead of listing host variables:
+<programlisting>
+EXEC SQL FETCH NEXT FROM mycursor INTO SQL DESCRIPTOR mydesc;
+</programlisting>
+    If the resultset is empty, the Descriptor Area will still contain
+    the metadata from the query, i.e. the field names.
+   </para>
+
+   <para>
+    For not yet executed prepared queries, the <command>DESCRIBE</command>
+    statement can be used to get the metadata of the resultset:
+<programlisting> 
+EXEC SQL BEGIN DECLARE SECTION;
+char *sql_stmt = "SELECT * FROM table1";
+EXEC SQL END DECLARE SECTION;
+
+EXEC SQL PREPARE stmt1 FROM :sql_stmt;
+EXEC SQL DESCRIBE stmt1 INTO SQL DESCRIPTOR mydesc;
+</programlisting>
+   </para>
+
+   <para>
+    Before PostgreSQL 9.0, the <literal>SQL</literal> keyword was optional,
+    so using <literal>DESCRIPTOR</literal> and <literal>SQL DESCRIPTOR</literal>
+    produced named SQL Descriptor Areas. Now it is mandatory, omitting
+    the <literal>SQL</literal> keyword produces SQLDA Descriptor Areas,
+    see <xref linkend="ecpg-sqlda-descriptors"/>. 
+   </para>
+
+   <para>
+    In <command>DESCRIBE</command> and <command>FETCH</command> statements,
+    the <literal>INTO</literal> and <literal>USING</literal> keywords can be
+    used to similarly: they produce the resultset and the metadata in a
+    Descriptor Area.
+   </para>
+
+   <para>
+    Now how do you get the data out of the descriptor area?  You can
+    think of the descriptor area as a structure with named fields.  To
+    retrieve the value of a field from the header and store it into a
+    host variable, use the following command:
+<programlisting>
+EXEC SQL GET DESCRIPTOR <replaceable>name</replaceable> :<replaceable>hostvar</replaceable> = <replaceable>field</replaceable>;
+</programlisting>
+    Currently, there is only one header field defined:
+    <replaceable>COUNT</replaceable>, which tells how many item
+    descriptor areas exist (that is, how many columns are contained in
+    the result).  The host variable needs to be of an integer type.  To
+    get a field from the item descriptor area, use the following
+    command:
+<programlisting>
+EXEC SQL GET DESCRIPTOR <replaceable>name</replaceable> VALUE <replaceable>num</replaceable> :<replaceable>hostvar</replaceable> = <replaceable>field</replaceable>;
+</programlisting>
+    <replaceable>num</replaceable> can be a literal integer or a host
+    variable containing an integer. Possible fields are:
+
+    <variablelist>
+     <varlistentry>
+      <term><literal>CARDINALITY</literal> (integer)</term>
+      <listitem>
+       <para>
+        number of rows in the result set
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>DATA</literal></term>
+      <listitem>
+       <para>
+        actual data item (therefore, the data type of this field
+        depends on the query)
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>DATETIME_INTERVAL_CODE</literal> (integer)</term>
+      <listitem>
+       <para>
+        ?
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>DATETIME_INTERVAL_PRECISION</literal> (integer)</term>
+      <listitem>
+       <para>
+        not implemented
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>INDICATOR</literal> (integer)</term>
+      <listitem>
+       <para>
+        the indicator (indicating a null value or a value truncation)
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>KEY_MEMBER</literal> (integer)</term>
+      <listitem>
+       <para>
+        not implemented
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>LENGTH</literal> (integer)</term>
+      <listitem>
+       <para>
+        length of the datum in characters
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>NAME</literal> (string)</term>
+      <listitem>
+       <para>
+        name of the column
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>NULLABLE</literal> (integer)</term>
+      <listitem>
+       <para>
+        not implemented
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>OCTET_LENGTH</literal> (integer)</term>
+      <listitem>
+       <para>
+        length of the character representation of the datum in bytes
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>PRECISION</literal> (integer)</term>
+      <listitem>
+       <para>
+        precision (for type <type>numeric</type>)
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>RETURNED_LENGTH</literal> (integer)</term>
+      <listitem>
+       <para>
+        length of the datum in characters
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>RETURNED_OCTET_LENGTH</literal> (integer)</term>
+      <listitem>
+       <para>
+        length of the character representation of the datum in bytes
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>SCALE</literal> (integer)</term>
+      <listitem>
+       <para>
+        scale (for type <type>numeric</type>)
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>TYPE</literal> (integer)</term>
+      <listitem>
+       <para>
+        numeric code of the data type of the column
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+
+   <para>
+    In <command>EXECUTE</command>, <command>DECLARE</command> and <command>OPEN</command>
+    statements, the effect of the <literal>INTO</literal> and <literal>USING</literal>
+    keywords are different. A Descriptor Area can also be manually built to
+    provide the input parameters for a query or a cursor and
+    <literal>USING SQL DESCRIPTOR <replaceable>name</replaceable></literal>
+    is the way to pass the input parameters into a parametrized query. The statement
+    to build a named SQL Descriptor Area is below:
+<programlisting>
+EXEC SQL SET DESCRIPTOR <replaceable>name</replaceable> VALUE <replaceable>num</replaceable> <replaceable>field</replaceable> = :<replaceable>hostvar</replaceable>;
+</programlisting>
+   </para>
+
+   <para>
+    PostgreSQL supports retrieving more that one record in one <command>FETCH</command>
+    statement and storing the data in host variables in this case assumes that the
+    variable is an array. E.g.:
+<programlisting>
+EXEC SQL BEGIN DECLARE SECTION;
+int id[5];
+EXEC SQL END DECLARE SECTION;
+
+EXEC SQL FETCH 5 FROM mycursor INTO SQL DESCRIPTOR mydesc;
+
+EXEC SQL GET DESCRIPTOR mydesc VALUE 1 :id = DATA;
+</programlisting>
+
+   </para>
+
+  </sect2>
+
+  <sect2 id="ecpg-sqlda-descriptors">
+   <title>SQLDA Descriptor Areas</title>
+
+   <para>
+    An SQLDA Descriptor Area is a C language structure which can be also used
+    to get the resultset and the metadata of a query. One structure stores one
+    record from the resultset.
+<programlisting>
+EXEC SQL include sqlda.h;
+sqlda_t         *mysqlda;
+
+EXEC SQL FETCH 3 FROM mycursor INTO DESCRIPTOR mysqlda;
+</programlisting>
+    Note that the <literal>SQL</literal> keyword is omitted. The paragraphs about
+    the use cases of the <literal>INTO</literal> and <literal>USING</literal>
+    keywords in <xref linkend="ecpg-named-descriptors"/> also apply here with an addition.
+    In a <command>DESCRIBE</command> statement the <literal>DESCRIPTOR</literal>
+    keyword can be completely omitted if the <literal>INTO</literal> keyword is used:
+<programlisting>
+EXEC SQL DESCRIBE prepared_statement INTO mysqlda;
+</programlisting>
+   </para>
+
+   <para>
+    The structure of SQLDA is:
+<programlisting>
+#define NAMEDATALEN 64
+
+struct sqlname
+{
+        short           length;
+        char            data[NAMEDATALEN];
+};
+
+struct sqlvar_struct
+{
+        short           sqltype;
+        short           sqllen;
+        char       *sqldata;
+        short      *sqlind;
+        struct sqlname sqlname;
+};
+
+struct sqlda_struct
+{
+        char            sqldaid[8];
+        long            sqldabc;
+        short           sqln;
+        short           sqld;
+        struct sqlda_struct *desc_next;
+        struct sqlvar_struct    sqlvar[1];
+};
+
+typedef struct sqlvar_struct    sqlvar_t;
+typedef struct sqlda_struct     sqlda_t;
+</programlisting>
+   </para>
+
+   <para>
+    The allocated data for an SQLDA structure is variable as it depends on the
+    number of fields in a resultset and also depends on the length of the string
+    data values in a record. The individual fields of the <literal>SQLDA</literal>
+    structure are:
+
+    <variablelist>
+     <varlistentry>
+      <term><literal>sqldaid</literal></term>
+      <listitem>
+       <para>
+        It contains the "<literal>SQLDA  </literal>" literal string.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>sqldabc</literal></term>
+      <listitem>
+       <para>
+        It contains the size of the allocated space in bytes.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>sqln</literal></term>
+      <listitem>
+       <para>
+        It contains the number of input parameters for a parametrized query
+        case it's passed into <command>OPEN</command>, <command>DECLARE</command> or
+        <command>EXECUTE</command> statements using the <literal>USING</literal>
+        keyword. In case it's used as output of <command>SELECT</command>,
+        <command>EXECUTE</command> or <command>FETCH</command> statements,
+        its value is the same as <literal>sqld</literal>
+        statement
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>sqld</literal></term>
+      <listitem>
+       <para>
+        It contains the number of fields in a resultset.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>desc_next</literal></term>
+      <listitem>
+       <para>
+        If the query returns more than one records, multiple linked SQLDA structures
+        are returned, the first record is stored in the SQLDA returned in the
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>sqlvar</literal></term>
+      <listitem>
+       <para>
+        This is the array of the fields in the resultset. The fields are:
+
+        <variablelist>
+
+         <varlistentry>
+         <term><literal>sqltype</literal></term>
+          <listitem>
+           <para>
+            It contains the type identifier of the field. For values,
+            see <literal>enum ECPGttype</literal> in <literal>ecpgtype.h</literal>.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+         <term><literal>sqllen</literal></term>
+          <listitem>
+           <para>
+            It contains the binary length of the field. E.g. 4 bytes for ECPGt_int.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+         <term><literal>sqldata</literal></term>
+          <listitem>
+           <para>
+            <literal>(char *)sqldata</literal> points to the data.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+         <term><literal>sqlind</literal></term>
+          <listitem>
+           <para>
+            <literal>(char *)sqlind</literal> points to the NULL indicator for data.
+            0 means NOT NULL, -1 means NULL.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+         <term><literal>sqlname</literal></term>
+          <listitem>
+           <para>
+            <literal>struct sqlname sqlname</literal> contains the name of the field
+            in a structure:
+<programlisting>
+struct sqlname
+{
+        short           length;
+        char            data[NAMEDATALEN];
+};
+</programlisting>
+
+            <variablelist>
+             <varlistentry>
+              <term><literal>length</literal></term>
+               <listitem>
+                <para>
+                 <literal>sqlname.length</literal> contains the length of the field name.
+                </para>
+               </listitem>
+              </varlistentry>
+             <varlistentry>
+              <term><literal>data</literal></term>
+               <listitem>
+                <para>
+                 <literal>sqlname.data</literal> contains the actual field name.
+                </para>
+               </listitem>
+              </varlistentry>
+            </variablelist>
+           </para>
+          </listitem>
+         </varlistentry>
+
+        </variablelist>
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+
+  </sect2>
+
+ </sect1>
+
  <sect1 id="ecpg-informix-compat">
   <title>Mode de compatibilité <productname>Informix</productname></title>
   <para>
@@ -2493,7 +2965,23 @@ void PGTYPESdecimal_free(decimal *var);
   </para>
 
   <sect2>
-   <title>Instructions supplémentaires du SQL embarqué</title>
+   <title>Additional types</title>
+   <para>
+    The Informix-special "string" pseudo-type for storing right-trimmed character string data is now
+    supported in Informix-mode without using <literal>typedef</literal>. In fact, in Informix-mode,
+    ECPG refuses to process source files that contain <literal>typedef sometype string;</literal>
+<programlisting>
+    EXEC SQL BEGIN DECLARE SECTION;
+    string userid; /* this variable will contain trimmed data */
+    EXEC SQL END DECLARE SECTION;
+
+    EXEC SQL FETCH MYCUR INTO :userid;
+</programlisting>
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>Instructions supplémentaires/manquantes du SQL embarqué</title>
    <para>
     <variablelist>
      <varlistentry>
@@ -2509,7 +2997,306 @@ void PGTYPESdecimal_free(decimal *var);
        </para>
       </listitem>
      </varlistentry>
+     <varlistentry>
+      <term><literal>FREE cursor_name</literal></term>
+      <listitem>
+       <para>
+        Due to the differences how ECPG works compared to Informix's ESQL/C (i.e. which steps
+        are purely grammar transformations and which steps rely on the underlying runtime library)
+        there is no <literal>FREE cursor_name</literal> statement in ECPG. This is because in ECPG,
+        <literal>DECLARE CURSOR</literal> doesn't translate to a function call into
+        the runtime library that uses to the cursor name. This means that there's no runtime
+        bookkeeping of SQL cursors in the ECPG runtime library, only in the PostgreSQL server.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>FREE statement_name</literal></term>
+      <listitem>
+       <para>
+        <literal>FREE statement_name</literal> is a synonym for <literal>DEALLOCATE PREPARE statement_name</literal>.
+       </para>      
+      </listitem>   
+     </varlistentry>
     </variablelist>
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>Informix-compatible SQLDA Descriptor Areas</title>
+   <para>
+    Informix-compatible mode supports a different structure than the one described in
+    <xref linkend="ecpg-sqlda-descriptors"/>. See below:
+<programlisting>
+struct sqlvar_compat
+{
+        short   sqltype;
+        int     sqllen;
+        char       *sqldata;
+        short      *sqlind;
+        char       *sqlname;
+        char       *sqlformat;
+        short   sqlitype;
+        short   sqlilen;
+        char       *sqlidata;
+        int     sqlxid;
+        char       *sqltypename;
+        short   sqltypelen;
+        short   sqlownerlen;
+        short   sqlsourcetype;
+        char       *sqlownername;
+        int     sqlsourceid;
+
+        char       *sqlilongdata;
+        int     sqlflags;
+        void       *sqlreserved;
+};
+
+struct sqlda_compat
+{
+        short           sqld;
+        struct sqlvar_compat *sqlvar;
+        char            desc_name[19];
+        short           desc_occ;
+        struct sqlda_compat *desc_next;
+        void               *reserved;
+};
+
+typedef struct sqlvar_compat    sqlvar_t;
+typedef struct sqlda_compat     sqlda_t;
+</programlisting>
+   </para>
+
+   <para>
+    The global properties are:
+    <variablelist>  
+
+     <varlistentry>
+     <term><literal>sqld</literal></term>
+      <listitem>
+       <para>
+        The number of fields in the <literal>SQLDA</literal> descriptor.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqlvar</literal></term>   
+      <listitem>
+       <para>
+        Pointer to the per-field properties.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>desc_name</literal></term>
+      <listitem>
+       <para>
+        Unused, filled with zerobytes.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>desc_occ</literal></term>
+      <listitem>
+       <para>
+        Size of the allocated structure.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>desc_next</literal></term>
+      <listitem>
+       <para>
+        Pointer to the next SQLDA structure if the resultset contains more than one records.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>reserved</literal></term>
+      <listitem>
+       <para>
+        Unused pointer, contains NULL. Kept for Informix-compatibility.
+       </para>
+      </listitem>
+     </varlistentry>
+
+    </variablelist>
+
+    The per-field properties are below, they are stored in the <literal>sqlvar</literal> array:
+
+    <variablelist>
+
+     <varlistentry>
+     <term><literal>sqltype</literal></term>
+      <listitem>
+       <para>
+        Type of the field. Constants are in <literal>sqltypes.h</literal>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqllen</literal></term>
+      <listitem>
+       <para>
+        Length of the field data.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqldata</literal></term>
+      <listitem>
+       <para>
+        Pointer to the field data. The pointer is of <literal>char *</literal> type,
+        the data pointed by it is in a binary format. Example:
+<programlisting>
+    int intval; 
+
+    switch (sqldata->sqlvar[i].sqltype)
+    {
+      case SQLINTEGER:
+        intval = *(int *)sqldata->sqlvar[i].sqldata;
+        break;
+      ...
+    }
+</programlisting>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqlind</literal></term>
+      <listitem>
+       <para>
+        Pointer to the NULL indicator. If returned by DESCRIBE or FETCH then it's always a valid pointer.
+        If used as input for <literal>EXECUTE ... USING sqlda;</literal> then NULL-pointer value means   
+        that the value for this field is non-NULL. Otherwise a valid pointer and <literal>sqlitype</literal>
+        has to be properly set. Example:
+<programlisting>
+    if (*(int2 *)sqldata->sqlvar[i].sqlind != 0)
+      printf("value is NULL\n");
+</programlisting>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqlname</literal></term>
+      <listitem>
+       <para>
+        Name of the field. 0-terminated string.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqlformat</literal></term>
+      <listitem>
+       <para>
+        Reserved in Informix, value of PQfformat() for the field.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqlitype</literal></term>
+      <listitem>
+       <para>
+        Type of the NULL indicator data. It's always SQLSMINT when returning data from the server.
+        When the <literal>SQLDA</literal> is used for a parametrized query, the data is treated   
+        according to the set type.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqlilen</literal></term>
+      <listitem>
+       <para>
+        Length of the NULL indicator data.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqlxid</literal></term>
+      <listitem>
+       <para>
+        Extended type of the field, result of PQftype().
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqltypename</literal></term>
+     <term><literal>sqltypelen</literal></term> 
+     <term><literal>sqlownerlen</literal></term>
+     <term><literal>sqlsourcetype</literal></term>
+     <term><literal>sqlownername</literal></term> 
+     <term><literal>sqlsourceid</literal></term>  
+     <term><literal>sqlflags</literal></term>     
+     <term><literal>sqlreserved</literal></term>  
+      <listitem>
+       <para>
+        Unused.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><literal>sqlilongdata</literal></term>
+      <listitem>
+       <para>
+        It equals to <literal>sqldata</literal> if <literal>sqllen</literal> is larger than 32KB.
+       </para>
+      </listitem>
+     </varlistentry>
+
+    </variablelist>
+
+    Example:
+<programlisting>
+EXEC SQL INCLUDE sqlda.h;
+
+    sqlda_t        *sqlda; /* This doesn't need to be under embedded DECLARE SECTION */
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    char *prep_stmt = "select * from table1";
+    int i;
+    EXEC SQL END DECLARE SECTION;
+
+    ...
+
+    EXEC SQL PREPARE mystmt FROM :prep_stmt;
+
+    EXEC SQL DESCRIBE mystmt INTO sqlda;
+
+    printf("# of fields: %d\n", sqlda-&gt;sqld);
+    for (i = 0; i &lt; sqlda-&gt;sqld; i++)
+      printf("field %d: \"%s\"\n", sqlda-&gt;sqlvar[i]-&gt;sqlname);
+
+    EXEC SQL DECLARE mycursor CURSOR FOR mystmt;
+    EXEC SQL OPEN mycursor;
+    EXEC SQL WHENEVER NOT FOUND GOTO out;
+
+    while (1)
+    {
+      EXEC SQL FETCH mycursor USING sqlda;
+    }
+
+    EXEC SQL CLOSE mycursor;
+
+    free(sqlda); /* The main structure is all to be free(),
+                  * sqlda and sqlda-&gt;sqlvar is in one allocated area */
+</programlisting>
+    For more information, see the <literal>sqlda.h</literal> header and the
+    <literal>src/interfaces/ecpg/test/compat_informix/sqlda.pgc</literal> regression test.
    </para>
   </sect2>
 
@@ -3158,7 +3945,7 @@ void dtcurrent(timestamp *ts);
       <listitem>
        <para>
 	analyse une variable de type timestamp à partir d'une représentation
-	textuelle en un standard ANSI pour en faire une variable de type timestamp.
+	textuelle pour en faire une variable de type timestamp.
 <synopsis>
 int dtcvasc(char *str, timestamp *ts);
 </synopsis>
@@ -3183,7 +3970,7 @@ int dtcvasc(char *str, timestamp *ts);
       <listitem>
        <para>
 	analyse une variable de type timestamp à partir de sa représentation
-	textuelle dans le standard ANSI en utilisant un masque de formatage
+	textuelle en utilisant un masque de formatage
 	pour en faire une variable de type timestamp.
 <synopsis>
 dtcvfmtasc(char *inbuf, char *fmtstr, timestamp *dtvalue)
@@ -3238,7 +4025,7 @@ int dttoasc(timestamp *ts, char *output);
 	à convertir (<literal>ts</literal>) et la chaîne de stockage du
 	résultat de l'opération, <literal>output</literal>. Elle convertit
 	<literal>ts</literal> en sa représentation textuelle dans le standard
-	SQL ANSI, définie comme <literal>YYYY-MM-DD HH:MM:SS</literal>.
+	SQL, définie comme <literal>YYYY-MM-DD HH:MM:SS</literal>.
        </para>
        <para>
 	La fonction renvoie 0 en cas de succès et une valeur négative en cas
@@ -3288,7 +4075,7 @@ int intoasc(interval *i, char *str);
 	à convertir (<literal>i</literal>) et la chaîne de stockage du
 	résultat de l'opération, <literal>str</literal>. Elle convertit
 	<literal>i</literal> en sa représentation textuelle dans le standard
-	SQL ANSI, définie comme <literal>YYYY-MM-DD HH:MM:SS</literal>.
+	SQL, définie comme <literal>YYYY-MM-DD HH:MM:SS</literal>.
        </para>
        <para>
 	La fonction renvoie 0 en cas de succès et une valeur négative en cas
@@ -3772,213 +4559,6 @@ risnull(CINTTYPE, (char *) &i);
     </variablelist>
    </para>
   </sect2>
- </sect1>
-
- <sect1 id="ecpg-descriptors">
-  <title>Utiliser les zones de descripteur SQL</title>
-
-  <para>
-   Une zone de descripteur SQL est une méthode de traitement du résultat 
-   d'un <command>SELECT</command> ou d'un <command>FETCH</command> plus
-   sophistiquée.
-   La zone de descripteur SQL groupe les données d'une ligne avec les éléments
-   de métadonnées en une seule structure de données. Les métadonnées sont
-   particulièrement utiles lors de l'exécution d'instructions SQL dynamiques
-   pour lesquelles la nature des colonnes de résultats n'est pas forcément
-   connue à l'avance.
-  </para>
-
-  <para>
-   Une zone de descripteur SQL est constituée d'un en-tête, qui contient des
-   informations sur le descripteur complet, et un ou plusieurs éléments
-   de zones de descripteur, qui basiquement décrivent chacun une colonne de la ligne de
-   résultat.
-  </para>
-
-  <para>
-   Avant d'utiliser une zone de descripteur SQL, il est nécessaire de
-   l'allouer&nbsp;:
-<programlisting>EXEC SQL ALLOCATE DESCRIPTOR <replaceable>identifiant</replaceable>;
-</programlisting>
-   L'identifiant sert de <quote>nom de variable</quote> à la zone du
-   descripteur.
-  </para> <remark>La portée du descripteur alloué est QUOI&nbsp;?</remark>
-  <para>
-   Lorsque le descripteur n'est plus utilisé, il est recommandé de le désallouer&nbsp;:
-<programlisting>EXEC SQL DEALLOCATE DESCRIPTOR <replaceable>identifiant</replaceable>;
-</programlisting>
-  </para>
-
-  <para>
-   Pour utiliser une zone de descripteur, il suffit de le préciser comme cible de
-   stockage dans une clause <literal>INTO</literal> à la place de la liste des
-   variables hôtes&nbsp;:
-<programlisting>EXEC SQL FETCH NEXT FROM moncurseur INTO DESCRIPTOR mondesc;
-</programlisting>
-  </para>
-
-  <para>
-   Il reste à répondre à la question de la récupération des données de la zone
-   descripteur.
-   Celle-ci peut être considérée comme une structure contenant des champs nommés. Pour
-   récupérer la valeur d'un champ à partir de l'en-tête et la stocker dans une
-   variable hôte, on utilise la commande suivante&nbsp;:
-<programlisting>EXEC SQL GET DESCRIPTOR <replaceable>nom</replaceable> :<replaceable>varhote</replaceable> = <replaceable>champ</replaceable>;
-</programlisting>
-   Actuellement, il n'existe qu'un seul champ d'en-tête défini&nbsp;:
-   <replaceable>COUNT</replaceable>, qui indique le nombre d'éléments dans
-   la zone de descripteur (c'est-à-dire le nombre de colonnes contenues dans le
-   résultat). La variable hôte doit être de type entier. Pour récupérer
-   un champ à partir de l'élément de la zone du descripteur, on utilise la commande
-   suivante&nbsp;:
-<programlisting>EXEC SQL GET DESCRIPTOR <replaceable>nom</replaceable> VALUE
-<replaceable>numero</replaceable> :<replaceable>varhote</replaceable> =
-<replaceable>champ</replaceable>;
-</programlisting>
-   <replaceable>numero</replaceable> peut être une constante entière ou une
-   variable hôte contenant un entier. Les champs possibles sont&nbsp;:
-
-   <variablelist>
-    <varlistentry>
-     <term><literal>CARDINALITY</literal> (integer)</term>
-     <listitem>
-      <para>
-       le nombre de lignes dans l'ensemble du résultat&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>DATA</literal></term>
-     <listitem>
-      <para>
-       l'élément de données en cours (de fait, le type de données de ce champ
-       dépend de la requête)&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-
-    <varlistentry>
-     <term><literal>DATETIME_INTERVAL_CODE</literal> (integer)</term>
-     <listitem>
-      <para>
-       ?
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>DATETIME_INTERVAL_PRECISION</literal> (integer)</term>
-     <listitem>
-      <para>
-       non implanté&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>INDICATOR</literal> (integer)</term>
-     <listitem>
-      <para>
-       l'indicateur (de valeur NULL ou de troncature de la valeur)&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>KEY_MEMBER</literal> (integer)</term>
-     <listitem>
-      <para>
-       non implanté&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>LENGTH</literal> (integer)</term>
-     <listitem>
-      <para>
-       la longueur de la donnée en caractères&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>NAME</literal> (string)</term>
-     <listitem>
-      <para>
-       le nom de la colonne&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>NULLABLE</literal> (integer)</term>
-     <listitem>
-      <para>
-       non implanté&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>OCTET_LENGTH</literal> (integer)</term>
-     <listitem>
-      <para>
-       la longueur en octets de la représentation en caractères de la
-       donnée&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>PRECISION</literal> (integer)</term>
-     <listitem>
-      <para>
-       la précision (pour le type <type>numeric</type>)&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>RETURNED_LENGTH</literal> (integer)</term>
-     <listitem>
-      <para>
-       la longueur de la donnée en caractères&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>RETURNED_OCTET_LENGTH</literal> (integer)</term>
-     <listitem>
-      <para>
-       la longueur en octets de la représentation en caractères de la
-       donnée&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>SCALE</literal> (integer)</term>
-     <listitem>
-      <para>
-       l'échelle (pour le type <type>numeric</type>)&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
-     <term><literal>TYPE</literal> (integer)</term>
-     <listitem>
-      <para>
-       le code numérique du type de données de la colonne&nbsp;;
-      </para>
-     </listitem>
-    </varlistentry>
-   </variablelist>
-  </para>
  </sect1>
 
  <sect1 id="ecpg-errors">
@@ -4818,10 +5398,9 @@ exec sql endif;
 
   <para>
    La bibliothèque <application>ecpg</application> est compatible avec les
-   threads si elle a été compilée en utilisant l'option en ligne de commande
-   <option>--enable-thread-safety</option> de <filename>configure</filename>.
-   (Il peut s'avérer nécessaire de préciser d'autres options de threading sur la
-   ligne de commande pour compiler le code client.)
+   threads by
+   default.  However, you might need to use some threading
+   command-line options to compile your client code.
   </para>
  </sect1>
 
@@ -4859,6 +5438,31 @@ exec sql endif;
     applications qui utilisent cette bibliothèque.
     </para>
     </note>
+   </listitem>
+
+   <listitem>
+     <para>
+       <function>ECPGget_PGconn(const char *<replaceable>connection_name</replaceable>)
+       </function> returns the library database connection handle identified by the given name.
+       If <replaceable>connection_name</replaceable> is set to <literal>NULL</literal>, the current
+       connection handle is returned. If no connection handle can be identified, the function returns 
+       <literal>NULL</literal>. The returned connection handle can be used to call any other functions
+       from <application>libpq</application>, if necessary.
+     </para>
+     <note>
+     <para>
+       It is a bad idea to manipulate database connection handles made from <application>ecpg</application> directly
+       with <application>libpq</application> routines.
+     </para>
+     </note>
+   </listitem>
+
+   <listitem>
+     <para>
+       <function>ECPGtransactionStatus(const char *<replaceable>connection_name</replaceable>)</function>
+       returns the current transaction status of the given connection identified by <replaceable>connection_name</replaceable>.
+       See <xref linkend="libpq-status"/> and libpq's <function>PQtransactionStatus()</function> for details about the returned status codes.
+     </para>
    </listitem>
 
    <listitem>

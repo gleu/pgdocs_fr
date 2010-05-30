@@ -39,11 +39,13 @@
     exécuté. Les fonctions déclencheur peuvent être définies pour s'exécuter
     avant ou après une commande <command>INSERT</command>,
     <command>UPDATE</command> ou <command>DELETE</command>, soit une fois par
-    ligne modifiée, soit une fois par expression <acronym>SQL</acronym>. Les
-    triggers peuvent aussi être déclenchés par des instructions
-    <command>TRUNCATE</command>. Si un événement déclencheur se produit, le
-    gestionnaire de déclencheurs est appelé au bon moment pour gérer
-    l'événement.
+    ligne modifiée, soit une fois par expression <acronym>SQL</acronym>.
+    <command>UPDATE</command> triggers can moreover be set to fire only if
+    certain columns are mentioned in the <literal>SET</literal> clause of the
+    <command>UPDATE</command> statement.
+    Triggers can also fire for <command>TRUNCATE</command> statements.
+    If a trigger event occurs, the trigger's function is called at the
+    appropriate time to handle the event.
     </para>
 
    <para>
@@ -57,8 +59,7 @@
 
    <para>
     Une fois qu'une fonction déclencheur est créée, le déclencheur (trigger)
-    est créé avec
-    <xref linkend="sql-createtrigger" endterm="sql-createtrigger-title"/>.
+    est créé avec <xref linkend="sql-createtrigger"/>.
     La même fonction déclencheur est utilisable par plusieurs déclencheurs.
    </para>
 
@@ -144,6 +145,25 @@
     prochain déclencheur. Si un des déclencheurs avant renvoie un pointeur
     <symbol>NULL</symbol>, l'opération est abandonnée pour cette ligne et les
     déclencheurs suivants ne sont pas lancés.
+   </para>
+
+   <para>
+    A trigger definition can also specify a boolean <literal>WHEN</literal>
+    condition, which will be tested to see whether the trigger should
+    be fired.  In row-level triggers the <literal>WHEN</literal> condition can
+    examine the old and/or new values of columns of the row.  (Statement-level
+    triggers can also have <literal>WHEN</literal> conditions, although the feature
+    is not so useful for them.)  In a before trigger, the <literal>WHEN</literal>
+    condition is evaluated just before the function is or would be executed,
+    so using <literal>WHEN</literal> is not materially different from testing the
+    same condition at the beginning of the trigger function.  However, in
+    an after trigger, the <literal>WHEN</literal> condition is evaluated just after
+    the row update occurs, and it determines whether an event is queued to
+    fire the trigger at the end of statement.  So when an after trigger's
+    <literal>WHEN</literal> condition does not return true, it is not necessary
+    to queue an event nor to re-fetch the row at end of statement.  This
+    can result in significant speedups in statements that modify many
+    rows, if the trigger only needs to be fired for a few of the rows.
    </para>
 
    <para>
@@ -497,15 +517,17 @@ de
     Oid         tgfoid;
     int16       tgtype;
     bool        tgenabled;
-    bool        tgisconstraint;
+    bool        tgisinternal;
     Oid         tgconstrrelid;
+    Oid         tgconstrindid;
     Oid         tgconstraint;
     bool        tgdeferrable;
     bool        tginitdeferred;
     int16       tgnargs;
     int16       tgnattr;
-    int16       *tgattr;
+    int16      *tgattr;
     char      **tgargs;
+    char       *tgqual;
 } Trigger;
 </programlisting>
 
@@ -556,7 +578,7 @@ de
   </sect1>
 
   <sect1 id="trigger-example">
-   <title>Un exemple complet</title>
+   <title>Un exemple complet de trigger</title>
 
    <para>
     Voici un exemple très simple de fonction déclencheur écrite en C (les
@@ -584,6 +606,10 @@ de
 <programlisting><![CDATA[#include "postgres.h"
 #include "executor/spi.h"       /* nécessaire pour fonctionner avec SPI */
 #include "commands/trigger.h"   /* ... et les déclencheurs */
+
+#ifdef PG_MODULE_MAGIC
+PG_MODULE_MAGIC;
+#endif
 
 extern Datum trigf(PG_FUNCTION_ARGS);
 

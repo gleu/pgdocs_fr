@@ -32,13 +32,6 @@
   souhaite utiliser. Le serveur suivra ce protocole s'il en est capable.
  </para>
 
- <para>
-  Les fonctionnalités de haut niveau construites sur ce protocole
-  (par exemple, la façon dont <application>libpq</application> passe certaines
-  variables d'environnement à l'établissement de la connexion) ne sont pas couvertes
-  par ce chapitre.
- </para>
-
   <para>
    Pour répondre efficacement à de multiples clients, le serveur lance un
    nouveau serveur (<quote>backend</quote>) pour chaque client. dans l'implémentation
@@ -698,6 +691,24 @@
        les constantes chaînes littérales non typées.
       </para>
 
+   <note>
+    <para>
+     A parameter data type can be left unspecified by setting it to zero,
+     or by making the array of parameter type OIDs shorter than the
+     number of parameter symbols (<literal>$</literal><replaceable>n</replaceable>)
+     used in the query string.  Another special case is that a parameter's
+     type can be specified as <type>void</type> (that is, the OID of the
+     <type>void</type> pseudotype).  This is meant to allow parameter symbols
+     to be used for function parameters that are actually OUT parameters.
+     Ordinarily there is no context in which a <type>void</type> parameter
+     could be used, but if such a parameter symbol appears in a function's
+     parameter list, it is effectively ignored.  For example, a function
+     call such as <literal>foo($1,$2,$3,$4)</literal> could match a function with
+     two IN and two OUT arguments, if <literal>$3</literal> and <literal>$4</literal>
+     are specified as having type <type>void</type>.
+    </para>
+   </note>
+
       <note>
        <para>
         La chaîne contenue dans un message Parse ne peut pas inclure plus d'une
@@ -740,10 +751,41 @@
        <para>
         Le choix entre sortie texte et binaire est déterminé par les codes
         de format donnés dans Bind, quelque soit la commande SQL impliquée.
-        L'attribut <literal>binary</literal> dans les déclarations du curseur n'est pas
+        L'attribut <literal>BINARY</literal> dans les déclarations du curseur n'est pas
         pertinent lors de l'utilisation du protocole de requête étendue.
        </para>
       </note>
+
+   <para>
+    Query planning for named prepared-statement objects occurs when the Parse
+    message is processed. If a query will be repeatedly executed with
+    different parameters, it might be beneficial to send a single Parse message
+    containing a parameterized query, followed by multiple Bind
+    and Execute messages. This will avoid replanning the query on each
+    execution.
+   </para>
+
+   <para>
+    The unnamed prepared statement is likewise planned during Parse processing
+    if the Parse message defines no parameters.  But if there are parameters,
+    query planning occurs every time Bind parameters are supplied.  This allows the
+    planner to make use of the actual values of the parameters provided by
+    each Bind message, rather than use generic estimates.
+   </para>
+
+   <note>
+    <para>
+     Query plans generated from a parameterized query might be less
+     efficient than query plans generated from an equivalent query with actual
+     parameter values substituted. The query planner cannot make decisions
+     based on actual parameter values (for example, index selectivity) when
+     planning a parameterized query assigned to a named prepared-statement
+     object.  This possible penalty is avoided when using the unnamed
+     statement, since it is not planned until actual parameter values are
+     available.  The cost is that planning must occur afresh for each Bind,
+     even if the query stays the same.
+    </para>
+   </note>
 
       <para>
        En cas de succès de sa création, un objet portail nommé dure jusqu'à la fin
@@ -1078,8 +1120,9 @@
        À ce jour, il existe un certain nombre de paramètres codés en dur pour
        lesquels des messages ParameterStatus seront engendrés&nbsp;: on trouve
        <literal>server_version</literal>,
-       <literal>client_encoding</literal>,
        <literal>server_encoding</literal>,
+       <literal>client_encoding</literal>,
+       <literal>application_name</literal>,
        <literal>is_superuser</literal>,
        <literal>session_authorization</literal> et
        <literal>session_authorization</literal>,
@@ -1092,7 +1135,8 @@
        sorties avant la 8.0&nbsp;; <literal>standard_conforming_strings</literal>
        n'a pas été reporté par les sorties avant la 8.1&nbsp;;
        <literal>IntervalStyle</literal> n'a pas été reporté par les sorties
-       avant la 8.4.). Notez que
+       avant la 8.4;
+    <literal>application_name</literal> was not reported by releases before 9.0.). Notez que
        <literal>server_version</literal>,
        <literal>server_encoding</literal> et
        <literal>integer_datetimes</literal> sont des pseudo-paramètres qui ne peuvent pas
@@ -1106,7 +1150,7 @@
        Si un client lance une commande <command>listen</command>, alors le serveur
        enverra un message NotificationResponse (à ne pas confondre avec
        NoticeResponse&nbsp;!) à chaque fois qu'une commande
-       <command>notify</command> est exécutée pour la notification de même nom.
+       <command>notify</command> est exécutée pour le canal de même nom.
       </para>
 
       <note>
@@ -2204,6 +2248,12 @@ CommandComplete (B)
        </para>
 
        <para>
+        For a <command>SELECT</command> or <command>CREATE TABLE AS</command>
+        command, the tag is <literal>SELECT <replaceable>rows</replaceable></literal>
+        where <replaceable>rows</replaceable> is the number of rows retrieved.
+       </para>
+
+       <para>
         Pour une commande <command>move</command>, la balise est
         <literal>move <replaceable>lignes</replaceable></literal> où
         <replaceable>lignes</replaceable> est le nombre de lignes de déplacement
@@ -2392,7 +2442,7 @@ CopyInResponse (B)
  		séparées par des retours chariot, colonnes séparées par des
  		caractères de séparation, etc). 1 indique que le format de copie
  		complet est binaire (similaire au format DataRow).
- 		Voir <xref linkend="sql-copy" endterm="sql-copy-title"/> pour
+ 		Voir <xref linkend="sql-copy"/> pour
  		plus d'informations.
 </para>
 </listitem>
@@ -2466,7 +2516,7 @@ CopyOutResponse (B)
 		séparées par des retours chariots, colonnes séparées par des
 		caractères séparateur, etc). 1 indique que le format de copie
 		complet est binaire (similaire au format DataRow).
-		Voir <xref linkend="sql-copy" endterm="sql-copy-title"/> pour
+		Voir <xref linkend="sql-copy"/> pour
 		plus d'informations.
 </para>
 </listitem>
@@ -3150,7 +3200,7 @@ NotificationResponse (B)
 </term>
 <listitem>
 <para>
-                Nom de la condition à l'origine de la notification.
+                Nom du canal à l'origine de la notification.
 </para>
 </listitem>
 </varlistentry>
@@ -3160,9 +3210,7 @@ NotificationResponse (B)
 </term>
 <listitem>
 <para>
-                Information supplémentaire provenant du processus à l'origine de
-		la notification (cette fonctionnalité n'est, à ce jour, pas
-		implantée, le champ est donc toujours constitué d'une chaîne vide).
+                The <quote>payload</quote> string passed from the notifying process.
 </para>
 </listitem>
 </varlistentry>
@@ -4116,6 +4164,120 @@ des changements de paragraphes, non comme des changements de lignes.
 
 </sect1>
 
+<sect1 id="protocol-replication">
+<title>Streaming Replication Protocol</title>
+
+<para>
+To initiate streaming replication, the frontend sends the "replication"
+parameter in the startup message. This tells the backend to go into
+walsender mode, where a small set of replication commands can be issued
+instead of SQL statements. Only the simple query protocol can be used in
+walsender mode.
+
+The commands accepted in walsender mode are:
+
+<variablelist>
+  <varlistentry>
+    <term>IDENTIFY_SYSTEM</term>
+    <listitem>
+     <para>
+      Requests the server to identify itself. Server replies with a result
+      set of a single row, and two fields:
+
+      systemid: The unique system identifier identifying the cluster. This
+      can be used to check that the base backup used to initialize the
+      slave came from the same cluster.
+
+      timeline: Current TimelineID. Also used to check that the slave is
+      consistent with the master.
+     </para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term>START_REPLICATION XXX/XXX</term>
+    <listitem>
+     <para>
+      Instructs backend to start streaming WAL, starting at point XXX/XXX.
+      Server can reply with an error e.g if the requested piece of WAL has
+      already been recycled. On success, server responds with a
+      CopyOutResponse message, and backend starts to stream WAL as CopyData
+      messages.
+      The payload in CopyData message consists of the following format.
+     </para>
+
+     <para>
+      <variablelist>
+      <varlistentry>
+      <term>
+          XLogData (B)
+      </term>
+      <listitem>
+      <para>
+      <variablelist>
+      <varlistentry>
+      <term>
+          Byte1('w')
+      </term>
+      <listitem>
+      <para>
+          Identifies the message as WAL data.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Int32
+      </term>
+      <listitem>
+      <para>
+          The log file number of the LSN, indicating the starting point of
+          the WAL in the message.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Int32
+      </term>
+      <listitem>
+      <para>
+          The byte offset of the LSN, indicating the starting point of
+          the WAL in the message.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Byte<replaceable>n</replaceable>
+      </term>
+      <listitem>
+      <para>
+          Data that forms part of WAL data stream.
+      </para>
+      </listitem>
+      </varlistentry>
+      </variablelist>
+      </para>
+      </listitem>
+      </varlistentry>
+      </variablelist>
+     </para>
+     <para>
+       A single WAL record is never split across two CopyData messages. When
+       a WAL record crosses a WAL page boundary, however, and is therefore
+       already split using continuation records, it can be split at the page
+       boundary. In other words, the first main WAL record and its
+       continuation records can be split across different CopyData messages.
+     </para>
+    </listitem>
+  </varlistentry>
+</variablelist>
+
+</para>
+
+</sect1>
+
 
 <sect1 id="protocol-changes">
 <title>Résumé des modifications depuis le protocole 2.0</title>
@@ -4215,8 +4377,8 @@ Il existe un nouveau sous-protocole pour les <quote>requêtes étendues</quote> qu
 
    <para>
    Le message NotificationResponse ('<literal>a</literal>') a un champ de type chaîne
-   supplémentaire, actuellement vide mais qui pourrait à terme transporter des
-   données supplémentaires engendrées par l'émetteur de l'événement <command>notify</command>.
+   supplémentaire, which can carry a <quote>payload</quote> string passed par
+   l'émetteur de l'événement <command>notify</command>.
    </para>
 
    <para>

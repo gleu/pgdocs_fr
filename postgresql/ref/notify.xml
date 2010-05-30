@@ -7,7 +7,7 @@
 
 <refentry id="sql-notify">
  <refmeta>
-  <refentrytitle id="sql-notify-title">NOTIFY</refentrytitle>
+  <refentrytitle>NOTIFY</refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Instructions du langage</refmiscinfo>
  </refmeta>
@@ -18,7 +18,7 @@
  </refnamediv>
 
  <refsynopsisdiv>
-<synopsis>NOTIFY <replaceable class="parameter">nom</replaceable>        
+<synopsis>NOTIFY <replaceable class="parameter">canal</replaceable> [ , <replaceable class="parameter">charge</replaceable> ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -29,19 +29,20 @@
   </indexterm>
 
   <para>
-   La commande <command>NOTIFY</command> envoie une notification
+   La commande <command>NOTIFY</command> envoie une notification together
+   with an optional <quote>payload</quote> string
    à chaque application cliente qui a exécuté précédemment la commande
-   <command>LISTEN <replaceable class="parameter">nom</replaceable></command>
-   dans la base de données courante pour le nom de notification indiqué.
+   <command>LISTEN <replaceable class="parameter">canal</replaceable></command>
+   dans la base de données courante pour le nom du canal indiqué.
   </para>
 
   <para>
-   <command>NOTIFY</command> fournit une forme simple de signal ou de mécanisme
+   <command>NOTIFY</command> fournit un mécanisme simple
    de communication interprocessus pour tout ensemble de processus accédant à
-   la même base de données <productname>PostgreSQL</productname>. Des mécanismes
-   de plus haut niveau peuvent être construits en utilisant les tables de la base
-   de données pour passer des données supplémentaires (au-delà du simple nom de
-   notification) du notifieur aux écouteurs.
+   la même base de données <productname>PostgreSQL</productname>.
+   A payload string can be sent along with the notification, and Des mécanismes
+   de plus haut niveau for passing structured data peuvent être construits en utilisant les tables de la base
+   de données pour passer des données supplémentaires du notifieur aux écouteurs.
   </para>
 
   <para>
@@ -53,14 +54,17 @@
   </para>
 
   <para>
-   Habituellement, le nom de notification correspond au nom d'une table
+   It is up to the database designer to define the channel names that will
+   be used in a given database and what each one means.
+   Habituellement, le nom du canal correspond au nom d'une table
    dans la base de données. L'événement notify signifie
    essentiellement <quote>J'ai modifié cette table, jetez-y un &oelig;il pour
    vérifier ce qu'il y a de nouveau</quote>. Mais cette association n'est 
    pas contrôlée par les commandes <command>NOTIFY</command> et
    <command>LISTEN</command>. Un concepteur de bases de données
-   peut, par exemple, utiliser plusieurs noms de notification différents pour signaler
-   différentes sortes de modifications au sein d'une même table.
+   peut, par exemple, utiliser plusieurs noms de canal différents pour signaler
+   différentes sortes de modifications au sein d'une même table. Alternatively,
+   the payload string could be used to differentiate various cases.
   </para>
 
   <para>
@@ -97,21 +101,22 @@
   </para>
 
   <para>
-   <command>NOTIFY</command> se comporte comme les signaux Unix sur un
-   point important&nbsp;: si le même nom de notification est signalé
-   successivement et rapidement plusieurs fois, les récepteurs peuvent ne
-   recevoir qu'un unique événement de notification pour plusieurs exécutions de
-   <command>NOTIFY</command>. Il est donc malhabile de dépendre du
-   nombre de notifications reçues. À la place, <command>NOTIFY</command> peut
-   être utilisé pour réveiller les applications qui doivent être averties d'un
-   évènement et un objet de bases de données (tel une séquence) utilisé pour
-   garder une trace de ce qui s'est passé ou du nombre de fois que cela s'est
-   produit.
+   If the same channel name is signaled multiple times from the same
+   transaction with identical payload strings, the
+   database server can decide to deliver a single notification only.
+   On the other hand, notifications with distinct payload strings will
+   always be delivered as distinct notifications. Similarly, notifications from
+   different transactions will never get folded into one notification.
+   Except for dropping later instances of duplicate notifications,
+   <command>NOTIFY</command> guarantees that notifications from the same
+   transaction get delivered in the order they were sent.  It is also
+   guaranteed that messages from different transactions are delivered in
+   the order in which the transactions committed.
   </para>
 
   <para>
    Il est courant qu'un client qui exécute <command>NOTIFY</command>
-   écoute lui-même des notifications de même nom. Dans ce cas, il récupère une
+   écoute lui-même des notifications de même canal. Dans ce cas, il récupère une
    notification, comme toutes les autres sessions en écoute.
    Suivant la logique de l'application, cela peut engendre un travail
    inutile, par exemple lire une table de la base de données pour trouver les
@@ -121,11 +126,7 @@
    notification) est le même que le <acronym>PID</acronym> de la session
    courante (disponible à partir de <application>libpq</application>).
    S'ils sont identiques, la notification est le retour du travail actuel et
-   peut être ignorée. (En dépit de ce qui est dit dans le paragraphe qui précède,
-   cette technique est sûre. <productname>PostgreSQL</productname> distingue les
-   notifications propres des notifications en provenance d'autres
-   sessions&nbsp;; il n'y a donc aucun risque de passer à côté d'une
-   notification externe lorsque les notifications propres sont ignorées.)
+   peut être ignorée.
   </para>
  </refsect1>
 
@@ -134,14 +135,64 @@
 
   <variablelist>
    <varlistentry>
-    <term><replaceable class="parameter">nom</replaceable></term>
+    <term><replaceable class="parameter">canal</replaceable></term>
     <listitem>
      <para>
-      Nom de la notification à signaler (identifiant quelconque).
+      Nom du canal à signaler (identifiant quelconque).
+     </para>
+    </listitem>
+   </varlistentry>
+   <varlistentry>
+    <term><replaceable class="PARAMETER">payload</replaceable></term>
+    <listitem>
+     <para>
+      The <quote>payload</quote> string to be communicated along with the
+      notification.  This must be specified as a simple string literal.
+      In the default configuration it must be shorter than 8000 bytes.
+      (If binary data or large amounts of information need to be communicated,
+      it's best to put it in a database table and send the key of the record.)
      </para>
     </listitem>
    </varlistentry>
   </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   There is a queue that holds notifications that have been sent but not
+   yet processed by all listening sessions.  If this queue becomes full,
+   transactions calling <command>NOTIFY</command> will fail at commit.
+   The queue is quite large (8GB in a standard installation) and should be
+   sufficiently sized for almost every use case. However, no cleanup can take
+   place if a session executes <command>LISTEN</command> and then enters a
+   transaction for a very long time. Once the queue is half full you will see
+   warnings in the log file pointing you to the session that is preventing
+   cleanup. In this case you should make sure that this session ends its
+   current transaction so that cleanup can proceed.
+  </para>
+  <para>
+   A transaction that has executed <command>NOTIFY</command> cannot be
+   prepared for two-phase commit.
+  </para>
+
+  <refsect2>
+   <title>pg_notify</title>
+
+   <indexterm>
+    <primary>pg_notify</primary>
+   </indexterm>
+
+   <para>
+    To send a notification you can also use the function
+    <literal><function>pg_notify</function>(<type>text</type>,
+    <type>text</type>)</literal>. The function takes the channel name as the
+    first argument and the payload as the second. The function is much easier
+    to use than the <command>NOTIFY</command> command if you need to work with
+    non-constant channel names and payloads.
+   </para>
+  </refsect2>
  </refsect1>
 
  <refsect1>
@@ -154,6 +205,13 @@
 <programlisting>LISTEN virtual;
 NOTIFY virtual;
 Asynchronous notification "virtual" received from server process with PID 8448.
+NOTIFY virtual, 'This is the payload';
+Asynchronous notification "virtual" with payload "This is the payload" received from server process with PID 8448.
+
+LISTEN foo;
+SELECT pg_notify('fo' || 'o', 'pay' || 'load');
+Asynchronous notification "foo" with payload "payload" received from server process with PID 14728.
+
 </programlisting>
   </para>
  </refsect1>
@@ -170,8 +228,8 @@ Asynchronous notification "virtual" received from server process with PID 8448.
   <title>Voir aussi</title>
 
   <simplelist type="inline">
-   <member><xref linkend="sql-listen" endterm="sql-listen-title"/></member>
-   <member><xref linkend="sql-unlisten" endterm="sql-unlisten-title"/></member>
+   <member><xref linkend="sql-listen"/></member>
+   <member><xref linkend="sql-unlisten"/></member>
   </simplelist>
  </refsect1>
 </refentry>

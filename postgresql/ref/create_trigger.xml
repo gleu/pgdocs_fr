@@ -7,7 +7,7 @@
 
 <refentry id="sql-createtrigger">
  <refmeta>
-  <refentrytitle id="sql-createtrigger-title">CREATE TRIGGER</refentrytitle>
+  <refentrytitle>CREATE TRIGGER</refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Instructions du langage</refmiscinfo>
  </refmeta>
@@ -20,7 +20,8 @@
  <refsynopsisdiv>
 <synopsis>CREATE TRIGGER <replaceable class="parameter">nom</replaceable> { BEFORE | AFTER } { <replaceable class="parameter">evenement</replaceable> [ OR ... ] }
     ON <replaceable class="parameter">table</replaceable> [ FOR [ EACH ] { ROW | STATEMENT } ]
-    EXECUTE PROCEDURE <replaceable class="parameter">nomfonc</replaceable> ( <replaceable class="parameter">arguments</replaceable> )
+    [ WHEN ( <replaceable class="parameter">condition</replaceable> ) ]
+    EXECUTE PROCEDURE <replaceable class="parameter">nom_fonction</replaceable> ( <replaceable class="parameter">arguments</replaceable> )
 </synopsis>
  </refsynopsisdiv>
  
@@ -33,7 +34,7 @@
   <para>
    <command>CREATE TRIGGER</command> crée un nouveau déclencheur. Le
    déclencheur est associé à la table spécifiée et exécute la fonction
-   <replaceable class="parameter">nomfonc</replaceable> lorsque
+   <replaceable class="parameter">nom_fonction</replaceable> lorsque
    certains événements surviennent.
   </para>
 
@@ -48,8 +49,8 @@
    l'événement, le déclencheur peut ignorer l'opération sur la ligne
    courante ou modifier la ligne en cours d'insertion (uniquement pour les
    opérations <command>INSERT</command> et <command>UPDATE</command>). Si le
-   déclencheur est activé après l'événement, toute modification, dont la
-   dernière insertion, mise à jour ou suppression, est <quote>visible</quote>
+   déclencheur est activé après l'événement, toute modification, dont les
+   autres triggers, est <quote>visible</quote>
    par le déclencheur.
   </para>
 
@@ -69,6 +70,16 @@
    De plus, les triggers peuvent être définis pour être déclenchés suite à
    l'exécution d'un <command>TRUNCATE</command>, mais seulement dans le cas d'un
    trigger <literal>FOR EACH STATEMENT</literal>.
+  </para>
+
+  <para>
+   Also, a trigger definition can specify a boolean <literal>WHEN</literal>
+   condition, which will be tested to see whether the trigger should
+   be fired.  In row-level triggers the <literal>WHEN</literal> condition can
+   examine the old and/or new values of columns of the row.  Statement-level
+   triggers can also have <literal>WHEN</literal> conditions, although the feature
+   is not so useful for them since the condition cannot refer to any values
+   in the table.
   </para>
 
   <para>
@@ -122,6 +133,16 @@
       déclencheur. Plusieurs événements peuvent être précisés en les séparant par
       <literal>OR</literal>.
      </para>
+
+     <para>
+      For <command>UPDATE</command> triggers, it is possible to
+      specify a list of columns using this syntax:
+<synopsis>
+UPDATE OF <replaceable>column_name1</replaceable> [, <replaceable>column_name2</replaceable> ... ]
+</synopsis>
+      The trigger will only fire if at least one of the listed columns
+      is mentioned as a target of the update.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -150,7 +171,32 @@
    </varlistentry>
 
    <varlistentry>
-    <term><replaceable class="parameter">nomfonc</replaceable></term>
+    <term><replaceable class="parameter">condition</replaceable></term>
+    <listitem>
+     <para>
+      A Boolean expression that determines whether the trigger function
+      will actually be executed.  If <literal>WHEN</literal> is specified, the
+      function will only be called if the <replaceable
+      class="parameter">condition</replaceable> returns <literal>true</literal>.
+      In <literal>FOR EACH ROW</literal> triggers, the <literal>WHEN</literal>
+      condition can refer to columns of the old and/or new row values
+      by writing <literal>OLD.<replaceable
+      class="parameter">column_name</replaceable></literal> or
+      <literal>NEW.<replaceable
+      class="parameter">column_name</replaceable></literal> respectively.
+      Of course, <literal>INSERT</literal> triggers cannot refer to <literal>OLD</literal>
+      and <literal>DELETE</literal> triggers cannot refer to <literal>NEW</literal>.
+     </para>
+
+     <para>
+      Currently, <literal>WHEN</literal> expressions cannot contain
+      subqueries.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">nom_fonction</replaceable></term>
     <listitem>
      <para>
       Une fonction utilisateur, déclarée sans argument et renvoyant le type <literal>trigger</literal>, exécutée
@@ -186,8 +232,43 @@
   </para>
 
   <para>
-   <xref linkend="sql-droptrigger" endterm="sql-droptrigger-title"/>
-   est utilisé pour supprimer un déclencheur.
+   Utiliser <xref linkend="sql-droptrigger"/>
+   pour supprimer un déclencheur.
+  </para>
+
+  <para>
+   A column-specific trigger (<literal>FOR UPDATE OF
+   <replaceable>column_name</replaceable></literal>) will fire when any
+   of its columns are listed as targets in the <command>UPDATE</command>
+   command's <literal>SET</literal> list.  It is possible for a column's value
+   to change even when the trigger is not fired, because changes made to the
+   row's contents by <literal>BEFORE UPDATE</literal> triggers are not considered.
+   Conversely, a command such as <literal>UPDATE ... SET x = x ...</literal>
+   will fire a trigger on column <literal>x</literal>, even though the column's
+   value did not change.
+  </para>
+
+  <para>
+   In a <literal>BEFORE</literal> trigger, the <literal>WHEN</literal> condition is
+   evaluated just before the function is or would be executed, so using
+   <literal>WHEN</literal> is not materially different from testing the same
+   condition at the beginning of the trigger function.  Note in particular
+   that the <literal>NEW</literal> row seen by the condition is the current value,
+   as possibly modified by earlier triggers.  Also, a <literal>BEFORE</literal>
+   trigger's <literal>WHEN</literal> condition is not allowed to examine the
+   system columns of the <literal>NEW</literal> row (such as <literal>oid</literal>),
+   because those won't have been set yet.
+  </para>
+
+  <para>
+   In an <literal>AFTER</literal> trigger, the <literal>WHEN</literal> condition is
+   evaluated just after the row update occurs, and it determines whether an
+   event is queued to fire the trigger at the end of statement.  So when an
+   <literal>AFTER</literal> trigger's <literal>WHEN</literal> condition does not return
+   true, it is not necessary to queue an event nor to re-fetch the row at end
+   of statement.  This can result in significant speedups in statements that
+   modify many rows, if the trigger only needs to be fired for a few of the
+   rows.
   </para>
 
   <para>
@@ -201,11 +282,56 @@
   </para>
  </refsect1>
 
- <refsect1 id="r1-sql-createtrigger-2">
+ <refsect1 id="r1-sql-createtrigger-examples">
   <title>Exemples</title>
 
   <para>
-   <xref linkend="trigger-example"/> contient un exemple complet.
+   Execute the function <function>check_account_update</function> whenever
+   a row of the table <literal>accounts</literal> is about to be updated:
+
+<programlisting>
+CREATE TRIGGER check_update
+    BEFORE UPDATE ON accounts
+    FOR EACH ROW
+    EXECUTE PROCEDURE check_account_update();
+</programlisting>
+
+   The same, but only execute the function if column <literal>balance</literal>
+   is specified as a target in the <command>UPDATE</command> command:
+
+<programlisting>
+CREATE TRIGGER check_update
+    BEFORE UPDATE OF balance ON accounts
+    FOR EACH ROW
+    EXECUTE PROCEDURE check_account_update();
+</programlisting>
+
+   This form only executes the function if column <literal>balance</literal>
+   has in fact changed value:
+
+<programlisting>
+CREATE TRIGGER check_update
+    BEFORE UPDATE ON accounts
+    FOR EACH ROW
+    WHEN (OLD.balance IS DISTINCT FROM NEW.balance)
+    EXECUTE PROCEDURE check_account_update();
+</programlisting>
+
+   Call a function to log updates of <literal>accounts</literal>, but only if
+   something changed:
+
+<programlisting>
+CREATE TRIGGER log_update
+    AFTER UPDATE ON accounts
+    FOR EACH ROW
+    WHEN (OLD.* IS DISTINCT FROM NEW.*)
+    EXECUTE PROCEDURE log_account_update();
+</programlisting>
+  </para>
+
+  <para>
+   <xref linkend="trigger-example"/> contains a complete example of a trigger
+   function written in C.
   </para>
  </refsect1>
 
@@ -218,13 +344,6 @@
    <acronym>SQL</acronym>. Les fonctionnalités manquantes sont&nbsp;:
 
    <itemizedlist>
-    <listitem>
-     <para>
-      SQL permet aux déclencheurs de se lancer dans des mises à jour de
-      colonnes spécifiques (c'est-à-dire <literal>AFTER UPDATE OF col1, col2</literal>).
-     </para>
-    </listitem>
-
     <listitem>
      <para>
       SQL permet de définir des alias pour les lignes
@@ -264,10 +383,11 @@
    <productname>PostgreSQL</productname> définit que <literal>BEFORE DELETE</literal>
    se déclenche toujours avant l'action de suppression, même lors
    d'une action en cascade. Cela semble plus cohérent.
-   Le comportement est imprévisible lorsque des déclencheurs <literal>BEFORE</literal> modifient des
-   lignes elles-mêmes modifiées ensuite par les actions référentielles. Cela peut
-   conduire à des violations de contraintes ou à des données stockées qui ne respectent
-   plus la contrainte de référence.
+   There is also unpredictable
+   behavior when <literal>BEFORE</literal> triggers modify rows or prevent
+   updates during an update that is caused by a referential action.  This can
+   lead to constraint violations or stored data that does not honor the
+   referential constraint.
   </para>
 
   <para>
@@ -286,9 +406,9 @@
   <title>Voir aussi</title>
 
   <simplelist type="inline">
-   <member><xref linkend="sql-createfunction" endterm="sql-createfunction-title"/></member>
-   <member><xref linkend="sql-altertrigger" endterm="sql-altertrigger-title"/></member>
-   <member><xref linkend="sql-droptrigger" endterm="sql-droptrigger-title"/></member>
+   <member><xref linkend="sql-createfunction"/></member>
+   <member><xref linkend="sql-altertrigger"/></member>
+   <member><xref linkend="sql-droptrigger"/></member>
   </simplelist>
  </refsect1>
 </refentry>

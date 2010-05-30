@@ -37,7 +37,7 @@
     données est absolument critique pour de bonnes performances, donc le système
     inclut un <firstterm>planificateur</firstterm> complexe qui tente de choisir
     les bons plans. Vous pouvez
-    utiliser la commande <xref linkend="sql-explain" endterm="sql-explain-title"/>
+    utiliser la commande <xref linkend="sql-explain"/>
     pour voir quel plan de requête le planificateur crée pour une requête particulière.
     La lecture du plan est un art qui mérite un tutoriel complet, ce que vous
     n'aurez pas là&nbsp;; ici ne se trouvent que des informations de base.
@@ -558,15 +558,32 @@ WHERE relname LIKE 'tenk1%';
    pour afficher seulement les lignes des tables lisibles par l'utilisateur courant).
    Par exemple, nous pourrions lancer&nbsp;:
 
-<screen>SELECT attname, n_distinct, most_common_vals
+<screen>SELECT attname, inherited, n_distinct,
+       array_to_string(most_common_vals, E'\n') as most_common_vals
 FROM pg_stats
 WHERE tablename = 'road';
 
- attname | n_distinct |                                                                                                                                                                                  most_common_vals                                                                                                                                                                                   
----------+------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- name    |  -0.467008 | {"I- 580                        Ramp","I- 880                        Ramp","Sp Railroad                       ","I- 580                            ","I- 680                        Ramp","I- 80                         Ramp","14th                          St  ","5th                           St  ","Mission                       Blvd","I- 880                            "}
- thepath |         20 | {"[(-122.089,37.71),(-122.0886,37.711)]"}
-(2 rows)</screen>
+ attname | inherited | n_distinct |          most_common_vals          
+---------+-----------+------------+------------------------------------
+ name    | f         |  -0.363388 | I- 580                        Ramp+
+         |           |            | I- 880                        Ramp+
+         |           |            | Sp Railroad                       +
+         |           |            | I- 580                            +
+         |           |            | I- 680                        Ramp
+ name    | t         |  -0.284859 | I- 880                        Ramp+
+         |           |            | I- 580                        Ramp+
+         |           |            | I- 680                        Ramp+
+         |           |            | I- 580                            +
+         |           |            | State Hwy 13                  Ramp
+(2 rows)
+</screen>
+
+   Note that two rows are displayed for the same column, one corresponding
+   to the complete inheritance hierarchy starting at the
+   <literal>road</literal> table (<literal>inherited</literal>=<literal>t</literal>),
+   and another one including only the <literal>road</literal> table itself
+   (<literal>inherited</literal>=<literal>f</literal>).
+
   </para>
 
   <para>
@@ -804,7 +821,7 @@ WHERE quelquechosedautre;</programlisting>
    <title>Utilisez <command>COPY</command></title>
 
    <para>
-    Utilisez <xref linkend="sql-copy" endterm="sql-copy-title"/> pour charger
+    Utilisez <xref linkend="sql-copy"/> pour charger
     toutes les lignes en une seule commande, plutôt que d'utiliser une série
     de commandes <command>INSERT</command>. La commande <command>COPY</command>
     est optimisée pour charger un grand nombre de lignes&nbsp;; elle est moins
@@ -817,7 +834,7 @@ WHERE quelquechosedautre;</programlisting>
 
    <para>
     Si vous ne pouvez pas utiliser <command>COPY</command>, utiliser <xref
-    linkend="sql-prepare" endterm="sql-prepare-title"/> pourrait vous aider à
+    linkend="sql-prepare"/> pourrait vous aider à
     créer une instruction préparée <command>INSERT</command>, puis utilisez
     <command>EXECUTE</command> autant de fois que nécessaire. Ceci évite
     certaines surcharges lors d'une analyse et d'une planification répétées
@@ -839,8 +856,8 @@ WHERE quelquechosedautre;</programlisting>
     <command>TRUNCATE</command> précédente. Dans ce cas, les journaux de
     transactions ne sont pas impactés car, en cas d'erreur, les fichiers
     contenant les données nouvellement chargées seront supprimés de toute
-    façon. Néanmoins, cette considération ne s'applique pas quand
-    <xref linkend="guc-archive-mode"/> est activé, car toutes les
+    façon. Néanmoins, cette considération ne s'applique que quand
+    <xref linkend="guc-wal-level"/> vaut <literal>minimal</literal>, car toutes les
     commandes doivent écrire dans les journaux de transaction dans ce cas.
    </para>
 
@@ -914,26 +931,28 @@ WHERE quelquechosedautre;</programlisting>
   </sect2>
 
   <sect2 id="populate-pitr">
-   <title>Désactiver <varname>archive_mode</varname></title>
+   <title>Disable WAL archival and streaming replication</title>
 
    <para>
-    Lors du chargement de grosses quantités de données dans un cluster qui
-    utiliser l'archive des journaux de transaction, vous pouvez souhaiter
-    désactiver l'archivage (désactiver le paramètre <xref
-    linkend="guc-archive-mode"/>) lors du chargement. Il peut être
-    plus rapide de réaliser une nouvelle sauvegarde de base une fois le
-    chargement terminé plutôt que de traiter un grand nombre de données WAL
-    incrémentales. Mais notez qu'activer et désactiver
-    <varname>archive_mode</varname> demande un redémarrage du serveur.
+    When loading large amounts of data into an installation that uses
+    WAL archiving or streaming replication, it might be faster to take a
+    new base backup after the load has completed than to process a large
+    amount of incremental WAL data. You might want to disable archiving
+    and streaming replication while loading, by setting
+    <xref linkend="guc-wal-level"/> to <literal>minimal</literal>,
+    <xref linkend="guc-archive-mode"/> <literal>off</literal>, and
+    <xref linkend="guc-max-wal-senders"/> to zero).
+    But note that changing these settings requires a server restart.
    </para>
 
    <para>
-    En dehors d'éviter le temps de traitement des données WAL, la désactivation
-    rendra certaines commandes plus rapides car elles sont conçues pour ne
-    pas écrire dans les WAL si <varname>archive_mode</varname> est désactivé
-    (elles peuvent garantir une certaine immunité aux arrêts brutaux en
-    exécutant un <function>fsync</function> à la fin plutôt que d'écrire dans
-    les WAL.) Ceci s'applique aux commandes suivantes&nbsp;:
+    Aside from avoiding the time for the archiver or WAL sender to
+    process the WAL data,
+    doing this will actually make certain commands faster, because they
+    are designed not to write WAL at all if <varname>wal_level</varname>
+    is <literal>minimal</literal>.  (They can guarantee crash safety more cheaply
+    by doing an <function>fsync</function> at the end than by writing WAL.)
+    Ceci s'applique aux commandes suivantes&nbsp;:
     <itemizedlist>
      <listitem>
       <para>
@@ -971,8 +990,8 @@ WHERE quelquechosedautre;</programlisting>
 
    <para>
      Quand vous avez changé significativement la distribution des données à
-     l'intérieur d'une table, lancer <xref linkend="sql-analyze"
-     endterm="sql-analyze-title"/> est fortement recommandée. Ceci inclut le
+     l'intérieur d'une table, lancer <xref linkend="sql-analyze"/> est fortement
+     recommandée. Ceci inclut le
      chargement de grosses quantités de données dans la table. Lancer
      <command>ANALYZE</command> (ou <command>VACUUM ANALYZE</command>) vous
      assure que le planificateur dispose de statistiques à jour sur la table.
@@ -981,9 +1000,8 @@ WHERE quelquechosedautre;</programlisting>
      requête, amenant des performances pauvres sur toutes les tables sans
      statistiques ou avec des statistiques inexactes. Notez que si le démon
      autovacuum est désactivée, il pourrait exécuter <command>ANALYZE</command>
-     automatiquement&nbsp;; voir <xref linkend="vacuum-for-statistics"
-     endterm="vacuum-for-statistics-title"/> et <xref linkend="autovacuum"
-     endterm="autovacuum-title"/> pour plus d'informations.
+     automatiquement&nbsp;; voir <xref linkend="vacuum-for-statistics"/> et
+     <xref linkend="autovacuum"/> pour plus d'informations.
    </para>
   </sect2>
 
@@ -1019,10 +1037,12 @@ WHERE quelquechosedautre;</programlisting>
      </listitem>
      <listitem>
       <para>
-       Si vous utilisez l'archivage des WAL, considérez sa désactivation lors
-       de la restauration. Pour cela, désactiver <varname>archive_mode</varname>
-       avant de charger le script de sauvegarde, puis ré-activez-le et réalisez
-       une sauvegarde de base.
+       If using WAL archiving or streaming replication, consider disabling
+       them during the restore. To do that, set <varname>archive_mode</varname> off,
+       <varname>wal_level</varname> to <literal>minimal</literal>, and
+       <varname>max_wal_senders</varname> zero before loading the dump script,
+       and afterwards set them back to the right values and take a fresh
+       base backup.
       </para>
      </listitem>
      <listitem>
@@ -1038,6 +1058,9 @@ WHERE quelquechosedautre;</programlisting>
        <command>COPY</command> s'exécuteront plus rapidement si vous utilisez une
        transaction simple et que vous avez désactivé l'archivage des journaux de
        transaction.
+       <application>pg_restore</application> also has a <option>--jobs</option> option
+       which allows concurrent data loading and index creation, and has
+       the performance advantages of doing COPY in a single transaction.
       </para>
      </listitem>
      <listitem>
@@ -1071,11 +1094,9 @@ WHERE quelquechosedautre;</programlisting>
     <varname>maintenance_work_mem</varname>&nbsp;; en fait, vous le ferez lors
     d'une nouvelle création manuelle des index et des clés étrangères. Et
     n'oubliez pas <command>ANALYZE</command> une fois que vous avez terminé&nbsp;;
-    voir <xref linkend="vacuum-for-statistics"
-    endterm="vacuum-for-statistics-title"/> et <xref linkend="autovacuum"
-    endterm="autovacuum-title"/> pour plus d'informations.
+    voir <xref linkend="vacuum-for-statistics"/> et <xref linkend="autovacuum"/>
+    pour plus d'informations.
    </para>
   </sect2>
-  </sect1>
-
- </chapter>
+ </sect1>
+</chapter>
