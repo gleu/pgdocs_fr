@@ -122,6 +122,31 @@ $version['804'] = '8.4';
     Pour rapporter tout probl&egrave;me dans la traduction, merci d'envoyer un
     mail &agrave; <a href="mailto:guillaume chez lelarge point info">Guillaume
     Lelarge</a>.
+    <div id="pg90">
+      <h2>Documentation PostgreSQL, version 9.0 <em>BETA 2</em></h2>
+      <div class="listes">
+        <ul>
+            <li>Manuel au format HTML&nbsp;:
+                <a href="9.0/">Consultation en
+                ligne</a>,
+                t&eacute;l&eacute;chargement en
+                <a onclick="pageTracker._trackPageview('/pg90.zip');"
+                href="http://docs.postgresql.fr/9.0/pg90.zip">ZIP</a> ou
+                <a onclick="pageTracker._trackPageview('/pg90.tar.gz');"
+                href="http://docs.postgresql.fr/9.0/pg90.tar.gz">TAR.GZ</a>
+            </li>
+            <li>Document d'installation au format <a
+              onclick="pageTracker._trackPageview('/INSTALL90.html');"
+              href="http://docs.postgresql.fr/9.0/INSTALL.html">HTML</a> et
+              <a onclick="pageTracker._trackPageview('/INSTALL90.txt');"
+              href="http://docs.postgresql.fr/9.0/INSTALL.txt">texte</a>
+            </li>
+            <li><a onclick="pageTracker._trackPageview('/pg90.man.tar.gz');"
+              href="http://docs.postgresql.fr/9.0/pg90.man.tar.gz">Pages
+              man</a></li>
+        </ul>
+      </div>
+    </div>
     <div id="pg84">
       <h2>Documentation PostgreSQL, version 8.4</h2>
       <div class="listes">

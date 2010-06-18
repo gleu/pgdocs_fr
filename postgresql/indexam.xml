@@ -188,25 +188,29 @@ aminsert (Relation indexRelation,
    de clés à indexer.
    <literal>heap_tid</literal> est le TID à indexer. Si la méthode d'accès supporte les
    index uniques (son drapeau <structname>pg_am</structname>.<structfield>amcanunique</structfield>
-   vaut true), alors <literal>checkUnique</literal> indicates the type of uniqueness check to
-   perform.  This varies depending on whether the unique constraint is
-   deferrable; see <xref linkend="index-unique-checks"/> for details.
-   Normally the access method only needs the <literal>heapRelation</literal>
-   parameter when performing uniqueness checking (since then it will have to
-   look into the heap to verify tuple liveness).
+   vaut true), alors <literal>checkUnique</literal> indique le type de
+   vérification unique à réaliser. Cela varie si la contrainte unique est
+   déferrable ou non&nbsp;; voir <xref linkend="index-unique-checks"/> pour
+   les détails. Habituellement, la méthode d'accès a seulement besoin du
+   paramètre <literal>heapRelation</literal> lors de la vérification de
+   l'unicité (car après, elle doit regarder la table pour vérifier la
+   visibilité de la ligne).
   </para>
 
   <para>
-   The function's boolean result value is significant only when
-   <literal>checkUnique</literal> is <literal>UNIQUE_CHECK_PARTIAL</literal>.
-   In this case a TRUE result means the new entry is known unique, whereas
-   FALSE means it might be non-unique (and a deferred uniqueness check must
-   be scheduled).  For other cases a constant FALSE result is recommended.
+   La valeur résultat, de type booléen, de la fonction est significative
+   seulement quand <literal>checkUnique</literal> vaut
+   <literal>UNIQUE_CHECK_PARTIAL</literal>. Dans ce cas, un résultat TRUE
+   signifie que la nouvelle entrée est reconnue comme unique alors que FALSE
+   indique qu'elle pourrait ne pas être unique (et une vérification d'unicité
+   déferrée doit être planifiée). Dans les autres cas, un résultat FALSE
+   constant est recommendé.
   </para>
 
   <para>
-   Some indexes might not index all tuples.  If the tuple is not to be
-   indexed, <function>aminsert</function> should just return without doing anything.
+   Certains index pourraient ne pas indexer toutes les lignes. Si la ligne
+   ne doit pas être indexée, <function>aminsert</function> devrait terminer
+   sans rien faire.
   </para>
 
   <para>
@@ -789,19 +793,22 @@ supprime des données, mais dans le cas de l'index ? -->
   </para>
 
   <para>
-   If the unique constraint is deferrable, there is additional complexity:
-   we need to be able to insert an index entry for a new row, but defer any
-   uniqueness-violation error until end of statement or even later.  To
-   avoid unnecessary repeat searches of the index, the index access method
-   should do a preliminary uniqueness check during the initial insertion.
-   If this shows that there is definitely no conflicting live tuple, we
-   are done.  Otherwise, we schedule a recheck to occur when it is time to
-   enforce the constraint.  If, at the time of the recheck, both the inserted
-   tuple and some other tuple with the same key are live, then the error
-   must be reported.  (Note that for this purpose, <quote>live</quote> actually
-   means <quote>any tuple in the index entry's HOT chain is live</quote>.)
-   To implement this, the <function>aminsert</function> function is passed a
-   <literal>checkUnique</literal> parameter having one of the following values:
+   Si la contrainte unique est déferrable, il y a une complication
+   supplémentaire&nbsp;: nous devons être capable d'insérer une entrée d'index
+   pour une nouvelle ligne mais de déferrer toute erreur de violation de
+   l'unicité jusqu'à la fin de l'instruction, voire même après. Pour éviter
+   des recherches répétées et inutiles de l'index, la méthode d'accès de
+   l'index doit faire une vérification préliminaire d'unicité lors de
+   l'insertion initiale. Si cela montre qu'il n'y a pas de conflit avec une
+   ligne visible, nous avons terminé. Sinon, nous devons planifier une
+   nouvelle vérification quand il sera temps de forcer la contrainte. Si, au
+   moment de la nouvelle vérification, la ligne insérée et d'autres lignes de
+   la même clé sont vivantes, alors l'erreur doit être reportée. (Notez que,
+   dans ce contexte, <quote>vivant</quote> signifie réellement <quote>toute
+   ligne dans la chaine HOT de l'entrée de l'index est vivante</quote>.)
+   Pour implanter ceci, la fonction <function>aminsert</function> reçoit un
+   paramètre <literal>checkUnique</literal> qui peut avoir une des valeurs
+   suivantes&nbsp;:
 
     <itemizedlist>
      <listitem>
@@ -812,52 +819,56 @@ supprime des données, mais dans le cas de l'index ? -->
      </listitem>
      <listitem>
       <para>
-       <literal>UNIQUE_CHECK_YES</literal> indicates that this is a non-deferrable
-       unique index, and the uniqueness check must be done immediately, as
-       described above.
+       <literal>UNIQUE_CHECK_YES</literal> indique qu'il s'agit d'un index
+       unique non déferrable et la vérification de l'unicité doit se faire
+       immédiatement, comme décrit ci-dessus.
       </para>
      </listitem>
      <listitem>
       <para>
-       <literal>UNIQUE_CHECK_PARTIAL</literal> indicates that the unique
-       constraint is deferrable. <productname>PostgreSQL</productname>
-       will use this mode to insert each row's index entry.  The access
-       method must allow duplicate entries into the index, and report any
-       potential duplicates by returning FALSE from <function>aminsert</function>.
-       For each row for which FALSE is returned, a deferred recheck will
-       be scheduled.
+       <literal>UNIQUE_CHECK_PARTIAL</literal> indique que la contrainte
+       unique est déferrable. <productname>PostgreSQL</productname> utilisera
+       ce mode pour insérer l'entrée d'index de chaque ligne. La méthode
+       d'accès doit autoriser les entrées dupliquées dans l'index et rapporter
+       tout dupliquat potentiel en renvoyant FALSE à partir de
+       <function>aminsert</function>. Pour chaque ligne pour laquelle FALSE
+       est renvoyé, une revérification déferrée sera planifiée.
       </para>
 
       <para>
-       The access method must identify any rows which might violate the
-       unique constraint, but it is not an error for it to report false
-       positives. This allows the check to be done without waiting for other
-       transactions to finish; conflicts reported here are not treated as
-       errors and will be rechecked later, by which time they may no longer
-       be conflicts.
+       La méthode d'accès doit identifier toute ligne qui pourrait violer la
+       contrainte unique, mais rapporter des faux positifs n'est pas une
+       erreur. Cela permet de faire la vérification sans attendre la fin des
+       autres transactions&nbsp;; les conflits rapportés ici ne sont pas
+       traités comme des erreurs, et seront revérifiés plus tard, à un moment
+       où ils ne seront peut-être plus en conflit.
       </para>
      </listitem>
      <listitem>
       <para>
-       <literal>UNIQUE_CHECK_EXISTING</literal> indicates that this is a deferred
-       recheck of a row that was reported as a potential uniqueness violation.
-       Although this is implemented by calling <function>aminsert</function>, the
-       access method must <emphasis>not</emphasis> insert a new index entry in this
-       case.  The index entry is already present.  Rather, the access method
-       must check to see if there is another live index entry.  If so, and
-       if the target row is also still live, report error.
+       <literal>UNIQUE_CHECK_EXISTING</literal> indique que c'est une
+       revérification déferrée d'une ligne qui a été rapportée comme en
+       violation potentielle d'unicité. Bien que cela soit implanté par un
+       appel à <function>aminsert</function>, la méthode d'accès ne doit
+       <emphasis>pas</emphasis> insérer une nouvelle entrée d'index dans ce
+       cas. L'entrée d'index est déjà présente. À la place, la méthode d'accès
+       doit vérifier s'il existe une autre entrée d'index vivante. Si c'est le
+       cas et que la ligne cible est toujours vivante, elle doit rapporter
+       une erreur.
       </para>
 
       <para>
-       It is recommended that in a <literal>UNIQUE_CHECK_EXISTING</literal> call,
-       the access method further verify that the target row actually does
-       have an existing entry in the index, and report error if not.  This
-       is a good idea because the index tuple values passed to
-       <function>aminsert</function> will have been recomputed.  If the index
-       definition involves functions that are not really immutable, we
-       might be checking the wrong area of the index.  Checking that the
-       target row is found in the recheck verifies that we are scanning
-       for the same tuple values as were used in the original insertion.
+       Il est recommendé que, dans un appel à
+       <literal>UNIQUE_CHECK_EXISTING</literal>, la méthode d'accès vérifie en
+       plus que la ligne cible ait réellement une entrée existante dans l'index
+       et de rapporter une erreur si ce n'est pas le cas. C'est une bonne idée
+       car les valeurs de la ligne d'index passées à
+       <function>aminsert</function> auront été recalculées. Si la définition
+       de l'index implique des fonctions qui ne sont pas vraiment immutables,
+       nous pourrions vérifier la mauvaise aire de l'index. Vérifier que la
+       ligne cible est trouvée dans la revérification permet de s'assurer que
+       nous recherchons les mêmes valeurs de la ligne comme elles ont été
+       utilisées lors de l'insertion originale.
       </para>
      </listitem>
     </itemizedlist>
