@@ -21,6 +21,7 @@ $version['801'] = '8.1';
 $version['802'] = '8.2';
 $version['803'] = '8.3';
 $version['804'] = '8.4';
+$version['900'] = '9.0';
 ?>
 <!DOCTYPE html SYSTEM "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -123,7 +124,7 @@ $version['804'] = '8.4';
     mail &agrave; <a href="mailto:guillaume chez lelarge point info">Guillaume
     Lelarge</a>.
     <div id="pg90">
-      <h2>Documentation PostgreSQL, version 9.0 <em>BETA 2</em></h2>
+      <h2>Documentation PostgreSQL, version 9.0 <em>BETA 3</em></h2>
       <div class="listes">
         <ul>
             <li>Manuel au format HTML&nbsp;:

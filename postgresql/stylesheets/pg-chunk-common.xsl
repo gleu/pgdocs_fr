@@ -43,9 +43,10 @@
    <li> <a href="http://blog.postgresql.fr/" title="Lire les actualités">Actualités</a> </li>
    <li> <a href="http://docs.postgresql.fr/" title="Lire la documentation officielle">Documentation</a> </li>
    <li> <a href="http://forums.postgresql.fr/" title="Pour poser des questions">Forums</a> </li>
-   <li> <a href="http://asso.postgresql.fr/" title="La vie de l'association">Association</a></li>
-   <li> <a href="http://planete.postgresql.fr" title="La planète francophone sur PostgreSQL">Planète</a></li>
-   <li> <a href="http://support.postgresql.fr" title="Support sur PostgreSQL">Support</a></li>
+   <li> <a href="http://asso.postgresql.fr/" title="La vie de l'association">Association</a> </li>
+   <li> <a href="http://www.postgresql.fr/devel:accueil" title="Informations pour les développeurs/traducteurs">Développeurs</a> </li>
+   <li> <a href="http://planete.postgresql.fr" title="La planète francophone sur PostgreSQL">Planète</a> </li>
+   <li> <a href="http://support.postgresql.fr" title="Support sur PostgreSQL">Support</a> </li>
   </ul>
 </div>
 <div id="pgContent">
@@ -54,7 +55,7 @@
       <form method="post" action="http://docs.postgresql.fr/search.php">
         <div>
           <h2><label for="q">Rechercher</label></h2>
-          <input type='hidden' id='v' name='v' value='804' />
+          <input type='hidden' id='v' name='v' value='900' />
           <input id="q" name="q" type="text" size="10" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="Rechercher" accesskey="r" /><input id="submit" name="submit" type="submit" value="Rechercher" />
         </div>
       </form>
