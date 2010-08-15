@@ -124,7 +124,7 @@ $version['900'] = '9.0';
     mail &agrave; <a href="mailto:guillaume chez lelarge point info">Guillaume
     Lelarge</a>.
     <div id="pg90">
-      <h2>Documentation PostgreSQL, version 9.0 <em>BETA 3</em></h2>
+      <h2>Documentation PostgreSQL, version 9.0 <em>BETA 4</em></h2>
       <div class="listes">
         <ul>
             <li>Manuel au format HTML&nbsp;:
@@ -135,6 +135,10 @@ $version['900'] = '9.0';
                 href="http://docs.postgresql.fr/9.0/pg90.zip">ZIP</a> ou
                 <a onclick="pageTracker._trackPageview('/pg90.tar.gz');"
                 href="http://docs.postgresql.fr/9.0/pg90.tar.gz">TAR.GZ</a>
+            </li>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg90.chm');"
+              href="http://docs.postgresql.fr/9.0/pg90.chm">CHM</a>
+              (syst&egrave;me d'aide Windows)
             </li>
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg90.pdf');"
               href="http://docs.postgresql.fr/9.0/pg90.pdf">PDF</a>
@@ -164,6 +168,10 @@ $version['900'] = '9.0';
                 <a onclick="pageTracker._trackPageview('/pg84.tar.gz');"
                 href="http://docs.postgresql.fr/8.4/pg84.tar.gz">TAR.GZ</a>
             </li>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg84.chm');"
+              href="http://docs.postgresql.fr/8.4/pg84.chm">CHM</a>
+              (syst&egrave;me d'aide Windows)
+            </li>
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg84.pdf');"
               href="http://docs.postgresql.fr/8.4/pg84.pdf">PDF</a>
             </li>
@@ -192,12 +200,10 @@ $version['900'] = '9.0';
                 <a onclick="pageTracker._trackPageview('/pg83.tar.gz');"
                 href="http://docs.postgresql.fr/8.3/pg83.tar.gz">TAR.GZ</a>
             </li>
-	    <!--
-            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg833.chm');"
-              href="http://docs.postgresql.fr/8.3/pg834.chm">CHM</a>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg83.chm');"
+              href="http://docs.postgresql.fr/8.3/pg83.chm">CHM</a>
               (syst&egrave;me d'aide Windows)
             </li>
-	    -->
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg833.pdf');"
               href="http://docs.postgresql.fr/8.3/pg83.pdf">PDF</a>
             </li>
@@ -231,12 +237,10 @@ $version['900'] = '9.0';
                 <a onclick="pageTracker._trackPageview('/pg82.tar.gz');"
                 href="http://docs.postgresql.fr/8.2/pg82.tar.gz">TAR.GZ</a>
             </li>
-	    <!--
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg82.chm');"
               href="http://docs.postgresql.fr/8.2/pg82.chm">CHM</a>
               (syst&egrave;me d'aide Windows)
             </li>
-	    -->
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg82.pdf');"
               href="http://docs.postgresql.fr/8.2/pg82.pdf">PDF</a>
             </li>
@@ -270,12 +274,10 @@ $version['900'] = '9.0';
                 <a onclick="pageTracker._trackPageview('/pg81.tar.gz');"
                 href="http://docs.postgresql.fr/8.1/pg81.tar.gz">TAR.GZ</a>
             </li>
-	    <!--
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg81.chm');"
                 href="http://docs.postgresql.fr/8.1/pg81.chm">CHM</a>
               (syst&egrave;me d'aide Windows)
             </li>
-	    -->
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg81.pdf');"
               href="http://docs.postgresql.fr/8.1/pg81.pdf">PDF</a>
             </li>
