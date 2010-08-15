@@ -38,7 +38,7 @@ $output ='
   <div class="footer">
     <div class="intro-header">
       <div class="left"></div>
-      <div class="right"><div class="copyright">Contenu &copy; 2007-2009 Slony Development Group / Traduction et hébergement par <a href="http://www.postgresql.fr">PostgreSQLFr</a></div></div>
+      <div class="right"><div class="copyright">Contenu &copy; 2007-2010 Slony Development Group / Traduction et hébergement par <a href="http://www.postgresql.fr">PostgreSQLFr</a></div></div>
     </div>
   </div>
 </div>
