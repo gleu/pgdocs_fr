@@ -15,12 +15,13 @@ $output = '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
 <div class="header">
   <div class="left">
   <div class="menu">
-    <a href="/" title="Aller sur la page principale">Accueil</a>
-    <a href="/scm/" title="Aller sur le dépôt CVS de slony">CVS</a>
-    <a href="http://lists.slony.info/mailman/listinfo" title="Slony mailinglists">Listes de diffusion</a>
+    <a href="/" title="Aller sur la page principale">Home</a>
+    <a href="/git.html" title="Aller sur la page d\'informations GIT de Slony">Git</a>
+    <a href="http://lists.slony.info/mailman/listinfo" title="Listes de discussions de Slony">Mailinglists</a>
     <a href="/documentation/" title="Aller vers la section documentation">Documentation</a>
-    <a href="/downloads/" title="Téléchargez Slony!">Téléchargez !</a>
-    <a href="http://bugs.slony.info/bugzilla/" title="Slony-I Bugzilla"> Bugs </a>
+    <a href="/downloads/" title="Téléchargez Slony!">Téléchargement</a>
+    <a href="http://bugs.slony.info/bugzilla/" title="Bugzilla Slony-I Bugzilla">Bugs</a>
+    <a href="/bug-processing.html" title="Aller sur la page de politique de la gestion des bugs">Politique Bugs</a>
   </div>
   </div>
   <div class="right">
