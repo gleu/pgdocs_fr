@@ -78,7 +78,7 @@ $version['900'] = '9.0';
     <li><a href="http://docs.postgresql.fr/" title="Lire la documentation officielle">Documentation</a></li>
     <li><a href="http://forums.postgresql.fr/" title="Pour poser des questions">Forums</a></li>
     <li><a href="http://asso.postgresql.fr/" title="La vie de l'association">Association</a></li>
-    <li><a href="http://trac.postgresql.fr" title="Trac des développeurs">Développeurs</a></li>
+    <li><a href="http://www.postgresql.fr/devel:accueil" title="Informations pour les développeurs/traducteurs">Développeurs</a></li>
     <li><a href="http://planete.postgresql.fr" title="La planète francophone sur PostgreSQL">Planète</a></li>
     <li><a href="http://support.postgresql.fr" title="Support sur PostgreSQL">Support</a></li>
   </ul>
