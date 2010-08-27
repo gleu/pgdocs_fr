@@ -650,13 +650,16 @@ protocol to make nodes agree on a serializable transactional order.
     <varname>restore_command</varname>. Une fois qu'il a épuisé tous les WAL
     disponibles à cet endroit et que <varname>restore_command</varname>
     échoue, il essaye de restaurer tous les WAL disponibles dans le répertoire
-    pg_xlog. Si cela échoue, et que la streaming replication a été activée, le standby essaye
+    <filename>pg_xlog</filename>. Si cela échoue, et que la réplication en flux
+    a été activée, le standby essaye
     de se connecter au serveur primaire et de démarrer la réception des WAL depuis
-    le dernier enregistrement valide trouvé dans les archives ou pg_xlog. Si cela
+    le dernier enregistrement valide trouvé dans les archives ou
+    <filename>pg_xlog</filename>. Si cela
     échoue ou que la streaming replication n'est pas configurée, ou que la connexion
     est plus tard déconnectée, le standby retourne à l'étape 1 et essaye de 
     restaurer le fichier à partir de l'archive à nouveau. Cette boucle de
-    retentatives de l'archive, pg_xlog et par la streaming replication continue
+    retentatives de l'archive, <filename>pg_xlog</filename> et par la
+    streaming replication continue
     jusqu'à ce que le serveur soit stoppé ou que le failover (bascule) soit
     déclenché par un fichier trigger (déclencheur).
    </para>
@@ -664,7 +667,8 @@ protocol to make nodes agree on a serializable transactional order.
    <para>
     Le mode de standby est quitté et le serveur bascule en mode de fonctionnement normal
     quand un fichier de trigger est trouvé (<varname>trigger_file</varname>). Avant
-    de basculer, tout WAL immédiatement disponible dans l'archive ou le pg_xlog sera
+    de basculer, tout WAL immédiatement disponible dans l'archive ou le
+    <filename>pg_xlog</filename> sera
     restaurée, mais aucune tentative ne sera faite pour se connecter au maître.
    </para>
   </sect2>
@@ -799,7 +803,7 @@ trigger_file = '/path/to/trigger_file'
     recyclés trop tôt, alors que le standby pourrait toujours avoir besoin d'eux pour
     rattraper son retard. Si le standby prend trop de retard, il aura besoin d'être réinitialisé
     à partir d'une nouvelle sauvegarde de base. Si vous positionnez une archive de WAL qui est accessible
-    du standby, wal_keep_segments n'est pas nécessaire, puisque le standby peut toujours
+    du standby, <varname>wal_keep_segments</varname> n'est pas nécessaire, puisque le standby peut toujours
     utiliser l'archive pour rattraper son retard.
    </para>
 
@@ -1829,7 +1833,7 @@ LOG:  database system is ready to accept read only connections
    </para>
 
    <para>
-    Il n'est pas possible d'assigner de nouveaux oids, bien que des générateurs d' <acronym>UUID</acronym> 
+    Il n'est pas possible d'assigner de nouveaux OID, bien que des générateurs d' <acronym>UUID</acronym> 
     puissent tout de même fonctionner, tant qu'ils n'ont pas besoin d'écrire un nouveau statut dans
     la base.
    </para>
@@ -1972,112 +1976,10 @@ LOG:  database system is ready to accept read only connections
      si votre paramètre <varname>max_prepared_transactions</varname> est <literal>0</literal>.
     </para>
    </listitem>
-   
-   
-   
-   
-   
-   
-   
-   
   </itemizedlist>
-
    </para>
   </sect2>
 
  </sect1>
-
-  <sect1 id="backup-incremental-updated">
-   <title>Sauvegardes mises à jour de façon incrémentielle</title>
-
-  <indexterm zone="high-availability">
-   <primary>sauvegardes mises à jour de façon incrémentielle</primary>
-  </indexterm>
-
-  <indexterm zone="high-availability">
-   <primary>accumulation de modifications</primary>
-  </indexterm>
-
-   <para>
-    Dans une configuration de standby, il est possible de décharger le serveur 
-    primaire du coût des sauvegardes de base périodiques; à la place, les
-    sauvegardes de base peuvent être réalisées en sauvegardant les fichiers du
-    serveur de standby. Ce concept est habituellement connu sous le nom
-    de sauvegardes mises à jour de façon incrémentielle, accumulation de
-    modifications de journaux, ou plus simplement, accumulation de modifications.
-   </para>
-
-   <para>
-    Si nous déclenchons une sauvegarde de système de fichier sur les données
-    du serveur de standby alors qu'il traite les journaux reçus du primaire,
-    nous pourrons recharger cette sauvegarde et redémarrer le processus de récupération
-    à partir du dernier restartpoint. Nous n'avons plus besoin des fichiers de WAL
-    d'avant le restartpoint du standby. Si une récupération est nécessaire, il
-    sera plus rapide de récupérer à partir de la sauvegarde mise à jour incrémentiellement
-    que de la sauvegarde de base original.
-   </para>
-
-   <para>
-    La procédure pour effectuer une sauvegarde de fichier des données du standby
-    alors qu'il traite les journaux provenant du primaire est:
-   <orderedlist>
-    <listitem>
-     <para>
-      Effectuer la sauvegarde, sans utiliser <function>pg_start_backup</function> et
-      <function>pg_stop_backup</function>. Notez que le fichier <filename>pg_control</filename>
-      doit être sauvegardé en <emphasis>premier</emphasis>, comme ici:
-      
-<programlisting>
-cp /var/lib/pgsql/data/global/pg_control /tmp
-cp -r /var/lib/pgsql/data /chemin/vers/sauvegarde
-mv /tmp/pg_control /chemin/vers/sauvegarde/data/global
-</programlisting>
-      <filename>pg_control</filename> contient l'endroit où le rejeu du WAL commencera
-      après avoir restauré à partir de la sauvegarde; le sauvegarder en premier
-      garantit qu'il pointe vers le dernier restartpoint quand la sauvegarde a
-      commencé, pas un restartpoint ultérieur au moment où les fichiers ont
-      été copiés vers la sauvegarde.
-     </para>
-    </listitem>
-    <listitem>
-     <para>
-      Notez l'entrée de WAL de la fin de la sauvegarde en appelant
-      la fonction <function>pg_last_xlog_replay_location</function> à la
-      fin de la sauvegarde, et en la gardant avec la sauvegarde.
-<programlisting>
-psql -c "select pg_last_xlog_replay_location();" > /chemin/vers/sauvegarde/position_finale
-</programlisting>
-      Lors d'une récupération à partir d'une sauvegarde mise à jour incrémentiellement,
-      le serveur peut accepter les connexions et terminer la récupération avec succès
-      avant que la base ne soit devenue cohérente. Pour éviter ceci, vous devez
-      vous assurer que la base est cohérente avant que les utilisateurs n'essaient
-      de se connecter au serveur et quand la récupération se termine. Vous pouvez le
-      faire en comparant l'avancement de la récupération avec la position de WAL finale
-      de la sauvegarde que vous avez conservée: le serveur n'est pas cohérent avant
-      que la récupération n'ait atteint la position de WAL finale de la sauveqarde.
-      L'avancement de la récupération peut aussi être surveillée avec la fonction
-      <function>pg_last_xlog_replay_location</function>, mais cela impose de se
-      connecter au serveur alors qu'il n'est pas encore cohérent. Il faut donc être
-      prudent avec cette méthode.
-     </para>
-     <para>
-     </para>
-    </listitem>
-   </orderedlist>
-   </para>
-
-   <para>
-    Puisque le serveur de standby n'est pas <quote>actif</quote>, il n'est pas possible
-    d'utiliser <function>pg_start_backup()</function> et<function>pg_stop_backup()</function>
-    pour gérer le processus de sauvegarde; ce sera à vous de déterminer quelle quantité de
-    fichiers de segments WAL garder pour avoir une sauvegarde récupérable. Ceci est déterminé
-    par le dernier restartpoint au moment de la sauvegarde, tout WAL plus ancien que cela
-    peut être supprimé de l'archive une fois que la sauvegarde a été réalisée. Vous pouvez
-    déterminer le dernier restartpoint en exécutant <application>pg_controldata</application> 
-    sur le serveur de standby avant de commencer la sauvegarde, ou en positionnant l'option
-    <varname>log_checkpoints</varname> pour écrire les valeurs dans le journal applicatif du
-    serveur de standby.
-   </para>
-  </sect1>
 
 </chapter>
