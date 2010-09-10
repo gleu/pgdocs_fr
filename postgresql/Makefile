@@ -46,7 +46,6 @@ index.html: $(src)
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
 
 	for filename in `find $(BASEDIR)/$(HTM_OUTPUT) -name "*.html"`; do \
-	  recode iso-8859-15..utf-8 $$filename; \
 	  tidy -config tidy.conf $$filename; \
 	  true; \
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
@@ -80,7 +79,6 @@ webhtml: $(src)
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e 's@border="1"@border="0"@g' *.html
 
 	for filename in `find $(BASEDIR)/$(WEB_OUTPUT) -name "*.html"`; do \
-	  recode iso-8859-15..utf-8 $$filename; \
 	  tidy -config tidy.conf $$filename; \
 	  true; \
 	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
@@ -133,7 +131,6 @@ INSTALL.html: $(src)
 		--output $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html \
 		stylesheets/pg-nochunks.xsl standalone-install.xml
 
-	recode iso-8859-15..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
 	tidy -config tidy.conf $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html || true
 
 	sed -i -e "s@text/html@application/xhtml+xml@g"  \
@@ -142,10 +139,7 @@ INSTALL.html: $(src)
 
 INSTALL.txt: INSTALL.html
 	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	recode utf-8..iso-8859-15 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
 	html2text -nobs -style pretty $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html > $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.txt
-	recode iso-8859-15..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
-	recode iso-8859-15..utf-8 $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.txt
 
 manpages: psql.1
 psql.1: $(src)
@@ -156,7 +150,6 @@ psql.1: $(src)
 	[ -d man/man7 ] || mkdir -p man/man7
 	mv *.1 man/man1
 	mv *.7 man/man7
-	recode iso-8859-15..utf-8 man/man1/*.1 man/man7/*.7
 	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(MAN_OUTPUT) man
 	rm -r man
 

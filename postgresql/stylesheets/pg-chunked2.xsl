@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='ISO-8859-1'?>
+<?xml version='1.0' encoding='UTF-8'?>
 
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
                 xmlns="http://www.w3.org/1999/xhtml"
@@ -6,7 +6,7 @@
 
     <!-- We use XHTML -->
   <xsl:import href="/opt/docbook-xsl/xhtml/docbook.xsl"/>
-  <xsl:param name="chunker.output.encoding" select="'ISO-8859-15'"/>
+  <xsl:param name="chunker.output.encoding" select="'UTF-85'"/>
 
 
     <!-- Including our others customized elements templates -->
