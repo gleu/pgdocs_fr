@@ -124,7 +124,7 @@ $version['900'] = '9.0';
     mail &agrave; <a href="mailto:guillaume chez lelarge point info">Guillaume
     Lelarge</a>.
     <div id="pg90">
-      <h2>Documentation PostgreSQL, version 9.0 <em>BETA 4</em></h2>
+      <h2>Documentation PostgreSQL, version 9.0</h2>
       <div class="listes">
         <ul>
             <li>Manuel au format HTML&nbsp;:

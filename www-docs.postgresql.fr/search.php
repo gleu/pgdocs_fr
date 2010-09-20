@@ -23,6 +23,7 @@ $version['801'] = '8.1';
 $version['802'] = '8.2';
 $version['803'] = '8.3';
 $version['804'] = '8.4';
+$version['900'] = '9.0';
 ?>
 <!DOCTYPE html SYSTEM "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
