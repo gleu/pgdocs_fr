@@ -32,6 +32,7 @@
   <xsl:include href="xhtml/pg-legalnotice.xsl"/>
   <xsl:include href="xhtml/pg-index.xsl"/>
   <xsl:include href="xhtml/pg-navigational-web.xsl"/>
+  <xsl:include href="xhtml/pg-function.xsl"/>
 
   <xsl:param name="refentry.generate.name" select="0"></xsl:param>
   <xsl:param name="refentry.generate.title" select="1"></xsl:param>
