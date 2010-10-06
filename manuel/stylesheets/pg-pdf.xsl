@@ -16,6 +16,7 @@
   <xsl:include href="pdf/pg-admon.xsl"/>
   <xsl:include href="pdf/pg-mixed.xsl"/>
   <xsl:include href="pdf/pg-xref.xsl"/>
+  <xsl:include href="pdf/pg-function.xsl"/>
 
     <!-- Standart paper size -->
   <xsl:param name="paper.type" select="'A4'"/>
