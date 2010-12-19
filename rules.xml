@@ -1710,7 +1710,8 @@ INSERT INTO lacet VALUES ('sl10', 1000, 'magenta', 40.0, 'inch', 0.0);
 
 <programlisting>CREATE TABLE phone_data (person text, phone text, private boolean);
 CREATE VIEW phone_number AS
-    SELECT person, phone FROM phone_data WHERE NOT private;
+    SELECT person, CASE WHEN NOT private THEN phone END AS phone
+    FROM phone_data;
 GRANT SELECT ON phone_number TO secretary;
 </programlisting>
     
@@ -1719,9 +1720,7 @@ GRANT SELECT ON phone_number TO secretary;
     <command>grant</command>, la secrétaire peut lancer un <command>select</command>
     sur la vue <literal>phone_number</literal>. le système de règles réécrira le
     <command>select</command> sur <literal>phone_number</literal> en un 
-    <command>select</command> sur <literal>phone_data</literal> et ajoutera la
-    qualification que seules les entrées non privées (donc où
-    <literal>private</literal> est faux) sont désirées. comme l'utilisateur est le
+    <command>select</command> sur <literal>phone_data</literal>. Comme l'utilisateur est le
     propriétaire de <literal>phone_number</literal> et du coup le propriétaire de la
     règle, le droit de lecture de <literal>phone_data</literal> est maintenant vérifié
     avec ses propres privilèges et la requête est autorisée. La vérification de
@@ -1757,7 +1756,44 @@ GRANT SELECT ON phone_number TO secretary;
 </para>
 
 <para>
-    Ce mécanisme fonctionne aussi pour les règles de mise à jour. Dans les
+    Notez que, bien que les vues puissent être utilisées pour cacher le
+    contenu de certaines colonnes en utilisant la technique montrée ci-dessus,
+    elles ne peuvent pas être utilisées de manière fiable pour cacher des
+    données dans des lignes invisibles. Par exemple, la vue suivante n'est pas
+    sécurisée&nbsp;:
+<programlisting>
+CREATE VIEW phone_number AS
+    SELECT person, phone FROM phone_data WHERE phone NOT LIKE '412%';
+</programlisting>
+    Cette vue peut sembler sécurisée car le système de règles va réécrire tout
+	<command>SELECT</command> à partir de <literal>phone_number</literal> dans
+    un <command>SELECT</command> à partir de <literal>phone_data</literal> et
+    ajouter la qualification permettant de filter les enregistrements dont la
+    colonne <literal>phone</literal> ne commence pas par 412. Mais si
+    l'utilisateur peut créer ses propres fonctions, il n'est pas difficile de
+    convaincre le planificateur d'exécuter la fonction définie par
+    l'utilisateur avant l'expression <function>NOT LIKE</function>.
+<programlisting>
+CREATE FUNCTION tricky(text, text) RETURNS bool AS $$
+BEGIN
+    RAISE NOTICE '% => %', $1, $2;
+    RETURN true;
+END
+$$ LANGUAGE plpgsql COST 0.0000000000000000000001;
+SELECT * FROM phone_number WHERE tricky(person, phone);</programlisting>
+    Chaque personne et chaque numéro de téléphone de la table
+    <literal>phone_data</literal> sera affiché dans un
+    <literal>NOTICE</literal> car le planificateur choisira d'exécuter la
+    procédure <function>tricky</function> avant le <function>NOT
+    LIKE</function> car elle est moins coûteuse. Même si l'utilisateur ne peut
+    pas définir des nouvelles fonctions, les fonctions internes peuvent être
+    utilisées pour des attaques similaires. (Par exemple, les fonctions de
+    conversions affichent leur entrée dans le message d'erreur qu'elles
+    fournissent.)
+</para>
+
+<para>
+    Des considérations similaires s'appliquent aussi aux règles de mise à jour. Dans les
     exemples de la section précédente, le propriétaire des tables de la base de
     données d'exemple pourrait accorder les droits <literal>select</literal>,
     <literal>insert</literal>, <literal>update</literal> et <literal>delete</literal> sur la vue
@@ -1765,7 +1801,11 @@ GRANT SELECT ON phone_number TO secretary;
     sur <literal>lacet_log</literal>. l'action de la règle pourrait écrire des
     entrées de trace qui seraient toujours exécutées avec succès et que l'autre
     utilisateur pourrait voir. Mais il ne peut pas créer d'entrées fausses, pas
-    plus qu'il ne peut manipuler ou supprimer celles qui existent.
+    plus qu'il ne peut manipuler ou supprimer celles qui existent. Dans ce cas,
+    il n'existe pas de possibilité de subvertir les règles en convaincant le
+    planificateur de modifier l'ordre des opérations car la seule règle qui fait
+    référence à <literal>shoelace_log</literal> est un <literal>INSERT</literal>
+    non qualifié. Ceci pourrait ne plus être vrai dans les scénarios complexes.
 </para>
 </sect1>
 
