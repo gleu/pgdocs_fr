@@ -121,10 +121,10 @@
     <command>SELECT</command>, les commandes peuvent inclure des requêtes de
     modification des données (<command>INSERT</command>,
     <command>UPDATE</command> et <command>DELETE</command>) ainsi que
-    d'autres commandes SQL (la seule exception est que vous ne pouvez pas
-    placer de commandes <command>BEGIN</command>, <command>COMMIT</command>,
-    <command>ROLLBACK</command> ou <command>SAVEPOINT</command> dans une fonction
-    <acronym>SQL</acronym>). Néanmoins, la commande finale doit être un
+    d'autres commandes SQL (You cannot use transaction control commands, e.g.
+    <command>COMMIT</>, <command>SAVEPOINT</>, and some utility
+    commands, e.g.  <literal>VACUUM</>, in <acronym>SQL</acronym> functions).
+    Néanmoins, la commande finale doit être un
     <command>SELECT</command> ou doit avoir une clause <literal>RETURNING</literal>
     qui renvoie ce qui a été spécifié comme type
     de retour de la fonction. Autrement, si vous voulez définir une fonction
@@ -267,7 +267,7 @@ $$ LANGUAGE SQL;
 
    </sect2>
 
-   <sect2>
+   <sect2 id="xfunc-sql-composite-functions">
     <title>Fonctions <acronym>SQL</acronym> sur les types composites</title>
 
     <para>
@@ -472,6 +472,12 @@ SELECT nom(emp) AS leplusjeune FROM emp WHERE age(emp) &lt; 30;
      de la table (vous pouvez aussi émuler les champs calculés avec des
      vues).
     </para>
+
+     <para>
+      Because of this behavior, it's unwise to give a function that takes
+      a single composite-type argument the same name as any of the fields of
+      that composite type.
+     </para>
     </tip>
 
     <para>
@@ -1050,16 +1056,71 @@ SELECT anyleast('abc'::text, 'def');
  abc
 (1 row)
 
-CREATE FUNCTION concat(text, VARIADIC anyarray) RETURNS text AS $$
+CREATE FUNCTION concat_values(text, VARIADIC anyarray) RETURNS text AS $$
     SELECT array_to_string($2, $1);
 $$ LANGUAGE SQL;
 
-SELECT concat('|', 1, 4, 2);
- concat 
---------
+SELECT concat_values('|', 1, 4, 2);
+ concat_values 
+---------------
  1|4|2
 (1 row)
 </screen>
+    </para>
+   </sect2>
+
+   <sect2>
+    <title><acronym>SQL</acronym> Functions with Collations</title>
+
+    <indexterm>
+     <primary>collation</>
+     <secondary>in SQL functions</>
+    </indexterm>
+
+    <para>
+     When a SQL function has one or more parameters of collatable data types,
+     a collation is identified for each function call depending on the
+     collations assigned to the actual arguments, as described in <xref
+     linkend="collation">.  If a collation is successfully identified
+     (i.e., there are no conflicts of implicit collations among the arguments)
+     then all the collatable parameters are treated as having that collation
+     implicitly.  This will affect the behavior of collation-sensitive
+     operations within the function.  For example, using the
+     <function>anyleast</> function described above, the result of
+<programlisting>
+SELECT anyleast('abc'::text, 'ABC');
+</programlisting>
+     will depend on the database's default collation.  In <literal>C</> locale
+     the result will be <literal>ABC</>, but in many other locales it will
+     be <literal>abc</>.  The collation to use can be forced by adding
+     a <literal>COLLATE</> clause to any of the arguments, for example
+<programlisting>
+SELECT anyleast('abc'::text, 'ABC' COLLATE "C");
+</programlisting>
+     Alternatively, if you wish a function to operate with a particular
+     collation regardless of what it is called with, insert
+     <literal>COLLATE</> clauses as needed in the function definition.
+     This version of <function>anyleast</> would always use <literal>en_US</>
+     locale to compare strings:
+<programlisting>
+CREATE FUNCTION anyleast (VARIADIC anyarray) RETURNS anyelement AS $$
+    SELECT min($1[i] COLLATE "en_US") FROM generate_subscripts($1, 1) g(i);
+$$ LANGUAGE SQL;
+</programlisting>
+     But note that this will throw an error if applied to a non-collatable
+     data type.
+    </para>
+
+    <para>
+     If no common collation can be identified among the actual arguments,
+     then a SQL function treats its parameters as having their data types'
+     default collation (which is usually the database's default collation,
+     but could be different for parameters of domain types).
+    </para>
+
+    <para>
+     The behavior of collatable parameters can be thought of as a limited
+     form of polymorphism, applicable only to textual data types.
     </para>
    </sect2>
   </sect1>
@@ -1679,6 +1740,15 @@ typedef struct
      champ longueur lui-même.
     </para>
 
+    <para>
+     Another important point is to avoid leaving any uninitialized bits
+     within data type values; for example, take care to zero out any
+     alignment padding bytes that might be present in structs.  Without
+     this, logically-equivalent constants of your data type might be
+     seen as unequal by the planner, leading to inefficient (though not
+     incorrect) plans.
+    </para>
+
     <warning>
      <para>
       Ne <emphasis>jamais</emphasis> modifier le contenu d'une valeur en entrée passée
@@ -1722,7 +1792,7 @@ typedef struct
 char buffer[40]; /* notre donnée source */
 ...
 text *destination = (text *) palloc(VARHDRSZ + 40);
-destination->length = VARHDRSZ + 40;
+SET_VARSIZE(destination, VARHDRSZ + 40);
 memcpy(destination->data, buffer, 40);
 ...
 ]]></programlisting>
@@ -1730,6 +1800,8 @@ memcpy(destination->data, buffer, 40);
      <literal>VARHDRSZ</literal> est équivalent à <literal>sizeof(int4)</literal> mais
      est considéré comme une meilleure tournure de référence à la taille de
      l'overhead pour un type à longueur variable.
+     Also, the length field <emphasis>must</> be set using the
+     <literal>SET_VARSIZE</> macro, not by simple assignment.
     </para>
 
     <para>
@@ -2346,12 +2418,16 @@ concat_text(PG_FUNCTION_ARGS)
       <listitem>
        <para>
         Remettez toujours à zéro les octets de vos structures en utilisant
-        <function>memset</function>. Sinon, il est difficile de supporter les
-        index ou les jointures de découpage car vous devez retenir seulement
-        les bits significatifs de votre structure de donnée pour calculer un
-        découpage. Même si vous initialisez tous les champs de votre structure,
-        il peut y avoir des remplissages d'alignement (trous dans la structure)
-        pouvant contenir des valeurs parasites.
+        <function>memset</function>
+        (or allocate them with <function>palloc0</> in the first place).
+        Even if you assign to each field of your structure, there might be
+        alignment padding (holes in the structure) that contain
+        garbage values.  Without this, it's difficult to
+        support hash indexes or hash joins, as you must pick out only
+        the significant bits of your data structure to compute a hash.
+        The planner also sometimes relies on comparing constants via
+        bitwise equality, so you can get undesirable planning results if
+        logically-equivalent values aren't bitwise equal.
        </para>
       </listitem>
 
@@ -2383,277 +2459,6 @@ concat_text(PG_FUNCTION_ARGS)
    </sect2>
 
 &dfunc;
-
-<sect2 id="xfunc-c-pgxs">
-  <title>Infrastructure de construction d'extensions</title>
-
-  <indexterm zone="xfunc-c-pgxs">
-    <primary>pgxs</primary>
-  </indexterm>
-
-  <para>
-    Si vous pensez distribuer vos modules d'extension
-    <productname>PostgreSQL</productname>, configurer un système de construction
-    portable peut être assez compliqué. Du coup, l'installation de
-    <productname>PostgreSQL</productname> fournit une infrastructure de construction pour
-    les extensions, appelée <acronym>PGXS</acronym>, pour que les modules
-    d'extension simples puissent être construit simplement avec un serveur
-    déjà installé. Notez que cette infrastructure n'a pas pour but d'être un
-    ensemble de travail universel pouvant être utilisé pour construire tous
-    les logiciels s'interfaçant avec <productname>PostgreSQL</productname>&nbsp;; il
-    automatise simplement les règles de construction communes pour les modules
-    simples d'extension du serveur. Pour des paquetages plus complexes, vous
-    aurez besoin d'écrire votre propre système de construction.
-  </para>
-
-  <para>
-    Pour utiliser l'infrastructure de votre extension, vous devez écrire un
-    simple fichier makefile. Dans ce fichier, vous devez configurer quelques
-    variables et inclure enfin le makefile global <acronym>PGXS</acronym>.
-    Voici un exemple qui construit un module d'extension nommé
-    <literal>isbn_issn</literal> consistant en une bibliothèque partagée, un
-    script SQL et un fichier texte de documentation&nbsp;:
-<programlisting>MODULES = isbn_issn
-DATA_built = isbn_issn.sql
-DOCS = README.isbn_issn
-    
-PG_CONFIG := pg_config
-PGXS := $(shell $(PG_CONFIG) --pgxs)
-include $(PGXS)
-</programlisting>
-    Les trois dernières lignes devraient toujours être identiques. Plus tôt
-    dans le fichier, vous affectez des variables ou ajoutez vos propres règles
-    pour <application>make</application>.
-  </para>
-
-  <para>
-    Set one of these three variables to specify what is built&nbsp;:
-  
-  <variablelist>
-    <varlistentry>
-      <term><varname>MODULES</varname></term>
-      <listitem>
-        <para>
-          liste des objets partagés à construire à partir des fichiers source
-          de même base (ne pas inclure le suffixe dans cette liste)
-        </para>
-      </listitem>
-    </varlistentry>
-    
-     <varlistentry>
-      <term><varname>MODULE_big</varname></term>
-      <listitem>
-       <para>
-        un objet partagé à construire à partir de plusieurs fichiers source
-        (liste les fichiers objets dans <varname>OBJS</varname>)
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
-      <term><varname>PROGRAM</varname></term>
-      <listitem>
-       <para>
-        un exécutable binaire à construire
-        (liste les fichiers objets dans <varname>OBJS</varname>)
-       </para>
-      </listitem>
-     </varlistentry>
-    </variablelist>
-
-    Les variables suivantes peuvent être configurées&nbsp;:
-
-    <variablelist>
-     <varlistentry>
-      <term><varname>MODULEDIR</varname></term>
-      <listitem>
-       <para>
-        sous-répertoire dans lequel les fichiers DATA et DOCS doivent être
-        installés (si non configuré, la variable vaut par défaut
-        <literal>contrib</literal>)
-       </para>
-      </listitem>
-     </varlistentry>
-
-    <varlistentry>
-      <term><varname>DATA</varname></term>
-      <listitem>
-        <para>
-          fichiers spécifiques à installer dans
-          <literal><replaceable>prefix</replaceable>/share/$MODULEDIR</literal>
-        </para>
-      </listitem>
-    </varlistentry>
-    
-    <varlistentry>
-      <term><varname>DATA_built</varname></term>
-      <listitem>
-        <para>
-          fichiers spécifiques à installer dans
-          <literal><replaceable>prefix</replaceable>/share/$MODULEDIR</literal>
-          qui ont besoin d'être construit au début
-        </para>
-      </listitem>
-    </varlistentry>
-    
-     <varlistentry>
-      <term><varname>DATA_TSEARCH</varname></term>
-      <listitem>
-       <para>
-        quelques fichiers à installer sous
-        <literal><replaceable>prefix</replaceable>/share/tsearch_data</literal>
-       </para>
-      </listitem>
-     </varlistentry>
-
-    <varlistentry>
-      <term><varname>DOCS</varname></term>
-      <listitem>
-        <para>
-          fichiers spécifiques à installer dans
-          <literal><replaceable>prefix</replaceable>/doc/$MODULEDIR</literal>
-        </para>
-      </listitem>
-    </varlistentry>
-    
-    <varlistentry>
-      <term><varname>SCRIPTS</varname></term>
-      <listitem>
-        <para>
-          fichiers script (pas des binaires) à installer dans
-          <literal><replaceable>prefix</replaceable>/bin</literal>
-        </para>
-      </listitem>
-    </varlistentry>
-    
-    <varlistentry>
-      <term><varname>SCRIPTS_built</varname></term>
-      <listitem>
-        <para>
-          fichiers script (pas des binaires) à installer dans
-          <literal><replaceable>prefix</replaceable>/bin</literal>
-          qui ont besoin d'être construit au début
-        </para>
-      </listitem>
-    </varlistentry>
-    
-    <varlistentry>
-      <term><varname>REGRESS</varname></term>
-      <listitem>
-        <para>
-          liste des cas de tests de regression (sans suffixe), voir ci-dessous
-        </para>
-      </listitem>
-    </varlistentry>
-    
-    <varlistentry>
-      <term><varname>EXTRA_CLEAN</varname></term>
-      <listitem>
-        <para>
-          fichiers supplémentaires à supprimer dans <literal>make
-          clean</literal>
-        </para>
-      </listitem>
-    </varlistentry>
-    
-    <varlistentry>
-      <term><varname>PG_CPPFLAGS</varname></term>
-      <listitem>
-        <para>
-          sera ajouté à <varname>CPPFLAGS</varname>
-        </para>
-      </listitem>
-    </varlistentry>
-    
-    <varlistentry>
-      <term><varname>PG_LIBS</varname></term>
-      <listitem>
-        <para>
-          sera ajouté à la ligne de liens <varname>PROGRAM</varname>
-        </para>
-      </listitem>
-    </varlistentry>
-    
-    <varlistentry>
-      <term><varname>SHLIB_LINK</varname></term>
-      <listitem>
-        <para>
-          sera ajouté à la ligne de lien <varname>MODULE_big</varname>
-        </para>
-      </listitem>
-    </varlistentry>
-
-     <varlistentry>
-      <term><varname>PG_CONFIG</varname></term>
-      <listitem>
-       <para>
-        chemin vers le programme <application>pg_config</application> indiquant
-        l'installation de <productname>PostgreSQL</productname> qui sert à la
-	construction (généralement <literal>pg_config</literal> pour utiliser
-	le premier programme trouvé dans la variable d'environnement
-        <varname>PATH</varname>)
-       </para>
-      </listitem>
-     </varlistentry>
-  </variablelist>
-
-  </para>
-
-  <para>
-    Nommez ce fichier <literal>Makefile</literal> et placez le dans le répertoire
-    qui contient votre extension. Ensuite, vous pouvez lancer la compilation
-    avec <literal>make</literal>, et plus tard <literal>make
-    install</literal> pour installer votre module. Par défaut, l'extension est
-    compilée et installée pour l'installation de
-    <productname>PostgreSQL</productname> qui correspond au premier programme
-    <command>pg_config</command> trouvée dans votre chemin. Vous pouvez utiliser
-    utiliser une autre installation en configurant <varname>PG_CONFIG</varname>
-    pour qu'il pointe vers le bon <command>pg_config</command>, soit dans le
-    fichier Makefile soit sur la ligne de commande de <literal>make</literal>.
-  </para>
-  
-   <caution>
-    <para>
-     Modifier <varname>PG_CONFIG</varname> fonctionne seulement en construisant
-     à partir d'une installation <productname>PostgreSQL</productname> 8.3 ou
-     ultérieure. Les anciennes versions ne l'utilisent pas&nbsp;; vous devez
-     donc modifier votre variable <varname>PATH</varname> pour sélectionner
-     la bonne installation.
-    </para>
-   </caution>
-
-   <para>
-    Les scripts listés dans la variable <varname>REGRESS</varname> sont utilisés
-    pour les tests de régression de votre module, tout comme <literal>make
-    installcheck</literal> est utilisé pour votre serveur
-    <productname>PostgreSQL</productname>. Pour que ceci fonctionne, vous avez
-    besoin d'avoir un sous-répertoire nommé <literal>sql/</literal> dans le
-    répertoire de votre extension, à l'intérieur duquel vous placez un fichier
-    pour chaque groupe de tests que vous voulez exécuter. Les fichiers doivent
-    avoir l'extension <literal>.sql</literal>, qui ne seront pas inclus dans la
-    liste <varname>REGRESS</varname> dans le Makefile. Pour chaque test, il doit
-    exister un fichier contenant le résultat attendu dans un sous-répertoire nommé
-    <literal>expected/</literal>, avec l'extension <literal>.out</literal>. Les
-    tests sont exécutés via <literal>make installcheck</literal>, et le résultat sera
-    comparé aux fichiers attendus. Les différences seront écrites dans le fichier
-    <literal>regression.diffs</literal> dans un format <command>diff -c</command>.
-    Notez qu'essayer d'exécuter un test à qui il manque le fichier sera rapporté
-    comme un <quote>problème</quote>, donc assurez-vous que vous avez bien tous les
-    fichiers attendus.
-   </para>
-
-   <tip>
-    <para>
-     La façon la plus simple de créer les fichiers attendus est de créer des
-     fichiers vides, puis de vérifier avec précaution les fichiers résultants
-     après un test d'exécution (à trouver dans un répertoire
-     <literal>results/</literal>), et les copier dans
-     <literal>expected/</literal> s'ils correspondent à votre souhait suite aux
-     tests.
-    </para>
-   </tip>
-  </sect2>
-
 
    <sect2>
     <title>Arguments de type composite</title>
@@ -3215,7 +3020,7 @@ CREATE OR REPLACE FUNCTION retcomposite(integer, integer)
     </para>
 
     <para>
-     Le répertoire <filename>contrib/tablefunc</filename> situé dans les fichiers source
+     Le module <link linkend="tablefunc">contrib/tablefunc</> situé dans les fichiers source
      de la distribution contient d'autres exemples de fonctions renvoyant des
      ensembles.</para>
    </sect2>
@@ -3373,4 +3178,68 @@ void RequestAddinLWLocks(int n)
     </para>
    </sect2>
 
-  </sect1>
+
+   <sect2 id="extend-Cpp">
+    <title>Using C++ for Extensibility</title>
+
+    <indexterm zone="extend-Cpp">
+     <primary>C++</primary>
+    </indexterm>
+
+    <para>
+     Although the <productname>PostgreSQL</productname> backend is written in
+     C, it is possible to write extensions in C++ if these guidelines are
+     followed:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+         All functions accessed by the backend must present a C interface
+         to the backend;  these C functions can then call C++ functions.
+         For example, <literal>extern C</> linkage is required for
+         backend-accessed functions.  This is also necessary for any
+         functions that are passed as pointers between the backend and
+         C++ code.
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+        Free memory using the appropriate deallocation method.  For example,
+        most backend memory is allocated using <function>palloc()</>, so use
+        <function>pfree()</> to free it.  Using C++
+        <function>delete</> in such cases will fail.
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+        Prevent exceptions from propagating into the C code (use a catch-all
+        block at the top level of all <literal>extern C</> functions).  This
+        is necessary even if the C++ code does not explicitly throw any
+        exceptions, because events like out-of-memory can still throw
+        exceptions.  Any exceptions must be caught and appropriate errors
+        passed back to the C interface.  If possible, compile C++ with
+        <option>-fno-exceptions</> to eliminate exceptions entirely; in such
+        cases, you must check for failures in your C++ code, e.g.  check for
+        NULL returned by <function>new()</>.
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+        If calling backend functions from C++ code, be sure that the
+        C++ call stack contains only plain old data structures
+        (<acronym>POD</>).  This is necessary because backend errors
+        generate a distant <function>longjmp()</> that does not properly
+        unroll a C++ call stack with non-POD objects.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+
+    <para>
+     In summary, it is best to place C++ code behind a wall of
+     <literal>extern C</> functions that interface to the backend,
+     and avoid exception, memory, and call stack leakage.
+    </para>
+   </sect2>
+
+</sect1>

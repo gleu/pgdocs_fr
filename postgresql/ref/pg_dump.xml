@@ -76,10 +76,6 @@
    restaurer. Le format de fichier de sortie le plus flexible est le format
    <quote>personnalisé</quote> (<foreignphrase>custom</foreignphrase> en anglais, <option>-Fc</option>).
    Compressé par défaut, il permet de sélectionner et réordonner les éléments archivés.
-   Non compressé, le format <application>tar</application> (<option>-Ft</option>)
-   a des restrictions sur la façon de réordonner les données au
-   chargement, mais est, somme toute, assez flexible. Qui plus est, il est utilisable
-   par des outils Unix standard comme <command>tar</command>.
   </para>
 
   <para>
@@ -146,6 +142,7 @@
        <para>
         Les commandes de nettoyage (suppression) des objets de la base
         sont écrites avant les commandes de création.
+        (Restore might generate some harmless errors.)
        </para>
 
        <para>
@@ -199,8 +196,12 @@
       <term><option>--file=<replaceable class="parameter">file</replaceable></option></term>
       <listitem>
        <para>
-	La sortie est redirigée vers le fichier indiqué. Sans précision, la sortie
-    	standard est utilisée.
+        La sortie est redirigée vers le fichier indiqué. This parameter can be omitted for
+        file based output formats, in which case the standard output is used.
+        It must be given for the directory output format however, where it
+        specifies the target directory instead of a file. In this case the
+        directory is created by <command>pg_dump</command> and must not exist
+        before.
        </para>
       </listitem>
      </varlistentry>
@@ -242,8 +243,28 @@
          <listitem>
           <para>
            archive personnalisée utilisable par <application>pg_restore</application>.
-           C'est le format le plus flexible puisqu'il permet une sélection
-           manuelle et d'ordonner les éléments archivés. Ce format est compressé par défaut.
+           Together with the directory output format, this is the most flexible
+           output format in that it allows manual selection and reordering of
+           archived items during restore. This format is also compressed by
+           default.
+          </para>
+         </listitem>
+        </varlistentry>
+
+        <varlistentry>
+         <term><literal>d</></term>
+         <term><literal>directory</></term>
+         <listitem>
+          <para>
+           Output a directory-format archive suitable for input into
+           <application>pg_restore</application>. This will create a directory
+           with one file for each table and blob being dumped, plus a
+           so-called Table of Contents file describing the dumped objects in a
+           machine-readable format that <application>pg_restore</application>
+           can read. A directory format archive can be manipulated with
+           standard Unix tools; for example, files in an uncompressed archive
+           can be compressed with the <application>gzip</application> tool.
+           This format is compressed by default.
           </para>
          </listitem>
         </varlistentry>
@@ -253,13 +274,12 @@
          <listitem>
           <para>
            archive <command>tar</command> utilisable par <application>pg_restore</application>.
-           Ce format en sortie permet une sélection manuelle et un
-           réordonnancement des éléments archivés lors de la restauration, mais
-           il existe une restriction&nbsp;: l'ordre relatif des éléments de
-           données d'une table ne peut pas être changé lors de la
-           restauration. De plus, le format <command>tar</command> ne supporte
-           pas la compression et a une limite de 8&nbsp;Go sur la taille de
-           tables individuelles.
+            The tar-format is
+           compatible with the directory-format; extracting a tar-format
+           archive produces a valid directory-format archive.
+           However, the tar-format does not support compression and has a
+           limit of 8 GB on the size of individual tables. Also, the relative
+           order of table data items cannot be changed during restore.
           </para>
          </listitem>
         </varlistentry>
@@ -298,7 +318,8 @@
         coup, plusieurs schémas peuvent être sélectionnés en utilisant des
         caractères joker dans le modèle. Lors de l'utilisation de ces caractères,
         il faut faire attention à placer le modèle entre guillemets, si
-	nécessaire, pour empêcher le shell de remplacer les jokers.
+	    nécessaire, pour empêcher le shell de remplacer les jokers;  see
+        <xref linkend="pg-dump-examples" endterm="pg-dump-examples-title"/>.
        </para>
 
        <note>
@@ -425,7 +446,7 @@
       <term><option>--table=<replaceable class="parameter">table</replaceable></option></term>
       <listitem>
        <para>
-        Sauvegarde uniquement les tables (ou vues ou séquences) correspondant
+        Sauvegarde uniquement les tables (ou vues ou séquences or tables distantes) correspondant
         à <replaceable class="parameter">table</replaceable>. Plusieurs tables
         sont sélectionnables en utilisant plusieurs fois l'option
         <option>-t</option>. De plus, le paramètre
@@ -436,7 +457,8 @@
         coup, plusieurs tables peuvent être sélectionnées en utilisant des
         caractères joker dans le modèle. Lors de l'utilisation de ces caractères,
         il faut faire attention à placer le modèle entre guillemets, si
-	nécessaire, pour empêcher le shell de remplacer les jokers.
+        nécessaire, pour empêcher le shell de remplacer les jokers;  see
+        <xref linkend="pg-dump-examples" endterm="pg-dump-examples-title">.
        </para>
 
        <para>
@@ -652,6 +674,41 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>--serializable-deferrable</option></term>
+      <listitem>
+       <para>
+        Use a <literal>serializable</literal> transaction for the dump, to
+        ensure that the snapshot used is consistent with later database
+        states; but do this by waiting for a point in the transaction stream
+        at which no anomalies can be present, so that there isn't a risk of
+        the dump failing or causing other transactions to roll back with a
+        <literal>serialization_failure</literal>.  See <xref linkend="mvcc">
+        for more information about transaction isolation and concurrency
+        control.
+       </para>
+
+       <para>
+        This option is not beneficial for a dump which is intended only for
+        disaster recovery.  It could be useful for a dump used to load a
+        copy of the database for reporting or other read-only load sharing
+        while the original database continues to be updated.  Without it the
+        dump may reflect a state which is not consistent with any serial
+        execution of the transactions eventually committed.  For example, if
+        batch processing techniques are used, a batch may show as closed in
+        the dump without all of the items which are in the batch appearing.
+       </para>
+
+       <para>
+        This option will make no difference if there are no read-write
+        transactions active when pg_dump is started.  If read-write
+        transactions are active, the start of the dump may be delayed for an
+        indeterminate length of time.  Once running, performance with or
+        without the switch is the same.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--no-tablespaces</option></term>
       <listitem>
        <para>
@@ -670,6 +727,15 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>--no-security-label</option></term>
+      <listitem>
+       <para>
+        Do not dump security labels.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--use-set-session-authorization</option></term>
       <listitem>
        <para>
@@ -682,6 +748,28 @@
         certainement des droits superutilisateur pour se restaurer correctement,
         alors que <command>ALTER OWNER</command> nécessite des droits moins
         élevés.
+       </para>
+      </listitem>
+     </varlistentry>
+
+      <varlistentry>
+      <term><option>--no-unlogged-table-data</option></term>
+      <listitem>
+       <para>
+        Do not dump the contents of unlogged tables.  This option has no
+        effect on whether or not the table definitions (schema) are dumped;
+        it only suppresses dumping the table data.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--quote-all-identifiers</></term>
+      <listitem>
+       <para>
+        Force quoting of all identifiers.  This may be useful when dumping a
+        database for migration to a future version that may have introduced
+        additional keywords.
        </para>
       </listitem>
      </varlistentry>
@@ -841,7 +929,7 @@
   <para>
    L'activité générée par <application>pg_dump</application> dans la base de
    données est normalement collectée par le collecteur de statistiques. Si c'est
-   gênant, vous pouvez positionner le paramètre <literal>track_counts</literal>
+   gênant, vous pouvez positionner le paramètre <varname>track_counts</varname>
    à false via <envar>PGOPTIONS</envar> ou la commande <literal>ALTER USER</literal>.
   </para>
  </refsect1>
@@ -917,12 +1005,20 @@
  </refsect1>
 
  <refsect1 id="pg-dump-examples">
-  <title>Exemples</title>
+  <title id="pg-dump-examples-title">Exemples</title>
 
   <para>
    Sauvegarder une base appelée <literal>ma_base</literal> dans un script
    SQL&nbsp;:
 <screen><prompt>$</prompt> <userinput>pg_dump ma_base &gt; base.sql</userinput>
+</screen>
+  </para>
+
+  <para>
+   To dump a database into a directory-format archive:
+
+<screen>
+<prompt>$</prompt> <userinput>pg_dump -Fd mydb -f dumpdir</userinput>
 </screen>
   </para>
 

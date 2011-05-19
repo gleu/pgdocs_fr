@@ -186,9 +186,13 @@ INSERT INTO MA_TABLE VALUES (3, 'salut ici');</programlisting>
     s'applique toujours.
    </para>
 
+   <indexterm>
+     <primary>échappement Unicode</primary>
+     <secondary>dans les identifiants</secondary>
+   </indexterm>
+
    <para>
-    <indexterm><primary>échappement Unicode</primary><secondary>dans les
-    identifiants</secondary></indexterm> Une variante des identifiants entre
+    Une variante des identifiants entre
     guillemets permet d'inclure des caractères Unicode échappés en les
     identifiant par leur code. Cette variante commence par
     <literal>U&amp;</literal> (U en majuscule ou minuscule suivi par un « et »)
@@ -239,9 +243,9 @@ U&amp;"d!0061t!+000061" UESCAPE '!'
     utilisées pour indiquer des paires UTF-16 composant ainsi des caractères
     comprenant des points de code plus grands que U+FFFF (et ce, bien que la
     disponibilité de la forme sur six chiffres ne le nécessite pas
-    techniquement). (Quand des paires de substitution sont utilisée et que
-    l'encodage du serveur est <literal>UTF8</literal>, elles sont tout d'abord
-    combinées en un point code seul qui est ensuite encodé en UTF-8.)
+    techniquement). (Surrogate
+    pairs are not stored directly, but combined into a single
+    code point that is then encoded in UTF-8.)
    </para>
 
    <para>
@@ -444,17 +448,15 @@ U&amp;"d!0061t!+000061" UESCAPE '!'
      (<literal>off</literal>),
      alors <productname>PostgreSQL</productname> reconnaît les échappements
      antislashs dans les constantes traditionnelles de type chaînes et celles
-     échappées. Ceci est nécessaire pour la compatibilité ascendante avec le
-     comportement historique pour lequel les échappements à base d'antislash
-     étaient toujours reconnus.
-     Bien que <varname>standard_conforming_strings</varname> est désactivée
-     par défaut, cette valeur par défaut vaudra <literal>on</literal> dans une
-     prochaine version pour améliorer le respect des standards. Du coup, la
-     migration des applications vers un meilleur espect des standards est
-     fortement conseillé. Si vous avez besoin d'utiliser un échappement
-     antislash pour représenter un caractère spécial, écrivez la constante
-     avec un <literal>E</literal> pour vous assurer qu'elle sera bien gérée
-     dans les prochaines versions.
+     échappées. However, as of
+     <productname>PostgreSQL</> 9.1, the default is <literal>on</>, meaning
+     that backslash escapes are recognized only in escape string constants.
+     This behavior is more standards-compliant, but might break applications
+     which rely on the historical behavior, where backslash escapes
+     were always recognized.  As a workaround, you can set this parameter
+     to <literal>off</>, but it is better to migrate away from using backslash
+     escapes.  If you need to use a backslash escape to represent a special
+     character, write the string constant with an <literal>E</>.
     </para>
 
     <para>
@@ -1254,6 +1256,12 @@ unaires. Par exemple&nbsp;:
 
     <listitem>
      <para>
+      A collation expression
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
       Une sous-requête scalaire.
      </para>
     </listitem>
@@ -1389,7 +1397,7 @@ $1[10:42]
    </para>
   </sect2>
 
-  <sect2>
+  <sect2 id="field-selection">
    <title>Sélection de champs</title>
 
    <indexterm>
@@ -1424,7 +1432,16 @@ $1.unecolonne
     Les parenthèses sont requises ici pour montrer que
     <structfield>colcomposite</structfield> est un nom de colonne, et non pas
     un nom de table, ou que <structname>matable</structname> est un nom de
-    table, par un nom de schéma dans le deuxième cas.
+    table, pas un nom de schéma dans le deuxième cas.
+   </para>
+
+   <para>
+    In a select list (see <xref linkend="queries-select-lists">), you
+    can ask for all fields of a composite value by
+    writing <literal>.*</literal>:
+<programlisting>
+(compositecol).*
+</programlisting>
    </para>
   </sect2>
 
@@ -1489,6 +1506,19 @@ $1.unecolonne
     En option, les arguments peuvent avoir leur nom attaché. Voir <xref
     linkend="sql-syntax-calling-funcs"/> pour les détails.
    </para>
+
+   <note>
+    <para>
+     A function that takes a single argument of composite type can
+     optionally be called using field-selection syntax, and conversely
+     field selection can be written in functional style.  That is, the
+     notations <literal>col(table)</> and <literal>table.col</> are
+     interchangeable.  This behavior is not SQL-standard but is provided
+     in <productname>PostgreSQL</> because it allows use of functions to
+     emulate <quote>computed fields</>.  For more information see
+     <xref linkend="xfunc-sql-composite-functions">.
+    </para>
+   </note>
   </sect2>
 
   <sect2 id="syntax-aggregates">
@@ -1857,6 +1887,67 @@ UNBOUNDED FOLLOWING
      <xref linkend="sql-createcast"/>.
     </para>
    </note>
+  </sect2>
+
+  <sect2 id="sql-syntax-collate-exprs">
+   <title>Collation Expressions</title>
+
+   <indexterm>
+    <primary>COLLATE</primary>
+   </indexterm>
+
+   <para>
+    The <literal>COLLATE</literal> clause overrides the collation of
+    an expression.  It is appended to the expression it applies to:
+<synopsis>
+<replaceable>expr</replaceable> COLLATE <replaceable>collation</replaceable>
+</synopsis>
+    where <replaceable>collation</replaceable> is a possibly
+    schema-qualified identifier.  The <literal>COLLATE</literal>
+    clause binds tighter than operators; parentheses can be used when
+    necessary.
+   </para>
+
+   <para>
+    If no collation is explicitly specified, the database system
+    either derives a collation from the columns involved in the
+    expression, or it defaults to the default collation of the
+    database if no column is involved in the expression.
+   </para>
+
+   <para>
+    The two common uses of the <literal>COLLATE</literal> clause are
+    overriding the sort order in an <literal>ORDER BY</> clause, for
+    example:
+<programlisting>
+SELECT a, b, c FROM tbl WHERE ... ORDER BY a COLLATE "C";
+</programlisting>
+    and overriding the collation of a function or operator call that
+    has locale-sensitive results, for example:
+<programlisting>
+SELECT * FROM tbl WHERE a &gt; 'foo' COLLATE "C";
+</programlisting>
+    Note that in the latter case the <literal>COLLATE</> clause is
+    attached to an input argument of the operator we wish to affect.
+    It doesn't matter which argument of the operator or function call the
+    <literal>COLLATE</> clause is attached to, because the collation that is
+    applied by the operator or function is derived by considering all
+    arguments, and an explicit <literal>COLLATE</> clause will override the
+    collations of all other arguments.  (Attaching non-matching
+    <literal>COLLATE</> clauses to more than one argument, however, is an
+    error.  For more details see <xref linkend="collation">.)
+    Thus, this gives the same result as the previous example:
+<programlisting>
+SELECT * FROM tbl WHERE a COLLATE "C" &gt; 'foo';
+</programlisting>
+    But this is an error:
+<programlisting>
+SELECT * FROM tbl WHERE (a &gt; 'foo') COLLATE "C";
+</programlisting>
+    because it attempts to apply a collation to the result of the
+    <literal>&gt;</> operator, which is of the non-collatable data type
+    <type>boolean</>.
+   </para>
   </sect2>
 
   <sect2 id="sql-syntax-scalar-subqueries">

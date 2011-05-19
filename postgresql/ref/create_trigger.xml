@@ -18,10 +18,20 @@
  </refnamediv>
 
  <refsynopsisdiv>
-<synopsis>CREATE TRIGGER <replaceable class="parameter">nom</replaceable> { BEFORE | AFTER } { <replaceable class="parameter">evenement</replaceable> [ OR ... ] }
-    ON <replaceable class="parameter">table</replaceable> [ FOR [ EACH ] { ROW | STATEMENT } ]
+<synopsis>CREATE [ CONSTRAINT ] TRIGGER <replaceable class="PARAMETER">nom</replaceable> { BEFORE | AFTER | INSTEAD OF } { <replaceable class="PARAMETER">evenement</replaceable> [ OR ... ] }
+    ON <replaceable class="PARAMETER">table</replaceable>
+    [ FROM <replaceable class="parameter">referenced_table_name</replaceable> ]
+    { NOT DEFERRABLE | [ DEFERRABLE ] { INITIALLY IMMEDIATE | INITIALLY DEFERRED } }
+    [ FOR [ EACH ] { ROW | STATEMENT } ]
     [ WHEN ( <replaceable class="parameter">condition</replaceable> ) ]
     EXECUTE PROCEDURE <replaceable class="parameter">nom_fonction</replaceable> ( <replaceable class="parameter">arguments</replaceable> )
+
+<phrase>where <replaceable class="parameter">event</replaceable> can be one of:</phrase>
+
+    INSERT
+    UPDATE [ OF <replaceable class="parameter">column_name</replaceable> [, ... ] ]
+    DELETE
+    TRUNCATE
 </synopsis>
  </refsynopsisdiv>
  
@@ -33,7 +43,7 @@
 
   <para>
    <command>CREATE TRIGGER</command> crée un nouveau déclencheur. Le
-   déclencheur est associé à la table spécifiée et exécute la fonction
+   déclencheur est associé à la table ou à la vue spécifiée et exécute la fonction
    <replaceable class="parameter">nom_fonction</replaceable> lorsque
    certains événements surviennent.
   </para>
@@ -45,8 +55,9 @@
    <command>DELETE</command>) ou une fois que l'opération est
    terminée (après la vérification des contraintes et la fin de la commande
    <command>INSERT</command>, <command>UPDATE</command> ou 
-   <command>DELETE</command>). Si le déclencheur est lancé avant
-   l'événement, le déclencheur peut ignorer l'opération sur la ligne
+   <command>DELETE</command>); or instead of the operation
+   (in the case of inserts, updates or deletes on a view). Si le déclencheur est lancé avant
+   l'événement or instead of the event, le déclencheur peut ignorer l'opération sur la ligne
    courante ou modifier la ligne en cours d'insertion (uniquement pour les
    opérations <command>INSERT</command> et <command>UPDATE</command>). Si le
    déclencheur est activé après l'événement, toute modification, dont les
@@ -65,6 +76,67 @@
    modifiées (en particulier, une opération qui ne modifie aucune ligne résulte
    toujours en l'exécution des déclencheurs <literal>FOR EACH STATEMENT</literal> applicables).
   </para>
+
+  <para>
+   In addition, triggers may be defined to fire for a
+   Triggers that are specified to fire <literal>INSTEAD OF</> the trigger
+   event must be marked <literal>FOR EACH ROW</>, and can only be defined
+   on views. <literal>BEFORE</> and <literal>AFTER</> triggers on a view
+   must be marked as <literal>FOR EACH STATEMENT</>.
+  </para>
+
+  <para>
+   The following table summarizes which types of triggers may be used on
+   tables and views:
+  </para>
+
+  <informaltable id="supported-trigger-types">
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>When</entry>
+      <entry>Event</entry>
+      <entry>Row-level</entry>
+      <entry>Statement-level</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry align="center" morerows="1"><literal>BEFORE</></entry>
+      <entry align="center"><command>INSERT</>/<command>UPDATE</>/<command>DELETE</></entry>
+      <entry align="center">Tables</entry>
+      <entry align="center">Tables and views</entry>
+     </row>
+     <row>
+      <entry align="center"><command>TRUNCATE</></entry>
+      <entry align="center">&mdash;</entry>
+      <entry align="center">Tables</entry>
+     </row>
+     <row>
+      <entry align="center" morerows="1"><literal>AFTER</></entry>
+      <entry align="center"><command>INSERT</>/<command>UPDATE</>/<command>DELETE</></entry>
+      <entry align="center">Tables</entry>
+      <entry align="center">Tables and views</entry>
+     </row>
+     <row>
+      <entry align="center"><command>TRUNCATE</></entry>
+      <entry align="center">&mdash;</entry>
+      <entry align="center">Tables</entry>
+     </row>
+     <row>
+      <entry align="center" morerows="1"><literal>INSTEAD OF</></entry>
+      <entry align="center"><command>INSERT</>/<command>UPDATE</>/<command>DELETE</></entry>
+      <entry align="center">Views</entry>
+      <entry align="center">&mdash;</entry>
+     </row>
+     <row>
+      <entry align="center"><command>TRUNCATE</></entry>
+      <entry align="center">&mdash;</entry>
+      <entry align="center">&mdash;</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </informaltable>
 
   <para>
    De plus, les triggers peuvent être définis pour être déclenchés suite à
@@ -89,6 +161,20 @@
   </para>
 
   <para>
+   When the <literal>CONSTRAINT</> option is specified, this command creates a
+   <firstterm>constraint trigger</>.  This is the same as a regular trigger
+   except that the timing of the trigger firing can be adjusted using
+   <xref linkend="SQL-SET-CONSTRAINTS">.
+   Constraint triggers must be <literal>AFTER ROW</> triggers.  They can
+   be fired either at the end of the statement causing the triggering event,
+   or at the end of the containing transaction; in the latter case they are
+   said to be <firstterm>deferred</>.  A pending deferred-trigger firing can
+   also be forced to happen immediately by using <command>SET CONSTRAINTS</>.
+   Constraint triggers are expected to raise an exception when the constraints
+   they implement are violated.
+  </para>
+
+  <para>
    <command>SELECT</command> ne modifie aucune ligne&nbsp;; la création de
    déclencheurs sur <command>SELECT</command> n'est donc pas possible.
    Les règles et vues sont plus appropriées dans ce cas.
@@ -110,6 +196,10 @@
      <para>
       Le nom du nouveau déclencheur. Il doit être distinct du nom de
       tout autre déclencheur sur la table.
+      The name cannot be schema-qualified &mdash; the trigger inherits the
+      schema of its table.  For a constraint trigger, this is also the name to
+      use when modifying the trigger's behavior using
+      <command>SET CONSTRAINTS</>.
      </para>
     </listitem>
    </varlistentry>
@@ -117,9 +207,12 @@
    <varlistentry>
     <term><literal>BEFORE</literal></term>
     <term><literal>AFTER</literal></term>
+    <term><literal>INSTEAD OF</literal></term>
     <listitem>
      <para>
-      Détermine si la fonction est appelée avant ou après l'événement.
+      Détermine si la fonction est appelée avant, après , or instead of
+      the event.  A constraint trigger can only be specified as
+      <literal>AFTER</>.
      </para>
     </listitem>
    </varlistentry>
@@ -128,22 +221,26 @@
     <term><replaceable class="parameter">événement</replaceable></term>
     <listitem>
      <para>
-      Peut-être <command>INSERT</command>, <command>UPDATE</command> ou
-      <command>DELETE</command> ou <command>TRUNCATE</command>&nbsp;;
+      Peut-être <literal>INSERT</literal>, <literal>UPDATE</literal> ou
+      <literal>DELETE</literal> ou <literal>TRUNCATE</literal>&nbsp;;
       précise l'événement qui active le
       déclencheur. Plusieurs événements peuvent être précisés en les séparant par
       <literal>OR</literal>.
      </para>
 
      <para>
-      Pour les triggers se déclenchant suite à un <command>UPDATE</command>,
+      Pour les triggers se déclenchant suite à un <literal>UPDATE</literal>,
       il est possible de spécifier une liste de colonnes utilisant cette
       syntaxe&nbsp;:
 <synopsis>
 UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2</replaceable> ... ]
 </synopsis>
       Le trigger se déclenchera seulement si au moins une des colonnes listées
-      est mentionnée comme cible de la mise à jour.
+      est mentionnée comme cible de la commande <command>UPDATE</>.
+     </para>
+
+     <para>
+      <literal>INSTEAD OF UPDATE</> events do not support lists of columns.
      </para>
     </listitem>
    </varlistentry>
@@ -152,8 +249,35 @@ UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2
     <term><replaceable class="parameter">table</replaceable></term>
     <listitem>
      <para>
-      Le nom (éventuellement qualifié du nom du schéma) de la table à laquelle
-      est rattaché le déclencheur.
+      Le nom (éventuellement qualifié du nom du schéma) de la table ou de la
+      vue à laquelle est rattaché le déclencheur.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="PARAMETER">referenced_table_name</replaceable></term>
+    <listitem>
+     <para>
+      The (possibly schema-qualified) name of another table referenced by the
+      constraint.  This option is used for foreign-key constraints and is not
+      recommended for general use.  This can only be specified for
+      constraint triggers.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DEFERRABLE</literal></term>
+    <term><literal>NOT DEFERRABLE</literal></term>
+    <term><literal>INITIALLY IMMEDIATE</literal></term>
+    <term><literal>INITIALLY DEFERRED</literal></term>
+    <listitem>
+     <para>
+      The default timing of the trigger.
+      See the <xref linkend="SQL-CREATETABLE"> documentation for details of
+      these constraint options.  This can only be specified for constraint
+      triggers.
      </para>
     </listitem>
    </varlistentry>
@@ -167,7 +291,8 @@ UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2
       Précise si la procédure du déclencheur doit être lancée 
       pour chaque ligne affectée par l'événement ou
       simplement pour chaque instruction SQL. <literal>FOR EACH STATEMENT</literal>
-      est la valeur par défaut.
+      est la valeur par défaut. Constraint triggers can only
+      be specified <literal>FOR EACH ROW</>.
      </para>
     </listitem>
    </varlistentry>
@@ -194,8 +319,20 @@ UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2
      </para>
 
      <para>
+      <literal>INSTEAD OF</> triggers do not support <literal>WHEN</>
+      conditions.
+     </para>
+
+     <para>
       Actuellement, les expressions <literal>WHEN</literal> ne peuvent pas
       contenir de sous-requêtes.
+     </para>
+
+     <para>
+      Note that for constraint triggers, evaluation of the <literal>WHEN</>
+      condition is not deferred, but occurs immediately after the row update
+      operation is performed. If the condition does not evaluate to true then
+      the trigger is not queued for deferred execution.
      </para>
     </listitem>
    </varlistentry>
@@ -242,8 +379,8 @@ UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2
   </para>
 
   <para>
-   Un trigger sur colonne spécifique (<literal>FOR UPDATE OF
-   <replaceable>nom_colonne</replaceable></literal>) se déclenchera quand
+   Un trigger sur colonne spécifique (one defined using the <literal>UPDATE OF
+   <replaceable>nom_colonne</replaceable></literal> syntax) se déclenchera quand
    une des colonnes indiquées est listée comme cible de la liste
    <literal>SET</literal> pour la commande <command>UPDATE</command>. Il est
    possible qu'une valeur de colonne change même si le trigger n'est pas
@@ -337,6 +474,16 @@ CREATE TRIGGER log_update
     WHEN (OLD.* IS DISTINCT FROM NEW.*)
     EXECUTE PROCEDURE log_account_update();
 </programlisting>
+
+   Execute the function <function>view_insert_row</> for each row to insert
+   rows into the tables underlying a view:
+
+<programlisting>
+CREATE TRIGGER view_insert
+    INSTEAD OF INSERT ON my_view
+    FOR EACH ROW
+    EXECUTE PROCEDURE view_insert_row();
+</programlisting>
   </para>
 
   <para>
@@ -393,7 +540,7 @@ CREATE TRIGGER log_update
    <productname>PostgreSQL</productname> définit que <literal>BEFORE DELETE</literal>
    se déclenche toujours avant l'action de suppression, même lors
    d'une action en cascade. Cela semble plus cohérent. Il existe aussi un
-   comportement non prévisible quand les triggers <literal>BEFORE</literal>
+   comportement non standard quand les triggers <literal>BEFORE</literal>
    modifient les lignes ou empêchent les mises à jour causées par une action
    référente. Ceci peut amener à des violations de contraintes ou au stockage
    de données qui n'honorent pas la contrainte référentielle.
@@ -407,7 +554,14 @@ CREATE TRIGGER log_update
   <para>
    La possibilité d'exécuter un trigger suite à une commande
    <command>TRUNCATE</command> est une extension
-   <productname>PostgreSQL</productname> du standard SQL.
+   <productname>PostgreSQL</productname> du standard SQL, as is the
+   ability to define statement-level triggers on views.
+  </para>
+
+  <para>
+   <command>CREATE CONSTRAINT TRIGGER</command> is a
+   <productname>PostgreSQL</productname> extension of the <acronym>SQL</>
+   standard.
   </para>
  </refsect1>
 
@@ -418,6 +572,7 @@ CREATE TRIGGER log_update
    <member><xref linkend="sql-createfunction"/></member>
    <member><xref linkend="sql-altertrigger"/></member>
    <member><xref linkend="sql-droptrigger"/></member>
+   <member><xref linkend="sql-set-constraints"></member>
   </simplelist>
  </refsect1>
 </refentry>

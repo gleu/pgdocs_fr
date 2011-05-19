@@ -138,7 +138,7 @@
     </para>
 
     <para>
-        Les requêtes <command>select</command> n'ont normalement pas de
+        Les requêtes <command>select</command> n'ont pas de
         relation résultat. Le cas spécial d'un <command>select into</command>
         est pratiquement identique à un <command>create table</command> suivi
         par un <literal>insert ... select</literal> et n'est pas discuté
@@ -171,12 +171,15 @@
     </para>
 
     <para>
-        Les commandes <command>delete</command> n'ont pas besoin d'une liste de
+        Les commandes <command>delete</command> n'ont pas besoin d'une liste
+        normale de
         colonnes car elles ne produisent aucun résultat. En fait, le
-        planificateur ajoutera une entrée spéciale <acronym>ctid</acronym> pour aller
-        jusqu'à la liste de cibles mais c'est après le système de règles&nbsp;;
-        pour le système de règles, ce sera discuté après&nbsp;; pour le système
-        de règles, la liste de cibles est vide.
+        système de règles ajoutera une entrée spéciale <acronym>ctid</acronym> pour aller
+        jusqu'à la liste de cibles vide
+        to allow the executor to find the row to be deleted.
+        (<acronym>CTID</> is added when the result relation is an ordinary
+        table.  If it is a view, a whole-row variable is added instead,
+        as described in <xref linkend="rules-views-update">.)
     </para>
 
     <para>
@@ -197,9 +200,9 @@
         elle contient seulement les expressions de la partie <literal>set
         colonne = expression</literal> de la commande. le planificateur gèrera
         les colonnes manquantes en insérant des expressions qui copient les
-        valeurs provenant de l'ancienne ligne dans la nouvelle. et elle ajoutera
-        l'ancienne entrée <acronym>ctid</acronym> dans la nouvelle ligne comme pour le
-        <command>delete</command>.
+        valeurs provenant de l'ancienne ligne dans la nouvelle. Just as for <command>DELETE</>,
+        the rule system adds a <acronym>CTID</> or whole-row variable so that
+        the executor can identify the old row to be updated.
     </para>
 
     <para>
@@ -665,8 +668,10 @@ vous avez saisi&nbsp;:
 <para>
     Deux détails de l'arbre de requête n'ont pas été abordés dans la
     description des règles de vue ci-dessus. Ce sont le type de commande et le
-    relation résultante. En fait, les règles de vue n'ont pas besoin de cette
-    information.
+    relation résultante. 
+    In fact, the command type is not needed by view rules, but the result
+    relation may affect the way in which the query rewriter works, because
+    special care needs to be taken if the result relation is a view.
 </para>
 
 <para>
@@ -734,16 +739,16 @@ UPDATE t1 SET b = t2.b FROM t2 WHERE t1.a = t2.a;
 <programlisting>SELECT t1.a, t2.b FROM t1, t2 WHERE t1.a = t2.a;
 </programlisting>
     
-    le ferait. Mais il y a un petit problème avec
-    <command>update</command>&nbsp;: l'exécuteur ne fait pas attention au but du
-    résultat de la jointure. Il produit simplement un ensemble de lignes
-    composant le résultat. La différence entre une commande
-    <command>select</command> et une commande <command>update</command> est
-    gérée par celui qui a appelé l'exécuteur. L'appelant sait toujours (en
-    regardant dans l'arbre de requêtes) qu'il s'agit d'un
-    <command>update</command>, et il sait que le résultat ira dans la table
-    <literal>t1</literal>. mais quelles lignes disponibles maintenant seront remplacées
-    par les nouvelles lignes&nbsp;?
+
+    But there is a little problem in
+    <command>UPDATE</command>: the part of the executor plan that does
+    the join does not care what the results from the join are
+    meant for. It just produces a result set of rows. The fact that
+    one is a <command>SELECT</command> command and the other is an
+    <command>UPDATE</command> is handled higher up in the executor, where
+    it knows that this is an <command>UPDATE</command>, and it knows that
+    this result should go into table <literal>t1</>. But which of the rows
+    that are there has to be replaced by the new row?
 </para>
 
 <para>
@@ -770,7 +775,7 @@ UPDATE t1 SET b = t2.b FROM t2 WHERE t1.a = t2.a;
     <literal>cmax</literal> et <literal>xmax</literal> sont configurées par le compteur de
     commande actuel et par l'identifiant de transaction actuel. Du coup,
     l'ancienne ligne est cachée et, après validation de la transaction, le
-    nettoyeur (vacuum) peut réellement la supprimer.
+    nettoyeur (vacuum) peut éventuellement la supprimer.
 </para>
 
 <para>
@@ -810,17 +815,57 @@ UPDATE t1 SET b = t2.b FROM t2 WHERE t1.a = t2.a;
 <para>
     Qu'arrive-t'il si une vue est nommée comme la relation cible d'un
     <command>insert</command>, <command>update</command> ou
-    <command>delete</command>&nbsp;? après avoir réalisées les substitutions
-    décrites ci-dessus, nous aurons un arbre de requête dans lequel la relation
-    résultante pointe vers une entrée de la table d'échelle de la sous-requête.
-    Ceci ne fonctionnera pas car la réécriture renvoie une erreur si elle
-    aperçoit qu'elle a produit une telle chose.
+    <command>delete</command>&nbsp;? Simply doing the substitutions
+    described above would give a query tree in which the result
+    relation points at a subquery range-table entry, which will not
+    work.  Instead, the rewriter assumes that the operation will be
+    handled by an <literal>INSTEAD OF</> trigger on the view.
+    (If there is no such trigger, the executor will throw an error
+    when execution starts.)  Rewriting works slightly differently
+    in this case.  For <command>INSERT</command>, the rewriter does
+    nothing at all with the view, leaving it as the result relation
+    for the query.  For <command>UPDATE</command> and
+    <command>DELETE</command>, it's still necessary to expand the
+    view query to produce the <quote>old</> rows that the command will
+    attempt to update or delete.  So the view is expanded as normal,
+    but another unexpanded range-table entry is added to the query
+    to represent the view in its capacity as the result relation.
 </para>
 
 <para>
-    Pour modifier ceci, nous pouvons définir des règles modifiant le
-    comportement de ce type de commandes. C'est donc le thème de la prochaine
-    section.
+    The problem that now arises is how to identify the rows to be
+    updated in the view. Recall that when the result relation
+    is a table, a special <acronym>CTID</> entry is added to the target
+    list to identify the physical locations of the rows to be updated.
+    This does not work if the result relation is a view, because a view
+    does not have any <acronym>CTID</>, since its rows do not have
+    actual physical locations. Instead, for an <command>UPDATE</command>
+    or <command>DELETE</command> operation, a special <literal>wholerow</>
+    entry is added to the target list, which expands to include all
+    columns from the view. The executor uses this value to supply the
+    <quote>old</> row to the <literal>INSTEAD OF</> trigger.  It is
+    up to the trigger to work out what to update based on the old and
+    new row values.
+</para>
+
+<para>
+    If there are no <literal>INSTEAD OF</> triggers to update the view,
+    the executor will throw an error, because it cannot automatically
+    update a view by itself. To change this, we can define rules that
+    modify the behavior of <command>INSERT</command>,
+    <command>UPDATE</command>, and <command>DELETE</command> commands on
+    a view. These rules will rewrite the command, typically into a command
+    that updates one or more tables, rather than views. That is the topic
+    of the next section.
+</para>
+
+<para>
+    Note that rules are evaluated first, rewriting the original query
+    before it is planned and executed. Therefore, if a view has
+    <literal>INSTEAD OF</> triggers as well as rules on <command>INSERT</>,
+    <command>UPDATE</>, or <command>DELETE</>, then the rules will be
+    evaluated first, and depending on the result, the triggers may not be
+    used at all.
 </para>
 </sect2>
 
@@ -1779,6 +1824,7 @@ BEGIN
     RETURN true;
 END
 $$ LANGUAGE plpgsql COST 0.0000000000000000000001;
+
 SELECT * FROM phone_number WHERE tricky(person, phone);</programlisting>
     Chaque personne et chaque numéro de téléphone de la table
     <literal>phone_data</literal> sera affiché dans un
@@ -1786,8 +1832,8 @@ SELECT * FROM phone_number WHERE tricky(person, phone);</programlisting>
     procédure <function>tricky</function> avant le <function>NOT
     LIKE</function> car elle est moins coûteuse. Même si l'utilisateur ne peut
     pas définir des nouvelles fonctions, les fonctions internes peuvent être
-    utilisées pour des attaques similaires. (Par exemple, les fonctions de
-    conversions affichent leur entrée dans le message d'erreur qu'elles
+    utilisées pour des attaques similaires. (Par exemple, la plupart des fonctions de
+    conversions affichent les valeurs en entrée dans le message d'erreur qu'elles
     fournissent.)
 </para>
 
@@ -1890,15 +1936,17 @@ SELECT * FROM phone_number WHERE tricky(person, phone);</programlisting>
 </para>
 
 <para>
-    D'un autre côté, un trigger ne peut pas être créé sur des vues car il n'y
-    a pas de données réelles dans une vue&nbsp;; néanmoins, des règles sur
-    des INSERT, UPDATE et DELETE peuvent être créés pour des vues.
+    In this chapter, we focused on using rules to update views. All of
+    the update rule examples in this chapter can also be implemented
+    using <literal>INSTEAD OF</> triggers on the views.  Writing such
+    triggers is often easier than writing rules, particularly if complex
+    logic is required to perform the update.
 </para>
 
 <para>
     Pour les éléments qui peuvent être implémentés par les deux, ce qui sera le
     mieux dépend de l'utilisation de la base de données. Un déclencheur
-    est exécuté une fois pour chaque ligne affectée. Une règle manipule la
+    est exécuté une fois pour chaque ligne affectée. Une règle modifie la
     requête ou en génère une autre. Donc, si un grand nombre de lignes sont
     affectées pour une instruction, une règle lançant une commande supplémentaire
     sera certainement plus rapide qu'un déclencheur appelé pour chaque ligne et qui

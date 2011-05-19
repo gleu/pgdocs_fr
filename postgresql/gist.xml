@@ -93,7 +93,7 @@
 
  <para>
    Pour obtenir une méthode d'accès
-   <acronym>GiST</acronym> fonctionnelle, il suffit de coder sept méthodes
+   <acronym>GiST</acronym> fonctionnelle, il suffit de coder plusieurs méthodes
    utilisateur définissant le comportement des clés dans
    l'arbre. Ces méthodes doivent être suffisamment élaborées
    pour supporter des requêtes avancées, mais pour toutes les requêtes standard
@@ -109,7 +109,7 @@
  
  <para>
    Une classe d'opérateur d'index <acronym>GiST</acronym> doit fournir sept
-   méthodes. La précision de l'index est assurée par l'implantation des
+   méthodes, and an eighth that is optional. La précision de l'index est assurée par l'implantation des
    méthodes <function>same</function>, <function>consistent</function>
    et <function>union</function> alors que l'efficacité (taille et rapidité)
    de l'index dépendra des méthodes <function>penalty</function> et
@@ -124,6 +124,9 @@
    variable). Si le type de données interne de l'arbre existe au niveau SQL,
    l'option <literal>STORAGE</literal> de la commande <command>CREATE OPERATOR
    CLASS</command> peut être utilisée.
+   The optional eighth method is <function>distance</>, which is needed
+   if the operator class wishes to support ordered scans (nearest-neighbor
+   searches).
  </para>
 
  <variablelist>
@@ -606,6 +609,73 @@ my_same(PG_FUNCTION_ARGS)
      </listitem>
     </varlistentry>
 
+    <varlistentry>
+     <term><function>distance</></term>
+     <listitem>
+      <para>
+       Given an index entry <literal>p</> and a query value <literal>q</>,
+       this function determines the index entry's
+       <quote>distance</> from the query value.  This function must be
+       supplied if the operator class contains any ordering operators.
+       A query using the ordering operator will be implemented by returning
+       index entries with the smallest <quote>distance</> values first,
+       so the results must be consistent with the operator's semantics.
+       For a leaf index entry the result just represents the distance to
+       the index entry; for an internal tree node, the result must be the
+       smallest distance that any child entry could have.
+      </para>
+
+      <para>
+        The <acronym>SQL</> declaration of the function must look like this:
+
+<programlisting>
+CREATE OR REPLACE FUNCTION my_distance(internal, data_type, smallint, oid)
+RETURNS float8
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+</programlisting>
+
+        And the matching code in the C module could then follow this skeleton:
+
+<programlisting>
+Datum       my_distance(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(my_distance);
+
+Datum
+my_distance(PG_FUNCTION_ARGS)
+{
+    GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+    data_type  *query = PG_GETARG_DATA_TYPE_P(1);
+    StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
+    /* Oid subtype = PG_GETARG_OID(3); */
+    data_type  *key = DatumGetDataType(entry-&gt;key);
+    double      retval;
+
+    /*
+     * determine return value as a function of strategy, key and query.
+     */
+
+    PG_RETURN_FLOAT8(retval);
+}
+</programlisting>
+
+       The arguments to the <function>distance</> function are identical to
+       the arguments of the <function>consistent</> function, except that no
+       recheck flag is used.  The distance to a leaf index entry must always
+       be determined exactly, since there is no way to re-order the tuples
+       once they are returned.  Some approximation is allowed when determining
+       the distance to an internal tree node, so long as the result is never
+       greater than any child's actual distance.  Thus, for example, distance
+       to a bounding box is usually sufficient in geometric applications.  The
+       result value can be any finite <type>float8</> value.  (Infinity and
+       minus infinity are used internally to handle cases such as nulls, so it
+       is not recommended that <function>distance</> functions return these
+       values.)
+      </para>
+
+     </listitem>
+    </varlistentry>
+
   </variablelist>
 
 </sect1>
@@ -678,32 +748,6 @@ my_same(PG_FUNCTION_ARGS)
   </varlistentry>
  </variablelist>
 
-</sect1>
-
-<sect1 id="gist-recovery">
- <title>Récupération après un arrêt brutal</title>
-
- <para>
-  Il est généralement suffisant de rejouer les traces WAL pour restaurer l'intégrité d'un
-  index GiST après un arrêt brutal de la base de données. Néanmoins, il existe
-  quelques cas particuliers pour lesquels l'état de l'index n'est pas
-  entièrement reconstruit. L'index reste fonctionnellement correct mais
-  les performances peuvent se trouver dégradées. Lorsque cela
-  arrive, l'index peut être réparé par <command>VACUUM</command> de sa table, ou
-  par reconstruction avec <command>REINDEX</command>. Dans certains cas, un simple
-  <command>VACUUM</command> ne suffit pas et un <command>VACUUM FULL</command>
-  ou un <command>REINDEX</command> est nécessaire. Ce besoin est indiqué par
-  la survenue d'un tel message&nbsp;:
-<programlisting>LOG:  index NNN/NNN/NNN needs VACUUM or REINDEX to finish crash recovery
-</programlisting>
-  ou le message suivant lors d'insertions dans l'index&nbsp;:
-<programlisting>LOG:  index "FOO" needs VACUUM or REINDEX to finish crash recovery
-</programlisting>
-  Si un simple <command>VACUUM</command> est incapable de réaliser
-  complètement la récupération, l'avertissement suivant est envoyé&nbsp;:
-<programlisting>NOTICE:  index "FOO" needs VACUUM FULL or REINDEX to finish crash recovery
-</programlisting>
- </para>
 </sect1>
 
 </chapter>

@@ -28,9 +28,9 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
 
 <phrase>où <replaceable class="parameter">action</replaceable> peut être&nbsp;:</phrase>
 
-    ADD [ COLUMN ] <replaceable class="parameter">colonne</replaceable> <replaceable class="parameter">type</replaceable> [ <replaceable class="parameter">contrainte_colonne</replaceable> [ ... ] ]
+    ADD [ COLUMN ] <replaceable class="PARAMETER">colonne</replaceable> <replaceable class="PARAMETER">type</replaceable> [ COLLATE <replaceable class="PARAMETER">collation</replaceable> ] [ <replaceable class="PARAMETER">contrainte_colonne</replaceable> [ ... ] ]
     DROP [ COLUMN ] [ IF EXISTS ] <replaceable class="parameter">colonne</replaceable> [ RESTRICT | CASCADE ]
-    ALTER [ COLUMN ] <replaceable class="parameter">colonne</replaceable> [ SET DATA ] TYPE <replaceable class="parameter">type</replaceable> [ USING <replaceable class="parameter">expression</replaceable> ]
+    ALTER [ COLUMN ] <replaceable class="PARAMETER">colonne</replaceable> [ SET DATA ] TYPE <replaceable class="PARAMETER">type</replaceable> [ COLLATE <replaceable class="PARAMETER">collation</replaceable> ] [ USING <replaceable class="PARAMETER">expression</replaceable> ]
     ALTER [ COLUMN ] <replaceable class="parameter">colonne</replaceable> SET DEFAULT <replaceable class="parameter">expression</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">colonne</replaceable> DROP DEFAULT
     ALTER [ COLUMN ] <replaceable class="parameter">colonne</replaceable> { SET | DROP } NOT NULL
@@ -39,6 +39,9 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column</replaceable> RESET ( <replaceable class="parameter">option_attribut</replaceable> [, ... ] )
     ALTER [ COLUMN ] <replaceable class="parameter">colonne</replaceable> SET STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN }
     ADD <replaceable class="parameter">contrainte_table</replaceable>
+    ADD <replaceable class="PARAMETER">table_constraint_using_index</replaceable>
+    ADD <replaceable class="PARAMETER">table_constraint</replaceable> [ NOT VALID ]
+    VALIDATE CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable>
     DROP CONSTRAINT [ IF EXISTS ] <replaceable class="parameter">nom_contrainte</replaceable> [ RESTRICT | CASCADE ]
     DISABLE TRIGGER [ <replaceable class="parameter">nom_declencheur</replaceable> | ALL | USER ]
     ENABLE TRIGGER [ <replaceable class="parameter">nom_declencheur</replaceable> | ALL | USER ]
@@ -56,8 +59,16 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
     RESET ( <replaceable class="parameter">paramètre_stockage</replaceable> [, ... ] )
     INHERIT <replaceable class="parameter">table_parent</replaceable>
     NO INHERIT <replaceable class="parameter">table_parent</replaceable>
+    OF <replaceable class="PARAMETER">type_name</replaceable>
+    NOT OF
     OWNER TO <replaceable class="parameter">nouveau_proprietaire</replaceable>
     SET TABLESPACE <replaceable class="parameter">nouvel_espacelogique</replaceable>
+
+<phrase>and <replaceable class="PARAMETER">table_constraint_using_index</replaceable> is:</phrase>
+
+    [ CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable> ]
+    { UNIQUE | PRIMARY KEY } USING INDEX <replaceable class="PARAMETER">index_name</replaceable>
+    [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -105,7 +116,9 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
       Change le type d'une colonne de la table. Les index et
       les contraintes simples de table qui impliquent la colonne sont
       automatiquement convertis pour utiliser le nouveau type de la colonne en
-      réanalysant l'expression d'origine. La clause
+      réanalysant l'expression d'origine. The optional <literal>COLLATE</literal>
+      clause specifies a collation for the new column; if omitted, the
+      collation is the default for the new column type. La clause
       optionnelle <literal>USING</literal> précise comment calculer la nouvelle
       valeur de la colonne à partir de l'ancienne&nbsp;; en cas d'omission, la
       conversion par défaut est identique à une affectation de transtypage de l'ancien type
@@ -222,12 +235,79 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
    </varlistentry>
 
    <varlistentry>
-    <term><literal>ADD <replaceable class="parameter">contrainte_table</replaceable></literal></term>
+    <term><literal>ADD <replaceable class="parameter">contrainte_table</replaceable>
+          [ NOT VALID ]</literal></term>
     <listitem>
      <para>
       Ajoute une nouvelle contrainte à une table en utilisant une
-      syntaxe identique à <xref linkend="sql-createtable"/>. 
+      syntaxe identique à <xref linkend="sql-createtable"/>. Newly added foreign key constraints can
+      also be defined as <literal>NOT VALID</literal> to avoid the
+      potentially lengthy initial check that must otherwise be performed.
+      Constraint checks are skipped at create table time, so
++      <xref linkend="SQL-CREATETABLE"> does not contain this option.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>VALIDATE CONSTRAINT</literal></term>
+    <listitem>
+     <para>
+      This form validates a foreign key constraint that was previously created
+      as <literal>NOT VALID</literal>. Constraints already marked valid do not
+      cause an error response.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ADD <replaceable class="PARAMETER">table_constraint_using_index</replaceable></literal></term>
+    <listitem>
+     <para>
+      This form adds a new <literal>PRIMARY KEY</> or <literal>UNIQUE</>
+      constraint to a table based on an existing unique index.  All the
+      columns of the index will be included in the constraint.
+     </para>
+
+     <para>
+      The index cannot have expression columns nor be a partial index.
+      Also, it must be a b-tree index with default sort ordering.  These
+      restrictions ensure that the index is equivalent to one that would be
+      built by a regular <literal>ADD PRIMARY KEY</> or <literal>ADD UNIQUE</>
+      command.
+     </para>
+
+     <para>
+      If <literal>PRIMARY KEY</> is specified, and the index's columns are not
+      already marked <literal>NOT NULL</>, then this command will attempt to
+      do <literal>ALTER COLUMN SET NOT NULL</> against each such column.
+      That requires a full table scan to verify the column(s) contain no
+      nulls.  In all other cases, this is a fast operation.
+     </para>
+
+     <para>
+      If a constraint name is provided then the index will be renamed to match
+      the constraint name.  Otherwise the constraint will be named the same as
+      the index.
+     </para>
+
+     <para>
+      After this command is executed, the index is <quote>owned</> by the
+      constraint, in the same way as if the index had been built by
+      a regular <literal>ADD PRIMARY KEY</> or <literal>ADD UNIQUE</>
+      command.  In particular, dropping the constraint will make the index
+      disappear too.
+     </para>
+
+     <note>
+      <para>
+       Adding a constraint using an existing index can be helpful in
+       situations where a new constraint needs to be added without blocking
+       table updates for a long time.  To do that, create the index using
+       <command>CREATE INDEX CONCURRENTLY</>, and then install it as an
+       official constraint using this syntax.  See the example below.
+      </para>
+     </note>
     </listitem>
    </varlistentry>
 
@@ -349,7 +429,8 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
       pour les détails sur les paramètres disponibles. Le contenu de
       la table ne sera pas modifié immédiatement par cette commande&nbsp;;
       en fonction du paramètre, il pourra s'avérer nécessaire de réécrire la table pour
-      obtenir les effets désirés. Ceci peut se faire avec <xref
+      obtenir les effets désirés. Ceci peut se faire avec <link linkend="SQL-VACUUM">VACUUM
+      FULL</>, <xref
       linkend="sql-cluster"/> ou une des formes
       d'<command>ALTER TABLE</command> qui force une réécriture de la table.
      </para>
@@ -411,6 +492,30 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
       parent indiquée.
       Les requêtes envers la table parent n'inclueront plus les enregistrements
       de la table cible.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>OF <replaceable class="PARAMETER">type_name</replaceable></literal></term>
+    <listitem>
+     <para>
+      This form links the table to a composite type as though <command>CREATE
+      TABLE OF</> had formed it.  The table's list of column names and types
+      must precisely match that of the composite type; the presence of
+      an <literal>oid</> system column is permitted to differ.  The table must
+      not inherit from any other table.  These restrictions ensure
+      that <command>CREATE TABLE OF</> would permit an equivalent table
+      definition.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>NOT OF</literal></term>
+    <listitem>
+     <para>
+      This form dissociates a typed table from its type.
      </para>
     </listitem>
    </varlistentry>
@@ -707,11 +812,15 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
    <para>
     Ajouter une colonne avec une valeur par défaut différente de NULL ou
     modifier le type d'une colonne existante requiert que la table entière et
-    les index soient
-    réécrits. Cela peut prendre un temps considérable pour une grande
-    table&nbsp;; et cela demande temporairement le double d'espace disque.
-    Ajouter ou supprimer une colonne système <literal>oid</literal> requiert de
-    la même façon de réécrire la table entière.
+    les index soient réécrits.
+    As an exception, if the <literal>USING</> clause does not change the column
+    contents and the old type is either binary coercible to the new type or
+    an unconstrained domain over the new type, a table rewrite is not needed,
+    but any indexes on the affected columns must still be rebuilt.  Adding or
+    removing a system <literal>oid</> column also requires rewriting the entire
+    table.  Table and/or index rebuilds may take a significant amount of time
+    for a large table; and will temporarily require as much as double the disk
+    space.
    </para>
 
    <para>
@@ -740,17 +849,11 @@ ALTER TABLE <replaceable class="parameter">nom</replaceable>
    </para>
     
    <para>
-    Le fait qu'<literal>SET DATA TYPE</literal> requiert la réécriture de toute la table
-    est parfois un avantage car le processus de réécriture
-    élimine tout espace mort dans la table. Par exemple, pour réclamer
-    immédiatement la place occupée par une colonne supprimée, la façon la plus
-    rapide est&nbsp;:
-<programlisting>ALTER TABLE table ALTER COLUMN toutecolonne TYPE touttype;
-</programlisting>
-    où <literal>toutecolonne</literal> est une colonne conservée de la table et
-    <literal>touttype</literal> est le type courant de la colonne.
-    Sémantiquement, aucune modification n'est visible, mais
-    la commande force la réécriture, ce qui supprime toute donnée devenue inutile.
+    To force an immediate rewrite of the table, you can use
+    <link linkend="SQL-VACUUM">VACUUM FULL</>, <xref linkend="SQL-CLUSTER">
+    or one of the forms of ALTER TABLE that forces a rewrite.  This results in
+    no semantically-visible change in the table, but gets rid of
+    no-longer-useful data.
    </para>
 
    <para>
@@ -932,13 +1035,23 @@ ALTER TABLE ONLY distributeurs DROP CONSTRAINT verif_cp;
 </programlisting>
   </para>
 
+  <para>
+   To recreate a primary key constraint, without blocking updates while the
+   index is rebuilt:
+<programlisting>
+CREATE UNIQUE INDEX CONCURRENTLY dist_id_temp_idx ON distributors (dist_id);
+ALTER TABLE distributors DROP CONSTRAINT distributors_pkey,
+    ADD CONSTRAINT distributors_pkey PRIMARY KEY USING INDEX dist_id_temp_idx;
+</programlisting>
+  </para>
+
  </refsect1>
 
  <refsect1>
   <title>Compatibilité</title>
 
   <para>
-   Les formes <literal>ADD</literal>, <literal>DROP</literal>,
+   Les formes <literal>ADD</literal> (without <literal>USING INDEX</literal>), <literal>DROP</literal>,
    <literal>SET DEFAULT</literal> et <literal>SET DATA TYPE</literal>
    (sans <literal>USING</literal>) se conforment au standard SQL. Les autres
    formes sont des
@@ -952,5 +1065,13 @@ ALTER TABLE ONLY distributeurs DROP CONSTRAINT verif_cp;
    la seule colonne d'une table, laissant une table dépourvue de colonne.
    C'est une extension au SQL, qui n'autorise pas les tables sans colonne.
   </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-createtable"></member>
+  </simplelist>
  </refsect1>
 </refentry>

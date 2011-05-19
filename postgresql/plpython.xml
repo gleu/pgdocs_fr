@@ -19,6 +19,7 @@
 
  <para>
   Pour installer PL/Python dans une base de données particulières, utilisez
+  <literal>CREATE EXTENSION plpythonu</>, or from the shell command line use
   <literal>createlang plpythonu <replaceable>nom_base</replaceable></literal>.
  </para>
 
@@ -153,8 +154,9 @@
     <listitem>
      <para>
       Les intrépides qui veulent construire un système d'exploitation utilisant
-      seulement Python-3, peuvent modifier les scripts de compilation pour
-      rendre <literal>plpythonu</literal> équivalent à
+      seulement Python-3, peuvent modifier contents of
+      <link linkend="catalog-pg-pltemplate"><structname>pg_pltemplate</structname></link>
+      pour rendre <literal>plpythonu</literal> équivalent à
       <literal>plpython3u</literal>, en gardant en tête que cela rend leur
       installation incompatible avec la majorité de ce qui existe dans ce
       monde.
@@ -387,18 +389,6 @@ $$ LANGUAGE plpythonu;
     PostgreSQL et le type de l'objet Python renvoyé ne sont pas détectées. La 
     valeur sera convertie dans tous les cas.
    </para>
-
-   <tip>
-    <para>
-     Les fonctions <application>PL/Python</application> ne peuvent renvoyer les 
-     types <type>RECORD</type> ou <type>SETOF RECORD</type>. Une solution de 
-     contournement est d'écrire une fonction <application>PL/pgSQL</application>
-     qui crée une table temporaire, d'appeler la fonction en 
-     <application>PL/Python</application> pour remplir cette table puis de 
-     laisser à la fonction <application>PL/pgSQL</application>  le soin de 
-     renvoyer le type générique <type>RECORD</type> de cette table temporaire.
-    </para>
-   </tip>
   </sect2>
 
   <sect2>
@@ -406,7 +396,7 @@ $$ LANGUAGE plpythonu;
 
   <para>
    Si une valeur SQL NULL<indexterm><primary>valeur NULL</primary><secondary
-   sortas="PL/Python">PL/Python</secondary></indexterm> est passée à une fonction,
+   sortas="PL/Python">en PL/Python</secondary></indexterm> est passée à une fonction,
    la valeur de l'argument apparaîtra comme <symbol>None</symbol> au niveau de
    Python. La définition de la fonction ci-dessus renverra la mauvaise réponse
    pour des entrées NULL. Nous pouvons jouer <literal>STRICT</literal> à la
@@ -596,10 +586,21 @@ $$ LANGUAGE plpythonu;
    </variablelist>
   </para>
 
+   <para>
+    Functions with <literal>OUT</literal> parameters are also supported.  For example:
+<programlisting>
+CREATE FUNCTION multiout_simple(OUT i integer, OUT j integer) AS $$
+return (1, 2)
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM multiout_simple();
+</programlisting>
+   </para>
+
   </sect2>
 
   <sect2>
-   <title>Set-Returning Functions</title>
+   <title>Fonctions renvoyant des ensembles</title>
 
   <para>
    Une fonction <application>PL/Python</application> peut aussi renvoyer des
@@ -692,6 +693,19 @@ $$ LANGUAGE plpythonu;
    </variablelist>
   </para>
 
+   <para>
+    Set-returning functions with <literal>OUT</literal> parameters
+    (using <literal>RETURNS SETOF record</literal>) are also
+    supported.  For example:
+<programlisting>
+CREATE FUNCTION multiout_simple_setof(n integer, OUT integer, OUT integer) RETURNS SETOF record AS $$
+return [(1, 2)] * n
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM multiout_simple_setof(3);
+</programlisting>
+   </para>
+
   </sect2>
  </sect1>
 
@@ -754,8 +768,7 @@ $$ LANGUAGE plpythonu;
       <para>
        contient l'événement sous la forme d'une chaîne&nbsp;:
        <literal>INSERT</literal>, <literal>UPDATE</literal>,
-       <literal>DELETE</literal>, <literal>TRUNCATE</literal>
-       ou <literal>UNKNOWN</literal>.
+       <literal>DELETE</literal>, <literal>TRUNCATE</literal>.
       </para>
      </listitem>
     </varlistentry>
@@ -765,7 +778,7 @@ $$ LANGUAGE plpythonu;
      <listitem>
       <para>
        contient une chaîne valant soit <literal>BEFORE</literal>, soit
-       <literal>AFTER</literal> soit <literal>UNKNOWN</literal>.
+       <literal>AFTER</literal> soit <literal>INSTEAD OF</literal>.
       </para>
      </listitem>
     </varlistentry>
@@ -775,7 +788,7 @@ $$ LANGUAGE plpythonu;
      <listitem>
       <para>
        contient une chaîne valant soit <literal>ROW</literal> soit
-       <literal>STATEMENT</literal> soit <literal>UNKNOWN</literal>.
+       <literal>STATEMENT</literal>.
       </para>
      </listitem>
     </varlistentry>
@@ -844,11 +857,13 @@ $$ LANGUAGE plpythonu;
   </para>
 
   <para>
-   Si <literal>TD["when"]</literal> vaut <literal>BEFORE</literal> et si
+   Si <literal>TD["when"]</literal> vaut <literal>BEFORE</literal> or
+   <literal>INSTEAD OF</> et si
    <literal>TD["level"]</literal> vaut <literal>ROW</literal>, vous pourriez
    renvoyer <literal>None</literal> ou <literal>"OK"</literal> à partir de la
    fonction Python pour indiquer que la ligne n'est pas modifiée,
-   <literal>"SKIP"</literal> pour annuler l'événement ou <literal>"MODIFY"</literal>
+   <literal>"SKIP"</literal> pour annuler l'événement, or if <literal>TD["event"]</>
++   is <command>INSERT</> or <command>UPDATE</> you can return <literal>"MODIFY"</literal>
    pour indiquer que vous avez modifié la ligne. Sinon la valeur de retour est
    ignorée.
   </para>
@@ -863,6 +878,9 @@ $$ LANGUAGE plpythonu;
    vous sont accessibles dans le code Python via
    <literal>plpy.<replaceable>foo</replaceable></literal>. 
   </para>
+
+  <sect2>
+    <title>Database Access Functions</title>
 
   <para>
    Le module <literal>plpy</literal> propose deux fonctions appelées
@@ -944,6 +962,210 @@ CREATE FUNCTION utilise_plan_sauvegarde() RETURNS trigger AS $$
 $$ LANGUAGE plpythonu;
 </programlisting>
   </para>
+
+  </sect2>
+
+  <sect2 id="plpython-trapping">
+   <title>Trapping Errors</title>
+
+   <para>
+    Functions accessing the database might encounter errors, which
+    will cause them to abort and raise an exception.  Both
+    <function>plpy.execute</function> and
+    <function>plpy.prepare</function> can raise an instance of a subclass of
+    <literal>plpy.SPIError</literal>, which by default will terminate
+    the function.  This error can be handled just like any other
+    Python exception, by using the <literal>try/except</literal>
+    construct.  For example:
+<programlisting>
+CREATE FUNCTION try_adding_joe() RETURNS text AS $$
+    try:
+        plpy.execute("INSERT INTO users(username) VALUES ('joe')")
+    except plpy.SPIError:
+        return "something went wrong"
+    else:
+        return "Joe added"
+$$ LANGUAGE plpythonu;
+</programlisting>
+   </para>
+
+   <para>
+    The actual class of the exception being raised corresponds to the
+    specific condition that caused the error.  Refer
+    to <xref linkend="errcodes-table"> for a list of possible
+    conditions.  The module
+    <literal>plpy.spiexceptions</literal> defines an exception class
+    for each <productname>PostgreSQL</productname> condition, deriving
+    their names from the condition name.  For
+    instance, <literal>division_by_zero</literal>
+    becomes <literal>DivisionByZero</literal>, <literal>unique_violation</literal>
+    becomes <literal>UniqueViolation</literal>, <literal>fdw_error</literal>
+    becomes <literal>FdwError</literal>, and so on.  Each of these
+    exception classes inherits from <literal>SPIError</literal>.  This
+    separation makes it easier to handle specific errors, for
+    instance:
+<programlisting>
+CREATE FUNCTION insert_fraction(numerator int, denominator int) RETURNS text AS $$
+from plpy import spiexceptions
+try:
+    plan = plpy.prepare("INSERT INTO fractions (frac) VALUES ($1 / $2)", ["int", "int"])
+    plpy.execute(plan, [numerator, denominator])
+except spiexceptions.DivisionByZero:
+    return "denominator cannot equal zero"
+except spiexceptions.UniqueViolation:
+    return "already have that fraction"
+except plpy.SPIError, e:
+    return "other error, SQLSTATE %s" % e.sqlstate
+else:
+    return "fraction inserted"
+$$ LANGUAGE plpythonu;
+</programlisting>
+    Note that because all exceptions from
+    the <literal>plpy.spiexceptions</literal> module inherit
+    from <literal>SPIError</literal>, an <literal>except</literal>
+    clause handling it will catch any database access error.
+   </para>
+
+   <para>
+    As an alternative way of handling different error conditions, you
+    can catch the <literal>SPIError</literal> exception and determine
+    the specific error condition inside the <literal>except</literal>
+    block by looking at the <literal>sqlstate</literal> attribute of
+    the exception object.  This attribute is a string value containing
+    the <quote>SQLSTATE</quote> error code.  This approach provides
+    approximately the same functionality
+   </para>
+  </sect2>
+ </sect1>
+
+ <sect1 id="plpython-subtransaction">
+  <title>Explicit Subtransactions</title>
+
+  <para>
+   Recovering from errors caused by database access as described in
+   <xref linkend="plpython-trapping"> can lead to an undesirable
+   situation where some operations succeed before one of them fails,
+   and after recovering from that error the data is left in an
+   inconsistent state.  PL/Python offers a solution to this problem in
+   the form of explicit subtransactions.
+  </para>
+
+  <sect2>
+   <title>Subtransaction Context Managers</title>
+
+   <para>
+    Consider a function that implements a transfer between two
+    accounts:
+<programlisting>
+CREATE FUNCTION transfer_funds() RETURNS void AS $$
+try:
+    plpy.execute("UPDATE accounts SET balance = balance - 100 WHERE account_name = 'joe'")
+    plpy.execute("UPDATE accounts SET balance = balance + 100 WHERE account_name = 'mary'")
+except plpy.SPIError, e:
+    result = "error transferring funds: %s" % e.args
+else:
+    result = "funds transferred correctly"
+plan = plpy.prepare("INSERT INTO operations (result) VALUES ($1)", ["text"])
+plpy.execute(plan, [result])
+$$ LANGUAGE plpythonu;
+</programlisting>
+    If the second <literal>UPDATE</literal> statement results in an
+    exception being raised, this function will report the error, but
+    the result of the first <literal>UPDATE</literal> will
+    nevertheless be committed.  In other words, the funds will be
+    withdrawn from Joe's account, but will not be transferred to
+    Mary's account.
+   </para>
+
+   <para>
+    To avoid such issues, you can wrap your
+    <literal>plpy.execute</literal> calls in an explicit
+    subtransaction.  The <literal>plpy</literal> module provides a
+    helper object to manage explicit subtransactions that gets created
+    with the <literal>plpy.subtransaction()</literal> function.
+    Objects created by this function implement the
+    <ulink url="http://docs.python.org/library/stdtypes.html#context-manager-types">
+    context manager interface</ulink>.  Using explicit subtransactions
+    we can rewrite our function as:
+<programlisting>
+CREATE FUNCTION transfer_funds2() RETURNS void AS $$
+try:
+    with plpy.subtransaction():
+        plpy.execute("UPDATE accounts SET balance = balance - 100 WHERE account_name = 'joe'")
+        plpy.execute("UPDATE accounts SET balance = balance + 100 WHERE account_name = 'mary'")
+except plpy.SPIError, e:
+    result = "error transferring funds: %s" % e.args
+else:
+    result = "funds transferred correctly"
+plan = plpy.prepare("INSERT INTO operations (result) VALUES ($1)", ["text"])
+plpy.execute(plan, [result])
+$$ LANGUAGE plpythonu;
+</programlisting>
+    Note that the use of <literal>try/catch</literal> is still
+    required.  Otherwise the exception would propagate to the top of
+    the Python stack and would cause the whole function to abort with
+    a <productname>PostgreSQL</productname> error, so that the
+    <literal>operations</literal> table would not have any row
+    inserted into it.  The subtransaction context manager does not
+    trap errors, it only assures that all database operations executed
+    inside its scope will be atomically committed or rolled back.  A
+    rollback of the subtransaction block occurrs on any kind of
+    exception exit, not only ones caused by errors originating from
+    database access.  A regular Python exception raised inside an
+    explicit subtransaction block would also cause the subtransaction
+    to be rolled back.
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>Older Python Versions</title>
+
+   <para>
+    Context managers syntax using the <literal>with</literal> keyword
+    is available by default in Python 2.6.  If using PL/Python with an
+    older Python version, it is still possible to use explicit
+    subtransactions, although not as transparently.  You can call the
+    subtransaction manager's <literal>__enter__</literal> and
+    <literal>__exit__</literal> functions using the
+    <literal>enter</literal> and <literal>exit</literal> convenience
+    aliases.  The example function that transfers funds could be
+    written as:
+<programlisting>
+CREATE FUNCTION transfer_funds_old() RETURNS void AS $$
+try:
+    subxact = plpy.subtransaction()
+    subxact.enter()
+    try:
+        plpy.execute("UPDATE accounts SET balance = balance - 100 WHERE account_name = 'joe'")
+        plpy.execute("UPDATE accounts SET balance = balance + 100 WHERE account_name = 'mary'")
+    except:
+        import sys
+        subxact.exit(*sys.exc_info())
+        raise
+    else:
+        subxact.exit(None, None, None)
+except plpy.SPIError, e:
+    result = "error transferring funds: %s" % e.args
+else:
+    result = "funds transferred correctly"
+
+plan = plpy.prepare("INSERT INTO operations (result) VALUES ($1)", ["text"])
+plpy.execute(plan, [result])
+$$ LANGUAGE plpythonu;
+</programlisting>
+   </para>
+
+   <note>
+    <para>
+     Although context managers were implemented in Python 2.5, to use
+     the <literal>with</literal> syntax in that version you need to
+     use a <ulink
+     url="http://docs.python.org/release/2.5/ref/future.html">future
+     statement</ulink>.  Because of implementation details, however,
+     you cannot use future statements in PL/Python functions.
+    </para>
+   </note>
+  </sect2>
  </sect1>
 
  <sect1 id="plpython-util">
@@ -971,6 +1193,23 @@ $$ LANGUAGE plpythonu;
    cette configuration est contrôlée par les variables <xref
    linkend="guc-log-min-messages"/> et <xref linkend="guc-client-min-messages"/>.
    Voir le <xref linkend="runtime-config"/> pour plus d'informations.
+  </para>
+
+  <para>
+   Another set of utility functions are
+   <literal>plpy.quote_literal(<replaceable>string</>)</literal>,
+   <literal>plpy.quote_nullable(<replaceable>string</>)</literal>, and
+   <literal>plpy.quote_ident(<replaceable>string</>)</literal>.  They
+   are equivalent to the built-in quoting functions described in <xref
+   linkend="functions-string">.  They are useful when constructing
+   ad-hoc queries.  A PL/Python equivalent of dynamic SQL from <xref
+   linkend="plpgsql-quote-literal-example"> would be:
+<programlisting>
+plpy.execute("UPDATE tbl SET %s = %s WHERE key = %s" % (
+    plpy.quote_ident(colname),
+    plpy.quote_nullable(newvalue),
+    plpy.quote_literal(keyvalue)))
+</programlisting>
   </para>
  </sect1>
 
