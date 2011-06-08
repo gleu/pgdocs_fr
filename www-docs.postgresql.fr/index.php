@@ -124,7 +124,7 @@ $version['900'] = '9.0';
     mail &agrave; <a href="mailto:guillaume chez lelarge point info">Guillaume
     Lelarge</a>.</p>
     <p>Certaines vieilles versions, non maintenues, sont disponibles sur
-    l'<a href="index_obsoletes.html">index des version osbolètes</a>.</p>
+    l'<a href="index_obsoletes.php">index des version obsolètes</a>.</p>
     <div id="pg91">
       <h2>Documentation PostgreSQL, version 9.1 BETA</h2>
       <div class="listes">
