@@ -120,9 +120,45 @@ $version['900'] = '9.0';
   <div id="content">
     <div id="docs">
     <h1>Documentation</h1>
-    Pour rapporter tout probl&egrave;me dans la traduction, merci d'envoyer un
+    <p>Pour rapporter tout probl&egrave;me dans la traduction, merci d'envoyer un
     mail &agrave; <a href="mailto:guillaume chez lelarge point info">Guillaume
-    Lelarge</a>.
+    Lelarge</a>.</p>
+    <p>Certaines vieilles versions, non maintenues, sont disponibles sur
+    l'<a href="index_obsoletes.html">index des version osbolètes</a>.</p>
+    <div id="pg91">
+      <h2>Documentation PostgreSQL, version 9.1 BETA</h2>
+      <div class="listes">
+        <ul>
+            <li>Manuel au format HTML&nbsp;:
+                <a href="9.1/">Consultation en
+                ligne</a>,
+                t&eacute;l&eacute;chargement en
+                <a onclick="pageTracker._trackPageview('/pg91.zip');"
+                href="http://docs.postgresql.fr/9.1/pg91.zip">ZIP</a> ou
+                <a onclick="pageTracker._trackPageview('/pg91.tar.gz');"
+                href="http://docs.postgresql.fr/9.1/pg91.tar.gz">TAR.GZ</a>
+            </li>
+            <!--
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg91.chm');"
+              href="http://docs.postgresql.fr/9.1/pg91.chm">CHM</a>
+              (syst&egrave;me d'aide Windows)
+            </li>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg91.pdf');"
+              href="http://docs.postgresql.fr/9.1/pg91.pdf">PDF</a>
+            </li>
+            -->
+            <li>Document d'installation au format <a
+              onclick="pageTracker._trackPageview('/INSTALL91.html');"
+              href="http://docs.postgresql.fr/9.1/INSTALL.html">HTML</a> et
+              <a onclick="pageTracker._trackPageview('/INSTALL91.txt');"
+              href="http://docs.postgresql.fr/9.1/INSTALL.txt">texte</a>
+            </li>
+            <li><a onclick="pageTracker._trackPageview('/pg91.man.tar.gz');"
+              href="http://docs.postgresql.fr/9.1/pg91.man.tar.gz">Pages
+              man</a></li>
+        </ul>
+      </div>
+    </div>
     <div id="pg90">
       <h2>Documentation PostgreSQL, version 9.0</h2>
       <div class="listes">
@@ -257,94 +293,6 @@ $version['900'] = '9.0';
             <li><a onclick="pageTracker._trackPageview('/plugin82.firefox');"
               href="javascript:addEngine('pgfr-docs82','png','Computer',0)">
               Plugin de recherche</a> pour Firefox et Mozilla</li>
-	    -->
-        </ul>
-      </div>
-    </div>
-    <div id="pg81">
-      <h2>Documentation PostgreSQL, version 8.1</h2>
-      <div class="listes">
-        <ul>
-            <li>Manuel au format HTML&nbsp;:
-                <a href="8.1/">Consultation en
-                ligne</a>,
-                t&eacute;l&eacute;chargement en
-                <a onclick="pageTracker._trackPageview('/pg81.zip');"
-                href="http://docs.postgresql.fr/8.1/pg81.zip">ZIP</a> ou
-                <a onclick="pageTracker._trackPageview('/pg81.tar.gz');"
-                href="http://docs.postgresql.fr/8.1/pg81.tar.gz">TAR.GZ</a>
-            </li>
-            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg81.chm');"
-                href="http://docs.postgresql.fr/8.1/pg81.chm">CHM</a>
-              (syst&egrave;me d'aide Windows)
-            </li>
-            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg81.pdf');"
-              href="http://docs.postgresql.fr/8.1/pg81.pdf">PDF</a>
-            </li>
-            <li>Document d'installation au format <a
-              onclick="pageTracker._trackPageview('/INSTALL81.html');"
-              href="http://docs.postgresql.fr/8.1/INSTALL.html">HTML</a> et
-              <a onclick="pageTracker._trackPageview('/INSTALL81.txt');"
-              href="http://docs.postgresql.fr/8.1/INSTALL.txt">texte</a>
-            </li>
-            <li><a onclick="pageTracker._trackPageview('/pg81.man.tar.gz');"
-              href="http://docs.postgresql.fr/8.1/pg81.man.tar.gz">Pages
-              man</a></li>
-            <li><a onclick="pageTracker._trackPageview('/annotated81.html');"
-              href="http://docs.postgresql.fr/annotated_postgresql_conf_81.html">Fichier
-              postgresql.conf annot&eacute;</a>
-            </li>
-	    <!--
-            <li><a onclick="pageTracker._trackPageview('/plugin81.firefox');"
-              href="javascript:addEngine('pgfr-docs81','png','Computer',0)">
-              Plugin de recherche</a> pour Firefox et Mozilla</li>
-	    -->
-        </ul>
-      </div>
-    </div>
-    <div id="pg80">
-      <h2>Documentation PostgreSQL, version 8.0</h2>
-      <div class="listes">
-        <ul>
-            <li>Manuel au format HTML&nbsp;:
-                <a href="http://docs.postgresql.fr/8.0/">Consultation en
-                ligne</a>
-            </li>
-            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg80.pdf');"
-              href="http://docs.postgresql.fr/8.0/pg80.pdf">PDF</a>
-            </li>
-            <li><a onclick="pageTracker._trackPageview('/annotated80.html');"
-              href="http://docs.postgresql.fr/annotated_postgresql_conf_80.html">Fichier
-              postgresql.conf annot&eacute;</a>
-            </li>
-	    <!--
-            <li><a onclick="pageTracker._trackPageview('/plugin80.firefox');"
-              href="javascript:addEngine('pgfr-docs80','png','Computer',0)">
-              Plugin de recherche</a> pour Firefox et Mozilla</li>
-	    -->
-        </ul>
-      </div>
-    </div>
-    <div id="pg74">
-      <h2>Documentation PostgreSQL, version 7.4</h2>
-      <div class="listes">
-        <ul>
-            <li>Manuel au format HTML&nbsp;:
-                <a href="http://docs.postgresql.fr/7.4/">Consultation en
-                ligne</a>
-            </li>
-            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg74.pdf');"
-              href="http://docs.postgresql.fr/7.4/pg74.pdf">PDF</a>
-            </li>
-            <li><a onclick="pageTracker._trackPageview('/annotated74.html');"
-              href="http://docs.postgresql.fr/annotated_postgresql_conf_74.html">Fichier
-              postgresql.conf annot&eacute;</a>
-            </li>
-	    <!--
-            <li><a onclick="pageTracker._trackPageview('/plugin74.firefox');"
-              href="javascript:addEngine('pgfr-docs74','png','Computer',0)">
-              Plugin de recherche</a> pour Firefox et Mozilla
-            </li>
 	    -->
         </ul>
       </div>
