@@ -1985,16 +1985,16 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
         <primary>paramètre de configuration <varname>archive_mode</varname></primary> 
        </indexterm>
        <para>
-        Quand <varname>archive_mode</varname> est activé, les segments WAL
-	remplis peuvent être archivés en configurant
-        <xref linkend="guc-archive-command"/>.
-        <varname>archive_mode</varname> et <varname>archive_command</varname>
-        sont des variables séparées de façon à ce que
-	<varname>archive_command</varname> puisse être modifiée sans quitter le
-	mode d'archivage. Ce paramètre ne peut être configuré qu'au lancement du
-        serveur. <varname>wal_level</varname> doit être configuré à
-        <literal>archive</literal> ou <literal>hot_standby</literal> pour
-        activer <varname>archive_mode</varname>.
+        Quand <varname>archive_mode</varname> est activé, les segments
+        WAL remplis peuvent être archivés en configurant <xref
+        linkend="guc-archive-command"/>. <varname>archive_mode</varname>
+        et <varname>archive_command</varname> sont des variables
+        séparées de façon à ce que <varname>archive_command</varname>
+        puisse être modifiée sans quitter le mode d'archivage. Ce
+        paramètre ne peut être configuré qu'au lancement du serveur.
+        <varname>archive_mode</varname> ne peut pas être activé quand
+        <varname>wal_level</varname> est configuré à
+        <literal>minimal</literal>.
        </para>
       </listitem>
      </varlistentry>
@@ -2064,8 +2064,10 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
 	court pour <varname>archive_timeout</varname> &mdash; cela va faire exploser
 	la taille du stockage des archives. Un paramétrage
 	d'<varname>archive_timeout</varname> de l'ordre de la minute est
-	habituellement raisonnable.
-	Ce paramètre ne peut être configuré que dans le fichier
+	habituellement raisonnable. Cependant, vous devriez considérer
+	l'utilisation de la réplication en flux à la place de l'archivage si
+	vous voulez que les données soient envoyées du serveur maître plus
+	rapidement que cela. Ce paramètre ne peut être configuré que dans le fichier
 	<filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
        </para>
       </listitem>
@@ -2074,14 +2076,33 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
    </variablelist>
    </sect2>
 
-    <sect2 id="runtime-config-replication">
-     <title>Réplication en flux</title>
+   </sect1>
 
-     <para>
+   <sect1 id="runtime-config-replication">
+    <title>Réplication</title>
+
+    <para>
       Ces paramètres contrôlent le comportement de la fonctionnalité interne
-      de <firstterm>réplication en flux</firstterm>. Ces paramètres sont à
-      configurer sur le serveur maître pour envoyer les données de réplication
-      sur un ou plusieurs serveurs en attente.
+      de <firstterm>réplication en flux</firstterm> (voir
+      <xref linkend="streaming-replication"/>). Ces paramètres sont à
+      configurer sur le serveur maître alors que d'autres sont à
+      configurer sur le ou les serveurs en standby qui recevront les
+      données de réplication.
+    </para>
+
+    <sect2 id="runtime-config-replication-master">
+     <title>Serveur maître</title>
+ 
+     <para>
+	  Ces paramètres peuvent être configurés sur le serveur primaire qui
+	  va envoyer les données de réplication à un ou plusieurs serveurs.
+	  Notez qu'en plus de ces paramètres, <xref linkend="guc-wal-level"/>
+	  doit être configuré correctement sur le serveur maître, et vous
+	  voudrez aussi typiquement activer l'archivage des journaux de
+	  transactions (voir <xref linkend="runtime-config-wal-archiving"/>).
+      Les valeurs de ces paramètres sur les serveurs en standby n'ont pas
+      d'importance. Il est cependant intéressant de les configurer en
+      prévision du basculement d'un serveur standby en serveur maître.
      </para>
 
      <variablelist>
@@ -2223,20 +2244,7 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
        </para>
       </listitem>
      </varlistentry>
-     </variablelist>
-    </sect2>
 
-    <sect2 id="runtime-config-sync-rep">
-     <title>Réplication synchrone</title>
-
-     <para>
-      Ces paramètres contrôlent le comportement de la
-      <firstterm>réplication synchrone</firstterm>. Ils doivent être
-      configurés sur le serveur principal, celui qui va envoyer les
-      données de réplication à un ou plusieurs serveurs en standby.
-     </para>
-
-     <variablelist>
      <varlistentry id="guc-synchronous-standby-names" xreflabel="synchronous_standby_names">
       <term><varname>synchronous_standby_names</varname> (<type>string</type>)</term>
       <indexterm>
@@ -2244,51 +2252,65 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
       </indexterm>
       <listitem>
        <para>
-        Donne une liste des noms de serveurs standby en réplication
-        synchrone. Cette liste est ordonnée par ordre de priorité. À
-        tout moment, il y aura au plus un serveur standby synchrone qui
-        réveillera les utilisateurs endormis après la validation. Le
-        serveur en question sera le premier serveur nommé, qui est à la
-        fois connecté et en flux en temps réel (indiqué par un état
-        "STREAMING"). Les autres serveurs en standby qui sont listés
-        après deviendront des serveurs standby synchrones potentiels.
-        Si le serveur standby synchrone actuel est déconnecté, il sera
-        immédiatement remplacé par le serveur standby suivant (dans
-        l'ordre des priorités). Indiquer plus qu'un nom de standby peut
-        augmenter fortement la haute disponibilité.
+        Précise une liste de noms de serveur en standby, chacun séparé
+        par une virgule, acceptant une <firstterm>réplication
+        synchrone</firstterm>, comme décrite dans <xref
+        linkend="synchronous-replication"/>. À tout moment, il y aura au
+        maximum un serveur standby synchrone actif&nbsp;; les
+        transactions en attente de validation seront autorisées à
+        continuer après que le serveur standby aura confirmé la réception
+        des données. Le standby synchrone est le premier serveur standby
+        nommé dans cette liste, qui est à la fois connecté et qui récupère
+        les données en temps réel (comme indiqué par l'état
+        <literal>STREAMING</literal> dans la vue
+        <link linkend="monitoring-stats-views-table">
+        <literal>pg_stat_replication</literal></link>). Les autres
+        serveurs standards apparaissant plus tard dans cette liste
+        sont des serveurs standbys synchrones potentiels. Si le serveur
+        standby synchrone se déconnecte, quel qu'en soit la raison, il
+        sera immédiatement remplacé par le prochain standby dans l'ordre
+        des priorités. Indiquer plus qu'un nom de standby peut augmenter
+        fortement la haute disponibilité.
        </para>
        <para>
-        Le nom du serveur en standby est actuellement pris comme
-        nom d'application du serveur en standby, comme s'il était
-        indiqué dans le paramètre primary_conninfo sur le serveur standby.
-        L'unicité des noms n'est pas contrainte. Dans le cas de noms
-        dupliqués, un des serveurs en standby sera choisi pour être le
-        serveur standby synchrone. Sa sélection n'est pas déterministe.
-        L'enregistrement spécial <literal>*</literal> correspond à tout
-        application_name, y compris le nom d'application par défaut du
-        <literal>walreceiver</literal>.
+        Dans ce cadre, le nom d'un serveur standby correspond au paramètre
+        <varname>application_name</varname> du standby, qui est configurable
+        dans <varname>primary_conninfo</varname> du walreceiver du standby.
+        Il n'existe aucun paramètre pour s'assurer de l'unicité. Dans le
+        cas où des serveurs ont le même nom, un des serveurs standby
+        sera choisi pour être le serveur standby synchrone mais il est
+        impossible de déterminer lequel sera choisi. L'entrée spéciale
+        <literal>*</literal> correspond à tout
+        <varname>application_name</varname>, cela incluant le nom de
+        l'application par défaut de <literal>walreceiver</literal>.
        </para>
        <para>
-        Si aucun nom de serveur en standby synchrone n'est indiqué, alors
+        Si aucun nom de serveur en standby synchrone n'est indiqué ici, alors
         la réplication synchrone n'est pas activée et la validation
-        d'une transaction n'attendra jamais la réplication. Ceci est la
+        des transactions n'attendra jamais la réplication. Ceci est la
         configuration par défaut. Même si la réplication synchrone est
         activée, les transactions individuelles peuvent être configurées
         pour ne pas avoir à attendre la réplication en configurant le
         paramètre <xref linkend="guc-synchronous-commit"/> à
         <literal>local</literal> ou <literal>off</literal>.
        </para>
+       <para>
+        Ce paramètre peut seulement être configuré dans le fichier
+        <filename>postgresql.conf</filename> ou sur la ligne de commande
+        du serveur.
+       </para>
       </listitem>
      </varlistentry>
      </variablelist>
     </sect2>
 
-    <sect2 id="runtime-config-standby">
-    <title>Serveurs en attente</title>
+    <sect2 id="runtime-config-replication-standby">
+     <title>Serveurs standby (en attente)</title>
 
      <para>
       Ces paramètres contrôlent le comportement d'un serveur en attente pour
-      qu'il puisse recevoir les données de réplication.
+      qu'il puisse recevoir les données de réplication. Leur configuration
+      sur le serveur maître n'a aucune importance.
      </para>
 
     <variablelist>
@@ -2384,14 +2406,17 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
       </indexterm>
       <listitem>
       <para>
-       Indique la fréquence minimale, en secondes, pour que le processus
+       Indique la fréquence minimale pour que le processus
        de réception (walreceiver) sur le serveur de standby envoie des
        informations sur la progression de la réplication au serveur
        principal, où elles sont disponibles en utilisant la vue
-       <literal>pg_stat_replication</literal>. Le serveur en standby
+       <link linkend="monitoring-stats-views-table"><literal>pg_stat_replication</literal></link>.
+       Le serveur en standby
        renvoie la dernière position écrite dans le journal de transactions,
        la dernière position vidée sur disque du journal de transactions,
-       et la dernière position rejouée. Les mises à jour sont envoyées
+       et la dernière position rejouée. La valeur de ce paramètre est
+       l'intervalle maximum, en secondes, entre les rapports. Les mises
+       à jour sont envoyées
        à chaque fois que les positions d'écriture ou de vidage ont
        changées et de toute façon au moins aussi fréquemment que l'indique
        ce paramètre. Du coup, la position de rejeu pourrait avoir un
@@ -2423,9 +2448,12 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
         éliminer les annulations de requêtes nécessaires au nettoyage des
         enregistrements. Par contre, il peut causer une fragmentation
         plus importante sur le serveur principal pour certaines charges.
-        La valeur par défaut est <literal>off</literal>. Les messages
-        ne seront pas envoyés plus fréquemment qu'une fois par
-        <varname>wal_receiver_status_interval</varname>.
+        Les messages d'informations ne seront pas envoyés plus fréquemment
+        qu'une fois par <varname>wal_receiver_status_interval</varname>.
+        La valeur par défaut est <literal>off</literal>. Ce paramètre
+        peut seulement être configuré dans le fichier
+        <filename>postgresql.conf</filename> ou sur la ligne de commande
+        du serveur.
        </para>
       </listitem>
      </varlistentry>
@@ -4760,9 +4788,10 @@ COPY postgres_log FROM '/chemin/complet/vers/le/logfile.csv' WITH csv;
 
        <para>
         La valeur courante réelle du chemin de recherche peut être examinée via
-        la fonction <acronym>SQL</acronym> <function>current_schemas()</function>. 
-        Elle n'est pas identique à la valeur de <varname>search_path</varname>,
-        car <function>current_schemas()</function> affiche la façon dont les
+        la fonction <acronym>SQL</acronym> <function>current_schemas()</function>
+        (voir <xref linkend="functions-info"/>). Elle n'est pas identique
+        à la valeur de <varname>search_path</varname>
+        car <function>current_schemas</function> affiche la façon dont les
 	requêtes apparaissant dans <varname>search_path</varname> sont
 	résolues.
        </para>
