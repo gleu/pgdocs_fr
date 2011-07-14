@@ -60,6 +60,20 @@
         </div>
       </form>
     </div>
+    <div id="pgSideNav">
+      <div>
+<script>
+function jump_to_english() {
+var fr_url = location.href;
+var fr_pattern = "http://docs.postgresql(.fr|fr.org)/([7-9].[0-4])";
+var en_pattern = "http://www.postgresql.org/docs/$2/static";
+var reg=new RegExp(fr_pattern, "");
+window.location = fr_url.replace(reg,en_pattern) ;
+}
+</script>
+        <a href="javascript:jump_to_english()">Version anglaise</a>
+      </div>
+    </div>
   </div>
 
   <div id="pgContentWrap">
