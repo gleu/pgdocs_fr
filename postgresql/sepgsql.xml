@@ -15,7 +15,7 @@
 
  <warning>
    <para>
-     Cette implémentation a des limitations importantes et ne force pas
+     L'implémentation actuelle a des limitations importantes et ne force pas
      le contrôle d'accès pour toutes les actions. Voir
      <xref linkend="sepgsql-limitations"/>.
    </para>
@@ -34,7 +34,7 @@
    gestionnaire d'objet en espace utilisateur. Chaque accès à une table
    ou à une fonction initié par une requête DML sera vérifié par rapport
    à la politique de sécurité du système. Cette vérification est en plus
-   des vérifications de droits habituels effectuées par
+   des vérifications de droits SQL habituels effectuées par
    <productname>PostgreSQL</productname>.
   </para>
 
@@ -64,20 +64,20 @@
   <title>Installation</title>
 
   <para>
-    Ce module peut seulement être utilisé sur
+    <filename>sepgsql</filename> peut seulement être utilisé sur
     <productname>Linux</productname> 2.6.28 ou ultérieur, avec
     <productname>SELinux</productname> activé. Il n'est pas disponible
-    sur les autres plateformes et doit être explicitement activé en
-    utilisant <literal>--with-selinux</literal>. Vous aurez aussi besoin
+    sur les autres plateformes. Vous aurez aussi besoin
     de <productname>libselinux</productname> ou ultérieur et de
     <productname>selinux-policy</productname> 3.9.13 ou ultérieur
-    (certaines distributions peuvent proposer les règles nécessaires
+    (même si certaines distributions peuvent proposer les règles nécessaires
     dans des versions antérieures de politique).
   </para>
 
   <para>
    La commande <command>sestatus</command> vous permet de vérifier le
-   statut de <productname>SELinux</productname>.
+   statut de <productname>SELinux</productname>. Voici un affichage
+   standard&nbsp;:
 <screen>
 $ sestatus
 SELinux status:                 enabled
@@ -93,37 +93,43 @@ Policy from config file:        targeted
   </para>
 
   <para>
+   Pour construire ce module, ajoutez l'option <literal>--with-selinux</literal>
+   dans votre commande <literal>configure</literal> lors de la compilation
+   de PostgreSQL. Assurez-vous que le RPM <filename>libselinux-devel</filename>
+   est installé au moment de la construction.
+  </para>
+
+  <para>
    Pour utiliser ce module, vous devez ajouter <literal>sepgsql</literal>
-   dans <xref linkend="guc-shared-preload-libraries"/>. Le module ne
-   fonctionnera pas s'il est chargé d'une autre façon. Une fois que le
-   module est chargé, vous devez exécuter
+   dans le paramètre <xref linkend="guc-shared-preload-libraries"/> du
+   fichier <filename>postgresql.conf</filename>. Le module ne
+   fonctionnera pas correctement s'il est chargé d'une autre façon. Une
+   fois que le module est chargé, vous devez exécuter
    <filename>sepgsql.sql</filename> dans chaque base de données. Cela
    installera les fonctions nécessaires à la gestion des labels de
    sécurité et affectera des labels initiaux de sécurité.
   </para>
 
   <para>
-   Les instructions suivantes supposent que votre installation se trouve
-   dans le répertoire <filename>/usr/local/pgsql</filename> et que
-   le répertoire des données se trouve dans
-   <filename>/chemin/vers/base</filename>. Ajustez
-   les chemins affichés ci-dessous pour votre installation.
-  </para>
-
-<screen>
-$ export PGDATA=/chemin/vers/base
-$ initdb
-$ vi $PGDATA/postgresql.conf
-$ for DBNAME in template0 template1 postgres; do
-  postgres --single -F -O -c exit_on_error=true $DBNAME \
-      &lt; /usr/local/pgsql/share/contrib/sepgsql.sql &gt; /dev/null
-  done
-</screen>
-
-  <para>
-   Si le processus d'installation se termine sans erreur, vous pouvez
-   commencer à lancer le serveur normalement.
-  </para>
+   Voici un exemple montrant comment initialiser un répertoire de données
+   avec les fonctions <filename>sepgsql</filename> et les labels de
+   sécurité installés. Ajustez les chemins de façon approprié pour que
+   cela corresponde à votre installation&nbsp;:
+   </para>
+ 
+ <screen>
+$ export PGDATA=/path/to/data/directory
+ $ initdb
+ $ vi $PGDATA/postgresql.conf
+  modifiez
+    #shared_preload_libraries = ''                # (change requires restart)
+  en
+    shared_preload_libraries = 'sepgsql'          # (change requires restart)
+ $ for DBNAME in template0 template1 postgres; do
+    postgres --single -F -c exit_on_error=true $DBNAME \
+      &lt;/usr/local/pgsql/share/contrib/sepgsql.sql &gt;/dev/null
+   done
+ </screen>
 
   <para>
    Notez que vous pourriez voir les notifications suivantes, suivant la
@@ -132,8 +138,18 @@ $ for DBNAME in template0 template1 postgres; do
    <productname>selinux-policy</productname>.
 <screen>
 /etc/selinux/targeted/contexts/sepgsql_contexts:  line 33 has invalid object type db_blobs
+/etc/selinux/targeted/contexts/sepgsql_contexts:  line 36 has invalid object type db_language
+/etc/selinux/targeted/contexts/sepgsql_contexts:  line 37 has invalid object type db_language
+/etc/selinux/targeted/contexts/sepgsql_contexts:  line 38 has invalid object type db_language
+/etc/selinux/targeted/contexts/sepgsql_contexts:  line 39 has invalid object type db_language
+/etc/selinux/targeted/contexts/sepgsql_contexts:  line 40 has invalid object type db_language
 </screen>
-   Ce message n'est pas grave et peut être ignoré sans conséquence.
+   Ces messages ne sont graves et peuvent être ignorés sans conséquence.
+  </para>
+
+  <para>
+   Si le processus d'installation se termine sans erreur, vous pouvez
+   commencer à lancer le serveur normalement.
   </para>
  </sect2>
 
@@ -141,95 +157,96 @@ $ for DBNAME in template0 template1 postgres; do
   <title>Tests de régression</title>
   <para>
    Dû à la nature de <productname>SELinux</productname>, exécuter les
-   tests de régression pour ce module nécessite quelques étapes de
-   configuration supplémentaires.
+   tests de régression pour <filename>sepgsql</filename> nécessite
+   quelques étapes de configuration supplémentaires, some of which must be done as root.
++   The regression tests will not be run by an ordinary
++   <literal>make check</> or <literal>make installcheck</> command; you must
++   set up the configuration and then invoke the test script manually.
++   The tests must be run in the <filename>contrib/sepgsql</> directory
++   of a configured PostgreSQL build tree.  Although they require a build tree,
++   the tests are designed to be executed against an installed server,
++   that is they are comparable to <literal>make installcheck</> not
++   <literal>make check</>.
   </para>
 
   <para>
-   Tout d'abord, configurez <productname>sepgsql</productname> suivant
-   <xref linkend="sepgsql-installation"/>. Le test de régression a pour
-   but d'être exécuté sur un système ayant une implémentation
-   fonctionnelle de SE-Linux. L'utilisateur courant du système
-   d'exploitation doit être capable de se connecter à la base de données
-   en tant que superutilisateur et sans authentification.
+   Tout d'abord, configurez <filename>sepgsql</filename> in a working database
++   according to the instructions in <xref linkend="sepgsql-installation">.
++   Note that the current operating system user must be able to connect to the
++   database as superuser without password authentication.
   </para>
 
   <para>
    Ensuite, construisez et installez le paquet de politique pour les
-   tests de régression. Le fichier <filename>sepgsql-regtest.pp</filename>
+   tests de régression. Le fichier <filename>sepgsql-regtest</filename>
    est un paquet de politique à but spécial. Il fournit un ensemble de
    règles à autoriser pendant les tests de régression. Il doit être
    construit à partir du fichier source de politique
-   (<filename>sepgsql-regtest.te</filename>), ce qui se fait normalement
-   en utilisant <command>make</command>. Vous aurez besoin de localiser
-   le Makefile approprié sur votre système&nbsp;; le chemin affiché
-   ci-dessous est seulement un exemple. Une fois construit, vous pouvez
-   installer ce paquet de politique en utilisant la commande
-   <command>semodule</command>, qui lie les paquets de politique fournis
-   et les charge dans l'espace noyau. Si ce paquet est correctement
+   <filename>sepgsql-regtest.te</filename>, ce qui se fait en utilisant
+   <command>make</command> avec un fichier Makefile fourni par SELinux.
+   Vous aurez besoin de localiser le Makefile approprié sur votre
+   système&nbsp;; le chemin affiché ci-dessous est seulement un exemple.
+   Une fois construit, installez ce paquet de politique en utilisant la
+   commande
+   <command>semodule</command>, qui charge les paquets de politique fournis
+   dans le noyau. Si ce paquet est correctement
    installé, <literal><command>semodule</command> -l</literal> doit lister
-   sepgsql-regtest comme un paquet de politique disponible.
+   sepgsql-regtest comme un paquet de politique disponible&nbsp;:
   </para>
 
 <screen>
-$ make -C ./contrib/sepgsql -f /usr/share/selinux/devel/Makefile
-$ su
-# semodule -u ./contrib/sepgsql/sepgsql-regtest.pp
-# semodule -l
-    :
-sepgsql-regtest 1.03
-    :
+$ cd .../contrib/sepgsql
+$ make -f /usr/share/selinux/devel/Makefile
+$ sudo semodule -u sepgsql-regtest.pp
+$ sudo semodule -l | grep sepgsql
 </screen>
 
   <para>
    Puis, activez <literal>sepgsql_regression_test_mode</literal>. Nous
    n'activons pas toutes les règles du fichier
-   <filename>sepgsql-regtest.pp</filename> par défaut, pour la sécurité
+   <filename>sepgsql-regtest</filename> par défaut, pour la sécurité
    de votre système. Le paramètre
-   <literal>sepgsql_regression_test_mode</literal> est associé à des
+   <literal>sepgsql_regression_test_mode</literal> active les
    règles pour le lancement des tests de régression. Il peut être
-   activé en utilisant la commande <command>setsebool</command>.
+   activé en utilisant la commande <command>setsebool</command>&nbsp;:
   </para>
 
 <screen>
-$ su
-# setsebool sepgsql_regression_test_mode on
-# getsebool sepgsql_regression_test_mode
-sepgsql_regression_test_mode --> on
+$ sudo setsebool sepgsql_regression_test_mode on
+$ getsebool sepgsql_regression_test_mode
 </screen>
 
   <para>
-   Enfin, lancez les tests de régression à partir du domaine
-   <literal>unconfined_t</literal>.
-  </para>
-
-  <para>
-   La commande <command>id</command> nous indique le domaine en cours.
-   Confirmez que votre shell utilise le domaine
-   <literal>unconfined_t</literal> ainsi&nbsp;:
+   Ensuite, vérifiez que votre shell est exécuté dans le domaine
+   <literal>unconfined_t</literal>&nbsp;:
   </para>
 <screen>
-$ id -Z
-unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+$ ./test_sepgsql
 </screen>
 
   <para>
-   Voir <xref linkend="sepgsql-resources"/> pour des détails sur
-   l'ajustement de votre domaine de travail, si nécessaire.
+   Ce script tentera de vérifier que vous avez fait correctement toutes
+   les étapes de configuration, puis il lancera les tests de régression
+   du module <filename>sepgsql</filename>.
   </para>
 
   <para>
-   Si <command>pg_regress</command> échoue au lancement de la commande
-   <command>psql</command>, vous devez vous assurer que la commande
-   <command>psql</command> est labelisée <literal>bin_t</literal>. Dans
-   le cas contraire, la commande <command>restorecon</command> peut être
-   utilisée pour corriger les labels de sécurité dans le répertoire
-   d'installation de <productname>PostgreSQL</productname>.
+   Une fois les tests terminés, il est recommandé de désactiver le
+   paramètre <literal>sepgsql_regression_test_mode</literal>&nbsp;:
+   </para>
+ 
+ <screen>
+$ sudo setsebool sepgsql_regression_test_mode off
+</screen>
+
+  <para>
+   Vous pouvez préférer supprimer complètement la politique
+   <filename>sepgsql-regtest</filename>&nbsp;:
   </para>
 
 <screen>
-$ restorecon -R /usr/local/pgsql/
-</screen>
+$ sudo semodule -r sepgsql-regtest
+ </screen>
  </sect2>
 
  <sect2 id="sepgsql-parameters">
@@ -243,7 +260,7 @@ $ restorecon -R /usr/local/pgsql/
     </indexterm>
     <listitem>
      <para>
-      Ce paramètre active <productname>SE-PostgreSQL</productname> pour
+      Ce paramètre active <productname>sepgsql</productname> pour
       qu'il fonctionne en mode permissif, quelque soit la configuration
       du système. La valeur par défaut est off.
       Ce paramètre es configurable dans le fichier
@@ -251,8 +268,8 @@ $ restorecon -R /usr/local/pgsql/
      </para>
 
      <para>
-      Quand ce paramètre est activé, <productname>SE-PostgreSQL</productname>
-      fonctionne en mode permissif, même si le système de la plateforme
+      Quand ce paramètre est activé, <productname>sepgsql</productname>
+      fonctionne en mode permissif, même si SELinux
       fonctionne en mode forcé. Ce paramètre est utile principalement
       pour des tests.
      </para>
@@ -266,9 +283,10 @@ $ restorecon -R /usr/local/pgsql/
     </indexterm>
     <listitem>
      <para>
-      Ce paramètre active l'affichage de messages d'audit indépendants
-      de la configuration de la politique. La valeur par défaut est
-      off (d'après la configuration de la politique de sécurité).
+      Ce paramètre active l'affichage de messages d'audit quelque soit
+      la configuration de la politique. La valeur par défaut est
+      off, autrement dit les messages seront affichés suivant la
+      configuration du système.
      </para>
 
      <para>
@@ -293,17 +311,18 @@ $ restorecon -R /usr/local/pgsql/
    <title>Classes d'objet contrôlé</title>
    <para>
     Le modèle de sécurité <productname>SELinux</productname> décrit toutes
-    les règles de contrôle d'accès comme une relation entre une entité
-    sujet (habituellement le client d'une base) et une entité objet. Les
+    les règles de contrôle d'accès comme des relations entre une entité
+    sujet (habituellement le client d'une base) et une entité objet
+    (tel que l'objet base de données). Les
     deux sont identifiés par un label de sécurité. Si un accès à un
     objet sans label est tenté, l'objet est traité comme si le label
     <literal>unlabeled_t</literal> lui est affecté.
    </para>
 
    <para>
-    Actuellement, <productname>sepgsql</productname> autorise l'affectation
+    Actuellement, <filename>sepgsql</filename> autorise l'affectation
     de label de sécurité aux schémas, tables, colonnes, séquences, vues
-    et fonctions. Quand <productname>sepgsql</productname> est en cours
+    et fonctions. Quand <filename>sepgsql</filename> est en cours
     d'utilisation, des labels de sécurité sont automatiquement affectés
     aux objets de la base au moment de leur création. Ce label est appelé
     un label de sécurité par défaut et est configuré par la politique de
@@ -316,8 +335,9 @@ $ restorecon -R /usr/local/pgsql/
     de l'objet parent, sauf quand la politique de sécurité a des règles
     spéciales, connues sous le nom de règles de transition, auquel cas
     un label différent est affecté. Pour les schémas, l'objet parent est
-    la base de données&nbsp;; pour les colonnes, il s'agit de la table&nbsp;;
-    pour les tables, séquences, vues et fonctions, il s'agit du schéma.
+    la base de données&nbsp;; pour les tables, séquences, vues et
+    fonctions, il s'agit du schéma&nbsp;; pour les colonnes, il s'agit
+    de la table.
    </para>
   </sect3>
 
@@ -332,7 +352,7 @@ $ restorecon -R /usr/local/pgsql/
     aussi vérifié pour toutes les tables qui contiennent des colonnes
     référencées dans la clause <literal>WHERE</literal> ou
     <literal>RETURNING</literal>, comme source de données d'un
-    <literal>UPDATE</literal>, et ainsi de suite.
+    <literal>UPDATE</literal>, et ainsi de suite. Par exemple, avec&nbsp;:
    </para>
 
    <para>
@@ -344,13 +364,6 @@ UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
     plus de <literal>db_table:update</literal> car <literal>t1.a</literal>
     est référencée dans la clause <literal>WHERE</literal>. Les droits
     sur les colonnes seront aussi vérifiés pour chaque colonne référencée.
-   </para>
-
-   <para>
-    Le client doit être autorisé à accéder à toutes les tables et colonnes
-    référencées, même si elles proviennent de vues qui ont été aplaties,
-    pour pouvoir appliquer des règles de contrôles d'accès cohérentes
-    indépendamment de la manère dont le contenu des tables est référencé.
    </para>
 
    <para>
@@ -400,18 +413,25 @@ UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
    </para>
 
    <para>
+    Le client doit être autorisé à accéder à toutes les tables et colonnes
+    référencées, même si elles proviennent de vues qui ont été aplaties,
+    pour pouvoir appliquer des règles de contrôles d'accès cohérentes
+    indépendamment de la manère dont le contenu des tables est référencé.
+   </para>
+
+   <para>
     Le système des droits de la base, par défaut, autorise les
     superutilisateurs de la base à modifier les catalogues systèmes en
     utilisant des commandes DML, et de référencer ou modifier les tables
     TOAST. Ces opérations sont interdites quand
-    <productname>sepgsql</productname> est activé.
+    <filename>sepgsql</filename> est activé.
    </para>
   </sect3>
 
   <sect3>
    <title>Droits DDL</title>
    <para>
-    Sur la commande <xref linkend="sql-security-label"/>,
+    Quand la commande <xref linkend="sql-security-label"/> est exécutée,
     <literal>setattr</literal> et <literal>relabelfrom</literal> devraient
     être vérifiés sur l'objet en cours de labelisation avec un ancien
     label de sécurité, puis <literal>relabelto</literal> sur le nouveau
@@ -428,7 +448,7 @@ UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
   </sect3>
 
   <sect3>
-   <title>Procédure de confiance</title>
+   <title>Procédures de confiance</title>
    <para>
     Les procédures de confiance sont similaires aux fonctions dont la
     sécurité est définie à la création ou aux commandes set-uid. 
@@ -481,8 +501,8 @@ postgres=# SELECT cid, cname, show_credit(cid) FROM customer;
    <para>
     Dans ce cas, un utilisateur standard ne peut pas faire référence à
     <literal>customer.credit</literal> directement mais une procédure de
-    confiance comme <literal>show_credit</literal> nous permet d'afficher
-    le numéro de carte de crédit de clients, avec quelques chiffres
+    confiance comme <literal>show_credit</literal> lui permet d'afficher
+    le numéro de carte de crédit des clients, avec quelques chiffres
     masqués.
    </para>
   </sect3>
@@ -501,17 +521,6 @@ postgres=# SELECT cid, cname, show_credit(cid) FROM customer;
   <title>Limitations</title>
 
   <variablelist>
-   <varlistentry>
-    <term>Cache des vecteurs d'accès en espace utilisateur</term>
-    <listitem>
-     <para>
-      <productname>sepgsql</productname> ne supporte pas encore un cache
-      des vecteurs d'accès. Une fois ajouté, cela devrait améliorer les
-      performances.
-     </para>
-    </listitem>
-   </varlistentry>
-
    <varlistentry>
     <term>Droits DDL</term>
     <listitem>
@@ -537,7 +546,7 @@ postgres=# SELECT cid, cname, show_credit(cid) FROM customer;
     <listitem>
      <para>
       <productname>PostgreSQL</productname> ne supporte pas le contrôle
-      d'accès au niveau ligne. Du coup, <productname>sepgsql</productname>
+      d'accès au niveau ligne. Du coup, <filename>sepgsql</filename>
       ne le supporte pas non plus.
      </para>
     </listitem>
@@ -547,7 +556,7 @@ postgres=# SELECT cid, cname, show_credit(cid) FROM customer;
     <term>Canaux cachés</term>
     <listitem>
      <para>
-      <productname>sepgsql</productname> n'essaie jamais de cacher
+      <filename>sepgsql</filename> n'essaie pas de cacher
       l'existence d'un objet particulier, même si l'utilisateur n'est
       pas autorisé à y accéder. Par exemple, nous pouvons inférer
       l'existence d'un objet invisible suite à un conflit de clé primaire,
