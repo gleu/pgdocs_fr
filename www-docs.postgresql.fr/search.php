@@ -19,11 +19,10 @@ $pgconn = @pg_connect("host=localhost dbname=docspgfr user=docspgfr") or die('Co
 $query = "SET client_encoding TO utf8;";
 $result = pg_query($pgconn, $query);
 
-$version['801'] = '8.1';
-$version['802'] = '8.2';
 $version['803'] = '8.3';
 $version['804'] = '8.4';
 $version['900'] = '9.0';
+$version['901'] = '9.1';
 ?>
 <!DOCTYPE html SYSTEM "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">

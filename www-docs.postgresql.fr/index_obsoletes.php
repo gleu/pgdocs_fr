@@ -17,11 +17,10 @@ $pgconn = @pg_connect("host=localhost dbname=docspgfr user=docspgfr") or die('Co
 $query = "SET client_encoding TO utf8;";
 $result = pg_query($pgconn, $query);
 
-$version['801'] = '8.1';
-$version['802'] = '8.2';
 $version['803'] = '8.3';
 $version['804'] = '8.4';
 $version['900'] = '9.0';
+$version['901'] = '9.1';
 ?>
 <!DOCTYPE html SYSTEM "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -121,6 +120,43 @@ $version['900'] = '9.0';
     <div id="docs">
     <h1>Documentation des versions obsolètes</h1>
     <p>Ces versions ne sont plus mises à jour par le projet PostgreSQL.</p>
+    <div id="pg82">
+      <h2>Documentation PostgreSQL, version 8.2</h2>
+      <div class="listes">
+        <ul>
+            <li>Manuel au format HTML&nbsp;:
+                <a href="8.2/">Consultation en
+                ligne</a>,
+                t&eacute;l&eacute;chargement en
+                <a onclick="pageTracker._trackPageview('/pg821.zip');"
+                href="http://docs.postgresql.fr/8.2/pg82.zip">ZIP</a> ou
+                <a onclick="pageTracker._trackPageview('/pg82.tar.gz');"
+                href="http://docs.postgresql.fr/8.2/pg82.tar.gz">TAR.GZ</a>
+            </li>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg82.chm');"
+              href="http://docs.postgresql.fr/8.2/pg82.chm">CHM</a>
+              (syst&egrave;me d'aide Windows)
+            </li>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg82.pdf');"
+              href="http://docs.postgresql.fr/8.2/pg82.pdf">PDF</a>
+            </li>
+            <li>Document d'installation au format <a
+              onclick="pageTracker._trackPageview('/INSTALL82.html');"
+              href="http://docs.postgresql.fr/8.2/INSTALL.html">HTML</a> et
+              <a onclick="pageTracker._trackPageview('/INSTALL82.txt');"
+              href="http://docs.postgresql.fr/8.2/INSTALL.txt">texte</a>
+            </li>
+            <li><a onclick="pageTracker._trackPageview('/pg82.man.tar.gz');"
+              href="http://docs.postgresql.fr/8.2/pg82.man.tar.gz">Pages
+              man</a></li>
+	    <!--
+            <li><a onclick="pageTracker._trackPageview('/plugin82.firefox');"
+              href="javascript:addEngine('pgfr-docs82','png','Computer',0)">
+              Plugin de recherche</a> pour Firefox et Mozilla</li>
+	    -->
+        </ul>
+      </div>
+    </div>
     <div id="pg81">
       <h2>Documentation PostgreSQL, version 8.1</h2>
       <div class="listes">
