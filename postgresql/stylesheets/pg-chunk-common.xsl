@@ -55,7 +55,7 @@
       <form method="post" action="http://docs.postgresql.fr/search.php">
         <div>
           <h2><label for="q">Rechercher</label></h2>
-          <input type='hidden' id='v' name='v' value='900' />
+          <input type='hidden' id='v' name='v' value='901' />
           <input id="q" name="q" type="text" size="10" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="Rechercher" accesskey="r" /><input id="submit" name="submit" type="submit" value="Rechercher" />
         </div>
       </form>
