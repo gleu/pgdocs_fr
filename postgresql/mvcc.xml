@@ -165,7 +165,7 @@
    </para>
 
     <table tocentry="1" id="mvcc-isolevel-table">
-     <title>Niveaux d'isolation des transactions <acronym>SQL</acronym></title>
+     <title>Niveaux d'isolation standards des transactions <acronym>SQL</acronym></title>
      <tgroup cols="4">
      <colspec colnum="1" colwidth="2.2*"/>
      <colspec colnum="2" colwidth="0.6*"/>
@@ -1236,6 +1236,10 @@ transaction exécute&nbsp;:
     <title>Verrous informatifs</title>
 
     <indexterm zone="advisory-locks">
+     <primary>advisory lock</primary>
+    </indexterm>
+
+    <indexterm zone="advisory-locks">
      <primary>lock</primary>
      <secondary>advisory</secondary>
     </indexterm>
@@ -1251,43 +1255,58 @@ transaction exécute&nbsp;:
      qualifiés d'<firstterm>informatifs</firstterm> car le système ne force
      pas leur utilisation &mdash; c'est à l'application de les utiliser
      correctement. Les verrous informatifs peuvent être utiles pour
-     des manières d'utiliser le verrouillage qui ne sont pas en phase avec le modèle MVCC. </para>
+     des manières d'utiliser le verrouillage qui ne sont pas en phase avec
+     le modèle MVCC. Par exemple, une utilisation habituelle des verrous
+     informations est l'émulation de stratégie de verrouillage pessimiste
+     typique des systèmes de gestion de données à partir de <quote>fichiers
+     à plat</quote>. Bien qu'un drapeau stocké dans une table puisse être
+     utilisé pour la même raison, les verrous informatifs sont plus rapides,
+     évitent la fragmentation de la table et sont nettoyés automatiquement
+     par le serveur à la fin de la session.
+    </para>
 
     <para>
-     Il y a deux types différents de verrous informatifs dans
-     <productname>PostgreSQL</productname>: au niveau de la session et
-     au niveau de la transaction. Une fois acquis, un verrou informatif
-     au niveau de la session est maintenu jusqu'à ce qu'il soit
-     explicitement relâché ou que la session se termine. Contrairement
-     aux verrous standard, les verrous informatifs au niveau de la
-     session ne respectent pas les sémantiques de transaction: un
-     verrou acquis durant une transaction qui est plus tard annulée
-     sera toujours possédé après l'annulation, et de la même façon
-     une libération de verrou reste effective même si la transaction
-     appelante échoue plus loin. Le même verrou de niveau session peut
-     être acquis plusieurs fois par le processus le détenant: pour
-     chaque demande de verrou il faudra une libération avant que le
-     verrou soit réellement libéré. (Si une session possède déjà
-     un verrou, les demandes suivants réussiront toujours, même si
-     d'autres sessions attendent l'acquisition du verrou). Les verrous
-     de niveau transaction, par contre, se comportent plus comme des
-     verrous classiques; ils sont libérés automatiquement à la fin de
-     la transaction, et ne peuvent pas être explicitement libérés. Les
-     verrous de niveau session et transaction partagent le même espace
-     de verrous, ce qui signifie qu'un verrou au niveau transaction
-     empêchera une autre session d'obtenir un verrou au niveau session
-     sur la même ressource, et vice versa.
-     Comme tous les verrous dans <productname>PostgreSQL</productname>,
-     une liste complète des verrous informatifs
-     possédés à un moment donné par une session
-     peuvent être trouvés dans la vue système <link linkend="view-pg-locks"><structname>pg_locks</structname></link>.
-     </para>
+     Il existe deux façons pour acquérir un verrou informatif dans
+     <productname>PostgreSQL</productname>&nbsp;: au niveau de la session
+     ou au niveau de la transaction. Une fois acquis au niveau de la
+     session, un verrou information est détenu jusqu'à ce que le verrou
+     soit explicitement relâché ou à la fin de la session. Contrairement
+     aux demandes de verrou standard, les demandes de verrous informatifs
+     au niveau session n'honorent pas la sémantique de la transaction&nbsp;:
+     un verrou acquis lors d'une transaction qui est annulée plus tard
+     sera toujours acquis après le ROLLBACK, et de la même façon, un verrou
+     relâché reste valide même si la transaction appelante a échoué après.
+     Un verrou peut être acquis plusieurs fois par le processus qui le
+     détient&nbsp;; pour chaque demande de verrou terminée, il doit y avoir
+     une demande de relâche du verrou correspondant avant que ce dernier
+     ne soit réellement relâché.
+     D'un autre côté, les demandes de verrou au niveau transaction se comportent
+     plutôt comme des demandes de verrous standards&nbsp;: les verrous sont
+     automatiquement relâchés à la fin de la transaction, et il n'y a pas
+     d'opération explicite de déverrouillage. Ce comportement est souvent
+     plus intéressant que le comportement au niveau session pour un usage
+     rapide d'un verrou informatif.
+     Les demandes de verrou au niveau session et transaction pour le même
+     identifiant de verrou informatif se bloqueront de la façon attendue.
+     Si une session détient déjà un verrou informatif donné, les demandes
+     supplémentaires par le même processus réussiront toujours, même si
+     d'autres sessions sont en attente&nbsp;; ceci est vrai quelque soit
+     le niveau (session ou transaction) du verrou détenu et des verrous
+     demandés.
+    </para>
 
     <para>
-     Les verrous informatifs sont alloués à partir d'une portion de mémoire
-     partagée dont la taille est définie par les variables de configuration
-     <xref linkend="guc-max-locks-per-transaction"/> et
-     <xref linkend="guc-max-connections"/>. Attention à ne pas vider cette
+     Comme tous les verrous dans <productname>PostgreSQL</productname>, une
+     liste complète des verrous informatifs détenus actuellement par toute
+     session est disponible dans la vue système <link
+     linkend="view-pg-locks"><structname>pg_locks</structname></link>.
+    </para>
+
+    <para>
+     Les verrous informatifs et les verrous standards sont stockés dans une
+     partie de la mémoire partagée, dont la taille est définie par les
+     variables de configuration <xref linkend="guc-max-locks-per-transaction"/>
+     et <xref linkend="guc-max-connections"/>. Attention à ne pas vider cette
      mémoire, sinon le serveur ne serait plus capable d'accorder des verrous.
      Ceci impose une limite supérieure au nombre de verrous informatifs que le
      serveur peut accorder, typiquement entre des dizaines et des centaines de
@@ -1295,12 +1314,7 @@ transaction exécute&nbsp;:
     </para>
 
     <para>
-     Une utilisation commune des verrous informatifs est d'émuler des stratégies
-     de verrou pessimiste, typiques des systèmes de gestion de données sur
-     <quote>fichier plat</quote>. Alors qu'une option stockée dans une table
-     pourrait être utilisée dans le même but, les verrous informatifs sont plus
-     rapides, évitent le grossissement de MVCC et peuvent être automatiquement nettoyés
-     par le serveur à la fin d'une session. Dans certains cas qui utilisent
+     Dans certains cas utilisant
      cette méthode, tout spécialement les requêtes impliquant un tri explicite
      et des clauses <literal>LIMIT</literal>, une grande attention doit être
      portée au contrôle des verrous acquis, à cause de l'ordre dans lequel les
@@ -1493,5 +1507,79 @@ SELECT pg_advisory_lock(q.id) FROM
      verrous explicitement avant que l'instantané ne soit figé.
     </para>
    </sect2>
+  </sect1>
+
+  <sect1 id="locking-indexes">
+   <title>Locking and Indexes</title>
+
+   <indexterm zone="locking-indexes">
+    <primary>index</primary>
+    <secondary>locks</secondary>
+   </indexterm>
+
+   <para>
+    Though <productname>PostgreSQL</productname>
+    provides nonblocking read/write access to table
+    data, nonblocking read/write access is not currently offered for every
+    index access method implemented
+    in <productname>PostgreSQL</productname>.
+    The various index types are handled as follows:
+
+    <variablelist>
+     <varlistentry>
+      <term>
+       B-tree, <acronym>GiST</acronym> and <acronym>SP-GiST</acronym> indexes
+      </term>
+      <listitem>
+       <para>
+        Short-term share/exclusive page-level locks are used for
+        read/write access. Locks are released immediately after each
+        index row is fetched or inserted.  These index types provide
+        the highest concurrency without deadlock conditions.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>
+       Hash indexes
+      </term>
+      <listitem>
+       <para>
+        Share/exclusive hash-bucket-level locks are used for read/write
+        access.  Locks are released after the whole bucket is processed.
+        Bucket-level locks provide better concurrency than index-level
+        ones, but deadlock is possible since the locks are held longer
+        than one index operation.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>
+       <acronym>GIN</acronym> indexes
+      </term>
+      <listitem>
+       <para>
+        Short-term share/exclusive page-level locks are used for
+        read/write access. Locks are released immediately after each
+        index row is fetched or inserted. But note that insertion of a
+        GIN-indexed value usually produces several index key insertions
+        per row, so GIN might do substantial work for a single value's
+        insertion.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+
+   <para>
+    Currently, B-tree indexes offer the best performance for concurrent
+    applications; since they also have more features than hash
+    indexes, they are the recommended index type for concurrent
+    applications that need to index scalar data. When dealing with
+    non-scalar data, B-trees are not useful, and GiST, SP-GiST or GIN
+    indexes should be used instead.
+   </para>
   </sect1>
  </chapter>

@@ -27,6 +27,7 @@ EXPLAIN [ ANALYZE ] [ VERBOSE ] <replaceable class="parameter">instruction</repl
     VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
     COSTS [ <replaceable class="parameter">boolean</replaceable> ]
     BUFFERS [ <replaceable class="parameter">boolean</replaceable> ]
+    TIMING [ <replaceable class="parameter">boolean</replaceable> ]
     FORMAT { TEXT | XML | JSON | YAML }
 
 </synopsis>
@@ -61,25 +62,26 @@ EXPLAIN [ ANALYZE ] [ VERBOSE ] <replaceable class="parameter">instruction</repl
   <para>
    La partie la plus importante de l'affichage concerne l'affichage des coûts 
    estimés d'exécution. Ils représentent l'estimation faite par le planificateur
-   des temps d'exécution de la requête (mesurés en unités de récupération de pages
-   sur le disque).
-   Deux nombres sont affichés&nbsp;: le temps de démarrage, écoulé avant que la première
-   ligne soit renvoyée, et le temps d'exécution total, nécessaire au renvoi
+   des temps d'exécution de la requête (measured in cost units that are arbitrary, but conventionally
+   mean disk page fetches).
+   Deux nombres sont affichés&nbsp;: le coût de démarrage, écoulé avant que la première
+   ligne soit renvoyée, et le coût d'exécution total, nécessaire au renvoi
    de toutes les lignes.
-   Pour la plupart des requêtes, le temps qui importe est celui d'exécution totale. 
+   Pour la plupart des requêtes, le coût qui importe est celui d'exécution totale. 
    Mais dans certains cas, tel que pour une sous-requête dans la clause
-   <literal>EXISTS</literal>, le planificateur choisira le temps de démarrage le 
+   <literal>EXISTS</literal>, le planificateur choisira le coût de démarrage le 
    plus court, et non celui d'exécution totale (car, de toute façon, l'exécuteur
    s'arrête après la récupération d'une ligne).
    De même, lors de la limitation des résultats à retourner par une
    clause <literal>LIMIT</literal>, la planificateur effectue une interpolation
-   entre les deux temps limites pour choisir le plan réellement le moins coûteux.
+   entre les deux coûts limites pour choisir le plan réellement le moins coûteux.
   </para>
 
   <para>
    L'option <literal>ANALYZE</literal> impose l'exécution de la requête en plus de 
-   sa planification. Le temps total d'exécution de chaque n&oelig;ud du plan (en millisecondes)
-   et le nombre total de lignes effectivement retournées sont ajoutés à l'affichage.
+   sa planification. Then actual runtime statistics are added to
+   the display, including the total elapsed time expended within each plan
+   node (in milliseconds) and the total number of rows it actually returned.
    C'est utile pour vérifier la véracité des informations fournies par le planificateur.
   </para>
 
@@ -120,8 +122,8 @@ ROLLBACK;
     <term><literal>ANALYZE</literal></term>
     <listitem>
      <para>
-      Exécute la commande et affiche les temps d'exécution réels. Ce paramètre
-      est par défaut à <literal>FALSE</literal>.
+      Exécute la commande et affiche les temps d'exécution réels et d'autres
+      statistiques. Ce paramètre est par défaut à <literal>FALSE</literal>.
      </para>
     </listitem>
    </varlistentry>
@@ -156,19 +158,41 @@ ROLLBACK;
     <term><literal>BUFFERS</literal></term>
     <listitem>
      <para>
-      Inclut des informations sur l'utilisation des blocs. Cela inclut le
-      nombre de lecture de blocs partagés en cache, sur le disque ainsi que
-      le nombre de blocs écrits. Cela inclut aussi le nombre de blocs locaux
-      lus dans le cache, sur le disque et le nombre de blocs locaux écrits.
-      Enfin, cela inclut le nombre de blocs temporaires lus et écrits.
-      Les blocs partagés, les blocs locaux et les blocs temporaires contiennent
-      respectivement des tables et des index, des tables temporaires et des
-      index temporaires, et les blocs disques utilisés dans les tris et les
-      plans matérialisés. Le nombre de blocs affichés pour un n&oelig;ud de
-      haut niveau inclut ceux utilisés par tous ses enfants. Dans le format
-      texte, seuls les valeurs différentes de zéro sont affichés. Ce paramètre
-      pourrait seulement être utilisé avec le paramètre
-      <literal>ANALYZE</literal>. Il vaut par défaut <literal>FALSE</literal>.
+       Include information on buffer usage. Specifically, include the number of
+      shared blocks hit, read, dirtied, and written, the number of local blocks
+      hit, read, dirtied, and written, and the number of temp blocks read and
+      written.
+      A <emphasis>hit</emphasis> means that a read was avoided because the block was
+      found already in cache when needed.
+      Shared blocks contain data from regular tables and indexes;
+      local blocks contain data from temporary tables and indexes;
+      while temp blocks contain short-term working data used in sorts, hashes,
+      Materialize plan nodes, and similar cases.
+      The number of blocks <emphasis>dirtied</emphasis> indicates the number of
+      previously unmodified blocks that were changed by this query; while the
+      number of blocks <emphasis>written</emphasis> indicates the number of
+      previously-dirtied blocks evicted from cache by this backend during
+      query processing.
+      The number of blocks shown for an
+       upper-level node includes those used by all its child nodes.  In text
+       format, only non-zero values are printed.  This parameter may only be
+      used when <literal>ANALYZE</literal> is also enabled.  It defaults to
+       <literal>FALSE</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>TIMING</literal></term>
+    <listitem>
+     <para>
+      Include the actual startup time and time spent in the node in the output.
+      The overhead of repeatedly reading the system clock can slow down the
+      query significantly on some systems, so it may be useful to set this
+      parameter to <literal>FALSE</literal> when only actual row counts, and not
+      exact times, are needed.
+      This parameter may only be used when <literal>ANALYZE</literal> is also
+      enabled.  It defaults to <literal>TRUE</literal>.
      </para>
     </listitem>
    </varlistentry>
@@ -215,33 +239,44 @@ ROLLBACK;
  </refsect1>
 
  <refsect1>
+  <title>Outputs</title>
+ 
+   <para>
+    The command's result is a textual description of the plan selected
+    for the <replaceable class="parameter">statement</replaceable>,
+    optionally annotated with execution statistics.
+    <xref linkend="using-explain"/> describes the information provided.
+   </para>
+ </refsect1>
+
+ <refsect1>
   <title>Notes</title>
-
-  <para>
-   La documentation sur l'utilisation faite par l'optimiseur des informations de coût
-   est assez réduite dans <productname>PostgreSQL</productname>. On peut se référer
-   à <xref linkend="using-explain"/> pour plus d'informations.
-  </para>
-  <para>
-   Pour que le planificateur de requêtes de <productname>PostgreSQL</productname>
-   puisse prendre des décisions en connaissance de cause, l'instruction
-   <xref linkend="sql-analyze"/> doit avoir été exécutée afin d'enregistrer 
-   les statistiques de distribution des données dans la table.
-   Si cela n'a pas été fait, (ou si la distribution statistique des
-   données dans la table a changé de manière significative depuis
-   la dernière exécution de la commande <command>ANALYZE</command>)
-   les coûts estimés risquent de ne pas refléter les propriétés réelles de
-   la requête. De ce fait, un plan de requête inférieur risque d'être choisi.
-  </para>
-
-  <para>
-   Pour mesurer le coût d'exécution du plan d'exécution, l'implémentation
-   actuelle de <command>EXPLAIN ANALYZE</command> peut ajouter un délai
-   considérable à l'exécution de la requête à cause du profilage. De ce fait,
-   exécuter <command>EXPLAIN ANALYZE</command> sur une requête peut prendre
-   bien plus de temps que d'exécuter la requête seule. Ce délai dépend
-   de la nature de la requête.
-  </para>
+ 
+   <para>
+    In order to allow the <productname>PostgreSQL</productname> query
+    planner to make reasonably informed decisions when optimizing
+   queries, the <link
+   linkend="catalog-pg-statistic"><structname>pg_statistic</structname></link>
+   data should be up-to-date for all tables used in the query.  Normally
+   the <link linkend="autovacuum">autovacuum daemon</link> will take care
+   of that automatically.  But if a table has recently had substantial
+   changes in its contents, you might need to do a manual
+   <xref linkend="sql-analyze"/> rather than wait for autovacuum to catch up
+   with the changes.
+   </para>
+ 
+   <para>
+    In order to measure the run-time cost of each node in the execution
+    plan, the current implementation of <command>EXPLAIN
+   ANALYZE</command> adds profiling overhead to query execution.
+   As a result, running <command>EXPLAIN ANALYZE</command>
+    on a query can sometimes take significantly longer than executing
+    the query normally. The amount of overhead depends on the nature of
+   the query, as well as the platform being used.  The worst case occurs
+   for plan nodes that in themselves require very little time per
+   execution, and on machines that have relatively slow operating
+   system calls for obtaining the time of day.
+   </para>
  </refsect1>
 
  <refsect1>

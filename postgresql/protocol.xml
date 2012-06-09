@@ -128,9 +128,9 @@
     Dans le protocole des requêtes étendues, l'exécution de commandes SQL est
     scindée en plusieurs étapes. L'état retenu entre les étapes est représenté
     par deux types d'objets&nbsp;: les <firstterm>instructions préparées</firstterm> et
-    les <firstterm>portails</firstterm>. une instruction préparée représente le résultat
-    de l'analyse syntaxique, de l'analyse sémantique et de la planification d'une
-    chaîne de requête textuelle. Une instruction préparée n'est pas nécessairement prête à
+    les <firstterm>portails</firstterm>. Une instruction préparée représente le résultat
+    de l'analyse syntaxique et de l'analyse sémantique d'une
+    chaîne de requête textuelle. Une instruction préparée en elle-même n'est pas prête à
     être exécutée parce qu'il peut lui manquer certaines valeurs de
     <firstterm>paramètres</firstterm>. un portail représente une instruction prête à être
     exécutée ou déjà partiellement exécutée, dont toutes les valeurs de
@@ -295,11 +295,16 @@
       <term>authenticationmd5password</term>
       <listitem>
        <para>
-        Le client doit alors envoyer un PasswordMessage contenant le mot
-        de passe chiffré à l'aide de MD5, en utilisant le composant salt de quatre
-        caractères spécifié dans le message AuthenticationMD5Password. Si le mot
-        de passe est correct, le serveur répond AuthenticationOk,
-        ErrorResponse sinon.
+         The frontend must now send a PasswordMessage containing the
+        password (with username) encrypted via MD5, then encrypted
+        again using the 4-byte random salt specified in the
+        AuthenticationMD5Password message.  If this is the correct
+        password, the server responds with an AuthenticationOk,
+        otherwise it responds with an ErrorResponse.  The actual
+        PasswordMessage can be computed in SQL as <literal>concat('md5',
+        md5(concat(md5(concat(password, username)), random-salt)))</literal>.
+        (Keep in mind the <function>md5()</function> function returns its
+        result as a hex string.)
        </para>
       </listitem>
      </varlistentry>
@@ -732,7 +737,7 @@
        la prochaine instruction Parse spécifiant l'instruction non nommée comme
        destination. Un simple message Query détruit également l'instruction non
        nommée. Les instructions préparées nommées doivent être explicitement
-       closes avant de pouvoir être redéfinies par un message Parse. Ce n'est
+       closes avant de pouvoir être redéfinies par un autre message Parse. Ce n'est
        pas obligatoire pour une instruction non nommée. Il est également possible
        de créer des instructions préparées nommées, et d'y accéder, en ligne de
        commandes SQL à l'aide des instructions <command>prepare</command> et
@@ -762,39 +767,14 @@
       </note>
 
    <para>
-    La planification d'un requête préparée 
-    nommée se fait lorsque le message Parse est traité. Si une requête est 
-    exécutée plusieurs fois, avec différents paramètres, il peut être 
-    bénéfique d'envoyer un seul message Parse contenant la requête 
-    paramétrée, suivie de plusieurs messages Bind et Execute.
-    Cette méthode permet d'éviter de replanifier la requête à chaque exécution.
+    Query planning typically occurs when the Bind message is processed.
+    If the prepared statement has no parameters, or is executed repeatedly,
+    the server might save the created plan and re-use it during subsequent
+    Bind messages for the same prepared statement.  However, it will do so
+    only if it finds that a generic plan can be created that is not much
+    less efficient than a plan that depends on the specific parameter values
+    supplied.  This happens transparently so far as the protocol is concerned.
    </para>
-
-   <para>
-    Une requête préparée non nommée est aussi planifiée lors du 
-    traitement de Parse si ce dernier ne défini pas de paramètres. Si des 
-    paramètres sont utilisés, la planification se fera à chaque fois que 
-    les valeurs des paramètres seront transmis par le message Bind. 
-    Ce comportement permet au planificateur de prendre en compte les valeurs 
-    des paramètres du Bind au moment de créer son plan d'exécution plutôt 
-    que d'utiliser un plan générique estimé.
-   </para>
-
-   <note>
-    <para>
-     Les plans d'exécution générés pour une requête paramétrée peuvent 
-     être moins efficaces que ceux générés pour une requête équivalente 
-     avec les paramètres directement substitués. Le planificateur de 
-     requête ne peut pas prendre de décision se basant sur les valeurs 
-     réelles des paramètres (par exemple, la sélectivité d'un index) lors de 
-     la planification d'une requête paramétrée nommée.
-     Cette pénalité potentielle peut être évitée en utilisant des 
-     requêtes préparée non nommées, puisque'elles ne seront pas planifiées 
-     avant que les valeurs des paramètres soient disponibles. 
-     La contrepartie est que la planification doit alors être effectuée à 
-     chaque message Bind, même si la requête reste la même.
-    </para>
-   </note>
 
       <para>
        En cas de succès de sa création, un objet portail nommé dure jusqu'à la fin
@@ -803,7 +783,7 @@
        instruction Bind spécifiant le portail non nommé comme destination.
        Un simple message Query détruit également le portail non nommé. Les
        portails nommés doivent être explicitement fermés avant de pouvoir être
-       redéfinis par un message Bind. Cela n'est pas obligatoire pour le portail non
+       redéfinis par un autre message Bind. Cela n'est pas obligatoire pour le portail non
        nommé. Il est également possible de créer des portails nommés, et d'y
        accéder, en ligne de commandes SQL à l'aide des instructions
        <command>declare cursor</command> et <command>fetch</command>.
@@ -1321,7 +1301,8 @@
       <para>
        Le client doit être préparé à gérer une réponse ErrorMessage à un SSLRequest
        émanant du serveur. Ceci ne peut survenir que si le serveur ne dispose pas
-       du support de <acronym>ssl</acronym>. dans ce cas, la connexion doit être fermée,
+       du support de <acronym>ssl</acronym>. (Such servers are now very ancient,
+    and likely do not exist in the wild anymore.) Dans ce cas, la connexion doit être fermée,
        mais le client peut choisir d'ouvrir une nouvelle connexion et procéder
        sans <acronym>ssl</acronym>.
       </para>
@@ -1607,6 +1588,54 @@ Les commandes acceptées en mode walsender sont:
        Le processus de réception peut envoyer ses réponses à l'émetteur
        à tout moment, en utilisant un des formats de message suivants
        (ainsi que dans la charge d'un message CopyData)&nbsp;:
+     </para>
+
+     <para>
+      <variablelist>
+      <varlistentry>
+      <term>
+          Primary keepalive message (B)
+      </term>
+      <listitem>
+      <para>
+      <variablelist>
+      <varlistentry>
+      <term>
+          Byte1('k')
+      </term>
+      <listitem>
+      <para>
+          Identifies the message as a sender keepalive.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Byte8
+      </term>
+      <listitem>
+      <para>
+          The current end of WAL on the server, given in
+          XLogRecPtr format.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Byte8
+      </term>
+      <listitem>
+      <para>
+          The server's system clock at the time of transmission,
+          given in TimestampTz format.
+      </para>
+      </listitem>
+      </varlistentry>
+      </variablelist>
+      </para>
+      </listitem>
+      </varlistentry>
+      </variablelist>
      </para>
 
      <para>

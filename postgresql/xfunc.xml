@@ -156,21 +156,67 @@ SELECT nettoie_emp();
     de la fonction (voir la <xref linkend="sql-syntax-strings"/>).
    </para>
 
-   <para>
-   Les arguments de la fonction SQL sont référencés dans le corps de la
-   fonction en utilisant la syntaxe suivante.
-   <literal>$<replaceable>n</replaceable></literal>:<literal>$1</literal> se réfère au premier argument,
-   <literal>$2</literal> au second et ainsi de suite. Si un argument est de type
-   composite, on utilisera la notation par point, par exemple
-   <literal>$1.name</literal>, pour accéder aux attributs de l'argument.
-   Les arguments peuvent seulement être utilisés comme valeurs des données, pas
-   comme des identifieurs. Du coup, par exemple, ceci est correct&nbsp;:
-<programlisting>INSERT INTO matable VALUES ($1);
-</programlisting>
-   mais ceci ne fonctionnera pas&nbsp;:
-<programlisting>INSERT INTO $1 VALUES (42);
-</programlisting>
-   </para>
+   <sect2 id="xfunc-sql-function-arguments">
+    <title>Arguments for <acronym>SQL</acronym> Functions</title>
+
+   <indexterm>
+    <primary>function</primary>
+    <secondary>named argument</secondary>
+   </indexterm>
+
+    <para>
+     Arguments of a SQL function can be referenced in the function
+     body using either names or numbers.  Examples of both methods appear
+     below.
+    </para>
+
+    <para>
+     To use a name, declare the function argument as having a name, and
+     then just write that name in the function body.  If the argument name
+     is the same as any column name in the current SQL command within the
+     function, the column name will take precedence.  To override this,
+     qualify the argument name with the name of the function itself, that is
+     <literal><replaceable>function_name</replaceable>.<replaceable>argument_name</replaceable></literal>.
+     (If this would conflict with a qualified column name, again the column
+     name wins.  You can avoid the ambiguity by choosing a different alias for
+     the table within the SQL command.)
+    </para>
+
+    <para>
+     In the older numeric approach, arguments are referenced using the syntax
+     <literal>$<replaceable>n</replaceable></literal>: <literal>$1</literal> refers to the first input
+     argument, <literal>$2</literal> to the second, and so on.  This will work
+     whether or not the particular argument was declared with a name.
+    </para>
+
+    <para>
+     If an argument is of a composite type, then the dot notation,
+     e.g., <literal>argname.fieldname</literal> or
+     <literal>$1.fieldname</literal>, can be used to access attributes of the
+     argument.  Again, you might need to qualify the argument's name with the
+     function name to make the form with an argument name unambiguous.
+    </para>
+
+    <para>
+     SQL function arguments can only be used as data values,
+     not as identifiers.  Thus for example this is reasonable:
+ <programlisting>
+ INSERT INTO mytable VALUES ($1);
+ </programlisting>
+@@ -169,7 +205,16 @@ but this will not work:
+ <programlisting>
+ INSERT INTO $1 VALUES (42);
+ </programlisting>
+-   </para>
+
+    <note>
+     <para>
+      The ability to use names to reference SQL function arguments was added
+      in <productname>PostgreSQL</productname> 9.2.  Functions to be used in
+      older servers must use the <literal>$<replaceable>n</replaceable></literal> notation.
+     </para>
+    </note>
+   </sect2>
 
    <sect2 id="xfunc-sql-base-functions">
     <title>Fonctions <acronym>SQL</acronym> sur les types de base</title>
@@ -204,10 +250,25 @@ SELECT un();
     </para>
 
     <para>
-    Il est presque aussi facile de définir des fonctions SQL acceptant des types
-    de base comme arguments. Dans l'exemple suivant, remarquez comment nous
-    faisons référence aux arguments dans le corps de la fonction avec  
-    <literal>$1</literal> et <literal>$2</literal>.
+    Il est presque aussi facile de définir des fonctions <acronym>SQL</acronym> acceptant des types
+    de base comme arguments:
+
+<screen>
+CREATE FUNCTION add_em(x integer, y integer) RETURNS integer AS $$
+    SELECT x + y;
+$$ LANGUAGE SQL;
+
+SELECT add_em(1, 2) AS answer;
+
+ answer
+--------
+      3
+</screen>
+    </para>
+
+    <para>
+     Alternatively, we could dispense with names for the arguments and
+     use numbers:
 
 <screen>CREATE FUNCTION ajoute(integer, integer) RETURNS integer AS $$
     SELECT $1 + $2;
@@ -225,10 +286,10 @@ SELECT ajoute(1, 2) AS reponse;
     Voici une fonction plus utile, qui pourrait être utilisée pour débiter un
     compte bancaire&nbsp;:
 
-<programlisting>CREATE FUNCTION tf1 (integer, numeric) RETURNS integer AS $$
-    UPDATE banque
-        SET balance = balance - $2
-        WHERE no_compte = $1;
+<programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS integer AS $$
+     UPDATE bank
+        SET balance = balance - debit
+        WHERE no_compte = tf1.no_compte;
     SELECT 1;
 $$ LANGUAGE SQL;
 </programlisting>
@@ -239,14 +300,23 @@ $$ LANGUAGE SQL;
     </para>
     
     <para>
+     In this example, we chose the name <literal>accountno</literal> for the first
+     argument, but this is the same as the name of a column in the
+     <literal>bank</literal> table.  Within the <command>UPDATE</command> command,
+     <literal>accountno</literal> refers to the column <literal>bank.accountno</literal>,
+     so <literal>tf1.accountno</literal> must be used to refer to the argument.
+     We could of course avoid this by using a different name for the argument.
+    </para>
+
+    <para>
     Dans la pratique, on préférera vraisemblablement un résultat plus utile que
     la constante 1. Une définition plus probable est&nbsp;:
 
-<programlisting>CREATE FUNCTION tf1 (integer, numeric) RETURNS numeric AS $$
-    UPDATE banque
-        SET balance = balance - $2
-        WHERE no_compte = $1;
-    SELECT balance FROM banque WHERE no_compte = $1;
+<programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS integer AS $$
+     UPDATE bank
+        SET balance = balance - debit
+        WHERE no_compte = tf1.no_compte;
+    SELECT balance FROM banque WHERE no_compte = tf1.no_compte;
 $$ LANGUAGE SQL;
 </programlisting>
 
@@ -254,12 +324,11 @@ $$ LANGUAGE SQL;
      La même chose peut se faire en une commande en utilisant la clause
      <literal>RETURNING</literal>&nbsp;:
 
-<programlisting>
-CREATE FUNCTION tf1 (integer, numeric) RETURNS numeric AS $$
-    UPDATE banque
-        SET balance = balance - $2
-        WHERE no_compte = $1
-    RETURNING balance;
+<programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS integer AS $$
+     UPDATE bank
+        SET balance = balance - debit
+        WHERE no_compte = tf1.no_compte
+     RETURNING balance;
 $$ LANGUAGE SQL;
 </programlisting>
     </para>
@@ -271,8 +340,7 @@ $$ LANGUAGE SQL;
 
     <para>
     Quand nous écrivons une fonction avec des arguments de type composite,
-    nous devons non seulement spécifier l'argument utilisé (comme nous
-    l'avons fait précédemment avec <literal>$1</literal> et <literal>$2</literal>),
+    nous devons non seulement spécifier l'argument utilisé,
     mais aussi spécifier l'attribut désiré de cet argument (champ). Par
     exemple, supposons que 
     <type>emp</type> soit le nom d'une table contenant des données sur les
@@ -486,41 +554,6 @@ SELECT nom(emp) AS leplusjeune FROM emp WHERE age(emp) &lt; 30;
     </para>
    </sect2>
 
-   <sect2 id="xfunc-named-parameters">
-    <title>Fonctions <acronym>SQL</acronym> avec des paramètres nommés</title>
-
-   <indexterm>
-    <primary>fonction</primary>
-    <secondary>paramètre nommé</secondary>
-   </indexterm>
-
-    <para>
-     Il est possible d'attacher des noms aux paramètres d'une fonction, par
-     exemple&nbsp;:
-
-<programlisting>
-CREATE FUNCTION tf1 (acct_no integer, debit numeric) RETURNS numeric AS $$
-    UPDATE bank
-        SET balance = balance - $2
-        WHERE no_compte = $1
-    RETURNING balance;
-$$ LANGUAGE SQL;
-</programlisting>
-
-     Dans cet exemple, le premier paramètre a comme nom
-     <literal>acct_no</literal>, et le second paramètre
-     <literal>debit</literal>. En ce qui concerne la fonction SQL, ces noms
-     sont de la décoration. Vous devez toujours faire référence aux paramètres
-     avec la notation <literal>$1</literal>, <literal>$2</literal>, etc dans
-     le corps de la fonction. (Certains langages de procédure vous autorisent
-     à utiliser les noms des paramètres à la place.) Néanmoins, les noms des
-     paramètres peuvent être utiles dans un but de documentation. Quand une
-     fonction a beaucoup de paramètres, il est aussi utile d'utiliser les noms
-     lors de l'appel à la fonction, comme décrit dans <xref
-     linkend="sql-syntax-calling-funcs"/>.
-    </para>
-   </sect2>
-
    <sect2 id="xfunc-output-parameters">
     <title>Fonctions <acronym>SQL</acronym> avec des paramètres en sortie</title>
 
@@ -535,7 +568,7 @@ $$ LANGUAGE SQL;
      exemple&nbsp;:
 
 <screen>CREATE FUNCTION ajoute (IN x int, IN y int, OUT sum int)
-AS 'SELECT $1 + $2'
+AS 'SELECT x + y'
 LANGUAGE SQL;
 
 SELECT ajoute(3,7);
@@ -551,7 +584,7 @@ SELECT ajoute(3,7);
      définir des fonctions qui renvoient plusieurs colonnes. Par exemple,
 
 <screen>CREATE FUNCTION ajoute_n_produit (x int, y int, OUT sum int, OUT product int)
-AS 'SELECT $1 + $2, $1 * $2'
+AS 'SELECT x + y, x * y'
 LANGUAGE SQL;
 
  SELECT * FROM sum_n_product(11,42);
@@ -968,7 +1001,8 @@ $$ LANGUAGE SQL;
     <para>
      Les fonctions <acronym>SQL</acronym> peuvent être déclarées pour accepter
      et renvoyer les types <quote>polymorphe</quote> <type>anyelement</type>,
-     <type>anyarray</type>, <type>anynonarray</type> et <type>anyenum</type>.
+     <type>anyarray</type>, <type>anynonarray</type>, <type>anyenum</type>
+     et <type>anyrange</type>.
      Voir la <xref linkend="extend-types-polymorphic"/> pour une
      explication plus approfondie. Voici une fonction polymorphe
      <function>cree_tableau</function> qui construit un tableau à partir de
@@ -1745,7 +1779,8 @@ typedef struct
     <para>
      Enfin, tous les types à longueur variable doivent aussi être passés par
      référence. Tous les types à longueur variable doivent commencer avec un
-     champ d'une longueur d'exactement quatre octets et toutes les données
+     champ d'une longueur d'exactement quatre octets, which will be set
+     by SET_VARSIZE; never set this field directly! Toutes les données
      devant être stockées dans ce type doivent être localisées dans la mémoire à
      la suite immédiate de ce champ longueur. Le champ longueur contient la
      longueur totale de la structure, c'est-à-dire incluant la longueur du
@@ -1811,7 +1846,7 @@ memcpy(destination->data, buffer, 40);
 ...
 ]]></programlisting>
 
-     <literal>VARHDRSZ</literal> est équivalent à <literal>sizeof(int4)</literal> mais
+     <literal>VARHDRSZ</literal> est équivalent à <literal>sizeof(int32)</literal> mais
      est considéré comme une meilleure tournure de référence à la taille de
      l'overhead pour un type à longueur variable.
      Also, the length field <emphasis>must</emphasis> be set using the
@@ -1920,7 +1955,7 @@ memcpy(destination->data, buffer, 40);
 	<row>
 	 <entry><type>interval</type></entry>
 	 <entry><type>Interval*</type></entry>
-	 <entry><filename>utils/timestamp.h</filename></entry>
+	 <entry><filename>datatype/timestamp.h</filename></entry>
 	</row>
 	<row>
 	 <entry><type>lseg</type></entry>
@@ -1985,7 +2020,7 @@ memcpy(destination->data, buffer, 40);
 	<row>
 	 <entry><type>timestamp</type></entry>
 	 <entry><type>Timestamp*</type></entry>
-	 <entry><filename>utils/timestamp.h</filename></entry>
+	 <entry><filename>datatype/timestamp.h</filename></entry>
 	</row>
 	<row>
 	 <entry><type>tinterval</type></entry>
@@ -3048,7 +3083,8 @@ CREATE OR REPLACE FUNCTION retcomposite(integer, integer)
     <para>
      Les fonctions en langage C peuvent être déclarées pour accepter et renvoyer
      les types <quote>polymorphes</quote> <type>anyelement</type>,
-	 <type>anyarray</type>, <type>anynonarray</type> et <type>anyenum</type>. Voir la <xref linkend="extend-types-polymorphic"/> pour une
+	   <type>anyarray</type>, <type>anynonarray</type>, <type>anyenum</type> et
+     <type>anyrange</type>. Voir la <xref linkend="extend-types-polymorphic"/> pour une
      explication plus détaillée des fonctions polymorphes. Si les types des
      arguments ou du renvoi de la fonction sont définis comme polymorphes,
      l'auteur de la fonction ne peut pas savoir à l'avance quel type de données
@@ -3147,6 +3183,40 @@ make_array(PG_FUNCTION_ARGS)
      et les méthodes décrites ci-dessus doivent être utilisées pour déterminer
      le nombre d'arguments réels et leur type lors de l'utilisation de cette
      fonctionnalité.
+    </para>
+   </sect2>
+
+   <sect2 id="xfunc-transform-functions">
+    <title>Transform Functions</title>
+
+    <para>
+     Some function calls can be simplified during planning based on
+     properties specific to the function.  For example,
+     <literal>int4mul(n, 1)</literal> could be simplified to just <literal>n</literal>.
+     To define such function-specific optimizations, write a
+     <firstterm>transform function</firstterm> and place its OID in the
+     <structfield>protransform</structfield> field of the primary function's
+     <structname>pg_proc</structname> entry.  The transform function must have the SQL
+     signature <literal>protransform(internal) RETURNS internal</literal>.  The
+     argument, actually <type>FuncExpr *</type>, is a dummy node representing a
+     call to the primary function.  If the transform function's study of the
+     expression tree proves that a simplified expression tree can substitute
+     for all possible concrete calls represented thereby, build and return
+     that simplified expression.  Otherwise, return a <literal>NULL</literal>
+     pointer (<emphasis>not</emphasis> a SQL null).
+    </para>
+
+    <para>
+     We make no guarantee that <productname>PostgreSQL</productname> will never call the
+     primary function in cases that the transform function could simplify.
+     Ensure rigorous equivalence between the simplified expression and an
+     actual call to the primary function.
+    </para>
+
+    <para>
+     Currently, this facility is not exposed to users at the SQL level
+     because of security concerns, so it is only practical to use for
+     optimizing built-in functions.
     </para>
    </sect2>
 

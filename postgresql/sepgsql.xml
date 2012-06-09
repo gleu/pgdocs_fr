@@ -69,7 +69,7 @@
     <productname>SELinux</productname> activé. Il n'est pas disponible
     sur les autres plateformes. Vous aurez aussi besoin
     de <productname>libselinux</productname> ou ultérieur et de
-    <productname>selinux-policy</productname> 3.9.13 ou ultérieur
+    <productname>selinux-policy</productname> 2.0.99 ou ultérieur
     (même si certaines distributions peuvent proposer les règles nécessaires
     dans des versions antérieures de politique).
   </para>
@@ -201,13 +201,12 @@ $ cd .../contrib/sepgsql
 $ make -f /usr/share/selinux/devel/Makefile
 $ sudo semodule -u sepgsql-regtest.pp
 $ sudo semodule -l | grep sepgsql
+sepgsql-regtest 1.04
 </screen>
 
   <para>
-   Puis, activez <literal>sepgsql_regression_test_mode</literal>. Nous
-   n'activons pas toutes les règles du fichier
-   <filename>sepgsql-regtest</filename> par défaut, pour la sécurité
-   de votre système. Le paramètre
+   For security reasons, the rules in <filename>sepgsql-regtest</filename>
+   are not enabled by default. Le paramètre
    <literal>sepgsql_regression_test_mode</literal> active les
    règles pour le lancement des tests de régression. Il peut être
    activé en utilisant la commande <command>setsebool</command>&nbsp;:
@@ -349,30 +348,21 @@ $ sudo semodule -r sepgsql-regtest
    <para>
     Pour les tables, <literal>db_table:select</literal>, <literal>db_table:insert</literal>,
     <literal>db_table:update</literal> ou <literal>db_table:delete</literal>
-    est vérifié pour toutes les tables cibles référencées, suivant l'ordre
+    sont vérifiés pour toutes les tables cibles référencées, suivant l'ordre
     de l'instruction. De plus, <literal>db_table:select</literal> est
     aussi vérifié pour toutes les tables qui contiennent des colonnes
     référencées dans la clause <literal>WHERE</literal> ou
     <literal>RETURNING</literal>, comme source de données d'un
-    <literal>UPDATE</literal>, et ainsi de suite. Par exemple, avec&nbsp;:
+    <literal>UPDATE</literal>, et ainsi de suite.
    </para>
 
    <para>
-<synopsis>
-UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
-</synopsis>
-
-    Dans ce cas, vous devez avoir <literal>db_table:select</literal> en
-    plus de <literal>db_table:update</literal> car <literal>t1.a</literal>
-    est référencée dans la clause <literal>WHERE</literal>. Les droits
-    sur les colonnes seront aussi vérifiés pour chaque colonne référencée.
-   </para>
-
-   <para>
-    Pour les colonnes, <literal>db_column:select</literal> est vérifié,
-    non seulement pour les colonnes lus en utilisant
-    <literal>SELECT</literal>, mais aussi pour les colonnes référencées
-    par d'autres instructions DML.
+    Column-level permissions will also be checked for each referenced column.
+    <literal>db_column:select</literal> is checked on not only the columns being
+    read using <literal>SELECT</literal>, but those being referenced in other DML
+    statements; <literal>db_column:update</literal> or <literal>db_column:insert</literal>
+    will also be checked for columns being modified by <literal>UPDATE</literal> or
+    <literal>INSERT</literal>.
    </para>
 
    <para>
@@ -382,16 +372,18 @@ UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
    </para>
 
    <para>
+     For example, consider:
 <synopsis>
 UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
 </synopsis>
-    Dans ce cas, il vérifie <literal>db_column:update</literal> sur la
-    colonne <literal>t1.x</literal> en cours de mise à jour,
-    <literal>db_column:{select update}</literal> sur la colonne
-    <literal>t1.y</literal> en cours de mise à jour et référencée, et
-    <literal>db_column:select</literal> sur la colonne
-    <literal>t1.z</literal> référencée uniquement dans la clause
-    <literal>WHERE</literal>. <literal>db_table:{select update}</literal>
+
+    Here, <literal>db_column:update</literal> will be checked for
+    <literal>t1.x</literal>, since it is being updated,
+    <literal>db_column:{select update}</literal> will be checked for
+    <literal>t1.y</literal>, since it is both updated and referenced, and
+    <literal>db_column:select</literal> will be checked for <literal>t1.z</literal>, since
+    it is only referenced.
+    <literal>db_table:{select update}</literal>
     vérifiera aussi la table.
    </para>
 
@@ -432,6 +424,42 @@ UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
 
   <sect3>
    <title>Droits DDL</title>
+   <para>
+    <productname>SELinux</productname> defines several permissions to control common
+    operations for each object type; such as creation, alter, drop and
+    relabel of security label. In addition, several object types have
+    special permissions to control their characteristic operations; such as
+    addition or deletion of name entries within a particular schema.
+   </para>
+   <para>
+    When a <literal>CREATE</literal> command is executed, <literal>create</literal> will
+    be checked on the object being constructed for each object types.
+    A default security label will be assigned to the new database object,
+    and the <literal>create</literal> permission will be checked on the pair
+    of security label of the client and the new object itself.
+    We consider <xref linkend="sql-createtable"/> to construct a table and
+    underlying columns at the same time, so it requires the users to have
+    permission to create both the table and its columns.
+   </para>
+   <para>
+    A few additional checks are applied depending on object types.
+    On <xref linkend="sql-createdatabase"/>, <literal>getattr</literal> permission
+    will be checked on the source or template database of the new database,
+    not only <literal>create</literal> on the new database.
+    On creation of objects within a particular schema (tables, views,
+    sequences and procedures), <literal>add_name</literal> will be also checked
+    on the schema, not only <literal>create</literal> on the new object itself.
+   </para>
+
+   <para>
+    When <literal>DROP</literal> command is executed, <literal>drop</literal> will be
+    checked on the object being removed for each object types.  Permissions
+    will not be checked for objects dropped indirectly via <literal>CASCADE</literal>.
+    Deletion of objects contained within a particular schema (tables, views,
+    sequences and procedures) additionally requires
+    <literal>remove_name</literal> on the schema.
+   </para>
+
    <para>
     Quand la commande <xref linkend="sql-security-label"/> est exécutée,
     <literal>setattr</literal> et <literal>relabelfrom</literal> devraient
@@ -510,6 +538,68 @@ postgres=# SELECT cid, cname, show_credit(cid) FROM customer;
   </sect3>
 
   <sect3>
+   <title>Dynamic Domain Transitions</title>
+   <para>
+    It is possible to use SELinux's dynamic domain transition feature
+    to switch the security label of the client process, the client domain,
+    to a new context, if that is allowed by the security policy.
+    The client domain needs the <literal>setcurrent</literal> permission and also
+    <literal>dyntransition</literal> from the old to the new domain.
+   </para>
+   <para>
+    Dynamic domain transitions should be considered carefully, because they
+    allow users to switch their label, and therefore their privileges,
+    at their option, rather than (as in the case of a trusted procedure)
+    as mandated by the system.
+    Thus, the <literal>dyntransition</literal> permission is only considered
+    safe when used to switch to a domain with a smaller set of privileges than
+    the original one. For example:
+   </para>
+<screen>
+regression=# select sepgsql_getcon();
+                    sepgsql_getcon
+-------------------------------------------------------
+ unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+(1 row)
+
+regression=# SELECT sepgsql_setcon('unconfined_u:unconfined_r:unconfined_t:s0-s0:c1.c4');
+ sepgsql_setcon 
+----------------
+ t
+(1 row)
+
+regression=# SELECT sepgsql_setcon('unconfined_u:unconfined_r:unconfined_t:s0-s0:c1.c1023');
+ERROR:  SELinux: security policy violation
+</screen>
+   <para>
+    In this example above we were allowed to switch from the larger MCS
+    range <literal>c1.c1023</literal> to the smaller range <literal>c1.c4</literal>, but
+    switching back was denied.
+   </para>
+   <para>
+    A combination of dynamic domain transition and trusted procedure
+    enables an interesting use case that fits the typical process life-cycle
+    of connection pooling software.
+    Even if your connection pooling software is not allowed to run most
+    of SQL commands, you can allow it to switch the security label
+    of the client using the <literal>sepgsql_setcon()</literal> function
+    from within a trusted procedure; that should take some
+    credential to authorize the request to switch the client label.
+    After that, this session will have the privileges of the target user,
+    rather than the connection pooler.
+    The connection pooler can later revert the security label change by
+    again using <literal>sepgsql_setcon()</literal> with
+    <literal>NULL</literal> argument, again invoked from within a trusted
+    procedure with appropriate permissions checks.
+    The point here is that only the trusted procedure actually has permission
+    to change the effective security label, and only does so when given proper
+    credentials.  Of course, for secure operation, the credential store
+    (table, procedure definition, or whatever) must be protected from
+    unauthorized access.
+   </para>
+  </sect3>
+
+  <sect3>
    <title>Divers</title>
    <para>
     Nous rejetons la commande <xref linkend="sql-load"/> car tout module
@@ -517,6 +607,56 @@ postgres=# SELECT cid, cname, show_credit(cid) FROM customer;
    </para>
 
   </sect3>
+ </sect2>
+
+ <sect2 id="sepgsql-functions">
+  <title>Sepgsql Functions</title>
+  <para>
+   <xref linkend="sepgsql-functions-table"/> shows the available functions.
+  </para>
+
+  <table id="sepgsql-functions-table">
+   <title>Sepgsql Functions</title>
+   <tgroup cols="2">
+    <tbody>
+     <row>
+      <entry><literal>sepgsql_getcon() returns text</literal></entry>
+      <entry>
+       Returns the client domain, the current security label of the client.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>sepgsql_setcon(text) returns bool</literal></entry>
+      <entry>
+       Switches the client domain of the current session to the new domain,
+       if allowed by the security policy.
+       It also accepts <literal>NULL</literal> input as a request to transition
+       to the client's original domain.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>sepgsql_mcstrans_in(text) returns text</literal></entry>
+      <entry>Translates the given qualifies MLS/MCS range into raw format if
+      the mcstrans daemon is running.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>sepgsql_mcstrans_out(text) returns text</literal></entry>
+      <entry>Translates the given raw MCS/MCS range into qualified format if
+      the mcstrans daemon is running.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>sepgsql_restorecon(text) returns bool</literal></entry>
+      <entry>
+       Sets up initial security labels for all objects within the
+       current database. The argument may be NULL, or the name of a specfile
+       to be used as alternative of the system default.
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
  </sect2>
 
  <sect2 id="sepgsql-limitations">
@@ -527,8 +667,8 @@ postgres=# SELECT cid, cname, show_credit(cid) FROM customer;
     <term>Droits DDL</term>
     <listitem>
      <para>
-      Dû aux restrictions d'implémentations, les droits DDL ne sont pas
-      vérifiés.
+      Dû aux restrictions d'implémentations, certaines opérations DDL 
+      ne vérifient pas les droits.
      </para>
     </listitem>
    </varlistentry>
@@ -537,8 +677,8 @@ postgres=# SELECT cid, cname, show_credit(cid) FROM customer;
     <term>Droits DCL</term>
     <listitem>
      <para>
-      Dû aux restrictions d'implémentations, les droits DCL ne sont pas
-      vérifiés.
+      Dû aux restrictions d'implémentations, les droits DCL
+      ne vérifient pas les droits.
      </para>
     </listitem>
    </varlistentry>

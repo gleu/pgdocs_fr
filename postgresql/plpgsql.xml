@@ -148,7 +148,8 @@
     <para>
      Les fonctions <application>PL/pgSQL</application> acceptent en entrée et
      en sortie les types polymorphes <type>anyelement</type>,
-     <type>anyarray</type>, <type>anynonarray</type> et <type>anyenum</type>.
+     <type>anyarray</type>, <type>anynonarray</type>, <type>anyenum</type>
+     et <type>anyrange</type>.
      Le type de données réel géré par une fonction polymorphe peut varier
      d'appel en appel (voir la <xref linkend="extend-types-polymorphic"/>).
      Voir l'exemple de la <xref linkend="plpgsql-declaration-parameters"/>.
@@ -506,7 +507,7 @@ $$ LANGUAGE plpgsql;
      <para>
       Lorsque le type de retour d'une fonction <application>PL/pgSQL</application>
       est déclaré comme type polymorphe (<type>anyelement</type>,
-      <type>anyarray</type>, <type>anynonarray</type> et <type>anyenum</type>), un
+      <type>anyarray</type>, <type>anynonarray</type>, <type>anyenum</type> et <type>anyrange</type>), un
       paramètre spécial <literal>$0</literal> est créé.
       Son type de donnée est le type effectif de retour de la fonction, déduit d'après
       les types en entrée (voir la <xref linkend="extend-types-polymorphic"/>).
@@ -840,12 +841,11 @@ PREPARE <replaceable>nom_instruction</replaceable>(integer, integer) AS SELECT $
      puis cette instruction préparée est exécutée (via <command>EXECUTE</command>)
      pour chaque exécution de l'instruction <command>IF</command>, avec les
      valeurs actuelles des variables <application>PL/pgSQL</application> fournies
-     en tant que valeurs des paramètres. Le plan de requête préparé de cette
-     façon est sauvegardé pour toute la durée de la connexion à la base, comme
-     le décrit la <xref linkend="plpgsql-plan-caching"/>. Généralement, ces détails
+     en tant que valeurs des paramètres. Généralement, ces détails
      ne sont pas importants pour un utilisateur de
      <application>PL/pgSQL</application>, mais ils sont utiles à connaître
      pour diagnostiquer un problème.
+     More information appears in <xref linkend="plpgsql-plan-caching"/>.
     </para>
   </sect1>
 
@@ -921,10 +921,9 @@ mon_enregistrement.id_utilisateur := 20;
     
     <para>
      Lors de l'exécution d'une commande SQL de cette façon,
-     <application>PL/pgSQL</application> planifie la commande une fois et
-     ré-utilise ce plan lors des prochaines exécutions, pour la durée de vie
-     de la connexion. Les implications de ceci sont discutées en détail dans
-     la <xref linkend="plpgsql-plan-caching"/>.
+     <application>PL/pgSQL</application> may cache and re-use the execution
+     plan for the command, as discussed in
+     <xref linkend="plpgsql-plan-caching"/>.
     </para>
 
     <para>
@@ -1140,7 +1139,7 @@ END;
     <para>
      De plus, il n'y a pas mise en cache des commandes exécutées via
      <command>EXECUTE</command>. À la
-     place, la commande est préparée à chaque fois que l'instruction est lancée.
+     place, la commande est planifiée à chaque fois que l'instruction est lancée.
      La chaîne commande peut être créée dynamiquement à l'intérieur de la
      fonction pour agir sur des tables ou colonnes différentes.
     </para>
@@ -1212,11 +1211,11 @@ EXECUTE 'SELECT count(*) FROM '
      La différence importante est que <command>EXECUTE</command> va planifier de
      nouveau la commande pour chaque exécution, générant un plan qui est
      spécifique aux valeurs actuelles des paramètres&nbsp;; alors que
-     <application>PL/pgSQL</application> crée habituellement un plan générique
+     <application>PL/pgSQL</application> pourrait sinon créer un plan générique
      et le stocke pour le réutiliser. Dans des situations où le meilleur plan
-     dépend fortement des valeurs des paramètres, <command>EXECUTE</command>
-     peut être beaucoup plus rapide&nbsp;: alors que lorsque le plan n'est pas
-     sensible aux valeurs des paramètres, la replanification sera une perte.
+     dépend fortement des valeurs des paramètres, it can be helpful to use
+     <command>EXECUTE</command> to positively ensure that a generic plan is not
+     selected.
     </para>
 
     <para>
@@ -1399,7 +1398,8 @@ EXECUTE format('UPDATE tbl SET %I = $1 WHERE cle = $2', nom_colonne)
 	 Il y a plusieurs moyens pour déterminer l'effet d'une commande. La première méthode
 	 est d'utiliser <command>GET DIAGNOSTICS</command>&nbsp;:
 
-<synopsis>GET DIAGNOSTICS <replaceable>variable</replaceable> = <replaceable>élément</replaceable> <optional> , ... </optional> ;
+<synopsis>+GET <optional> CURRENT </optional> DIAGNOSTICS <replaceable>variable</replaceable> = <replaceable>élément</replaceable> <optional> , ... </optional>;
+
 </synopsis>
 
      Cette commande permet la récupération des indicateurs d'état du système. Chaque
@@ -2518,16 +2518,6 @@ END;
       </para>
     </tip>
 
-    <para>
-     À l'intérieur d'un gestionnaire d'exceptions, la variable
-     <varname>SQLSTATE</varname> contient le code d'erreur correspondant à
-     l'exception qui a été levée (référez-vous au <xref
-     linkend="errcodes-table"/> pour une liste des codes d'erreurs possibles).
-     La variable <varname>SQLERRM</varname> contient le message d'erreur
-     associé avec l'exception. Ces variables sont indéfinies à l'extérieur des
-     gestionnaires d'exceptions.
-    </para>
-
     <example id="plpgsql-upsert-example">
     <title>Exceptions avec <command>UPDATE</command>/<command>INSERT</command></title>
     <para>
@@ -2563,12 +2553,115 @@ LANGUAGE plpgsql;
 SELECT fusionne_base(1, 'david');
 SELECT fusionne_base(1, 'dennis');
 </programlisting>
-     Cet exemple suppose que l'erreur <literal>unique_violation</literal>
-     est causé par la requête <command>INSERT</command>, et non pas par
-     une fonction trigger sur l'opération <command>INSERT</command> pour
-     cette table.
+
+     This coding assumes the <literal>unique_violation</literal> error is caused by
+     the <command>INSERT</command>, and not by, say, an <command>INSERT</command> in a
+     trigger function on the table.  It might also misbehave if there is
+     more than one unique index on the table, since it will retry the
+     operation regardless of which index caused the error.
+     More safety could be had by using the
+     features discussed next to check that the trapped error was the one
+     expected.
+     </para>
+     </example>
+
+   <sect3 id="plpgsql-exception-diagnostics">
+    <title>Obtaining information about an error</title>
+
+    <para>
+     Exception handlers frequently need to identify the specific error that
+     occurred.  There are two ways to get information about the current
+     exception in <application>PL/pgSQL</application>: special variables and the
+     <command>GET STACKED DIAGNOSTICS</command> command.
     </para>
-    </example>
+
+    <para>
+     Within an exception handler, the special variable
+     <varname>SQLSTATE</varname> contains the error code that corresponds to
+     the exception that was raised (refer to <xref linkend="errcodes-table"/>
+     for a list of possible error codes). The special variable
+     <varname>SQLERRM</varname> contains the error message associated with the
+     exception. These variables are undefined outside exception handlers.
+    </para>
+
+    <para>
+     Within an exception handler, one may also retrieve
+     information about the current exception by using the
+     <command>GET STACKED DIAGNOSTICS</command> command, which has the form:
+
+<synopsis>
+GET STACKED DIAGNOSTICS <replaceable>variable</replaceable> = <replaceable>item</replaceable> <optional> , ... </optional>;
+</synopsis>
+
+     Each <replaceable>item</replaceable> is a key word identifying a status
+     value to be assigned to the specified variable (which should be
+     of the right data type to receive it).  The currently available
+     status items are shown in <xref linkend="plpgsql-exception-diagnostics-values"/>.
+    </para>
+
+     <table id="plpgsql-exception-diagnostics-values">
+      <title>Error diagnostics values</title>
+      <tgroup cols="3">
+       <thead>
+        <row>
+         <entry>Name</entry>
+         <entry>Type</entry>
+         <entry>Description</entry>
+        </row>
+       </thead>
+       <tbody>
+        <row>
+         <entry><literal>RETURNED_SQLSTATE</literal></entry>
+         <entry>text</entry>
+         <entry>the SQLSTATE error code of the exception</entry>
+        </row>
+        <row>
+         <entry><literal>MESSAGE_TEXT</literal></entry>
+         <entry>text</entry>
+         <entry>the text of the exception's primary message</entry>
+        </row>
+        <row>
+         <entry><literal>PG_EXCEPTION_DETAIL</literal></entry>
+         <entry>text</entry>
+         <entry>the text of the exception's detail message, if any</entry>
+        </row>
+        <row>
+         <entry><literal>PG_EXCEPTION_HINT</literal></entry>
+         <entry>text</entry>
+         <entry>the text of the exception's hint message, if any</entry>
+        </row>
+        <row>
+         <entry><literal>PG_EXCEPTION_CONTEXT</literal></entry>
+         <entry>text</entry>
+         <entry>line(s) of text describing the call stack</entry>
+        </row>
+       </tbody>
+      </tgroup>
+     </table>
+
+    <para>
+     If the exception did not set a value for an item, an empty string
+     will be returned.
+    </para>
+
+    <para>
+     Here is an example:
+<programlisting>
+DECLARE
+  text_var1 text;
+  text_var2 text;
+  text_var3 text;
+BEGIN
+  -- some processing which might cause an exception
+  ...
+EXCEPTION WHEN OTHERS THEN
+  GET STACKED DIAGNOSTICS text_var1 = MESSAGE_TEXT,
+                          text_var2 = PG_EXCEPTION_DETAIL,
+                          text_var3 = PG_EXCEPTION_HINT;
+END;
+</programlisting>
+    </para>
+   </sect3>
    </sect2>
   </sect1>
 
@@ -2622,7 +2715,7 @@ SELECT fusionne_base(1, 'dennis');
 <programlisting>DECLARE
     curs1 refcursor;
     curs2 CURSOR FOR SELECT * FROM tenk1;
-    curs3 CURSOR (cle integer) IS SELECT * FROM tenk1 WHERE unique1 = cle;
+    curs3 CURSOR (cle integer) FOR SELECT * FROM tenk1 WHERE unique1 = cle;
 </programlisting>
      Ces variables sont toutes trois du type de données <type>refcursor</type>
      mais la première peut être utilisée avec n'importe quelle requête alors que
@@ -2723,10 +2816,10 @@ SELECT fusionne_base(1, 'dennis');
        </para>
      </sect3>
 
-    <sect3>
+    <sect3 id="plpgsql-open-bound-cursor">
      <title>Ouverture d'un curseur lié</title>
 
-<synopsis>OPEN <replaceable>var_curseur_lié</replaceable> <optional> ( <replaceable>arguments</replaceable> ) </optional>;
+<synopsis>+OPEN <replaceable>var_curseur_lié</replaceable> <optional> ( <optional> <replaceable>nom_argument</replaceable> := </optional> <replaceable>valeur_argument</replaceable> <optional>, ...</optional> ) </optional>;
 </synopsis>
 
 	 <para>
@@ -2734,32 +2827,56 @@ SELECT fusionne_base(1, 'dennis');
 	  curseur à laquelle la requête est liée au moment de la déclaration.
 	  Le curseur ne peut pas être déjà ouvert. Une liste des expressions arguments
 	  doit apparaître si et seulement si le curseur a été déclaré comme acceptant 
-	  des arguments. Ces valeurs seront remplacées dans la requête. Le plan de
+	  des arguments. Ces valeurs seront remplacées dans la requête.
+         </para>
+
+         <para>
+    Le plan de
 	  requête pour un curseur lié est toujours considéré comme pouvant être mis 
 	  en cache&nbsp;; il n'y a pas d'équivalent de la commande 
 	  <command>EXECUTE</command> dans ce cas. Notez que
 	  <literal>SCROLL</literal> et <literal>NO SCROLL</literal> ne peuvent
-	  pas être indiqués car le comportement du curseur était déjà déterminé.
+	  pas être indiquésdans <command>OPEN</command> car le comportement du curseur était déjà déterminé.
          </para>
 
          <para>
-          Notez que, parce que la substitution de variables est faite sur la
-	  requête du curseur lié, il y a deux façon de passer des valeurs au
-	  curseur&nbsp;: soit explicitement avec un argument pour
-	  <command>OPEN</command> soit implicitement en référençant une variable
-	  <application>PL/pgSQL</application> dans la requête. Néanmoins, seules
-	  les variables déclarées avant la déclaration du curseur lié pourront
-	  être substituées. De toute façon, la valeur à passer est déterminé au
-	  moment de l'exécution de <command>OPEN</command>.
-
+          Argument values can be passed using either <firstterm>positional</firstterm>
+          or <firstterm>named</firstterm> notation.  In positional
+          notation, all arguments are specified in order.  In named notation,
+          each argument's name is specified using <literal>:=</literal> to
+          separate it from the argument expression. Similar to calling
+          functions, described in <xref linkend="sql-syntax-calling-funcs"/>, it
+          is also allowed to mix positional and named notation.
          </para>
 
-    <para>
-     Exemples&nbsp;:
-<programlisting>OPEN curs2;
+         <para>
+          Examples (these use the cursor declaration examples above):
+<programlisting>
+OPEN curs2;
 OPEN curs3(42);
+OPEN curs3(key := 42);
 </programlisting>
-       </para>
+         </para>
+
+         <para>
+          Because variable substitution is done on a bound cursor's query,
+          there are really two ways to pass values into the cursor: either
+          with an explicit argument to <command>OPEN</command>, or implicitly by
+          referencing a <application>PL/pgSQL</application> variable in the query.
+          However, only variables declared before the bound cursor was
+          declared will be substituted into it.  In either case the value to
+          be passed is determined at the time of the <command>OPEN</command>.
+          For example, another way to get the same effect as the
+          <literal>curs3</literal> example above is
+<programlisting>
+DECLARE
+    key integer;
+    curs4 CURSOR FOR SELECT * FROM tenk1 WHERE unique1 = key;
+BEGIN
+    key := 42;
+    OPEN curs4;
+</programlisting>
+         </para>
      </sect3>
    </sect2>
 
@@ -3051,7 +3168,7 @@ COMMIT;
 
 <synopsis>
 <optional> &lt;&lt;<replaceable>label</replaceable>&gt;&gt; </optional>
-FOR <replaceable>var_record</replaceable> IN <replaceable>var_curseur_lié</replaceable> <optional> ( <replaceable>valeurs_argument</replaceable> ) </optional> LOOP
+FOR <replaceable>var_record</replaceable> IN <replaceable>var_curseur_lié</replaceable> <optional> ( <optional> <replaceable>nom_argument</replaceable> := </optional> <replaceable>valeur_argument</replaceable> <optional>, ...</optional> ) </optional> LOOP
     <replaceable>instructions</replaceable>
 END LOOP <optional> <replaceable>label</replaceable> </optional>;
 </synopsis>
@@ -3062,7 +3179,12 @@ END LOOP <optional> <replaceable>label</replaceable> </optional>;
      le curseur en sortie de la boucle. Une liste des expressions de valeurs
      des arguments doit apparaître si et seulement si le curseur a été déclaré
      prendre des arguments. Ces valeurs seront substitutées dans la requête,
-     de la même façon que lors d'un <command>OPEN</command>. La variable
+     de la même façon que lors d'un <command>OPEN</command> (see <xref
+     linkend="plpgsql-open-bound-cursor"/>).
+   </para>
+
+   <para>
+      La variable
      variable <replaceable>var_record</replaceable> est définie automatiquement
      avec le type <type>record</type> et existe seulement dans la boucle (toute
      définition existante d'un nom de variable est ignorée dans la boucle).
@@ -3908,11 +4030,7 @@ SELECT * FROM sales_summary_bytime;
     <literal>use_column</literal> (où <literal>error</literal> est la valeur par défaut).
     Ce paramètre agit sur les compilations posterieures
     d'instructions dans les fonctions <application>PL/pgSQL</application> mais pas les instructions
-    déjà compilées dans la session en cours. Pour fixer ce paramètre avant le
-    chargement de <application>PL/pgSQL</application>, vous devez ajouter 
-    <quote><literal>plpgsql</literal></quote> à la liste <xref
-    linkend="guc-custom-variable-classes"/> dans
-    <filename>postgresql.conf</filename>. Cette modification pouvant
+    déjà compilées dans la session en cours. Cette modification pouvant
     affecter de manière inattendue le comportement des fonctions <application>PL/pgSQL</application>,
     elle ne peut être faïte que par un administrateur.
    </para>
@@ -4001,18 +4119,15 @@ $$ LANGUAGE plpgsql;
     </indexterm>
     Au moment où chaque expression et commande <acronym>SQL</acronym> est
     exécutée en premier lieu dans la fonction, l'interpréteur
-    <application>PL/pgSQL</application> crée un plan d'exécution préparée (en
-    utilisant les fonctions <function>SPI_prepare</function> et
-    <function>SPI_saveplan</function> du gestionnaire
-    <acronym>SPI</acronym> ).
+    <application>PL/pgSQL</application> lit et analyse la commande pour
+    créer une instruction préparée en
+    utilisant la fonction <function>SPI_prepare</function> du gestionnaire
+    <acronym>SPI</acronym>.
     Les appels suivants à cette expression ou commande réutilisent le plan
-    préparé. Du coup, une fonction avec du code conditionnel contenant de
-    nombreuses instructions pour lesquels les plans d'exécutions pourraient
-    être requis vont seulement préparer et sauvegarder ces plans qui sont
-    utilisés tout au long de la durée de vie de la connexion à la base de
-    données. Ceci peut réduire substantiellement le temps total requis
-    pour analyser et générer les plans d'exécution pour les instructions
-    d'une fonction <application>PL/pgSQL</application>. Un inconvénient
+    préparé. Thus, a function with conditional code
+    paths that are seldom visited will never incur the overhead of
+    analyzing those commands that are never executed within the current
+    session. Un inconvénient
     est que les erreurs dans une expression ou commande spécifique ne peuvent
     pas être détectées avant que la fonction a atteint son exécution. (Les
     erreurs de syntaxe triviales seront détectées à la première passe d'analyse
@@ -4021,20 +4136,23 @@ $$ LANGUAGE plpgsql;
    </para>
 
    <para>
-    Un plan sauvegardé sera regénéré automatiquement s'il y a des changements
-    dans le schéma de n'importe quelle table utilisée dans la requête ou si une
-    fonction utilisée dans la requête et définie par un utilisateur
-    est redefinie Ceci rend la re-utilisation d'un plan préparé
-    transparent dans la plupart des cas mais il existe des cas particuliers
-    ou un plan obsolète peut être re-utilisé. Par exemple, la suppression et la re-création d'un
-    opérateur defini par un utilisateur n'affectera pas les plans déjà en cache; ils continueront
-    d'appeler la fonction sous-jacente de l'opérateur d'origine, si celle-ci n'a pas été
-    modifiée. Lorsque c'est nécessaure, le cache peut être vidé en commençant une nouvelle
-    session. 
+    <application>PL/pgSQL</application> (or more precisely, the SPI manager) can
+    furthermore attempt to cache the execution plan associated with any
+    particular prepared statement.  If a cached plan is not used, then
+    a fresh execution plan is generated on each visit to the statement,
+    and the current parameter values (that is, <application>PL/pgSQL</application>
+    variable values) can be used to optimize the selected plan.  If the
+    statement has no parameters, or is executed many times, the SPI manager
+    will consider creating a <firstterm>generic</firstterm> plan that is not dependent
+    on specific parameter values, and caching that for re-use.  Typically
+    this will happen only if the execution plan is not very sensitive to
+    the values of the <application>PL/pgSQL</application> variables referenced in it.
+    If it is, generating a plan each time is a net win.
    </para>
 
    <para>
-    Comme <application>PL/pgSQL</application> sauvegarde les plans d'exécution
+    Comme <application>PL/pgSQL</application> sauvegarde des instructions
+    préparées et quelques fois des plans d'exécition
     de cette façon, les commandes SQL qui apparaissent directement dans une
     fonction <application>PL/pgSQL</application> doivent faire référence aux
     même tables et aux mêmes colonnes à chaque exécution&nbsp;; c'est-à-dire
@@ -4042,29 +4160,8 @@ $$ LANGUAGE plpgsql;
     d'une colonne dans une commande SQL. Pour contourner cette restriction,
     vous pouvez construire des commandes dynamiques en utilisant l'instruction
     <command>EXECUTE</command> de <application>PL/pgSQL</application>
-    &mdash; au prix de la construction d'un nouveau plan d'exécution à chaque
-    exécution.
-   </para>
-
-   <para>
-    Un autre point important est que les plans préparés utilisent des paramètres
-    pour permettre le changement des valeurs des variables
-    <application>PL/pgSQL</application> entre chaque exécution, comme indiqué
-    en détail ci-dessus. Quelque fois, cela signifie qu'un plan est moins
-    efficace que s'il avait été généré avec une valeur spécifique. Comme exemple,
-    regardez&nbsp;:
-<programlisting>
-SELECT * INTO mon_enregistrement FROM dictionnaire WHERE mot LIKE terme_recherche;
-</programlisting>
-    où <literal>terme_recherche</literal> est une variable
-    <application>PL/pgSQL</application>. Le plan caché pour cette requête
-    n'utilisera jamais un index sur une variable. Le plan caché pour cette
-    requête n'utilisera jamais un index sur un <structfield>mot</structfield>
-    car le planificateur ne peut pas savoir si le modèle <literal>LIKE</literal>
-    comprendra une ancre à gauche à l'exécution. Pour utiliser un index, la
-    requête doit être planifiée avec un modèle spécifique pour <literal>LIKE</literal>.
-    C'est un autre cas où <command>EXECUTE</command> peut être utilisé pour
-    forcer la génération d'un nouveau plan à chaque exécution.
+    &mdash; at the price of performing new parse analysis and
+    constructing a new execution plan on every execution.
    </para>
 
     <para>
@@ -4072,14 +4169,14 @@ SELECT * INTO mon_enregistrement FROM dictionnaire WHERE mot LIKE terme_recherch
      dans cette connexion. Quand les champs d'une variable record sont utilisés
      dans les expressions ou instructions, les types de données des champs
      ne doivent pas modifier d'un appel de la fonction à un autre car chaque
-     expression sera planifiée en utilisant le type de données qui est présent
+     expression sera analysée en utilisant le type de données qui est présent
      quand l'expression est atteinte en premier. <command>EXECUTE</command> peut
      être utilisé pour contourner ce problème si nécessaire.
     </para>
 
     <para>
      Si la même fonction est utilisée comme trigger pour plus d'une table,
-     <application>PL/pgSQL</application> prépare et met en cache les plans
+     <application>PL/pgSQL</application> prépare et met en cache les instructions
      indépendament pour chacune de ses tables &mdash; c'est-à-dire qu'il y a
      un cache pour chaque combinaison fonction trigger/table, pas
      uniquement pour chaque fonction. Ceci diminue certains des problèmes avec
@@ -4091,13 +4188,13 @@ SELECT * INTO mon_enregistrement FROM dictionnaire WHERE mot LIKE terme_recherch
 
     <para>
      De la même façon, les fonctions ayant des types polymorphiques pour les
-     arguments ont un cache séparé des plans pour chaque combinaison des types
-     d'argument réél avec lesquels elles ont été appelées, donc les différences
+     arguments ont un cache séparé des instructions pour chaque combinaison des types
+     d'argument réels avec lesquels elles ont été appelées, donc les différences
      de type de données ne causent pas d'échecs inattendus.
     </para>
 
    <para>
-    La mise en cache du plan peut parfois avoir des effets surprenants sur
+    La mise en cache des instructions peut parfois avoir des effets surprenants sur
     l'interprétation des valeurs sensibles à l'heure. Par exemple, il y a une
     différence entre ce que font ces deux fonctions&nbsp;:
 
@@ -4124,16 +4221,19 @@ $$ LANGUAGE plpgsql;
     </para>
 
     <para>
-     Dans le cas de <function>logfunc1</function>, l'analyseur principal de
-     <productname>PostgreSQL</productname> sait que, au moment de la préparation
-     du plan pour <command>INSERT</command>, la chaîne <literal>'now'</literal>
-     devra être interprétée comme une valeur de type <type>timestamp</type> car
-     la colonne cible de <classname>logtable</classname> est de ce type. Du
-     coup, <literal>'now'</literal> sera converti en une constante quand
-     <command>INSERT</command> est planifié, puis utilisé dans tous les appels
-     à <function>logfunc1</function> lors de la durée de vie de la session.
-     Il n'est pas nécessaire de préciser que ce n'est pas le souhait du
-     développeur.
+      In the case of <function>logfunc1</function>, the
+      <productname>PostgreSQL</productname> main parser knows when
+     analyzing the <command>INSERT</command> that the
+      string <literal>'now'</literal> should be interpreted as
+      <type>timestamp</type>, because the target column of
+      <classname>logtable</classname> is of that type. Thus,
+     <literal>'now'</literal> will be converted to a <type>timestamp</type>
+     constant when the
+     <command>INSERT</command> is analyzed, and then used in all
+      invocations of <function>logfunc1</function> during the lifetime
+      of the session. Needless to say, this isn't what the programmer
+     wanted.  A better idea is to use the <literal>now()</literal> or
+     <literal>current_timestamp</literal> function.
     </para>
 
     <para>
@@ -4146,6 +4246,9 @@ $$ LANGUAGE plpgsql;
      <type>timestamp</type> en appelant les fonctions <function>text_out</function>
      et <function>timestamp_in</function> pour la conversion. Du coup, l'heure
      calculée est mise à jour à chaque exécution comme le suppose le développeur.
+     Even though this
+     happens to work as expected, it's not terribly efficient, so
+     use of the <literal>now()</literal> function would still be a better idea.
     </para>
 
   </sect2>

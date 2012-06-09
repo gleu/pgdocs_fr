@@ -739,7 +739,7 @@ int SPI_execute_with_args(const char *<parameter>command</parameter>,
   <para>
    Des résultats similaires peuvent être réalisés avec <function>SPI_prepare</function>
    suivi par <function>SPI_execute_plan</function>&nbsp;; néanmoins, lors de
-   l'utilisation de cette fonction, le plan de requête est personnalisé avec les
+   l'utilisation de cette fonction, le plan de requête est toujours personnalisé avec les
    valeurs de paramètres spécifiques fournies. Pour une exécution simple, cette
    fonction doit être préférée. Si la même commande doit être exécutée avec
    plusieurs paramètres différents, chaque méthode peut être la plus rapide,
@@ -849,7 +849,7 @@ int SPI_execute_with_args(const char *<parameter>command</parameter>,
 
  <refnamediv>
   <refname>SPI_prepare</refname>
-  <refpurpose>prépare un plan pour une commande sans l'exécuter tout de
+  <refpurpose>prépare une instruction sans l'exécuter tout de
 suite</refpurpose>
  </refnamediv>
 
@@ -863,18 +863,23 @@ suite</refpurpose>
   <indexterm><primary>SPI_prepare</primary></indexterm>
 
   <para>
-   <function>SPI_prepare</function> crée et retourne un plan d'exécution
+   <function>SPI_prepare</function> crée et retourne une requête préparée
    pour la commande spécifiée mais ne lance pas la commande.
-   Cette fonction ne peut être appelée que depuis une procédure connectée.
+   La requête préparée peut être appelée plusieurs fois en utilisant
+   <function>SPI_execute_plan</function>.
   </para>
 
   <para>
    Lorsque la même commande ou une commande semblable doit être lancée à
-   plusieurs reprises, il peut être intéressant de ne faire la planification
-   que d'une seule fois.
-   <function>SPI_prepare</function> convertit une chaîne de commande en un plan
-   d'exécution qui peut être lancé plusieurs fois en utilisant
-   <function>SPI_executeplan</function>.
+   plusieurs reprises, il
++   is generally advantageous to perform parse analysis only once, and
++   might furthermore be advantageous to re-use an execution plan for the
++   command.
++   <function>SPI_prepare</function> converts a command string into a
++   prepared statement that encapsulates the results of parse analysis.
++   The prepared statement also provides a place for caching an execution plan
++   if it is found that generating a custom plan for each execution is not
++   helpful.
   </para>
 
   <para>
@@ -887,11 +892,11 @@ suite</refpurpose>
   </para>
 
   <para>
-   Le plan renvoyé par <function>SPI_prepare</function> ne peut être utilisé
+   La requête renvoyée par <function>SPI_prepare</function> ne peut être utilisé
    que dans l'invocation courante de la procédure puisque
-   <function>SPI_finish</function> libère la mémoire allouée pour le plan.
-   Mais un plan peut être sauvegardé plus longtemps par l'utilisation de la
-   fonction <function>SPI_saveplan</function>.
+   <function>SPI_finish</function> libère la mémoire allouée pour la requête.
+   Mais l'instruction peut être sauvegardée plus longtemps par l'utilisation des
+   fonctions <function>SPI_keepplan</function> ou <function>SPI_saveplan</function>.
   </para>
  </refsect1>
 
@@ -948,6 +953,26 @@ suite</refpurpose>
   <title>Notes</title>
 
   <para>
+   If no parameters are defined, a generic plan will be created at the
+   first use of <function>SPI_execute_plan</function>, and used for all
+   subsequent executions as well.  If there are parameters, the first few uses
+   of <function>SPI_execute_plan</function> will generate custom plans
+   that are specific to the supplied parameter values.  After enough uses
+   of the same prepared statement, <function>SPI_execute_plan</function> will
+   build a generic plan, and if that is not too much more expensive than the
+   custom plans, it will start using the generic plan instead of re-planning
+   each time.  If this default behavior is unsuitable, you can alter it by
+   passing the <literal>CURSOR_OPT_GENERIC_PLAN</literal> or
+   <literal>CURSOR_OPT_CUSTOM_PLAN</literal> flag to
+   <function>SPI_prepare_cursor</function>, to force use of generic or custom
+   plans respectively.
+  </para>
+
+  <para>
+   This function should only be called from a connected procedure.
+  </para>
+
+  <para>
    <type>SPIPlanPtr</type> est déclaré comme un pointeur vers un type de
    structure opaque dans <filename>spi.h</filename>. Il est déconseillé d'essayer
    d'accéder à son contenu directement car cela rend votre code plus fragile aux
@@ -955,10 +980,8 @@ suite</refpurpose>
   </para>
 
   <para>
-   Il y a un inconvénient à utiliser les paramètres&nbsp;: puisque le
-   planificateur ne connaît pas les valeurs qui seront utilisées pour les
-   paramètres, il effectuera des choix pires que ceux qu'il prendrait pour une
-   commande normale avec toutes les constantes visibles.
+   The name <type>SPIPlanPtr</type> is somewhat historical, since the data
+   structure no longer necessarily contains an execution plan.
   </para>
  </refsect1>
 </refentry>
@@ -973,7 +996,7 @@ suite</refpurpose>
 
  <refnamediv>
   <refname>SPI_prepare_cursor</refname>
-  <refpurpose>prépare un plan pour une commande, sans l'exécuter pour l'instant</refpurpose>
+  <refpurpose>prépare une requête, sans l'exécuter pour l'instant</refpurpose>
  </refnamediv>
 
  <refsynopsisdiv>
@@ -1055,9 +1078,10 @@ SPIPlanPtr SPI_prepare_cursor(const char * <parameter>command</parameter>, int <
 
   <para>
    Les bits utiles pour <parameter>cursorOptions</parameter> incluent
-   <symbol>CURSOR_OPT_SCROLL</symbol>,
-   <symbol>CURSOR_OPT_NO_SCROLL</symbol> et
-   <symbol>CURSOR_OPT_FAST_PLAN</symbol>. Notez en particulier que
+   <symbol>CURSOR_OPT_NO_SCROLL</symbol>,
+   <symbol>CURSOR_OPT_FAST_PLAN</symbol>,
+   <symbol>CURSOR_OPT_GENERIC_PLAN</symbol> et
+   <symbol>CURSOR_OPT_CUSTOM_PLAN</symbol>. Notez en particulier que
    <symbol>CURSOR_OPT_HOLD</symbol> est ignoré.
   </para>
  </refsect1>
@@ -1073,7 +1097,7 @@ SPIPlanPtr SPI_prepare_cursor(const char * <parameter>command</parameter>, int <
 
  <refnamediv>
   <refname>SPI_prepare_params</refname>
-  <refpurpose>prépare un plan pour une commande, mais sans l'exécuter</refpurpose>
+  <refpurpose>prépare une requête, mais sans l'exécuter</refpurpose>
  </refnamediv>
 
  <indexterm><primary>SPI_prepare_params</primary></indexterm>
@@ -1091,7 +1115,8 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
   <title>Description</title>
 
   <para>
-   <function>SPI_prepare_params</function> crée et renvoie un plan d'exécution
+   <function>SPI_prepare_params</function> crée et renvoie une requête
+   préparée
    pour la commande indiquée mais n'exécute pas la commande. Cette fonction
    est équivalente à <function>SPI_prepare_cursor</function> avec en plus le
    fait que l'appelant peut indiquer des fonctions pour contrôler l'analyse
@@ -1162,7 +1187,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
   
   <refnamediv>
     <refname>SPI_getargcount</refname>
-    <refpurpose>renvoie le nombre d'arguments nécessaires au plan préparé
+    <refpurpose>renvoie le nombre d'arguments nécessaire à une requête
       par <function>SPI_prepare</function></refpurpose>
   </refnamediv>
   
@@ -1176,7 +1201,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
     
     <para>
       <function>SPI_getargcount</function> renvoie le nombre d'arguments
-      nécessaires pour exécuter un plan préparé par
+      nécessaires pour exécuter une requête préparée par
       <function>SPI_prepare</function>.
     </para>
   </refsect1>
@@ -1189,7 +1214,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
         <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
         <listitem>
           <para>
-            plan d'exécution (renvoyé par <function>SPI_prepare</function>)
+            requête préparée (renvoyée par <function>SPI_prepare</function>)
           </para>
         </listitem>
       </varlistentry>
@@ -1217,8 +1242,8 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
   
   <refnamediv>
     <refname>SPI_getargtypeid</refname>
-    <refpurpose>renvoie l'OID du type de données pour un argument du
-      plan préparé par <function>SPI_prepare</function></refpurpose>
+    <refpurpose>renvoie l'OID du type de données pour un argument de la
+      requête préparée par <function>SPI_prepare</function></refpurpose>
   </refnamediv>
   
   <refsynopsisdiv>
@@ -1232,7 +1257,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
     <para>
       <function>SPI_getargtypeid</function> renvoie l'OID représentant
       le type pour le <parameter>argIndex</parameter>-ième
-      argument d'un plan préparé par <function>SPI_prepare</function>. Le
+      argument d'une requête préparée par <function>SPI_prepare</function>. Le
       premier argument se trouve à l'index zéro.
     </para>
   </refsect1>
@@ -1245,7 +1270,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
         <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
         <listitem>
           <para>
-            plan d'exécution (renvoyé par <function>SPI_prepare</function>)
+            requête préparée (renvoyée par <function>SPI_prepare</function>)
           </para>
         </listitem>
       </varlistentry>
@@ -1285,7 +1310,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
   
   <refnamediv>
     <refname>SPI_is_cursor_plan</refname>
-    <refpurpose>renvoie <symbol>true</symbol> si le plan préparé par
+    <refpurpose>renvoie <symbol>true</symbol> si la requête préparée par
       <function>SPI_prepare</function> peut être utilisé avec
       <function>SPI_cursor_open</function></refpurpose>
   </refnamediv>
@@ -1300,7 +1325,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
     
     <para>
       <function>SPI_is_cursor_plan</function> renvoie <symbol>true</symbol>
-      si un plan préparé par <function>SPI_prepare</function> peut être
+      si une requête préparée par <function>SPI_prepare</function> peut être
       passé comme un argument à <function>SPI_cursor_open</function> ou
       <symbol>false</symbol> si ce n'est pas le cas. Les critères sont que le
       <parameter>plan</parameter> représente une seule commande et que cette
@@ -1319,7 +1344,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
 		  <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
         <listitem>
           <para>
-            plan d'exécution (renvoyé par <function>SPI_prepare</function>)
+            requête préparée (renvoyée par <function>SPI_prepare</function>)
           </para>
         </listitem>
       </varlistentry>
@@ -1327,7 +1352,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
   </refsect1>
   
   <refsect1>
-    <title>Return Value</title>
+    <title>Valeur de retour</title>
     <para>
       <symbol>true</symbol> ou <symbol>false</symbol> pour indiquer si
       <parameter>plan</parameter> peut produire un curseur ou non, avec
@@ -1351,7 +1376,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
   
   <refnamediv>
     <refname>SPI_execute_plan</refname>
-    <refpurpose>exécute un plan préparé par 
+    <refpurpose>exécute une requête préparée par 
     <function>SPI_prepare</function></refpurpose>
   </refnamediv>
   
@@ -1364,8 +1389,9 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
     <indexterm><primary>SPI_execute_plan</primary></indexterm>
     
     <para>
-      <function>SPI_execute_plan</function> exécute un plan préparé par
-      <function>SPI_prepare</function>. <parameter>read_only</parameter> et
+      <function>SPI_execute_plan</function> exécute une requête préparée par
+      <function>SPI_prepare</function> ou une fonction du même type.
+      <parameter>read_only</parameter> et
       <parameter>count</parameter> ont la même interprétation que dans
       <function>SPI_execute</function>.
     </para>
@@ -1379,7 +1405,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
     <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
     <listitem>
      <para>
-      plan d'exécution (retourné par <function>SPI_prepare</function>)
+      requête préparée (retournée par <function>SPI_prepare</function>)
      </para>
     </listitem>
    </varlistentry>
@@ -1389,7 +1415,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
     <listitem>
      <para>
       Un tableau des vraies valeurs des paramètres. Doit avoir la même longueur
-      que le nombre d'arguments du plan.
+      que le nombre d'arguments de la requête.
      </para>
     </listitem>
    </varlistentry>
@@ -1399,7 +1425,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
     <listitem>
      <para>
       Un tableau décrivant les paramètres nuls. Doit avoir la même longueur que
-      le nombre d'arguments du plan.
+      le nombre d'arguments de la requête.
       <literal>n</literal> indique une valeur NULL (l'entrée correspondante
       dans <parameter>values</parameter> sera ignorée)&nbsp;; un espace indique une
       valeur non NULL (l'entrée correspondante dans <parameter>values</parameter> est
@@ -1482,7 +1508,7 @@ SPIPlanPtr SPI_prepare_params(const char * <parameter>command</parameter>,
 
  <refnamediv>
   <refname>SPI_execute_plan_with_paramlist</refname>
-  <refpurpose>exécute un plan préparé par <function>SPI_prepare</function></refpurpose>
+  <refpurpose>exécute une requête préparée par <function>SPI_prepare</function></refpurpose>
  </refnamediv>
 
  <indexterm><primary>SPI_execute_plan_with_paramlist</primary></indexterm>
@@ -1500,8 +1526,8 @@ int SPI_execute_plan_with_paramlist(SPIPlanPtr <parameter>plan</parameter>,
   <title>Description</title>
 
   <para>
-   <function>SPI_execute_plan_with_paramlist</function> exécute un plan
-   préparé par <function>SPI_prepare</function>. Cette fonction est
+   <function>SPI_execute_plan_with_paramlist</function> exécute une requête
+   préparée par <function>SPI_prepare</function>. Cette fonction est
    l'équivalent de <function>SPI_execute_plan</function>, sauf que les
    informations sur les valeurs des paramètres à passer à la requête sont
    présentées différemment. La représentation <literal>ParamListInfo</literal>
@@ -1519,7 +1545,7 @@ int SPI_execute_plan_with_paramlist(SPIPlanPtr <parameter>plan</parameter>,
     <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
     <listitem>
      <para>
-      plan d'exécution (renvoyé par <function>SPI_prepare</function>)
+      requête préparée (renvoyée par <function>SPI_prepare</function>)
      </para>
     </listitem>
    </varlistentry>
@@ -1579,7 +1605,7 @@ int SPI_execute_plan_with_paramlist(SPIPlanPtr <parameter>plan</parameter>,
   
   <refnamediv>
     <refname>SPI_execp</refname>
-    <refpurpose>exécute un plan en mode lecture/écriture</refpurpose>
+    <refpurpose>exécute une requête en mode lecture/écriture</refpurpose>
   </refnamediv>
 
   <refsynopsisdiv>
@@ -1606,7 +1632,7 @@ int SPI_execute_plan_with_paramlist(SPIPlanPtr <parameter>plan</parameter>,
       <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
       <listitem>
         <para>
-          plan d'exécution (renvoyé par <function>SPI_prepare</function>)
+          requête préparée (renvoyée par <function>SPI_prepare</function>)
         </para>
       </listitem>
     </varlistentry>
@@ -1616,7 +1642,7 @@ int SPI_execute_plan_with_paramlist(SPIPlanPtr <parameter>plan</parameter>,
       <listitem>
         <para>
           Un tableau des vraies valeurs de paramètre. Doit avoir la même
-          longueur que le nombre d'arguments du plan.
+          longueur que le nombre d'arguments de la requête.
         </para>
       </listitem>
     </varlistentry>
@@ -1626,7 +1652,7 @@ int SPI_execute_plan_with_paramlist(SPIPlanPtr <parameter>plan</parameter>,
       <listitem>
         <para>
           Un tableau décrivant les paramètres NULL. Doit avoir la même
-          longueur que le nombre d'arguments du plan.
+          longueur que le nombre d'arguments de la requête.
           <literal>n</literal> indique une valeur NULL (l'entrée dans
           <parameter>values</parameter> sera ignorée)&nbsp;; un espace indique une
           valeur non NULL (l'entrée dans <parameter>values</parameter> est valide).
@@ -1675,7 +1701,7 @@ int SPI_execute_plan_with_paramlist(SPIPlanPtr <parameter>plan</parameter>,
 
  <refnamediv>
   <refname>SPI_cursor_open</refname>
-  <refpurpose>met en place un curseur en utilisant un plan créé avec
+  <refpurpose>met en place un curseur en utilisant une requête créée avec
 <function>SPI_prepare</function></refpurpose>
  </refnamediv>
 
@@ -1691,13 +1717,13 @@ bool <parameter>read_only</parameter>)</synopsis>
 
   <para>
    <function>SPI_cursor_open</function> met en place un curseur (en interne,
-   un portail) qui lancera un plan préparé par
+   un portail) qui lancera une requête préparée par
    <function>SPI_prepare</function>. Les paramètres ont la même signification
    que les paramètres correspondant à <function>SPI_execute_plan</function>.
   </para>
 
   <para>
-   Utiliser un curseur au lieu de lancer le plan directement a deux
+   Utiliser un curseur au lieu de lancer une requête directement a deux
    avantages. Premièrement, les lignes de résultats peuvent être récupérées un
    certain nombre à la fois, évitant la saturation de mémoire pour les requêtes
    qui retournent trop de lignes. Deuxièmement,
@@ -1731,7 +1757,7 @@ bool <parameter>read_only</parameter>)</synopsis>
     <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
     <listitem>
      <para>
-      plan d'exécution (retourné par <function>SPI_prepare</function>)
+      requête préparée (retournée par <function>SPI_prepare</function>)
      </para>
     </listitem>
    </varlistentry>
@@ -1741,7 +1767,7 @@ bool <parameter>read_only</parameter>)</synopsis>
     <listitem>
      <para>
       Un tableau des valeurs de paramètres actuelles. Doit avoir la même
-      longueur que le nombre d'arguments du plan.
+      longueur que le nombre d'arguments de la requête.
      </para>
     </listitem>
    </varlistentry>
@@ -1751,7 +1777,7 @@ bool <parameter>read_only</parameter>)</synopsis>
     <listitem>
      <para>
       Un tableau décrivant quels paramètres sont NULL. Doit avoir la même
-      longueur que le nombre d'arguments du plan.
+      longueur que le nombre d'arguments de la requête.
       <literal>n</literal> indique une valeur NULL (l'entrée correspondante
       dans <parameter>values</parameter> sera ignorée)&nbsp;; un espace indique une
       valeur non NULL (l'entrée correspondante dans <parameter>values</parameter> est
@@ -1965,7 +1991,7 @@ Portal SPI_cursor_open_with_paramlist(const char *<parameter>name</parameter>,
 
   <para>
    <function>SPI_cursor_open_with_paramlist</function> prépare un curseur (en
-   interne un portail), qui exécutera un plan préparé par
+   interne un portail), qui exécutera une requête préparée par
    <function>SPI_prepare</function>. Cette fonction est équivalente à
    <function>SPI_cursor_open</function> sauf que les informations sur les
    valeurs des paramètres passées à la requête sont présentées différemment.
@@ -1999,7 +2025,7 @@ Portal SPI_cursor_open_with_paramlist(const char *<parameter>name</parameter>,
     <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
     <listitem>
      <para>
-      plan d'exécution (renvoyé par <function>SPI_prepare</function>)
+      requête préparée (renvoyée par <function>SPI_prepare</function>)
      </para>
     </listitem>
    </varlistentry>
@@ -2486,32 +2512,34 @@ void SPI_scroll_cursor_move(Portal <parameter>portal</parameter>, FetchDirection
 
 <!-- *********************************************** -->
 
-<refentry id="spi-spi-saveplan">
+<refentry id="spi-spi-keepplan">
  <refmeta>
-  <refentrytitle>SPI_saveplan</refentrytitle>
+  <refentrytitle>SPI_keepplan</refentrytitle>
   <manvolnum>3</manvolnum>
  </refmeta>
 
  <refnamediv>
-  <refname>SPI_saveplan</refname>
-  <refpurpose>sauvegarde un plan</refpurpose>
+  <refname>SPI_keepplan</refname>
+  <refpurpose>save a prepared statement</refpurpose>
  </refnamediv>
 
+ <indexterm><primary>SPI_keepplan</primary></indexterm>
+
  <refsynopsisdiv>
-<synopsis>SPIPlanPtr SPI_saveplan(SPIPlanPtr <parameter>plan</parameter>)</synopsis>
+<synopsis>
+int SPI_keepplan(SPIPlanPtr <parameter>plan</parameter>)
+</synopsis>
  </refsynopsisdiv>
 
  <refsect1>
   <title>Description</title>
-  <indexterm><primary>SPI_saveplan</primary></indexterm>
 
   <para>
-   <function>SPI_saveplan</function> sauvegarde un plan validé (préparé par
-   <function>SPI_prepare</function>) dans une zone de mémoire qui ne sera pas
-   libérée par <function>SPI_finish</function> et par le gestionnaire de
-   transactions et retourne le pointeur vers le plan sauvegardé. Ceci vous donne la
-   possibilité de réutiliser les plans préparés lors des invocations suivantes
-   de votre procédure dans la session courante.
+   <function>SPI_keepplan</function> saves a passed statement (prepared by
+   <function>SPI_prepare</function>) so that it will not be freed
+   by <function>SPI_finish</function> nor by the transaction manager.
+   This gives you the ability to reuse prepared statements in the subsequent
+   invocations of your procedure in the current session.
   </para>
  </refsect1>
 
@@ -2523,7 +2551,74 @@ void SPI_scroll_cursor_move(Portal <parameter>portal</parameter>, FetchDirection
     <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
     <listitem>
      <para>
-      le plan à sauvegarder
+      the prepared statement to be saved
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Return Value</title>
+
+  <para>
+   0 on success;
+   <symbol>SPI_ERROR_ARGUMENT</symbol> if <parameter>plan</parameter>
+   is <symbol>NULL</symbol> or invalid
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   The passed-in statement is relocated to permanent storage by means
+   of pointer adjustment (no data copying is required).  If you later
+   wish to delete it, use <function>SPI_freeplan</function> on it.
+  </para>
+ </refsect1>
+</refentry>
+
+<!-- *********************************************** -->
+
+<refentry id="spi-spi-saveplan">
+ <refmeta>
+  <refentrytitle>SPI_saveplan</refentrytitle>
+  <manvolnum>3</manvolnum>
+ </refmeta>
+
+ <refnamediv>
+  <refname>SPI_saveplan</refname>
+  <refpurpose>sauvegarde une requête préparée</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>SPIPlanPtr SPI_saveplan(SPIPlanPtr <parameter>plan</parameter>)</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+  <indexterm><primary>SPI_saveplan</primary></indexterm>
+
+  <para>
+   <function>SPI_saveplan</function> copies a passed statement (prepared by
+   <function>SPI_prepare</function>) into memory that will not be freed
+    by <function>SPI_finish</function> nor by the transaction manager,
+   and returns a pointer to the copied statement.  This gives you the
+   ability to reuse prepared statements in the subsequent invocations of
+    your procedure in the current session.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Arguments</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
+    <listitem>
+     <para>
+      la requête préparée à sauvegarder
      </para>
     </listitem>
    </varlistentry>
@@ -2534,7 +2629,7 @@ void SPI_scroll_cursor_move(Portal <parameter>portal</parameter>, FetchDirection
   <title>Valeur de retour</title>
 
   <para>
-   Pointeur vers le plan sauvegardé&nbsp;; <symbol>NULL</symbol> en cas d'échec.
+   Pointeur vers la requête copiée&nbsp;; <symbol>NULL</symbol> en cas d'échec.
    En cas d'erreur, <varname>SPI_result</varname> est positionnée comme
    suit&nbsp;:
 
@@ -2564,16 +2659,15 @@ void SPI_scroll_cursor_move(Portal <parameter>portal</parameter>, FetchDirection
   <title>Notes</title>
 
   <para>
-   Le plan passé n'est pas libéré, donc vous pouvez souhaiter exécuter
+   La requête passée n'est pas libérée, donc vous pouvez souhaiter exécuter
    <function>SPI_freeplan</function> sur ce dernier pour éviter des pertes
    mémoire jusqu'à <function>SPI_finish</function>.
   </para>
 
   <para>
-   Si l'un des objets (une table, une fonction, etc.) référencés par le
-   plan préparé est supprimé ou redéfini, alors les exécutions futures de
-   <function>SPI_execute_plan</function> pourrait échouer ou renvoyer des
-   résultats différents de ce que le plan indique initialement.
+   In most cases, <function>SPI_keepplan</function> is preferred to this
+   function, since it accomplishes largely the same result without needing
+   to physically copy the prepared statement's data structures.
   </para>
  </refsect1>
 </refentry>
@@ -3772,7 +3866,7 @@ fonction semblable</refpurpose>
 
  <refnamediv>
   <refname>SPI_freeplan</refname>
-  <refpurpose>libère un plan sauvegardé auparavant</refpurpose>
+  <refpurpose>libère une requête préparée sauvegardée auparavant</refpurpose>
  </refnamediv>
 
  <refsynopsisdiv>
@@ -3784,9 +3878,9 @@ fonction semblable</refpurpose>
   <indexterm><primary>SPI_freeplan</primary></indexterm>
 
   <para>
-   <function>SPI_freeplan</function> libère un plan de commandes d'exécution
-   retourné auparavant par <function>SPI_prepare</function> ou sauvegardé par
-   <function>SPI_saveplan</function>.
+   <function>SPI_freeplan</function> libère une requête préparée
+   retournée auparavant par <function>SPI_prepare</function> ou sauvegardée par
+   <function>SPI_keepplan</function> ou <function>SPI_saveplan</function>.
   </para>
  </refsect1>
 
@@ -3798,7 +3892,7 @@ fonction semblable</refpurpose>
     <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
     <listitem>
      <para>
-      pointeur vers le plan à libérer
+      pointeur vers la requête à libérer
      </para>
     </listitem>
    </varlistentry>
@@ -3809,6 +3903,7 @@ fonction semblable</refpurpose>
   <title>Valeur de retour</title>
 
   <para>
+   0 en cas de succès&nbsp;;
    <symbol>SPI_ERROR_ARGUMENT</symbol> si <parameter>plan</parameter>
    est <symbol>NULL</symbol> ou invalide.
   </para>
