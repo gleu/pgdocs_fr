@@ -767,8 +767,72 @@ archive_command = 'copy "%p" "C:\\serveur\\repertoire_archive\\%f"'  # Windows</
    <title>Réaliser une sauvegarde de base</title>
 
    <para>
-    La procédure pour réaliser une sauvegarde de base est relativement
-    simple&nbsp;:
+    The easiest way to perform a base backup is to use the
+    <xref linkend="app-pgbasebackup"/> tool. It can create
+    a base backup either as regular files or as a tar archive. If more
+    flexibility than <xref linkend="app-pgbasebackup"/> can provide is
+    required, you can also make a base backup using the low level API
+    (see <xref linkend="backup-lowlevel-base-backup"/>).
+   </para>
+
+   <para>
+    It is not necessary to be concerned about the amount of time it takes
+    to make a base backup. However, if you normally run the
+    server with <varname>full_page_writes</varname> disabled, you might notice a drop
+    in performance while the backup runs since <varname>full_page_writes</varname> is
+    effectively forced on during backup mode.
+   </para>
+
+   <para>
+    To make use of the backup, you will need to keep all the WAL
+    segment files generated during and after the file system backup.
+    To aid you in doing this, the base backup process
+    creates a <firstterm>backup history file</firstterm> that is immediately
+    stored into the WAL archive area. This file is named after the first
+    WAL segment file that you need for the file system backup.
+    For example, if the starting WAL file is
+    <literal>0000000100001234000055CD</literal> the backup history file will be
+    named something like
+    <literal>0000000100001234000055CD.007C9330.backup</literal>. (The second
+    part of the file name stands for an exact position within the WAL
+    file, and can ordinarily be ignored.) Once you have safely archived
+    the file system backup and the WAL segment files used during the
+    backup (as specified in the backup history file), all archived WAL
+    segments with names numerically less are no longer needed to recover
+    the file system backup and can be deleted. However, you should
+    consider keeping several backup sets to be absolutely certain that
+    you can recover your data.
+   </para>
+
+   <para>
+    The backup history file is just a small text file. It contains the
+    label string you gave to <xref linkend="app-pgbasebackup"/>, as well as
+    the starting and ending times and WAL segments of the backup.
+    If you used the label to identify the associated dump file,
+    then the archived history file is enough to tell you which dump file to
+    restore.
+   </para>
+
+   <para>
+    Since you have to keep around all the archived WAL files back to your
+    last base backup, the interval between base backups should usually be
+    chosen based on how much storage you want to expend on archived WAL
+    files.  You should also consider how long you are prepared to spend
+    recovering, if recovery should be necessary &mdash; the system will have to
+    replay all those WAL segments, and that could take awhile if it has
+    been a long time since the last base backup.
+   </para>
+  </sect2>
+
+  <sect2 id="backup-lowlevel-base-backup">
+   <title>Making a Base Backup Using the Low Level API</title>
+   <para>
+    The procedure for making a base backup using the low level
+    APIs contains a few more steps than
+    the <xref linkend="app-pgbasebackup"/> method, but is relatively
+    simple. It is very important that these steps are executed in
+    sequence, and that the success of a step is verified before
+    proceeding to the next step.
   <orderedlist>
    <listitem>
     <para>
@@ -860,19 +924,6 @@ SELECT pg_start_backup('label', true);
    </para>
 
    <para>
-    Vous pouvez aussi utiliser l'outil <xref linkend="app-pgbasebackup"/> pour
-    faire la sauvegarde, à la place d'une copie manuelle des fichiers. Cet
-    outil fera l'équivalent des étapes <function>pg_start_backup()</function>,
-    copie et <function>pg_stop_backup()</function> automatiquement, et
-    transfert la sauvegarde via une connexion standard
-    <productname>PostgreSQL</productname> en utilisant le protocole de
-    réplication, au lieu d'avoir besoin d'un accès au niveau du système de
-    fichiers. <command>pg_basebackup</command> n'interfère pas avec les
-    sauvegardes de niveau système de fichiers prises à l'aide de
-    <function>pg_start_backup()</function>/<function>pg_stop_backup()</function>.
-   </para>
-
-   <para>
     Certains outils de sauvegarde de fichiers émettent des
     messages d'avertissement ou d'erreur si les fichiers qu'ils essaient de
     copier sont modifiés au cours de la copie. Cette situation, normale lors
@@ -895,21 +946,6 @@ SELECT pg_start_backup('label', true);
     vous pouvez utiliser les options d'avertissement <literal>--warning=no-file-changed
     --warning=no-file-removed</literal> pour cacher les messages d'avertissement
     en relation.
-   </para>
-
-   <para>
-    Il n'est pas utile d'accorder de l'importance au temps passé entre
-    <function>pg_start_backup</function> et le début réel de la sauvegarde, pas
-    plus qu'entre la fin de la sauvegarde et
-    <function>pg_stop_backup</function>&nbsp;; un délai de quelques minutes ne
-    pose pas de problème. (Néanmoins, si le serveur est normalement utilisé
-    alors que <varname>full_page_writes</varname> est désactivé, une perte de
-    performances entre <function>pg_start_backup</function> et
-    <function>pg_stop_backup</function> peut être constatée car l'activation du
-    paramètre <varname>full_page_writes</varname> est forcée lors du mode de
-    sauvegarde.) Il convient toutefois de s'assurer que ces étapes sont
-    effectuées séquentiellement, sans chevauchement. Dans le cas contraire, la
-    sauvegarde est invalidée.
    </para>
 
    <para>
@@ -937,49 +973,6 @@ SELECT pg_start_backup('label', true);
     d'exécution, mais pas sur le <application>postmaster</application>
     qui va utiliser cette sauvegarde. De plus, ces fichiers peuvent poser
     problème à <application>pg_ctl</application>.
-   </para>
-
-   <para>
-    La sauvegarde n'est utilisable que si les fichiers de segment WAL
-    engendrés pendant ou après cette sauvegarde sont préservés.
-    Pour faciliter cela, la fonction 
-    <function>pg_stop_backup</function> crée un <firstterm>fichier d'historique de la
-    sauvegarde</firstterm> immédiatement stocké dans la zone d'archivage des WAL.
-    Ce fichier est nommé d'après le nom du premier fichier segment WAL
-    nécessaire à l'utilisation de la sauvegarde. Ainsi, si le fichier
-    WAL de démarrage est <literal>0000000100001234000055CD</literal>, le nom
-    du fichier d'historique ressemble à 
-    <literal>0000000100001234000055CD.007C9330.backup</literal> (le deuxième nombre
-    dans le nom de ce fichier contient la position exacte à l'intérieur du fichier
-    WAL et peut en général être ignoré). Une fois que la sauvegarde du
-    système de fichiers et des segments WAL utilisés
-    pendant celle-ci (comme précisé dans le fichier d'historique des sauvegardes) 
-    est archivée de façon sûre,   
-    tous les segments WAL archivés de noms numériquement plus
-    petits ne sont plus nécessaires à la récupération de la sauvegarde du
-    système de fichiers et peuvent être supprimés. Toutefois, il est
-    préférable de conserver plusieurs jeux de sauvegarde pour être absolument
-    certain de pouvoir récupérer les données.
-   </para>
-
-   <para>
-    Le fichier d'historique de la sauvegarde est un simple fichier texte. Il
-    contient le label passé à <function>pg_start_backup</function>,
-    l'heure et les segments WAL de début et de fin de la sauvegarde.
-    Si le label est utilisé pour identifier l'endroit où le fichier de sauvegarde associé
-    est conservé, alors le fichier d'historique archivé est suffisant pour
-    savoir quel fichier de sauvegarde restaurer, en cas de besoin.
-   </para>
-
-   <para>
-    Puisqu'il faut conserver tous les fichiers WAL archivés depuis la
-    dernière sauvegarde de base, l'intervalle entre les sauvegardes de base
-    est habituellement choisi en fonction de l'espace de stockage qu'on
-    accepte de consommer en fichiers d'archives WAL. Il faut également
-    considérer le temps à dépenser pour la
-    récupération, si celle-ci s'avère nécessaire &mdash; le système doit rejouer
-    tous les segments WAL et ceci peut prendre beaucoup de temps si la
-    dernière sauvegarde de base est ancienne.
    </para>
 
    <para>
@@ -1305,6 +1298,17 @@ SELECT pg_start_backup('label', true);
      </para>
 
      <para>
+      As with base backups, the easiest way to produce a standalone
+      hot backup is to use the <xref linkend="app-pgbasebackup"/>
+      tool. If you include the <literal>-X</literal> parameter when calling
+      it, all the transaction log required to use the backup will be
+      included in the backup automatically, and no special action is
+      required to restore the backup.
+     </para>
+
+     <para>
+      If more flexibility in copying the backup files is needed, a lower
+      level process can be used for standalone hot backups as well.
       En vue d'effectuer des sauvegardes à chaud autonomes, on positionne
       <varname>wal_level</varname> à
       <literal>archive</literal> (ou <literal>hot_standby</literal>),
@@ -1343,6 +1347,11 @@ tar -rf /var/lib/pgsql/backup.tar /var/lib/pgsql/archive/
       fichier <application>tar</application>.
       Rappelez vous d'ajouter de la gestion d'erreur à vos scripts.
      </para>
+
+    </sect3>
+
+    <sect3 id="compressed-archive-logs">
+     <title>Compressed Archive Logs</title>
 
      <para>
       Si la taille du stockage des archives est un problème, vous pouvez

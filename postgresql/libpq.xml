@@ -2326,14 +2326,27 @@ suivantes&nbsp;:
           <listitem>
            <para>
             Lancement du transfert de données Copy In/Out (vers et à
-            partir du serveur). Ceci est seulement utilisé par la
-            réplication en flux.
+            partir du serveur). Cette fonctionnalité est seulement
+            utilisée par la réplication en flux,
+            so this status should not occur in ordinary applications.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry id="libpq-pgres-single-tuple">
+          <term><literal>PGRES_SINGLE_TUPLE</literal></term>
+          <listitem>
+           <para>
+            The <structname>PGresult</structname> contains a single result tuple
+            from the current command.  This status occurs only when
+            single-row mode has been selected for the query
+            (see <xref linkend="libpq-single-row-mode"/>).
            </para>
           </listitem>
          </varlistentry>
 </variablelist>
 
-Si le statut du résultat est <literal>PGRES_TUPLES_OK</literal>, alors les
+Si le statut du résultat est <literal>PGRES_TUPLES_OK</literal> ou <literal>PGRES_SINGLE_TUPLE</literal>, alors les
 fonctions décrites ci-dessous peuvent être utilisées pour récupérer les lignes
 renvoyées par la requête. Notez qu'une commande <command>SELECT</command> qui
 arrive à récupérer aucune ligne affichera toujours
@@ -2612,7 +2625,7 @@ Notez que les champs d'erreurs sont seulement disponibles pour les objets
 <para>
 Ces fonctions sont utilisées pour extraire des informations provenant d'un objet
 <structname>PGresult</structname> représentant un résultat valide pour une
-requête (statut <literal>PGRES_TUPLES_OK</literal>). Ils peuvent aussi être
+requête (statut <literal>PGRES_TUPLES_OK</literal> ou <literal>PGRES_SINGLE_TUPLE</literal>). Ils peuvent aussi être
 utilisés pour extraire des informations à partir d'une opération Describe
 réussie&nbsp;: le résultat d'un Describe a les mêmes informations de colonnes
 qu'une exécution réelle de la requête aurait fournie, mais elle ne renvoie pas
@@ -3501,6 +3514,15 @@ plusieurs commandes <acronym>SQL</acronym>, toutes les structures
 <function>PQexec</function>, sauf la dernière.
 </para>
 </listitem>
+
+    <listitem>
+     <para>
+      <function>PQexec</function> always collects the command's entire result,
+      buffering it in a single <structname>PGresult</structname>.  While
+      this simplifies error-handling logic for the application, it can be
+      impractical for results containing many rows.
+     </para>
+    </listitem>
 </itemizedlist>
 </para>
 
@@ -3666,8 +3688,10 @@ int PQsendDescribePortal(PGconn *conn, const char *portalName);
           Attend le prochain résultat d'un appel précédant à
           <function>PQsendQuery</function>,
           <function>PQsendQueryParams</function>,
-	  <function>PQsendPrepare</function> ou
-          <function>PQsendQueryPrepared</function>, et le renvoie. Un pointeur
+  	      <function>PQsendPrepare</function>,
+          <function>PQsendQueryPrepared</function>,
+          <function>PQsendDescribePrepared</function> ou
+          <function>PQsendDescribePortal</function>, et le renvoie. Un pointeur
           nul est renvoyé quand la commande est terminée et qu'il n'y aura plus
           de résultats.
 <synopsis>PGresult *PQgetResult(PGconn *conn);
@@ -3710,7 +3734,18 @@ commande contient plusieurs commandes <acronym>SQL</acronym>, les résultats de
 ces commandes peuvent être obtenus individuellement (ceci permet une simple
 forme de traitement en parallèle&nbsp;: le client peut gérer les résultats
 d'une commande alors que le serveur travaille sur d'autres requêtes de la même
-chaîne de commandes). Néanmoins, appeler <function>PQgetResult</function>
+chaîne de commandes).
+  </para>
+
+  <para>
+   Another frequently-desired feature that can be obtained with
+   <function>PQsendQuery</function> and <function>PQgetResult</function>
+   is retrieving large query results a row at a time.  This is discussed
+   in <xref linkend="libpq-single-row-mode"/>.
+  </para>
+
+  <para>
+   Néanmoins, appeler <function>PQgetResult</function>
 causera toujours un blocage du client jusqu'à la fin de la prochaine commande
 <acronym>SQL</acronym>. Ceci est évitable en utilisant proprement deux
 fonctions supplémentaires&nbsp;:
@@ -3877,7 +3912,99 @@ décrit ci-dessus.
 
 </sect1>
 
-<sect1 id="libpq-cancel">
+ <sect1 id="libpq-single-row-mode">
+  <title>Retrieving Query Results Row-By-Row</title>
+
+  <indexterm zone="libpq-single-row-mode">
+   <primary>libpq</primary>
+   <secondary>single-row mode</secondary>
+  </indexterm>
+
+  <para>
+   Ordinarily, <application>libpq</application> collects a SQL command's
+   entire result and returns it to the application as a single
+   <structname>PGresult</structname>.  This can be unworkable for commands
+   that return a large number of rows.  For such cases, applications can use
+   <function>PQsendQuery</function> and <function>PQgetResult</function> in
+   <firstterm>single-row mode</firstterm>.  In this mode, the result row(s) are
+   returned to the application one at a time, as they are received from the
+   server.
+  </para>
+
+  <para>
+   To enter single-row mode, call <function>PQsetSingleRowMode</function>
+   immediately after a successful call of <function>PQsendQuery</function>
+   (or a sibling function).  This mode selection is effective only for the
+   currently executing query.  Then call <function>PQgetResult</function>
+   repeatedly, until it returns null, as documented in <xref
+   linkend="libpq-async"/>.  If the query returns any rows, they are returned
+   as individual <structname>PGresult</structname> objects, which look like
+   normal query results except for having status code
+   <literal>PGRES_SINGLE_TUPLE</literal> instead of
+   <literal>PGRES_TUPLES_OK</literal>.  After the last row, or immediately if
+   the query returns zero rows, a zero-row object with status
+   <literal>PGRES_TUPLES_OK</literal> is returned; this is the signal that no
+   more rows will arrive.  (But note that it is still necessary to continue
+   calling <function>PQgetResult</function> until it returns null.)  All of
+   these <structname>PGresult</structname> objects will contain the same row
+   description data (column names, types, etc) that an ordinary
+   <structname>PGresult</structname> object for the query would have.
+   Each object should be freed with <function>PQclear</function> as usual.
+  </para>
+
+  <para>
+   <variablelist>
+    <varlistentry id="libpq-pqsetsinglerowmode">
+     <term>
+      <function>PQsetSingleRowMode</function>
+      <indexterm>
+       <primary>PQsetSingleRowMode</primary>
+      </indexterm>
+     </term>
+
+     <listitem>
+      <para>
+       Select single-row mode for the currently-executing query.
+
+<synopsis>
+int PQsetSingleRowMode(PGconn *conn);
+</synopsis>
+      </para>
+
+      <para>
+       This function can only be called immediately after
+       <function>PQsendQuery</function> or one of its sibling functions,
+       before any other operation on the connection such as
+       <function>PQconsumeInput</function> or
+       <function>PQgetResult</function>.  If called at the correct time,
+       the function activates single-row mode for the current query and
+       returns 1.  Otherwise the mode stays unchanged and the function
+       returns 0.  In any case, the mode reverts to normal after
+       completion of the current query.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+
+  <caution>
+   <para>
+    While processing a query, the server may return some rows and then
+    encounter an error, causing the query to be aborted.  Ordinarily,
+    <application>libpq</application> discards any such rows and reports only the
+    error.  But in single-row mode, those rows will have already been
+    returned to the application.  Hence, the application will see some
+    <literal>PGRES_SINGLE_TUPLE</literal> <structname>PGresult</structname>
+    objects followed by a <literal>PGRES_FATAL_ERROR</literal> object.  For
+    proper transactional behavior, the application must be designed to
+    discard or undo whatever has been done with the previously-processed
+    rows, if the query ultimately fails.
+   </para>
+  </caution>
+
+ </sect1>
+
+ <sect1 id="libpq-cancel">
   <title>Annuler des requêtes en cours d'exécution</title>
   
   <indexterm zone="libpq-cancel">
@@ -5217,297 +5344,6 @@ d'un <structname>PGresult</structname>, les pointeurs de gestion actuels de
 <structname>PGconn</structname> sont copiés dans <structname>PGresult</structname> pour une
 utilisation possible par des fonctions comme <function>PQgetvalue</function>.
 </para>
-
-</sect1>
-
- <sect1 id="libpq-row-processor">
-  <title>Traitement personnalisé des lignes</title>
-
-  <indexterm zone="libpq-row-processor">
-   <primary>PQrowProcessor</primary>
-  </indexterm>
-
-  <indexterm zone="libpq-row-processor">
-   <primary>traitement de lignes</primary>
-   <secondary>dans libpq</secondary>
-  </indexterm>
-
-  <para>
-   D'habitude, à la réception du résultat d'une requête, la bibliothèque
-   <application>libpq</application> ajoute chaque valeur de ligne dans la
-   structure <type>PGresult</type> jusqu'à ce que l'ensemble des resultats
-   soit récupéré. Puis le <type>PGresult</type> est renvoyé à l'application
-   en une fois. Cette approche est simple mais peut devenir inefficace pour
-   de gros ensembles de données. Pour améliorer les performances, une
-   application peut enregistrer une fonction personnalisée de
-   <firstterm>traitement de lignes</firstterm> qui traite chaque ligne de
-   données reçue à partir du réseau. Le traitement de chaque ligne peut se
-   faire directement ou être un simple stockage dans une structure de données
-   spécifique à l'application pour un traitement ultérieur.
-  </para>
-
-  <caution>
-   <para>
-    La fonction de traitement des lignes voit les lignes avant de savoir si la
-    requpete va réussir dans son ensemble car le serveur peut renvoyer quelques
-    lignes avant de rencontrer une erreur. Pour un bon comportement transactionnel,
-    il doit être possible d'annuler toute ce que la fonction de traitement de
-    lignes a fait si la requête finit par échouer.
-   </para>
-  </caution>
-
-  <para>
-   Lors de l'utilisation d'une fonction de traitement personnalisé de lignes,
-   les données d'une ligne ne sont pas accumulées dans la structure
-   <type>PGresult</type>. Du coup, le <type>PGresult</type> final renvoyé à
-   l'application contiendra aucune ligne (<function>PQntuples</function> =
-   <literal>0</literal>). Néanmoins, <function>PQresultStatus</function> vaut
-   toujours <literal>PGRES_TUPLES_OK</literal>, et il contient les bonnes
-   informations sur les colonnes du résultat de la requête. Par contre, si la
-   requête échoue entre temps, la valeur renvoyée par
-   <function>PQresultStatus</function> = <literal>PGRES_FATAL_ERROR</literal>.
-   L'application doit être prévue pour annuler toute action de la fonction
-   de traitement de lignes à chaque fois qu'elle récupère un statut
-   <literal>PGRES_FATAL_ERROR</literal> suite à l'exécution de la requête.
-  </para>
-
-  <para>
-   Une fonction de traitement personnalisé des lignes est enregistrée en
-   appelant la fonction <function>PQsetRowProcessor</function> décrite
-   ci-dessous. Cette fonction sera utilisée pour tous les résultats de
-   requêtes exécutées par la suite sur cette connexion, jusqu'à ce qu'elle
-   soit changée. Une fonction de traitement de lignes doit avoir la
-   signature suivante&nbsp;:
-
-<synopsis>
-typedef int (*PQrowProcessor) (PGresult *res, const PGdataValue *columns,
-                               const char **errmsgp, void *param);
-</synopsis>
-   where <type>PGdataValue</type> is described by
-<synopsis>
-typedef struct pgDataValue
-{
-    int         len;            /* data length in bytes, or &lt;0 if NULL */
-    const char *value;          /* data value, without zero-termination */
-} PGdataValue;
-</synopsis>
-  </para>
-
-  <para>
-   Le paramètre <parameter>res</parameter> correspond à <literal>PGRES_TUPLES_OK</literal>
-   de <type>PGresult</type> qui sera envoyé à l'application appelante si aucune
-   erreur ne survient. Il contient des informations sur l'ensemble de colonnes
-   du résultat de requêtes, mais pas les données de lignes. En particulier, la
-   fonction de traitement de lignes doit récupérer le résultat de
-   <literal>PQnfields(res)</literal> pour connaître le nombre de colonnes.
-  </para>
-
-  <para>
-   Tout de suite après que la bibliothèque <application>libpq</application>
-   ait déterminé l'information sur les colonnes de l'ensemble de résultats,
-   elle fera un appel à la fonction de traitement des lignes avec le
-   paramètre <parameter>columns</parameter> initialisé à NULL, mais les
-   autres paramètres auront l'initialisation habituelle. La fonction de
-   traitement des lignes peut utiliser cet appel pour se préparer à un nouvel
-   ensemble de résultats. Si elle n'a rien à faire, elle peut seulement renvoyer
-   <literal>1</literal>. Dans les appels suivants, un par ligne, le paramètre
-   <parameter>columns</parameter> pointe vers un tableau de structures
-   <type>PGdataValue</type>, une par colonne de données.
-  </para>
-
-  <para>
-   <parameter>errmsgp</parameter> est un paramètre en sortie utilisé seulement
-   pour renvoyer des erreurs. Si la fonction de traitement de ligne a besoin
-   d'indiquer une erreur, elle peut configurer
-   <literal>*</literal><parameter>errmsgp</parameter> de façon à ce qu'il pointe
-   vers une chaîne de caractères contenant le message (elle doit aussi renvoyer
-   <literal>-1</literal>). Un cas spécial est accepté&nbsp;: renvoyer
-   <literal>-1</literal> sans changer <literal>*</literal><parameter>errmsgp</parameter>
-   de sa valeur NULL initiale est pris pour un manque mémoire (<quote>out of
-   memory</quote>).
-  </para>
-
-  <para>
-   Le dernier paramètre, <parameter>param</parameter>, est un simple pointeur
-   passé à <function>PQsetRowProcessor</function>. Cela peut être utilisé
-   comme moyen de communication entre la fonction de traitement de ligne
-   et l'application.
-  </para>
-
-  <para>
-   Dans le tableau <type>PGdataValue</type> passé à la fonction de traitement
-   de lignes, les données ne sont pas forcément terminées par des zéros, que
-   le format des données soit du texte ou du binaire. Une valeur SQL NULL est
-   indiquée par un champ longueur de valeur négative.
-  </para>
-
-  <para>
-   La fonction de traitement des lignes <emphasis>doit</emphasis> traiter les
-   données immédiatement ou les copier dans une structure de stockage contrôlée
-   par l'application. Les pointeurs vers les valeurs passés à la fonction de
-   traitement de lignes pointent vers le tampon de données en entrée interne
-   de la bibliothèque <application>libpq</application>, tampon qui sera écrasé
-   par la lecture de la prochaine ligne.
-  </para>
-
-  <para>
-   La fonction de traitement de lignes doit renvoyer soit <literal>1</literal>
-   soit <literal>-1</literal>.
-   <literal>1</literal> est la valeur de retour inqiquant un succès de
-   l'opération&nbsp;; <application>libpq</application> continuera à recevoir
-   les valeurs des lignes provenant du serveur et à les passer à la fonction
-   de traitement des lignes. La valeur <literal>-1</literal> indique que la
-   fonction de traitement des lignes a rencontré une erreur. Dans ce cas, la
-   bibliothèque <application>libpq</application> annulera les lignes résultantes,
-   puis renverra un <type>PGresult</type> à <literal>PGRES_FATAL_ERROR</literal>
-   pour l'application (et contenant le message d'erreur indiqué ou le message
-   <quote>out of memory for query result</quote> si <literal>*</literal><parameter>errmsgp</parameter>
-   a été laissé à NULL).
-  </para>
-
-  <para>
-   Une autre option pour sortir d'une fonction de traitement de ligne est de
-   renvoyer une exception en utilisant les fonctions <function>longjmp()</function>
-   (en C) ou <literal>throw</literal> (en C++). Si cela arrive, le traitement des
-   données du résultat peut être continué plus tard en appelant
-   <function>PQgetResult</function>&nbsp;; la fonction de traitement des lignes
-   peut être appelée tout à fait normalement pour les lignes restantes.
-   Comme avec toute utilisation de <function>PQgetResult</function>, l'application
-   doit continuer à appeler <function>PQgetResult</function> jusqu'à obtenir un
-   résultat NULL avant de pouvoir exécuter une autre requête.
-  </para>
-
-  <para>
-   Dans certains cas, une exception pourrait indiquer que le reste des résultats
-   de la requête n'est pas intéressant. Dans certains cas, l'application pourrait
-   ignorer les lignes restantes avec la fonction <function>PQskipResult</function>,
-   décrites ci-dessous. Une autre option de récupération est de fermer la connexion
-   avec <function>PQfinish</function>.
-  </para>
-
-  <para>
-   <variablelist>
-    <varlistentry id="libpq-pqsetrowprocessor">
-     <term>
-      <function>PQsetRowProcessor</function>
-      <indexterm>
-       <primary>PQsetRowProcessor</primary>
-      </indexterm>
-     </term>
-
-     <listitem>
-      <para>
-       Configure une fonction callback qui traitera chaque ligne.
-
-<synopsis>
-void PQsetRowProcessor(PGconn *conn, PQrowProcessor func, void *param);
-</synopsis>
-      </para>
-
-      <para>
-       La fonction spécifiée pour le traitement de lignes,
-       <parameter>func</parameter>, est initialisée pour la connexion
-       <parameter>conn</parameter>. De plus, <parameter>param</parameter>
-       est initialisé comme canal d'informations entre l'application et
-       la fonction.
-       Si <parameter>func</parameter> est NULL, la fonction de traitement
-       de lignes standard est mise en place sur la connexion donnée. Dans
-       ce cas, <parameter>param</parameter> est ignoré.
-      </para>
-
-      <para>
-       Bien que la fonction de traitement de lignes peut être changée à tout
-       moment lors de la vie de la connexion, il est généralement déconseillé
-       de le faire lorsqu'une requête est active. En particulier, lors de
-       l'utilisation du mode asynchrone, sachez que <function>PQisBusy</function>
-       tout comme <function>PQgetResult</function> peuvent appeler la fonction
-       de traitement de lignes.
-       row processor.
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry id="libpq-pqgetrowprocessor">
-     <term>
-      <function>PQgetRowProcessor</function>
-      <indexterm>
-       <primary>PQgetRowProcessor</primary>
-      </indexterm>
-     </term>
-
-     <listitem>
-      <para>
-       Récupère la fonction de traitement de ligne actuellement configurée
-       pour cette connexion.
-
-<synopsis>
-PQrowProcessor PQgetRowProcessor(const PGconn *conn, void **param);
-</synopsis>
-      </para>
-
-      <para>
-       En plus de renvoyer le pointeur sur la fonction de traitement de lignes,
-       le pointeur d'informations <literal>*</literal><parameter>param</parameter>
-       sera renvoyée si <parameter>param</parameter> n'est pas NULL.
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry id="libpq-pqskipresult">
-     <term>
-      <function>PQskipResult</function>
-      <indexterm>
-       <primary>PQskipResult</primary>
-      </indexterm>
-     </term>
-
-     <listitem>
-      <para>
-       Annule le récupération des lignes restantes de l'ensemble de résultats.
-
-<synopsis>
-PGresult *PQskipResult(PGconn *conn);
-</synopsis>
-      </para>
-
-      <para>
-       Cette fonction facilite l'annulation de la récupération des lignes
-       restantes après qu'un traitement de ligne ait échoué ou après qu'il ait
-       déterminé que le reste de l'ensemble des lignes n'est pas intéressant.
-       <function>PQskipResult</function> est strictement équivalent à
-       <function>PQgetResult</function> sauf qu'il installe une fonction de
-       traitement des lignes qui ne fait rien pour ignorer rapidement le reste
-       des lignes. La valeur <type>PGresult</type> renvoyée peut être ignorée
-       si elle a le statut <literal>PGRES_TUPLES_OK</literal>. Les autres statuts
-       doivent être gérés normalement. En particulier,
-       <literal>PGRES_FATAL_ERROR</literal> indique une erreur renvoyée par le
-       serveur qui devra être traitée.)
-       Lors de l'utilisation de <function>PQgetResult</function>, il est nécessaire
-       de répéter son appel jusqu'à ce que NULL soit renvoyé pour être sûr que
-       la connexion a atteint son état d'inactivité. Une autre utilisation possible
-       est d'appeler <function>PQskipResult</function> une seule fois, puis de
-       continuer à appeler <function>PQgetResult</function> pour traiter les
-       ensembles de résultats suivants normalement.
-      </para>
-
-      <para>
-       Comme <function>PQskipResult</function> attendra une entrée du serveur,
-       il n'est pas très utile pour les applications asynchrones. En particulier,
-       vous ne devez pas coder une boucle de <function>PQisBusy</function> et
-       de <function>PQskipResult</function> car cela résulterait en l'appel de
-       la fonction de traitement de lignes à l'intérieur de
-       <function>PQisBusy</function>. Pour obtenir le bon comportement dans une
-       application asynchrone, vous aurez besoin d'installer une fonction de
-       traitement de lignes qui ne fait rien (ou de configurer un drapeau pour
-       faire en sorte que votre fonction de traitement de lignes ne fasse rien),
-       et de la laisser le temps que toutes les lignes de l'ensemble de résultats
-       soient passées dans votre boucle <function>PQisBusy</function>
-       et <function>PQgetResult</function>.
-      </para>
-     </listitem>
-    </varlistentry>
-   </variablelist>
-  </para>
 
  </sect1>
 
