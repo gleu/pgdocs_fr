@@ -12,7 +12,7 @@ $recherche = preg_replace('/:/', ' ', $recherche);
 
 $recherche_value = strlen($recherche)>0 ? $recherche : 'Rechercher';
 
-$pgconn = @pg_connect("host=localhost dbname=docspgfr user=docspgfr") or die('Connexion impossible');
+$pgconn = pg_connect("host=somehost dbname=somedb user=someuser password=somepassword") or die('Connexion impossible');
 
 $query = "SET client_encoding TO utf8;";
 $result = pg_query($pgconn, $query);
