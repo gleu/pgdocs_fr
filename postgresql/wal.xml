@@ -170,7 +170,8 @@
    il ne peut pas faire grand chose pour s'assurer que les données sont
    arrivées dans un espace de stockage non volatile. Ce travail incombe à
    l'administrateur&nbsp;: ce dernier doit s'assurer que tous les composants de
-   stockage assurent l'intégrité des données and filesystem metadata. Évitez les contrôleurs disques
+   stockage assurent l'intégrité des données et des métadonnées du système de
+   fichier. Évitez les contrôleurs disques
    ne disposant pas de caches protégés par batterie. Au niveau du disque,
    désactivez le cache <quote>write-back</quote> si le disque ne garantit pas
    que les données seront écrites avant un arrêt. Si vous utilisez des disques
@@ -206,53 +207,64 @@
   </para>
 
   <para>
-   <productname>PostgreSQL</productname> also protects against some kinds of data corruption
-   on storage devices that may occur because of hardware errors or media failure over time,
-   such as reading/writing garbage data.
+   <productname>PostgreSQL</productname> protège aussi de certaines corruptions
+   de données des supports de stockage qui pourraient se produire suite à des
+   erreurs au niveau matériel ou des problèmes d'usure rencontrés avec le temps,
+   comme par exemple la lecture ou l'écriture de données erronnées.
    <itemizedlist>
     <listitem>
      <para>
-      Each individual record in a WAL file is protected by a CRC-32 (32-bit) check
-      that allows us to tell if record contents are correct. The CRC value
-      is set when we write each WAL record and checked during crash recovery,
-      archive recovery and replication.
+	  Chaque enregistrement individuel d'un journal de transactions est protégé
+    par une somme de contrôle CRC-32 (32-bit) qui permet de savoir si le
+    contenu de l'enregistrement est correct. La valeur du CRC est définie à
+    chaque écriture d'un enregistrement dans les journaux de transactions et
+    vérifiée durant la reconstruction de la mémoire, la récupération d'une
+    archive ou encore la réplication.
      </para>
     </listitem>
     <listitem>
      <para>
-      Data pages are not currently checksummed, though full page images recorded
-      in WAL records will be protected. Data pages have a 16-bit field available
-      for future use with a data page checksum feature.
+	  Les pages de données ne disposent pas encore de sommes de contrôle, mais
+    les images des pages complètes stockées dans les enregistrements des
+    journaux de transactions seront protégées. Les pages de données ont un
+    champ de 16 bits inutilisé qui permettra à l'avenir d'accueillir une
+    fonctionnalité de vérification de page.
      </para>
     </listitem>
     <listitem>
      <para>
-      Internal data structures such as pg_clog, pg_subtrans, pg_multixact,
-      pg_serial, pg_notify, pg_stat, pg_snapshots are not directly
-      checksummed, nor are pages protected by full page writes. However, where
-      such data structures are persistent, WAL records are written that allow
-      recent changes to be accurately rebuilt at crash recovery and those
-      WAL records are protected as discussed above.
+	  Le code vérificateur des structures de données internes comme pg_clog,
+    pg_subtrans, pg_multixact, pg_serial, pg_notify, pg_stat, pg_snapshots
+    ne sont pas directement calculées, même si les pages sont protégées par
+    les écritures de pages complètes. Cependant, lorsque de telles structures
+    de données sont persistentes, les enregistrements fes journaux de
+    transactions sont écrits de manière à ce que les modifications récentes
+    puissent être rapidement reconstruites durant une restauration après
+    incident, et pour cela, ils sont protégés tel que décrit plus haut.
      </para>
     </listitem>
     <listitem>
      <para>
-      Individual state files in pg_twophase are protected by CRC-32.
+	  Les fichiers d'état individuels de pg_twophase sont protégés par une somme
+    de contrôle CRC-32.
      </para>
     </listitem>
     <listitem>
      <para>
-      Temporary data files used in larger SQL queries for sorts,
-      materializations and intermediate results are not currently checksummed,
-      nor will WAL records be written for changes to those files.
+	  Les fichiers de données temporaires utilisés pour les grosses requêtes SQL
+    de tri, la matérialisation ou encore les résultats intermédiaires ne sont
+    pas actuellement l'objet d'un calcul de somme de contrôle, bien que la
+    modification de ces fichiers soit consignée dans les enregistrements des
+    journaux de transactions.
      </para>
     </listitem>
    </itemizedlist>
   </para>
   <para>
-   <productname>PostgreSQL</productname> does not protect against correctable memory errors
-   and it is assumed you will operate using RAM that uses industry standard
-   Error Correcting Codes (ECC) or better protection.
+   <productname>PostgreSQL</productname> ne protége pas contre les erreurs
+   mémoires et il est pris comme hypothèse que vous travaillerez avec de la
+   RAM respectant les standards de l'industrie, incluant les codes des
+   correcteurs d'erreur (ECC) ou une meilleure protection.
   </para>
  </sect1>
 
@@ -462,13 +474,13 @@
    validation asynchrone mais il s'agit en fait d'une méthode de validation
    synchrone (en fait, <varname>commit_delay</varname> est ignoré lors d'une
    validation asynchrone). <varname>commit_delay</varname> a pour effet
-   l'application d'un délai
-   just before a transaction flushes <acronym>WAL</acronym> to disk, in
-   the hope that a single flush executed by one such transaction can also
-   serve other transactions committing at about the same time.  The
-   setting can be thought of as a way of increasing the time window in
-   which transactions can join a group about to participate in a single
-   flush, to amortize the cost of the flush among multiple transactions.
+   l'application d'un délai avant qu'une transaction entraîne la mise à jour
+   du <acronym>WAL</acronym> sur disque, dans l'espoir que cela profite aussi
+   aux autres transactions
+   qui auraient été commitées à peu près au même moment. Ce paramètre peut
+   être vu comme le moyen d'augmenter la fenêtre de temps durant laquelle
+   chaque transaction peut participer à un même vidage sur disque, pour amortir
+   le coût de chaque vidage sur disque sur plusieurs transactions.
   </para>
 
  </sect1>
@@ -526,14 +538,16 @@
    linkend="guc-checkpoint-timeout"/> secondes se sont
    écoulées.  Les paramètres par défaut sont respectivement de trois journaux
    et de 300 secondes (5 minutes).
-   If no WAL has been written since the previous checkpoint, new checkpoints
-   will be skipped even if <varname>checkpoint_timeout</varname> has passed.
-   (If WAL archiving is being used and you want to put a lower limit on how
-   often files are archived in order to bound potential data loss, you should
-   adjust the <xref linkend="guc-archive-timeout"/> parameter rather than the
-   checkpoint parameters.)
-   It is also possible to force a checkpoint by using the SQL
-    command <command>CHECKPOINT</command>.
+   Si aucun enregistrement WAL n'a été écrit depuis le dernier checkpoint, les
+   nouveaux checkpoint ne seront pas effectués même si la durée
+   <varname>checkpoint_timeout</varname> est dépassée.
+   (Si l'archivage des WAL est utilisé et que vous voulez définir une limite
+   basse correspondant à la fréquence à laquelle les fichiers sont archivés de
+   manière à limiter la perte potentielle de données, vous devez ajuster le
+   paramètre <xref linkend="guc-archive-timeout"/> plutôt que les paramètres
+   affectant les checkpoints.)
+   Il est aussi possible de forcer un checkpoint en utilisant la commande SQL
+   <command>CHECKPOINT</command>.
   </para>
 
   <para>
@@ -638,11 +652,12 @@
    ne peuvent être réalisés plus fréquemment que les checkpoints du maître car
    les restartpoints peuvent seulement être réalisés aux enregistrements de
    checkpoint.
-   A restartpoint is triggered when a checkpoint record is reached if at
-   least <varname>checkpoint_timeout</varname> seconds have passed since the last
-   restartpoint. In standby mode, a restartpoint is also triggered if at
-   least <varname>checkpoint_segments</varname> log segments have been replayed
-   since the last restartpoint.
+   Un restartpoint est déclenché lorsqu'un enregistement de checkpoint est
+   atteint si un minimum de <varname>checkpoint_timeout</varname> secondes se
+   sont écoulées depuis le dernier restartpoint. En mode standby, un
+   restartpoint est aussi déclenché si un minimum de
+   <varname>checkpoint_segments</varname> de journaux de transactions ont été
+   rejoués depuis le dernier restartpoint.
   </para>
 
   <para>
@@ -680,64 +695,66 @@
 
   <para>
    Le paramètre <xref linkend="guc-commit-delay"/> définit la durée
-   d'endormissement en micro-secondes a group commit leader process will sleep after acquiring a
-   lock within <function>XLogFlush</function>, while group commit
-   followers queue up behind the leader.  This delay allows other server
-   processes to add their commit records to the WAL buffers so that all of
-   them will be flushed by the leader's eventual sync operation.  No sleep
-   will occur if <xref linkend="guc-fsync"/> is not enabled, or if fewer
-   than <xref linkend="guc-commit-siblings"/> other sessions are currently
-   in active transactions; this avoids sleeping when it's unlikely that
-   any other session will commit soon.  Note that on some platforms, the
-   resolution of a sleep request is ten milliseconds, so that any nonzero
-   <varname>commit_delay</varname> setting between 1 and 10000
-   microseconds would have the same effect.  Note also that on some
-   platforms, sleep operations may take slightly longer than requested by
-   the parameter.
+   d'endormissement en micro-secondes qu'un processus maître du groupe de commit
+   va s'endormir après avoir obtenu un verrou avec <function>XLogFlush</function>,
+   tandis que les autres processus du groupe de commit vont compléter la file
+   d'attente derrière le maître. Ce délai permet aux processus des autres serveurs
+   d'ajouter leurs enregistrements de commit aux buffers WAL de manière à ce
+   qu'ils soient tous mis à jour par l'opération de synchronisation éventuelle du
+   maître. Il n'y aura pas d'endormissement si <xref linkend="guc-fsync"/> n'est
+   pas activé et si le nombre de sessions disposant actuellement de transactions
+   actives est inférieur à <xref linkend="guc-commit-siblings"/>&nbsp;; ce
+   mécanisme évite l'endormissement lorsqu'il est improbable que d'autres sessions
+   valident leur transactions peu de temps après. Il est à noter que, sur
+   certaines plateformes, la résolution d'une requête d'endormissement est de dix
+   millisecondes, ce qui implique que toute valeur comprise entre 1 et 10000 pour
+   le paramètre <varname>commit_delay</varname> aura le même effet. Notez aussi
+   que les opérations d'endormissement peuvent être légérement plus longues que
+   ce qui a été demandé par ce paramètre sur certaines plateformes.
   </para>
 
   <para>
-   Since the purpose of <varname>commit_delay</varname> is to allow the
-   cost of each flush operation to be amortized across concurrently
-   committing transactions (potentially at the expense of transaction
-   latency), it is necessary to quantify that cost before the setting can
-   be chosen intelligently.  The higher that cost is, the more effective
-   <varname>commit_delay</varname> is expected to be in increasing
-   transaction throughput, up to a point.  The <xref
-   linkend="pgtestfsync"/> program can be used to measure the average time
-   in microseconds that a single WAL flush operation takes.  A value of
-   half of the average time the program reports it takes to flush after a
-   single 8kB write operation is often the most effective setting for
-   <varname>commit_delay</varname>, so this value is recommended as the
-   starting point to use when optimizing for a particular workload.  While
-   tuning <varname>commit_delay</varname> is particularly useful when the
-   WAL log is stored on high-latency rotating disks, benefits can be
-   significant even on storage media with very fast sync times, such as
-   solid-state drives or RAID arrays with a battery-backed write cache;
-   but this should definitely be tested against a representative workload.
-   Higher values of <varname>commit_siblings</varname> should be used in
-   such cases, whereas smaller <varname>commit_siblings</varname> values
-   are often helpful on higher latency media.  Note that it is quite
-   possible that a setting of <varname>commit_delay</varname> that is too
-   high can increase transaction latency by so much that total transaction
-   throughput suffers.
+   Comme l'objet de <varname>commit_delay</varname> est de permettre d'amortir
+   le coût de chaque opération de vidage sur disque des transactions concurrentes
+   (potentiellement au coût de la latence des transactions), il est nécessaire de
+   quantifier ce coût pour choisir une bonne valeur pour ce paramètre. Plus ce
+   coût est élevé, plus il est probable que <varname>commit_delay</varname> soit
+   optimal dans un contexte où les transactions sont de plus en plus nombreuses,
+   jusqu'à un certain point. Le programme <xref linkend="pgtestfsync"/> peut être
+   utilisé pour mesurer le temps moyen en microsecondes qu'une seule mise à jour
+   WAL prends. Définir le paramètre à la moitié du temps moyen rapporté par ce
+   programme après une mise à jour d'une simple opération d'écriture de 8&nbsp;Ko
+   est la valeur la plus souvent recommandée pour démarrer l'optimisation d'une
+   charge particulière. Alors que l'ajustement de la valeur de
+   <varname>commit_delay</varname> est particulièrement nécessaire lorsque les
+   journaux WAL sont stockés sur des disques à latence élevée, le gain pourrait
+   aussi être significatif sur les supports de stockage avec des temps de
+   synchronisation très rapides, comme ceux s'appuyant sur de la mémoire flash
+   ou RAID avec des caches d'écriture dotés de batterie, mais dans tous les cas,
+   cela doit être testé avec un fonctionnement représentatif de la réalité. Des
+   valeurs plus élevées de <varname>commit_siblings</varname> peuvent être
+   utilisées dans ce cas, alors que de plus petites valeurs de
+   <varname>commit_siblings</varname> sont plutôt utiles sur des supports de
+   plus grande latence. À noter qu'il est possible qu'une valeur trop élevée de
+   <varname>commit_delay</varname> puisse augmenter la latence des transactions
+   à tel point que l'ensemble des transactions pourraient en souffrir.
   </para>
 
   <para>
-   When <varname>commit_delay</varname> is set to zero (the default), it
-   is still possible for a form of group commit to occur, but each group
-   will consist only of sessions that reach the point where they need to
-   flush their commit records during the window in which the previous
-   flush operation (if any) is occurring.  At higher client counts a
-   <quote>gangway effect</quote> tends to occur, so that the effects of group
-   commit become significant even when <varname>commit_delay</varname> is
-   zero, and thus explicitly setting <varname>commit_delay</varname> tends
-   to help less.  Setting <varname>commit_delay</varname> can only help
-   when (1) there are some concurrently committing transactions, and (2)
-   throughput is limited to some degree by commit rate; but with high
-   rotational latency this setting can be effective in increasing
-   transaction throughput with as few as two clients (that is, a single
-   committing client with one sibling transaction).
+   Lorsque <varname>commit_delay</varname> est défini à zéro (il s'agit de la
+   valeur par défaut), il est toujours possible qu'un groupement de commit se
+   produise, mais chaque groupe ne consistera qu'en les sessions qui ont atteint
+   le point où il leur est nécessaire de mettre à jour leur enregistrement de
+   commit alors que la précédente opération de mise à jour opère. Avec un plus
+   grand nombre de clients, l'apparition d'un <quote>effet tunnel</quote> se
+   profile, car l'effet d'un groupement de commit devient plus lourd même
+   lorsque <varname>commit_delay</varname> est à zéro, et dans ce cas
+   <varname>commit_delay</varname> devient inutile. Définir
+   <varname>commit_delay</varname> n'est alors réellement utile que quand
+   il existe des transactions concurrentes, et que le flux est limité en
+   fréquence par commit. Ce paramètre peut aussi être efficace avec une latence
+   élevée en augmentant le flux de transaction avec un maximum de deux clients
+   (donc un unique client avec une unique transaction en cours).
   </para>
 
   <para>
@@ -749,8 +766,9 @@
    du cache disque même quand d'autres options ne le font pas. Néanmoins,
    dans la mesure où la fiabilité ne disparaît pas, c'est avec des options
    spécifiques à la plate-forme que la rapidité la plus importante sera
-   observée. You can test the speeds of different options using the <xref
-   linkend="pgtestfsync"/> program. Notez que ce paramètre est ignoré si
+   observée. Vous pouvez tester l'impact sur la vitesse provoquée par différentes
+   options en utilisant le programme <xref
+   linkend="pgtestfsync"/>. Notez que ce paramètre est ignoré si
    <varname>fsync</varname> a été désactivé.
   </para>
 
