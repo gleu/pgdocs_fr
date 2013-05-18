@@ -1072,8 +1072,20 @@
     instruction <command>START_REPLICATION</command>. Le processus
     serveur envoie un message CopyBothResponse au client. Le processus
     serveur et le client peuvent ensuite envoyer des messages CopyData
-    jusqu'à la fin de la connexion. Voir <xref
-    linkend="protocol-replication"/>.
+    until either end sends a CopyDone message. After the client
+    sends a CopyDone message, the connection goes from copy-both mode to
+    copy-out mode, and the client may not send any more CopyData messages.
+    Similarly, when the server sends a CopyDone message, the connection
+    goes into copy-in mode, and the server may not send any more CopyData
+    messages. After both sides have sent a CopyDone message, the copy mode
+    is terminated, and the backend reverts to the command-processing mode.
+    In the event of a backend-detected error during copy-both mode,
+    the backend will issue an ErrorResponse message, discard frontend messages
+    until a Sync message is received, and then issue ReadyForQuery and return
+    to normal processing.  The frontend should treat receipt of ErrorResponse
+    as terminating the copy in both directions; no CopyDone should be sent
+    in this case.  See <xref linkend="protocol-replication"/> for more
+    information on the subprotocol transmitted over copy-both mode.
    </para>
 
    <para>
@@ -1473,19 +1485,73 @@ Les commandes acceptées en mode walsender sont:
   </varlistentry>
 
   <varlistentry>
-    <term>START_REPLICATION <replaceable>XXX</replaceable>/<replaceable>XXX</replaceable></term>
+    <term>TIMELINE_HISTORY <replaceable class="parameter">tli</replaceable></term>
+    <listitem>
+     <para>
+      Requests the server to send over the timeline history file for timeline
+      <replaceable class="parameter">tli</replaceable>.  Server replies with a
+      result set of a single row, containing two fields:
+     </para>
+
+     <para>
+      <variablelist>
+      <varlistentry>
+      <term>
+       filename
+      </term>
+      <listitem>
+      <para>
+       Filename of the timeline history file, e.g 00000002.history.
+      </para>
+      </listitem>
+      </varlistentry>
+
+      <varlistentry>
+      <term>
+       content
+      </term>
+      <listitem>
+      <para>
+       Contents of the timeline history file.
+      </para>
+      </listitem>
+      </varlistentry>
+
+      </variablelist>
+     </para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term>START_REPLICATION <replaceable class="parameter">XXX/XXX</replaceable> TIMELINE <replaceable class="parameter">tli</replaceable></term>
     <listitem>
      <para>
       Demande au serveur de débuter l'envoi de WAL en continu, en commençant 
       à la position 
-      <replaceable>XXX</replaceable>/<replaceable>XXX</replaceable> dans le 
-      WAL.
+      <replaceable class="parameter">XXX/XXX</replaceable> dans le
+      WAL on timeline <replaceable class="parameter">tli</replaceable>.
       Le serveur peu répondre avec une erreur, par exemple si la section de 
       WAL demandée a déjà été recyclée. En cas de succès, le serveur 
       répond avec un message CopyBothResponse et débute l'envoi en continu de 
       WAL au client.
-      Les WAL seront envoyé en continu jusqu'à ce que la connexion soit 
-      interrompue ; aucune autre commande ne sera acceptée.
+     </para>
+
+     <para>
+      If the client requests a timeline that's not the latest, but is part of
+      the history of the server, the server will stream all the WAL on that
+      timeline starting from the requested startpoint, up to the point where
+      the server switched to another timeline. If the client requests
+      streaming at exactly the end of an old timeline, the server responds
+      immediately with CommandComplete without entering COPY mode.
+     </para>
+
+     <para>
+      After streaming all the WAL on a timeline that is not the latest one,
+      the server will end streaming by exiting the COPY mode. When the client
+      acknowledges this by also exiting COPY mode, the server sends a
+      single-row, single-column result set indicating the next timeline in
+      this server's history. That is followed by a CommandComplete message,
+      and the server is ready to accept a new command.
      </para>
 
      <para>
@@ -1493,7 +1559,8 @@ Les commandes acceptées en mode walsender sont:
       (ce qui permet d'envoyer d'autre informations dans les intervalles 
       ; en particulier un serveur peut envoyer un message ErrorResponse s'il 
       rencontre une erreur après la début de l'envoi en continu des données).
-      Le contenu de chaque message CopyData suit le format suivant:
+      Le contenu de chaque message CopyData from server to the
+      client contains a message of one of the following formats:
      </para>
 
      <para>
@@ -1517,33 +1584,32 @@ Les commandes acceptées en mode walsender sont:
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-		  Le point de départ de la donnée du WAL dans ce message, donné au 
-		  format XLogRecPtr.
+		  Le point de départ de la donnée du WAL dans ce message.
       </para>
       </listitem>
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-		  Le fin courante du WAL sur le serveur, donné au format XLogRecPtr
+		  Le fin courante du WAL sur le serveur.
       </para>
       </listitem>
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-          L'horloge système du serveur à l'heure de la transmission, donné 
-          au format TimestampTz.
+          L'horloge système du serveur à l'heure de la transmission, as
+          microseconds since midnight on 2000-01-01.
       </para>
       </listitem>
       </varlistentry>
@@ -1555,44 +1621,19 @@ Les commandes acceptées en mode walsender sont:
       <para>
           Une section de donnée du flux de WAL.
       </para>
+      <para>
+          A single WAL record is never split across two XLogData messages.
+          When a WAL record crosses a WAL page boundary, and is therefore
+          already split using continuation records, it can be split at the page
+          boundary. In other words, the first main WAL record and its
+          continuation records can be sent in different XLogData messages.
+      </para>
       </listitem>
       </varlistentry>
       </variablelist>
       </para>
       </listitem>
       </varlistentry>
-      </variablelist>
-     </para>
-     <para>
-       Une entrée de WAL n'est jamais découpée dans deux messages CopyData.
-       Cependant, lorsqu'une entrée bute sur la fin d'une page de WAL, 
-       et est par conséquent divisée en utilisant des enregistrements de 
-       suite, elle peut être divisée sur la fin de la page. En d'autre terme, 
-       le premier enregistrement principal et les autres de suite peuvent 
-       êtres envoyés dans différents messages CopyData.
-     </para>
-     <para>
-       À noter que tous les champs à l'intérieur d'une donnée de WAL et les 
-       entêtes décrites précédemment seront envoyés au format natif du serveur.
-       L'endianisme et le format de timestamp ne sont pas prévsible à moins que le receveur 
-       ait vérifié que l'identifiant système de l'émeteur corresponde au 
-       contenu de son propre <filename>pg_control</filename>.
-     </para>
-     <para>
-       Si le processus d'émission de WAL se termine correctement (pendant 
-       l'arrêt du postmaster), il enverra un message CommandComplete avant de 
-       s'arrêter. Ce message pourrait évidement ne pas être envoyé en cas 
-       d'arrêt brutal.
-     </para>
-
-     <para>
-       Le processus de réception peut envoyer ses réponses à l'émetteur
-       à tout moment, en utilisant un des formats de message suivants
-       (ainsi que dans la charge d'un message CopyData)&nbsp;:
-     </para>
-
-     <para>
-      <variablelist>
       <varlistentry>
       <term>
           Message principal de keepalive (B)
@@ -1612,23 +1653,33 @@ Les commandes acceptées en mode walsender sont:
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-          La fin actuelle du journal de transactions sur le serveur, donnée
-          au format XLogRecPtr.
+          La fin actuelle du journal de transactions sur le serveur.
       </para>
       </listitem>
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-          L'horloge système du serveur au moment de la transmission, donnée
-          au format TimestampTz.
+          The server's system clock at the time of transmission, as
+          microseconds since midnight on 2000-01-01.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Byte1
+      </term>
+      <listitem>
+      <para>
+          1 means that the client should reply to this message as soon as
+          possible, to avoid a timeout disconnect. 0 otherwise.
       </para>
       </listitem>
       </varlistentry>
@@ -1637,6 +1688,12 @@ Les commandes acceptées en mode walsender sont:
       </listitem>
       </varlistentry>
       </variablelist>
+     </para>
+
+     <para>
+       The receiving process can send replies back to the sender at any time,
+       using one of the following message formats (also in the payload of a
+       CopyData message):
      </para>
 
      <para>
@@ -1661,48 +1718,52 @@ Les commandes acceptées en mode walsender sont:
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
           L'emplacement du dernier octet des journaux de transactions
-          + 1 reçu et écrit sur le disque du serveur en standby, dans
-          le format XLogRecPtr.
+          + 1 reçu et écrit sur le disque du serveur en standby.
       </para>
       </listitem>
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-          L'emplacement du dernier octet des journaux de transactions
-          + 1 poussé sur le disque du serveur en standby, dans
-          le format XLogRecPtr.
+          The location of the last WAL byte + 1 flushed in the standby.
       </para>
       </listitem>
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-         L'emplacement du dernier octet des journaux de transactions
-          + 1 appliqué sur le disque du serveur en standby, dans
-          le format XLogRecPtr.
+          The location of the last WAL byte + 1 applied in the standby.
       </para>
       </listitem>
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-          L'horloge système du serveur au moment de la transmission,
-          au format TimestampTz.
+         The client's system clock at the time of transmission, as microseconds since midnight on 2000-01-01.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Byte1
+      </term>
+      <listitem>
+      <para>
+          If 1, the client requests the server to reply to this message immediately. This can be used to ping the server, to test if the connection is still healthy.
       </para>
       </listitem>
       </varlistentry>
@@ -1734,28 +1795,27 @@ Les commandes acceptées en mode walsender sont:
       </varlistentry>
       <varlistentry>
       <term>
-          Byte8
+          Int64
       </term>
       <listitem>
       <para>
-          L'horloge système du serveur au moment de la transmission,
-          au format TimestampTz.
+          The client's system clock at the time of transmission, as microseconds since midnight on 2000-01-01.
       </para>
       </listitem>
       </varlistentry>
       <varlistentry>
       <term>
-          Byte4
+          Int32
       </term>
       <listitem>
       <para>
-          Le xmin courant du serveur en standby.
+          The standby's current xmin. This may be 0, if the standby is sending notification that Hot Standby feedback will no longer be sent on this connection. Later non-zero messages may reinitiate the feedback mechanism.
       </para>
       </listitem>
       </varlistentry>
       <varlistentry>
       <term>
-          Byte4
+          Int32
       </term>
       <listitem>
       <para>
@@ -1858,8 +1918,9 @@ Les commandes acceptées en mode walsender sont:
      </para>
      <para>
       Le premier ensemble de résultats standard contient la position de
-      démarrage de la sauvegarde, dans un format XLogRecPtr en tant
-      que colonne seule sur une seule ligne.
+      démarrage de la sauvegarde, in a single row with two columns. The first column contains
+      the start position given in XLogRecPtr format, and the second column
+      contains the corresponding timeline ID.
      </para>
      <para>
       Le deuxième ensemble de résultats standard contient une ligne pour
@@ -1904,7 +1965,9 @@ Les commandes acceptées en mode walsender sont:
       spécifié dans le standard POSIX 1003.1-2008) du contenu du
       tablespace, sauf que les deux blocs de zéros à la fin indiqués dans
       le standard sont omis. Après que l'envoi des données du tar est terminé,
-      un ensemble final de résultats sera envoyé.
+      un ensemble final de résultats sera envoyé,
+      containing the WAL end position of the backup, in the same format as
+      the start position.
      </para>
 
      <para>
@@ -4748,7 +4811,73 @@ récente en premier.
 
 <varlistentry>
 <term>
-<literal>f</literal>
+<literal>s</literal>
+</term>
+<listitem>
+<para>
+        Schema name: if the error was associated with a specific database
+        object, the name of the schema containing that object, if any.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+<literal>t</literal>
+</term>
+<listitem>
+<para>
+        Table name: if the error was associated with a specific table, the
+        name of the table.  (When this field is present, the schema name field
+        provides the name of the table's schema.)
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+<literal>c</literal>
+</term>
+<listitem>
+<para>
+        Column name: if the error was associated with a specific table column,
+        the name of the column.  (When this field is present, the schema and
+        table name fields identify the table.)
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+<literal>d</literal>
+</term>
+<listitem>
+<para>
+        Datatype name: if the error was associated with a specific datatype,
+        the name of the datatype.  (When this field is present, the schema
+        name field provides the name of the datatype's schema.)
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+<literal>n</literal>
+</term>
+<listitem>
+<para>
+        Constraint name: if the error was associated with a specific
+        constraint, the name of the constraint.  The table or domain that the
+        constraint belongs to is reported using the fields listed above.  (For
+        this purpose, indexes are treated as constraints, even if they weren't
+        created with constraint syntax.)
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+<literal>F</literal>
 </term>
 <listitem>
 <para>
@@ -4760,7 +4889,7 @@ récente en premier.
 
 <varlistentry>
 <term>
-<literal>l</literal>
+<literal>L</literal>
 </term>
 <listitem>
 <para>
@@ -4772,7 +4901,7 @@ récente en premier.
 
 <varlistentry>
 <term>
-<literal>r</literal>
+<literal>R</literal>
 </term>
 <listitem>
 <para>
@@ -4783,6 +4912,14 @@ récente en premier.
 </varlistentry>
 
 </variablelist>
+
+<note>
+ <para>
+  The fields for schema name, table name, column name, datatype name, and
+  constraint name are supplied only for a limited number of error types;
+  see <xref linkend="errcodes-appendix"/>.
+ </para>
+</note>
 
 <para>
 Le client est responsable du formatage adapté à ses besoins des informations
