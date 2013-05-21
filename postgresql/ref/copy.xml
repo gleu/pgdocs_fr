@@ -20,11 +20,11 @@
  <refsynopsisdiv>
 <synopsis>
 COPY <replaceable class="parameter">nom_table</replaceable> [ ( <replaceable class="parameter">nom_colonne</replaceable> [, ...] ) ]
-    FROM { '<replaceable class="parameter">nom_fichier</replaceable>' | STDIN }
+    FROM { '<replaceable class="parameter">nom_fichier</replaceable>' | PROGRAM '<replaceable class="parameter">commande</replaceable>' | STDIN }
     [ [ WITH ] ( <replaceable class="parameter">option</replaceable> [, ...] ) ]
 
 COPY { <replaceable class="parameter">nom_table</replaceable> [ ( <replaceable class="parameter">nom_colonne</replaceable> [, ...] ) ] | ( <replaceable class="parameter">requête</replaceable> ) }
-    TO { '<replaceable class="parameter">nom_fichier</replaceable>' | STDOUT }
+    TO { '<replaceable class="parameter">nom_fichier</replaceable>' | PROGRAM '<replaceable class="parameter">commande</replaceable>' | STDOUT }
     [ [ WITH ] ( <replaceable class="parameter">option</replaceable> [, ...] ) ]
 
 <phrase>où <replaceable class="parameter">option</replaceable> fait partie
@@ -32,6 +32,7 @@ de&nbsp;:</phrase>
 
     FORMAT <replaceable class="parameter">nom_format</replaceable>
     OIDS [ <replaceable class="parameter">oids</replaceable> ]
+    FREEZE [ <replaceable class="parameter">boolean</replaceable> ]
     DELIMITER '<replaceable class="parameter">caractère_délimiteur</replaceable>'
     NULL '<replaceable class="parameter">chaîne_null</replaceable>'
     HEADER [ <replaceable class="parameter">booléean</replaceable> ]
@@ -70,6 +71,10 @@ de&nbsp;:</phrase>
    Si un nom de fichier est précisé, <command>COPY</command> lit ou écrit
    directement dans le fichier. Ce fichier doit être accessible par le
    serveur et son nom doit être spécifié du point de vue du serveur.
+   When <literal>PROGRAM</literal> is specified, the server executes the
+   given command, and reads from its standard input, or writes to its
+   standard output. The command must be specified from the viewpoint of the
+   server, and be executable by the <literal>postgres</literal> user. 
    Si <literal>STDIN</literal> ou <literal>STDOUT</literal> est indiqué,
    les données sont transmises au travers de la connexion entre le client et
    le serveur.
@@ -115,10 +120,29 @@ de&nbsp;:</phrase>
     <term><replaceable class="parameter">nom_fichier</replaceable></term>
     <listitem>
      <para>
-      Le chemin absolu du fichier en entrée ou en sortie. Les utilisateurs sous
-      Windows peuvent avoir besoin d'utiliser une chaîne <literal>E''</literal>
-      et de doubler tous les antislashs utilisés comme
-      séparateurs de chemin.
+      The path name of the input or output file.  An input filename can be
+      an absolute or relative path, but an output filename must be an absolute
+      path.  Windows users might need to use an <literal>E''</literal> string and
+      double any backslashes used in the path name.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PROGRAM</literal></term>
+    <listitem>
+     <para>
+      A command to execute. In <command>COPY FROM</command>, the input is
+      read from standard output of the command, and in <command>COPY TO</command>,
+      the output is written to the standard input of the command.
+     </para>
+     <para>
+      Note that the command is invoked by the shell, so if you need to pass
+      any arguments to shell command that come from an untrusted source, you
+      must be careful to strip or escape any special characters that might
+      have a special meaning for the shell. For security reasons, it is best
+      to use a fixed command string, or at least avoid passing any user input
+      in it.
      </para>
     </listitem>
    </varlistentry>
@@ -177,6 +201,26 @@ de&nbsp;:</phrase>
       <literal>OIDS</literal> est utilisé pour une table qui ne possède pas
       d'OID, ou dans le cas de la copie du résultat d'une <replaceable
       class="parameter">requête</replaceable>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>FREEZE</literal></term>
+    <listitem>
+     <para>
+      Requests copying the data with rows already frozen, just as they
+      would be after running the <command>VACUUM FREEZE</command> command.
+      This is intended as a performance option for initial data loading.
+      Rows will be frozen only if the table being loaded has been created
+      or truncated in the current subtransaction, there are no cursors
+      open and there are no older snapshots held by this transaction.
+     </para>
+     <para>
+      Note that all other sessions will immediately be able to see the data
+      once it has been successfully loaded. This violates the normal rules
+      of MVCC visibility and users specifying should be aware of the
+      potential problems this might cause.
      </para>
     </listitem>
    </varlistentry>
@@ -349,7 +393,10 @@ COPY <replaceable class="parameter">nombre</replaceable>
     bases de données doit les héberger ou pouvoir y accéder.
     L'utilisateur <productname>PostgreSQL</productname> (l'identifiant de
     l'utilisateur qui exécute le serveur), non le client, doit pouvoir
-    y accéder et les lire ou les modifier.
+    y accéder et les lire ou les modifier. Similarly,
+    the command specified with <literal>PROGRAM</literal> is executed directly
+    by the server, not by the client application, must be executable by the
+    <productname>PostgreSQL</productname> user.
     L'utilisation de <command>COPY</command> avec un fichier n'est autorisé qu'aux
     superutilisateurs de la base de données car <command>COPY</command> autorise la lecture et
     l'écriture de tout fichier accessible au serveur.
@@ -357,7 +404,8 @@ COPY <replaceable class="parameter">nombre</replaceable>
 
    <para>
     Il ne faut pas confondre <command>COPY</command> et l'instruction
-    <command>\copy</command> de <application>psql</application>.
+    <command><link linkend="APP-PSQL-meta-commands-copy">\copy</link></command>
+    de <application>psql</application>.
     <command>\copy</command> appelle <command>COPY FROM STDIN</command> ou
     <command>COPY TO STDOUT</command>, puis lit/stocke les données dans un
     fichier accessible au client <application>psql</application>. 
@@ -374,6 +422,11 @@ COPY <replaceable class="parameter">nombre</replaceable>
     interprété relativement au répertoire de travail du processus serveur
     (habituellement dans le répertoire des données), pas par rapport au répertoire
     de travail du client.
+   </para>
+
+   <para>
+    Executing a command with <literal>PROGRAM</literal> might be restricted
+    by the operating system's access control mechanisms, such as SELinux.
    </para>
 
    <para>
@@ -855,6 +908,14 @@ COPY <replaceable class="parameter">nombre</replaceable>
    Pour copier dans un fichier les pays dont le nom commence par 'A'&nbsp;:
 <programlisting>
 COPY (SELECT * FROM pays WHERE nom_pays LIKE 'A%') TO '/usr1/proj/bray/sql/une_liste_de_pays.copy';
+</programlisting>
+  </para>
+
+  <para>
+   To copy into a compressed file, you can pipe the output through an external
+   compression program:
+<programlisting>
+COPY country TO PROGRAM 'gzip > /usr1/proj/bray/sql/country_data.gz';
 </programlisting>
   </para>
 

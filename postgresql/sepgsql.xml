@@ -69,7 +69,7 @@
     <productname>SELinux</productname> activé. Il n'est pas disponible
     sur les autres plateformes. Vous aurez aussi besoin
     de <productname>libselinux</productname> ou ultérieur et de
-    <productname>selinux-policy</productname> 2.0.99 ou ultérieur
+    <productname>selinux-policy</productname> 2.1.10 ou ultérieur
     (même si certaines distributions peuvent proposer les règles nécessaires
     dans des versions antérieures de politique).
   </para>
@@ -201,7 +201,7 @@ $ cd .../contrib/sepgsql
 $ make -f /usr/share/selinux/devel/Makefile
 $ sudo semodule -u sepgsql-regtest.pp
 $ sudo semodule -l | grep sepgsql
-sepgsql-regtest 1.04
+sepgsql-regtest 1.07
 </screen>
 
   <para>
@@ -327,8 +327,9 @@ $ sudo semodule -r sepgsql-regtest
     d'utilisation, des labels de sécurité sont automatiquement affectés
     aux objets de la base au moment de leur création. Ce label est appelé
     un label de sécurité par défaut et est configuré par la politique de
-    sécurité du système, qui prend en entrée le label du créateur et le
-    label affecté à l'objet parent du nouvel objet.
+    sécurité du système, qui prend en entrée le label du créateur, le
+    label affecté à l'objet parent du nouvel objet and optionally name
+    of the constructed object.
    </para>
 
    <para>
@@ -402,8 +403,21 @@ UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
    </para>
 
    <para>
-    Pour les fonctions, <literal>db_procedure:{execute}</literal> est
-    défini mais n'est pas vérifié dans cettet version.
+    For functions, <literal>db_procedure:{execute}</literal> will be checked when
+    user tries to execute a function as a part of query, or using fast-path
+    invocation. If this function is a trusted procedure, it also checks
+    <literal>db_procedure:{entrypoint}</literal> permission to check whether it
+    can perform as entrypoint of trusted procedure.
+   </para>
+
+   <para>
+    In order to access any schema object, <literal>db_schema:search</literal>
+    permission is required on the containing schema.  When an object is
+    referenced without schema qualification, schemas on which this
+    permission is not present will not be searched (just as if the user did
+    not have <literal>USAGE</literal> privilege on the schema).  If an explicit schema
+    qualification is present, an error will occur if the user does not have
+    the requisite permission on the named schema.
    </para>
 
    <para>
@@ -433,51 +447,85 @@ UPDATE t1 SET x = 2, y = md5sum(y) WHERE z = 100;
     un schéma particulier.
    </para>
    <para>
-    Lorsqu'une commande <literal>CREATE</literal> est exécutée,
-    <literal>create</literal> sera vérifié sur l'objet en cours de
-    construction pour chaque type d'objet. Un label de sécurité par défaut
-    sera affecté au nouvel objet base de données, et le droit
-    <literal>create</literal> sera vérifié sur la partie de labels de
-    sécurité du client et de l'objet lui-même. Nous prenons en compte
-    <xref linkend="sql-createtable"/> pour construire une table et les
-    colonnes sous-jacentes dans le même temps, donc les utilisateurs doivent
-    avoir les droits de créer la table et ses colonnes.
-   </para>
-   <para>
-    Quelques vérifications supplémentaires sont appliquées suivant le type des
-    objets. Sur <xref linkend="sql-createdatabase"/>, le droit
-    <literal>getattr</literal> sera vérifié sur la base de donnée source ou
-    sur la base de données modèle de la nouvelle base de données, pas seulement
-    le droit <literal>create</literal> sur une nouvelle base. À la création
-    d'objets dans un schéma particulier (table, vue, séquence et procédure),
-    <literal>add_name</literal> sera aussi vérifié sur le schéma, et pas
-    seulement <literal>create</literal> sur le nouvel objet.
-   </para>
+    Creating a new database object requires <literal>create</literal> permission.
+    <productname>SELinux</productname> will grant or deny this permission based on the
+    client's security label and the proposed security label for the new
+    object.  In some cases, additional privileges are required:
+    </para>
+ 
+   <itemizedlist>
+    <listitem>
+     <para>
+      <xref linkend="sql-createdatabase"/> additionally requires
+      <literal>getattr</literal> permission for the source or template database.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Creating a schema object additionally requires <literal>add_name</literal>
+      permission on the parent schema.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Creating a table additionally requires permission to create each
+      individual table column, just as if each table column were a
+      separate top-level object.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Creating a function marked as <literal>LEAKPROOF</literal> additionally
+      requires <literal>install</literal> permission.  (This permission is also
+      checked when <literal>LEAKPROOF</literal> is set for an existing function.)
+     </para>
+    </listitem>
+   </itemizedlist>
 
    <para>
     Quand la commande <literal>DROP</literal> est exécutée, <literal>drop</literal>
-    sera vérifié sur l'objet qui doit être supprimé, quelque soit le type
-    de l'objet. Les droits ne seront pas véifiés pour les objets supprimés
-    indirectement via <literal>CASCADE</literal>. La suppression des objets
-    contenus dans un schéma particulier (tables, vues, séquences et procédures)
-    nécessite en plus le droit <literal>remove_name</literal> dans le schéma.
+    sera vérifié sur l'objet qui doit être supprimé.  Permissions will be also checked for
+    objects dropped indirectly via <literal>CASCADE</literal>.  Deletion of objects
+    contained within a particular schema (tables, views, sequences and
+    procedures) additionally requires <literal>remove_name</literal> on the schema.
    </para>
 
    <para>
-    Quand la commande <xref linkend="sql-security-label"/> est exécutée,
-    <literal>setattr</literal> et <literal>relabelfrom</literal> devraient
-    être vérifiés sur l'objet en cours de labelisation avec un ancien
-    label de sécurité, puis <literal>relabelto</literal> sur le nouveau
-    label de sécurité fourni.
+    When <literal>ALTER</literal> command is executed, <literal>setattr</literal> will be
+    checked on the object being modified for each object types, except for
+    subsidiary objects such as the indexes or triggers of a table, where
+    permissions are instead checked on the parent object.  In some cases,
+    additional permissions are required:
    </para>
 
-   <para>
-    Dans le cas où plusieurs fournisseurs de labels sont installés et
-    que l'utilisateur essaie de configurer un label de sécurité qui n'est
-    pas géré par <productname>SELinux</productname>, seul
-    <literal>setattr</literal> devrait être vérifié ii. Ceci n'est pas
-    fait dû à des restrictions de l'implémentation.
-   </para>
+   <itemizedlist>
+    <listitem>
+     <para>
+      Moving an object to a new schema additionally requires
+      <literal>remove_name</literal> permission on the old schema and
+      <literal>add_name</literal> permission on the new one.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Setting the <literal>LEAKPROOF</literal> attribute on a function requires
+      <literal>install</literal> permission.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Using <xref linkend="sql-security-label"/> on an object additionally
+      requires <literal>relabelfrom</literal> permission for the object in
+      conjunction with its old security label and <literal>relabelto</literal>
+      permission for the object in conjunction with its new security label.
+      (In cases where multiple label providers are installed and the user
+      tries to set a security label, but it is not managed by
+      <productname>SELinux</productname>, only <literal>setattr</literal> should be checked here.
+      This is currently not done due to implementation restrictions.)
+     </para>
+    </listitem>
+   </itemizedlist>
+
   </sect3>
 
   <sect3>

@@ -284,9 +284,9 @@ façon la plus simple de lancer le serveur est&nbsp;:
    vous fassiez, le serveur doit être exécuté par le
    compte utilisateur <productname>PostgreSQL</productname> <emphasis>et non pas
    par root</emphasis> ou tout autre utilisateur. Donc, vous devriez
-   probablement former vos commandes en utilisant <literal>su -c '...' 
-   postgres</literal>. Par exemple&nbsp;:
-<programlisting>su -c 'pg_ctl start -D /usr/local/pgsql/data -l serverlog' postgres</programlisting>
+   probablement former vos commandes en utilisant <literal>su postgres -c '...' </literal>.
+   Par exemple&nbsp;:
+<programlisting>su postgres -c 'pg_ctl start -D /usr/local/pgsql/data -l serverlog'</programlisting>
   </para>
 
   <para>
@@ -312,7 +312,7 @@ façon la plus simple de lancer le serveur est&nbsp;:
       <indexterm><primary>openbsd</primary><secondary>script de
       lancement</secondary></indexterm>
 <programlisting>if [ -x /usr/local/pgsql/bin/pg_ctl -a -x /usr/local/pgsql/bin/postgres ]; then
-    su - -c '/usr/local/pgsql/bin/pg_ctl start -l /var/PostgreSQL/log -s' postgres
+    su -l postgres -c '/usr/local/pgsql/bin/pg_ctl start -s -l /var/postgresql/log -D /usr/local/pgsql/data'
     echo -n ' PostgreSQL'
 fi</programlisting>
      </para>
@@ -486,11 +486,11 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
   <title>Gérer les ressources du noyau</title>
 
   <para>
-   Une installation importante de <productname>PostgreSQL</productname> peut rapidement
-   épuiser les limites des ressources du système d'exploitation (Sur certains
-   systèmes, les valeurs par défaut sont trop basses que vous n'avez même pas
-   besoin d'une installation <quote>importante</quote>.). Si vous avez rencontré ce
-   type de problème, continuez votre lecture.
+   <productname>PostgreSQL</productname> can sometimes exhaust various operating system
+   resource limits, especially when multiple copies of the server are running
+   on the same system, or in very large installations.  This section explains
+   the kernel resources used by <productname>PostgreSQL</productname> and the steps you
+   can take to resolve problems related to kernel resource consumption.
   </para>
 
   <sect2 id="sysvipc">
@@ -508,13 +508,11 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
     La mémoire partagée et les sémaphores sont nommés collectivement
     <quote><acronym>ipc</acronym> <systemitem class="osname">system v</systemitem></quote>
     (ensemble avec les queues de messages, qui n'ont pas d'importance pour
-    <productname>PostgreSQL</productname>). Pratiquement, tous les systèmes d'exploitation
-    modernes fournissent ces fonctionnalités mais, parmi elles, toutes ne sont pas
-    activées ou dimensionnées suffisamment par défaut, car la mémoire
-    disponible et la demande des applications augmente. (Sur
-    <systemitem class="osname">Windows</systemitem>,
-    <productname>PostgreSQL</productname> fournit sa
-    propre implémentation de remplacement de ces fonctionnalités, du coup, ce qui suit peut être ignoré).
+    <productname>PostgreSQL</productname>). Except on
+    <systemitem class="osname">Windows</systemitem>, where <productname>PostgreSQL</productname>
+    provides its own replacement implementation of these facilities, these
+    facilities are required in order to run
+    <productname>PostgreSQL</productname>.
    </para>
 
    <para>
@@ -536,6 +534,14 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
     pour quelques plateformes sont données ci-dessous.
    </para>
 
+   <note>
+     <para>
+       Prior to <productname>PostgreSQL</productname> 9.3, the amount of System V shared
+       memory required to start the server was much larger.  If you are running
+       an older version of the server, please consult the documentation for
+       your server version.
+     </para>
+   </note>
 
    <table id="sysvipc-parameters">
     <title>Paramètres <systemitem class="osname">system v</systemitem> <acronym>ipc</acronym></title>
@@ -556,7 +562,7 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
       <row>
        <entry><varname>shmmax</varname></entry>
        <entry>taille maximum du segment de mémoire partagée (octets)</entry>
-       <entry>au moins plusieurs mo (voir texte)</entry>
+       <entry>au moins 1 Ko (more if running many copies of the server)</entry>
       </row>
 
       <row>
@@ -627,30 +633,15 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
 
 
    <para>
-    <indexterm><primary>shmmax</primary></indexterm> le paramètre de mémoire
-    partagé le plus important est <varname>shmmax</varname>, la taille maximum, en
-    octets, d'un segment de mémoire partagée. Si vous obtenez un message
-    d'erreur à partir de <function>shmget</function> comme <quote>invalid
-    argument</quote>, il est possible que cette limite soit dépassée.
-    La taille du segment de mémoire partagée requis dépend de plusieurs
-    paramètres de configuration de <productname>PostgreSQL</productname>, comme indiqué
-    dans le <xref linkend="shared-memory-parameters"/> (tout message
-    d'erreur obtenu incluera la taille exacte utilisée dans la requête
-    d'allocation qui a échoué). Temporairement, vous pouvez
-    baisser certains de ces paramètres pour éviter un échec. Alors qu'il est possible d'obtenir de
-    <productname>PostgreSQL</productname> qu'il fonctionne avec un <varname>shmmax</varname>
-    de 2&nbsp;Mo, vous avez besoin de bien plus pour obtenir
-    des performances acceptables. Les paramètrages désirables sont plutôt de
-    l'ordre de centaines de Mo à quelques Go.
-   </para>
-
-   <para>
-    Certains systèmes ont aussi une limite sur le nombre total de mémoire partagée
-    dans le système (<varname>shmall</varname>). Assurez-vous que cela soit suffisamment
-    important pour <productname>PostgreSQL</productname> et quelque autres applications
-    utilisant des segments de mémoire partagée (notez que
-    <varname>shmall</varname> est mesuré en pages plutôt qu'en octets sur beaucoup de
-    systèmes).
+    <productname>PostgreSQL</productname> requires a few bytes of System V shared memory
+    (typically 48 bytes, on 64-bit platforms) for each copy of the server.
+    On most modern operating systems, this amount can easily be allocated.
+    However, if you are running many copies of the server, or if other
+    applications are also using System V shared memory, it may be necessary
+    to increase <varname>SHMMAX</varname>, the maximum size in bytes of a shared
+    memory segment, or <varname>SHMALL</varname>, the total amount of System V shared
+    memory system-wide.  Note that <varname>SHMALL</varname> is measured in pages
+    rather than bytes on many systems.
    </para>
 
 
@@ -658,7 +649,7 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
    <para>
     La taille minimum des segments de mémoire partagée (<varname>shmmin</varname>) est
     moins sensible aux problèmes. Elle devrait être au plus à environ
-    500&nbsp;Ko pour <productname>PostgreSQL</productname> (il est habituellement à 1). Le
+    32 octets pour <productname>PostgreSQL</productname> (il est habituellement à 1). Le
     nombre maximum de segments au travers du système (<varname>shmmni</varname>) ou par
     processus (<varname>shmseg</varname>) a peu de chances de causer un problème sauf
     s'ils sont configurés à zéro sur votre système.
@@ -738,28 +729,30 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
       <listitem>
       <indexterm><primary>freebsd</primary><secondary>configuration ipc</secondary></indexterm>
        <para>
-        Les paramètres par défaut sont seulement acceptables pour de petites
-	installations (par exemple, la valeur par défaut de
-	<varname>shmmax</varname> est de 32&nbsp;mo). Les modifications se font
-	via les interfaces <command>sysctl</command> ou
+        Les paramètres par défaut can be changed using
+        the <command>sysctl</command> or
         <command>loader</command>. Les paramètres suivants peuvent être configurés
 	en utilisant <command>sysctl</command>&nbsp;:
-<screen><prompt>$</prompt> <userinput>sysctl -w kern.ipc.shmall=32768</userinput>
-<prompt>$</prompt> <userinput>sysctl -w kern.ipc.shmmax=134217728</userinput>
-<prompt>$</prompt> <userinput>sysctl -w kern.ipc.semmap=256</userinput></screen>
+<screen><prompt>#</prompt> <userinput>sysctl kern.ipc.shmall=32768</userinput>
+<prompt>#</prompt> <userinput>sysctl kern.ipc.shmmax=134217728</userinput>
+<prompt>#</prompt> <userinput>sysctl kern.ipc.semmap=256</userinput>
+</screen>
         Pour que ces paramètres persistent après les redémarrages, modifiez
         <filename>/etc/sysctl.conf</filename>.
        </para>
 
        <para>
         Les paramètres restant, concernant les sémaphores, sont en lecture seule
-	en ce qui concerne <command>sysctl</command> mais peuvent être modifiés
-	avant le redémarrage en utilisant l'invite <command>loader</command>&nbsp;:
-<screen><prompt>(loader)</prompt> <userinput>set kern.ipc.semmni=256</userinput>
-<prompt>(loader)</prompt> <userinput>set kern.ipc.semmns=512</userinput>
-<prompt>(loader)</prompt> <userinput>set kern.ipc.semmnu=256</userinput></screen>
-        De façon similaire, ils peuvent être sauvegardés entre les redémarrages
-	dans <filename>/boot/loader.conf</filename>.
+	en ce qui concerne <command>sysctl</command> is concerned, but can be set in
+        <filename>/boot/loader.conf</filename>:
+<programlisting>
+kern.ipc.semmni=256
+kern.ipc.semmns=512
+kern.ipc.semmnu=256
+</programlisting>
+        After modifying these values a reboot is required for the new
+        settings to take affect.
+
        </para>
 
        <para>
@@ -879,14 +872,11 @@ option        SEMMAP=256</programlisting>
       <listitem>
       <indexterm><primary>linux</primary><secondary>configuration ipc</secondary></indexterm>
        <para>
-        La taille maximale du segment par défaut est de 32&nbsp;Mo, ce qui
-        n'est adéquat que pour les très petites installations de
-        <productname>PostgreSQL</productname>. La taille totale maximale par
+        La taille maximale du segment par défaut est de 32&nbsp;Mo et la taille totale maximale par
         défaut est de 2097152 pages. Une page équivaut pratiquement toujours
         à 4096 octets sauf pour certaines configurations inhabituelles du
         noyau comme <quote>huge pages</quote> (utilisez
-        <literal>getconf PAGE_SIZE</literal> pour vérifier). Cela donne une
-        limite par défaut de 8&nbsp;Go, ce qui est souvent suffisant.
+        <literal>getconf PAGE_SIZE</literal> pour vérifier).
        </para>
 
        <para>
@@ -1016,9 +1006,7 @@ sysctl -w kern.sysv.shmall
       <listitem>
       <indexterm><primary>solaris</primary><secondary>configuration ipc</secondary></indexterm>
        <para>
-        La taille maximale par défaut d'un segment de mémoire partagée
-        est trop bas pour <productname>PostgreSQL</productname>. La
-        configuration est modifiable dans
+        La configuration est modifiable dans
         <filename>/etc/system</filename>, par exemple&nbsp;:
 <programlisting>set shmsys:shminfo_shmmax=0x2000000
 set shmsys:shminfo_shmmin=1
@@ -1049,9 +1037,8 @@ set semsys:seminfo_semmsl=32</programlisting>
         pour la majorité des configurations de
         <productname>PostgreSQL</productname>. La valeur par défaut de
         Solaris pour <varname>SHMMAX</varname> correspond maintenant à
-        un quart de la mémoire disponible sur le système. Si vous avez
-        besoin d'augmenter cette configuration pour obtenir un
-        paramétrage légèrement supérieur, vous devez utiliser une
+        un quart de la mémoire disponible sur le système. To further
+        adjust this setting, vous devez utiliser une
         configuration de projet associé à l'utilisateur
         <literal>postgres</literal>. Par exemple, exécutez ce qui suit
         en tant qu'utilisateur <literal>root</literal>&nbsp;:
@@ -1062,7 +1049,7 @@ projadd -c "PostgreSQL DB User" -K "project.max-shm-memory=(privileged,8GB,deny)
 
        <para>
         Cette commande ajoute le projet  <literal>user.postgres</literal>
-        et augmente le maximum de mémoire partagée pour l'utilisateur
+        et configure le maximum de mémoire partagée pour l'utilisateur
         <literal>postgres</literal> à 8 Go. Cela prend effet à chaque
         fois que l'utilisateur se connecte et quand vous redémarrez
         <productname>PostgreSQL</productname>. La ligne ci-dessus
@@ -1120,57 +1107,6 @@ project.max-msg-ids=(priv,4096,deny)
 
     </variablelist>
 
-   <table id="shared-memory-parameters">
-    <title>Usage de la mémoire partagée <productname>PostgreSQL</productname></title>
-
-    <tgroup cols="2">
-     <colspec colnum="1" colwidth="0.5*"/>
-     <colspec colnum="2" colwidth="1.5*"/>
-     <thead>
-      <row>
-       <entry>Usage</entry>
-       <entry>Nombre d'octets approximatifs pour la mémoire partagée (en 8.3)</entry>
-      </row>
-     </thead>
-
-     <tbody>
-      <row>
-       <entry>Connexions</entry>
-       <entry>(1800 + 270 * <xref
-       linkend="guc-max-locks-per-transaction"/>) * <xref
-       linkend="guc-max-connections"/></entry>
-      </row>
-
-      <row>
-       <entry>Processus travailleurs de l'autovacuum</entry>
-       <entry>(1800 + 270 * <xref
-       linkend="guc-max-locks-per-transaction"/>) * <xref
-       linkend="guc-autovacuum-max-workers"/></entry>
-      </row>
-
-      <row>
-       <entry>Transactions préparées</entry>
-       <entry>(770 + 270 * <xref
-       linkend="guc-max-locks-per-transaction"/>) * <xref linkend="guc-max-prepared-transactions"/></entry>
-      </row>
-
-      <row>
-       <entry>Tampons disque partagés</entry>
-       <entry>(<xref linkend="guc-block-size"/> + 208) * <xref linkend="guc-shared-buffers"/></entry>
-      </row>
-
-      <row>
-       <entry>Tampons WAL</entry>
-       <entry>(<xref linkend="guc-wal-block-size"/> + 8) * <xref linkend="guc-wal-buffers"/></entry>
-      </row>
-
-      <row>
-       <entry>Espace fixe requis</entry>
-       <entry>770 kB</entry>
-      </row>
-     </tbody>
-    </tgroup>
-   </table>
   </sect2>
 
 
@@ -1266,8 +1202,9 @@ project.max-msg-ids=(priv,4096,deny)
     Du fait de l'implémentation du <quote>memory overcommit</quote> par le
     noyau, celui-ci peut arrêter le serveur
     <productname>PostgreSQL</productname> (le processus serveur
-    maître, <quote>postmaster</quote>) si les demandes de mémoire d'un autre
-    processus provoque un manque de mémoire virtuelle au niveau du système.
+    maître, <quote>postmaster</quote>) si les demandes de mémoire de
+    <productname>PostgreSQL</productname> ou d'un autre processus provoque un
+    manque de mémoire virtuelle au niveau du système.
    </para>
 
    <para>
@@ -1290,6 +1227,21 @@ project.max-msg-ids=(priv,4096,deny)
     mémoire. S'il y a peu de mémoire, augmenter la swap peut aider à éviter
     le problème car un système peut tuer des processus lorsque la mémoire
     physique et la mémoire swap sont utilisées entièrement.
+   </para>
+
+   <para>
+    Si <productname>PostgreSQL</productname> lui-même est la cause d'un manque
+    de mémoire du système, vous pouvez éviter le problème en modifiant votre
+    configuration. Dans certains cas, baisser les paramètres de configuration
+    de la mémoire peut aider, tout particulièrement
+    <link linkend="guc-shared-buffers"><varname>shared_buffers</varname></link>
+    et <link linkend="guc-work-mem"><varname>work_mem</varname></link>. Dans
+    d'autres cas, le problème peut être causé par l'autorisation d'un trop grand
+    nombre de connexions au serveur de bases de données. Dans beaucoup de cas,
+    il est préférable de réduire <link
+    linkend="guc-max-connections"><varname>max_connections</varname></link> et
+    d'utiliser à la place un logiciel de multiplexage de connexions
+    (<foreignphrase>connection pooling</foreignphrase>).
    </para>
 
    <para>
@@ -1810,7 +1762,7 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   <para>
    Le moyen le plus simple d'empêcher les serveurs invalides pour des
    connexions <literal>local</literal>es est d'utiliser un répertoire de
-   socket de domaine Unix (<xref linkend="guc-unix-socket-directory"/>) qui
+   socket de domaine Unix (<xref linkend="guc-unix-socket-directories"/>) qui
    a un droit en écriture accessible seulement par un utilisateur local de
    confiance. Ceci empêche un utilisateur mal intentionné de créer son
    propre fichier socket dans ce répertoire. Si vous êtes concerné que
@@ -1832,7 +1784,7 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    (<xref linkend="ssl-tcp"/>). Le client TCP
    doit se connecter en utilisant <literal>sslmode='verify-ca'</literal> ou
    <literal>'verify-full'</literal> et avoir le certificat racine installé
-   (<xref linkend="libpq-connect"/>).
+   (<xref linkend="libpq-ssl-certificates"/>).
   </para>
  </sect1>
   

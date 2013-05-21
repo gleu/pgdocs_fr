@@ -14,7 +14,7 @@ $recherche = preg_replace('/:/', ' ', $recherche);
 
 $recherche_value = strlen($recherche)>0 ? $recherche : 'Rechercher';
 
-$pgconn = @pg_connect("host=localhost dbname=docspgfr user=docspgfr") or die('Connexion impossible');
+$pgconn = pg_connect("host=somehost dbname=somedb user=someuser password=somepassword") or die('Connexion impossible');
 
 $query = "SET client_encoding TO utf8;";
 $result = pg_query($pgconn, $query);
@@ -23,6 +23,7 @@ $version['803'] = '8.3';
 $version['804'] = '8.4';
 $version['900'] = '9.0';
 $version['901'] = '9.1';
+$version['902'] = '9.2';
 ?>
 <!DOCTYPE html SYSTEM "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -42,8 +43,8 @@ $version['901'] = '9.1';
 		{
 		  if ((typeof window.sidebar == "object") && (typeof window.sidebar.addSearchEngine == "function")) {
 		    window.sidebar.addSearchEngine(
-		      "http://docs.postgresqlfr.org/addon/"+name+".src",
-		      "http://docs.postgresqlfr.org/addon/"+name+"."+ext,
+		      "http://docs.postgresql.fr/addon/"+name+".src",
+		      "http://docs.postgresql.fr/addon/"+name+"."+ext,
 		      name,
 		      cat );
 		  } else {
@@ -140,7 +141,7 @@ if (pg_num_rows($result) > 0) {
 
 while ($ligne = pg_fetch_array($result)) {
   echo '<li>
-<a href="http://docs.postgresqlfr.org/'.$version[$ligne['version']].'/'.$ligne['url'].'">Manuel PostgreSQL '.$version[$ligne['version']].', '.$ligne['titre'].'</a></li>';
+<a href="http://docs.postgresql.fr/'.$version[$ligne['version']].'/'.$ligne['url'].'">Manuel PostgreSQL '.$version[$ligne['version']].', '.$ligne['titre'].'</a></li>';
 }
 
   $result = pg_query($pgconn, $query);
@@ -206,7 +207,7 @@ if (pg_num_rows($result) > 0) {
 
   while ($ligne = pg_fetch_array($result)) {
     echo '<li>
-<a href="http://docs.postgresqlfr.org/'.$version[$ligne['version']].'/'.$ligne['url'].'">Manuel PostgreSQL '.$version[$ligne['version']].', '.$ligne['titre'].'</a> ['.$ligne['score'].' %]<br/>
+<a href="http://docs.postgresql.fr/'.$version[$ligne['version']].'/'.$ligne['url'].'">Manuel PostgreSQL '.$version[$ligne['version']].', '.$ligne['titre'].'</a> ['.$ligne['score'].' %]<br/>
 ...'.$ligne['resume'].'...<br/>&nbsp;<br/>
 </li>';
   }
@@ -226,7 +227,7 @@ ORDER BY sml DESC, mot";
     echo "<p>Peut-être cherchez-vous :</p><ul>";
     while ($ligne = pg_fetch_array($result)) {
       echo '<li>
-<a href="http://docs.postgresqlfr.org/search.php?v='.$filtreversion.'&q='.$ligne['mot'].'">'.$ligne['mot'].'</a> ['.$ligne['sml'].' %]</li>';
+<a href="http://docs.postgresql.fr/search.php?v='.$filtreversion.'&q='.$ligne['mot'].'">'.$ligne['mot'].'</a> ['.$ligne['sml'].' %]</li>';
     }
     echo "</ul>";
 }

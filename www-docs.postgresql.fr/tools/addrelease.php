@@ -38,6 +38,10 @@ if (strlen("$PGDATABASE") == 0) {
 
 $PGPASSWORD = getenv('PGPASSWORD');
 
+$g_passwordrequired = false;
+$tags1 = '';
+$tags2 = '';
+
 // Déchiffrage des options en ligne de commande
 for ($i = 1; $i < $_SERVER["argc"]; $i++) {
   switch($_SERVER["argv"][$i]) {
@@ -90,8 +94,11 @@ for ($i = 1; $i < $_SERVER["argc"]; $i++) {
           case '9.1':
             $version_int = 901;
             break;
+          case '9.2':
+            $version_int = 902;
+            break;
           default:
-            echo "Il s'agit d'une version majeure : 8.1, 8.2, 8.3, 8.4, 9.0 ou 9.1.\n";
+            echo "Il s'agit d'une version majeure : 8.1, 8.2, 8.3, 8.4, 9.0, 9.1 ou 9.2.\n";
             exit;
             break;
         }

@@ -1573,11 +1573,11 @@ EXECUTE format('UPDATE tbl SET %I = $1 WHERE cle = $2', nom_colonne)
      </para>
 
      <para>
-      Lorsqu'elle renvoie un type scalaire, n'importe quelle expression peut être 
-      utilisée. Le résultat de l'expression sera automatiquement converti vers le type
-      de retour de la fonction, comme décrit pour les affectations. Pour renvoyer une 
-      valeur composite (ligne), vous devez écrire une variable record ou ligne comme 
-      <replaceable>expression</replaceable>.
+      In a function that returns a scalar type, the expression's result will
+      automatically be cast into the function's return type as described for
+      assignments.  But to return a composite (row) value, you must write an
+      expression delivering exactly the requested column set.  This may
+      require use of explicit casting.
      </para>
 
      <para>
@@ -1602,6 +1602,20 @@ EXECUTE format('UPDATE tbl SET %I = $1 WHERE cle = $2', nom_colonne)
       <type>void</type>. Dans ces cas, une instruction
       <command>RETURN</command> est automatiquement exécutée si le bloc de
       haut niveau est terminé.
+     </para>
+
+     <para>
+      Some examples:
+
+<programlisting>
+-- functions returning a scalar type
+RETURN 1 + 2;
+RETURN scalar_var;
+
+-- functions returning a composite type
+RETURN composite_type_var;
+RETURN (1, 2, 'three'::text);  -- must cast columns to correct types
+</programlisting>
      </para>
     </sect3>
 
@@ -1683,13 +1697,13 @@ CREATE TABLE truc (id_truc INT, sousid_truc INT, nom_truc TEXT);
 INSERT INTO truc VALUES (1, 2, 'trois');
 INSERT INTO truc VALUES (4, 5, 'six');
 
-CREATE OR REPLACE FUNCTION obtenirTousLesTrucs() RETURNS SETOF foo AS
+CREATE OR REPLACE FUNCTION obtenir_tous_les_trucs() RETURNS SETOF foo AS
 $BODY$
 DECLARE
     r truc%rowtype;
 BEGIN
-    FOR r IN SELECT * FROM truc
-    WHERE id_truc &gt; 0
+    FOR r IN
+        SELECT * FROM truc WHERE id_truc &gt; 0
     LOOP
         -- quelques traitements
         RETURN NEXT r; -- renvoie la ligne courante du SELECT
@@ -1699,7 +1713,37 @@ END
 $BODY$
 LANGUAGE 'plpgsql' ;
 
-SELECT * FROM obtenirTousLesTrucs();
+SELECT * FROM obtenir_tous_les_trucs();
+</programlisting>
+     </para>
+
+     <para>
+      Here is an example of a function using <command>RETURN
+      QUERY</command>:
+
+<programlisting>
+CREATE FUNCTION get_available_flightid(date) RETURNS SETOF integer AS
+$BODY$
+BEGIN
+    RETURN QUERY SELECT flightid
+                   FROM flight
+                  WHERE flightdate &gt;= $1
+                    AND flightdate &lt; ($1 + 1);
+
+    -- Since execution is not finished, we can check whether rows were returned
+    -- and raise exception if not.
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No flight at %.', $1;
+    END IF;
+
+    RETURN;
+ END
+$BODY$
+LANGUAGE plpgsql;
+
+-- Returns available flights or raises exception if there are no
+-- available flights.
+SELECT * FROM get_available_flightid(CURRENT_DATE);
 </programlisting>
      </para>
 
@@ -2465,8 +2509,9 @@ NOTICE:  ligne = {10,11,12}
       <literal>OTHERS</literal> correspond à tout type d'erreur sauf
       <literal>QUERY_CANCELED</literal> (il est possible, mais pas recommandé, de
       récupérer <literal>QUERY_CANCELED</literal> par son nom). Les noms des
-      conditions ne sont pas sensibles à la casse. Also, an error condition can be specified
-     by <literal>SQLSTATE</literal> code; for example these are equivalent:
+      conditions ne sont pas sensibles à la casse. De plus, une condition d'erreur
+      peut être indiquée par un code <literal>SQLSTATE</literal>&nbsp;; par exemple,
+      ces deux cas sont équivalents&nbsp;:
 <programlisting>
         WHEN division_by_zero THEN ...
         WHEN SQLSTATE '22012' THEN ...
@@ -3258,21 +3303,44 @@ RAISE ;
     Vous pouvez attacher des informations supplémentaires au rapport d'erreur
     en écrivant <literal>USING</literal> suivi par des éléments <replaceable
     class="parameter">option</replaceable> = <replaceable
-    class="parameter">expression</replaceable>. Les mots clés autorisées pour
-    <replaceable class="parameter">option</replaceable> sont
-    <literal>MESSAGE</literal>, <literal>DETAIL</literal>,
-    <literal>HINT</literal> et
-    <literal>ERRCODE</literal>, alors que chaque <replaceable
-    class="parameter">expression</replaceable> peut être une expression de type
-    chaîne. <literal>MESSAGE</literal> configure le texte de l'erreur (cette
-    option ne peut pas être utilisée sous la forme de <command>RAISE</command>
-    qui inclut une chaîne de format avant <literal>USING</literal>).
-    <literal>DETAIL</literal> fournit un message détaillé de l'erreur,
-    <literal>HINT</literal> propose une astuce.
-    <literal>ERRCODE</literal> indique le code d'erreur (SQLSTATE) à rapporter,
-    soit par le nom de la condition comme indiquée dans <xref
-    linkend="errcodes-appendix"/>, soit directement sous la forme d'un code
-    SQLSTATE à cinq caractères.
+    class="parameter">expression</replaceable>. Each
+    <replaceable class="parameter">expression</replaceable> can be any
+    string-valued expression.  The allowed <replaceable
+    class="parameter">option</replaceable> key words are:
+
+    <variablelist id="raise-using-options">
+     <varlistentry>
+      <term><literal>MESSAGE</literal></term>
+      <listitem>
+       <para>Sets the error message text.  This option can't be used in the
+        form of <command>RAISE</command> that includes a format string
+        before <literal>USING</literal>.</para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>DETAIL</literal></term>
+      <listitem>
+       <para>Supplies an error detail message.</para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>HINT</literal></term>
+      <listitem>
+       <para>Supplies a hint message.</para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>ERRCODE</literal></term>
+      <listitem>
+       <para>Specifies the error code (SQLSTATE) to report, either by condition
+        name, as shown in <xref linkend="errcodes-appendix"/>, or directly as a
+        five-character SQLSTATE code.</para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
    </para>
 
    <para>
@@ -3364,7 +3432,10 @@ RAISE unique_violation USING MESSAGE = 'Duplicate user ID: ' || user_id;
    <secondary>en PL/pgSQL</secondary>
   </indexterm>
 
-  <para>
+  <sect2 id="plpgsql-dml-trigger">
+   <title>Triggers on data changes</title>
+
+   <para>
 	<application>PL/pgSQL</application> peut être utilisé pour définir des 
 	procédures trigger. Une procédure trigger est créée grâce à la commande
 	<command>CREATE FUNCTION</command> utilisée comme fonction sans arguments
@@ -3385,11 +3456,11 @@ RAISE unique_violation USING MESSAGE = 'Duplicate user ID: ' || user_id;
      <term><varname>NEW</varname></term>
      <listitem>
       <para>
-       Type de données <type>RECORD</type>&nbsp;; variable contenant la nouvelle ligne 
-       de base de données pour les opérations <command>INSERT</command>/<command>UPDATE</command> 
-       dans les triggers de niveau ligne. Cette variable est
-       <symbol>NULL</symbol> dans un trigger de niveau instruction
-       et pour les opérations <command>DELETE</command>.
+       Type de données <type>RECORD</type>&nbsp;; variable contenant la nouvelle
+       ligne  de base de données pour les opérations <command>INSERT</command> /
+       <command>UPDATE</command> dans les triggers de niveau ligne. Cette
+       variable est non initialisée dans un trigger de niveau instruction et
+       pour les opérations <command>DELETE</command>.
       </para>
      </listitem>
     </varlistentry>
@@ -3400,7 +3471,7 @@ RAISE unique_violation USING MESSAGE = 'Duplicate user ID: ' || user_id;
       <para>
        Type de données <type>RECORD</type>&nbsp;; variable contenant l'ancienne ligne de 
        base de données pour les opérations <command>UPDATE</command>/<command>DELETE</command> 
-       dans les triggers de niveau ligne. Cette variable est <symbol>NULL</symbol>
+       dans les triggers de niveau ligne. Cette variable est non initialisée
        dans les triggers de niveau instruction et pour les opérations
        <command>INSERT</command>.
       </para>
@@ -3920,6 +3991,70 @@ SELECT * FROM sales_summary_bytime;
 </programlisting>
       </example>
 
+</sect2>
+
+  <sect2 id="plpgsql-event-trigger">
+   <title>Triggers on events</title>
+
+   <para>
+    <application>PL/pgSQL</application> can be used to define event
+    triggers.  <productname>PostgreSQL</productname> requires that a procedure that
+    is to be called as an event trigger must be declared as a function with
+    no arguments and a return type of <literal>event_trigger</literal>.
+   </para>
+
+   <para>
+    When a <application>PL/pgSQL</application> function is called as a
+    event trigger, several special variables are created automatically
+    in the top-level block. They are:
+
+   <variablelist>
+    <varlistentry>
+     <term><varname>TG_EVENT</varname></term>
+     <listitem>
+      <para>
+       Data type <type>text</type>; a string representing the event the
+       trigger is fired for.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>TG_TAG</varname></term>
+     <listitem>
+      <para>
+       Data type <type>text</type>; variable that contains the command tag
+       for which the trigger is fired.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+
+   <para>
+    <xref linkend="plpgsql-event-trigger-example"/> shows an example of a
+    event trigger procedure in <application>PL/pgSQL</application>.
+   </para>
+
+   <example id="plpgsql-event-trigger-example">
+    <title>A <application>PL/pgSQL</application> Event Trigger Procedure</title>
+
+    <para>
+     This example trigger simply raises a <literal>NOTICE</literal> message
+     each time a supported command is executed.
+    </para>
+
+<programlisting>
+CREATE OR REPLACE FUNCTION snitch() RETURNS event_trigger AS $$
+BEGIN
+    RAISE NOTICE 'snitch: % %', tg_event, tg_tag;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE EVENT TRIGGER snitch ON ddl_command_start EXECUTE PROCEDURE snitch();
+</programlisting>
+   </example>
+  </sect2>
     </sect1>
 
   <sect1 id="plpgsql-implementation">
@@ -4153,7 +4288,8 @@ $$ LANGUAGE plpgsql;
     ceci survient seulement si le plan d'exécution n'est pas très sensible
     aux valeurs des variables <application>PL/pgSQL</application> référencées.
     Si ce n'est pas le cas, générer un nouveau plan à chaque fois est un gain
-    net.
+    net. See <xref linkend="sql-prepare"/> for more information about the
+    behavior of prepared statements.
    </para>
 
    <para>
@@ -5092,22 +5228,24 @@ BEGIN
         ELSE
             RETURN pos + beg_index - 1;
         END IF;
-    ELSE
+    ELSIF beg_index &lt; 0 THEN
         ss_length := char_length(string_to_search);
         length := char_length(string);
         beg := length + beg_index - ss_length + 2;
 
-	WHILE beg &gt; 0 LOOP
+        WHILE beg &gt; 0 LOOP
             temp_str := substring(string FROM beg FOR ss_length);
             pos := position(string_to_search IN temp_str);
 
-	    IF pos &gt; 0 THEN
+            IF pos &gt; 0 THEN
                 RETURN beg;
             END IF;
 
             beg := beg - 1;
         END LOOP;
 
+        RETURN 0;
+    ELSE
         RETURN 0;
     END IF;
 END;
@@ -5119,7 +5257,7 @@ CREATE FUNCTION instr(string varchar, string_to_search varchar,
 RETURNS integer AS $$
 DECLARE
     pos integer NOT NULL DEFAULT 0;
-    occur_nombre integer NOT NULL DEFAULT 0;
+    occur_number integer NOT NULL DEFAULT 0;
     temp_str varchar;
     beg integer;
     i integer;
@@ -5147,7 +5285,7 @@ BEGIN
         ELSE
             RETURN beg;
         END IF;
-    ELSE
+    ELSIF beg_index &lt; 0 THEN
         ss_length := char_length(string_to_search);
         length := char_length(string);
         beg := length + beg_index - ss_length + 2;
@@ -5157,9 +5295,9 @@ BEGIN
             pos := position(string_to_search IN temp_str);
 
             IF pos &gt; 0 THEN
-                occur_nombre := occur_nombre + 1;
+                occur_number := occur_number + 1;
 
-                IF occur_nombre = occur_index THEN
+                IF occur_number = occur_index THEN
                     RETURN beg;
                 END IF;
             END IF;
@@ -5167,6 +5305,8 @@ BEGIN
             beg := beg - 1;
         END LOOP;
 
+        RETURN 0;
+    ELSE
         RETURN 0;
     END IF;
 END;

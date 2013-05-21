@@ -34,18 +34,26 @@
    <title>Introduction</title>
 
    <para>
-    Tous les objets larges sont placés dans une seule table système appelée
-    <classname>pg_largeobject</classname>.
+    All large objects are stored in a single system table named <link
+    linkend="catalog-pg-largeobject"><structname>pg_largeobject</structname></link>.
+    Each large object also has an entry in the system table <link
+    linkend="catalog-pg-largeobject-metadata"><structname>pg_largeobject_metadata</structname></link>.
+    Large objects can be created, modified, and deleted using a read/write API
+    that is similar to standard operations on files.
+   </para>
+
+   <para>
     <productname>PostgreSQL</productname> supporte aussi un système de stockage
-    appelé <quote><acronym>TOAST</acronym></quote> qui stocke automatiquement
+    appelé <link
+    linkend="storage-toast"><quote><acronym>TOAST</acronym></quote></link> qui stocke automatiquement
     les valeurs ne tenant pas sur une page de la base de données dans une aire
     de stockage secondaire par table. Ceci rend partiellement obsolète la
     fonctionnalité des objets larges. Un avantage restant des objets larges est
-    qu'il autorise les valeurs de plus de 2&nbsp;Go en taille alors que les
-    champs <acronym>TOAST</acronym> peuvent être d'au plus 1&nbsp;Go. Néanmoins,
-    les objets larges peuvent être modifiés au hasard en utilisant une API de
-    lecture/écriture qui est plus efficace que la réalisation de telles
-    opérations utilisant <acronym>TOAST</acronym>.
+    qu'il autorise les valeurs de plus de 4&nbsp;To en taille alors que les
+    champs <acronym>TOAST</acronym> peuvent être d'au plus 1&nbsp;Go.
+    Also, reading and updating portions of a large object can be
+    done efficiently, while most operations on a <acronym>TOAST</acronym>ed
+    field will read or write the whole value as a unit.
    </para>
 
   </sect1>
@@ -62,16 +70,28 @@
    </para>
 
    <para>
+    The chunks stored for a large object do not have to be contiguous.
+    For example, if an application opens a new large object, seeks to offset
+    1000000, and writes a few bytes there, this does not result in allocation
+    of 1000000 bytes worth of storage; only of chunks covering the range of
+    data bytes actually written.  A read operation will, however, read out
+    zeroes for any unallocated locations preceding the last existing chunk.
+    This corresponds to the common behavior of <quote>sparsely allocated</quote>
+    files in <acronym>Unix</acronym> file systems.
+   </para>
+
+   <para>
     À partir de <productname>PostgreSQL</productname> 9.0, les « Large
     Objects » ont un propriétaire et un ensemble de droits d'accès pouvant
     être gérés en utilisant les commandes <xref linkend="sql-grant"/> et
-    <xref linkend="sql-revoke"/>. Pour une compatibilité avec des versions
-    précédentes, voir <xref linkend="guc-lo-compat-privileges"/>. Les droits
+    <xref linkend="sql-revoke"/>. Les droits
     <literal>SELECT</literal> sont requis pour lire un « Large Object », et
     les droits <literal>UPDATE</literal> sont requis pour écrire ou tronquer.
     Seul le propriétaire du « Large Object » ou le propriétaire de la base de
     données peut supprimer, ajouter un commentaire ou modifier le propriétaire
     d'un « Large Object ».
+    To adjust this behavior for compatibility with prior releases, see the
+    <xref linkend="guc-lo-compat-privileges"/> run-time parameter.
    </para>
   </sect1>
 
@@ -79,20 +99,32 @@
    <title>Interfaces client</title>
 
    <para>
-    Cette section décrit les possibilités que les bibliothèques d'interfaces
-    clientes de <productname>PostgreSQL</productname> fournissent pour accéder
-    aux objets larges. Toutes les manipulations d'objets larges utilisant ces
-    fonctions <emphasis>doivent</emphasis> prendre place dans un bloc de
-    transaction SQL. L'interface des objets larges de
-    <productname>PostgreSQL</productname> prend comme modèle l'interface des
-    systèmes de fichiers <acronym>Unix</acronym> avec des fonctions analogues
-    pour <function>open</function>, <function>read</function>,
-    <function>write</function>, <function>lseek</function>, etc.
+     This section describes the facilities that
+    <productname>PostgreSQL</productname>'s <application>libpq</application>
+    client interface library provides for accessing large objects.
+    The <productname>PostgreSQL</productname> large object interface is
+    modeled after the <acronym>Unix</acronym> file-system interface, with
+    analogues of <function>open</function>,  <function>read</function>,
+     <function>write</function>,
+     <function>lseek</function>, etc.
    </para>
 
    <para>
-    Les applications clientes utilisant l'interface des objets larges dans
-    <application>libpq</application> doivent inclure le fichier d'en-tête
+    All large object manipulation using these functions
+    <emphasis>must</emphasis> take place within an SQL transaction block,
+    since large object file descriptors are only valid for the duration of
+    a transaction.
+   </para>
+
+   <para>
+    If an error occurs while executing any one of these functions, the
+    function will return an otherwise-impossible value, typically 0 or -1.
+    A message describing the error is stored in the connection object and
+    can be retrieved with <function>PQerrorMessage</function>.
+   </para>
+
+   <para>
+    Les applications clientes qui utilisent ces fonctions doivent inclure le fichier d'en-tête
     <filename>libpq/libpq-fs.h</filename> et établir un lien avec la
     bibliothèque <application>libpq</application>.
    </para>
@@ -101,10 +133,10 @@
     <title>Créer un objet large</title>
 
     <para>
+     <indexterm><primary>lo_creat</primary></indexterm>
      La fonction
 <synopsis>Oid lo_creat(PGconn *conn, int mode);
 </synopsis>
-     <indexterm><primary>lo_creat</primary></indexterm>
      crée un nouvel objet large. La valeur de retour est un OID assigné au
      nouvel objet large ou <symbol>InvalidOid</symbol> (zéro) en cas d'erreur.
 
@@ -124,10 +156,10 @@
     </para>
 
     <para>
+     <indexterm><primary>lo_create</primary></indexterm>
      La fonction
 <synopsis>Oid lo_create(PGconn *conn, Oid lobjId);
 </synopsis>
-     <indexterm><primary>lo_create</primary></indexterm>
      crée aussi un nouvel objet large. L'OID à affecter peut être spécifié par
      <replaceable class="parameter">lobjId</replaceable>&nbsp;; dans ce cas, un
      échec survient si l'OID est déjà utilisé pour un autre objet large. Si
@@ -156,11 +188,11 @@
     <title>Importer un objet large</title>
 
     <para>
+     <indexterm><primary>lo_import</primary></indexterm>
      Pour importer un fichier du système d'exploitation en tant qu'objet large,
      appelez
 <synopsis>Oid lo_import(PGconn *conn, const char *filename);
 </synopsis>
-     <indexterm><primary>lo_import</primary></indexterm>
      <replaceable class="parameter">filename</replaceable> 
      spécifie le nom du fichier à importer comme objet large. Le code de retour
      est l'OID assigné au nouvel objet large ou <symbol>InvalidOid</symbol> (zero) en cas
@@ -170,11 +202,11 @@
     </para>
     
     <para>
+     <indexterm><primary>lo_import_with_oid</primary></indexterm>
      La fonction
 <synopsis>
 Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
 </synopsis>
-     <indexterm><primary>lo_import_with_oid</primary></indexterm>
      importe aussi un nouvel «&nbsp;large object&nbsp;». L'OID à affecter peut
      être indiqué par <replaceable class="parameter">lobjId</replaceable>&nbsp;;
      dans ce cas, un échec survient si l'OID est déjà utilisé pour un autre
@@ -199,11 +231,11 @@ Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
     <title>Exporter un objet large</title>
 
     <para>
+     <indexterm><primary>lo_export</primary></indexterm>
      Pour exporter un objet large en tant que fichier du système
      d'exploitation, appelez
     <synopsis>int lo_export(PGconn *conn, Oid lobjId, const char *filename);
 </synopsis>
-     <indexterm><primary>lo_export</primary></indexterm>
      L'argument <parameter>lobjId</parameter> spécifie l'OID de l'objet large à
      exporter et l'argument <parameter>filename</parameter> spécifie le nom du
      fichier. Notez que le fichier est écrit par la bibliothèque d'interface du
@@ -215,21 +247,23 @@ Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
     <title>Ouvrir un objet large existant</title>
 
     <para>
+     <indexterm><primary>lo_open</primary></indexterm>
      Pour ouvrir un objet large existant pour lire ou écrire, appelez
 <synopsis>int lo_open(PGconn *conn, Oid lobjId, int mode);
 </synopsis>
-     <indexterm><primary>lo_open</primary></indexterm>
      L'argument <parameter>lobjId</parameter> spécifie l'OID de l'objet large à
      ouvrir. Les bits <parameter>mode</parameter> contrôlent si l'objet est
      ouvert en lecture (<symbol>INV_READ</symbol>), écriture
      (<symbol>INV_WRITE</symbol>) ou les deux (ces constantes symboliques
      sont définies dans le fichier d'en-tête
-     <filename>libpq/libpq-fs.h</filename>). Un objet large ne peut pas être
-     ouvert avant d'avoir été créé. <function>lo_open</function> renvoie un
+     <filename>libpq/libpq-fs.h</filename>). <function>lo_open</function> renvoie un
      descripteur (positif) d'objet large pour une utilisation future avec
      <function>lo_read</function>, <function>lo_write</function>,
-     <function>lo_lseek</function>, <function>lo_tell</function> et
-     <function>lo_close</function>. Le descripteur est uniquement valide pour
+     <function>lo_lseek</function>, <function>lo_lseek64</function>,
+     <function>lo_tell</function>,
+     <function>lo_tell64</function>, <function>lo_truncate</function>,
+     <function>lo_truncate64</function> et <function>lo_close</function>.
+     Le descripteur est uniquement valide pour
      la durée de la transaction en cours. En cas d'échec, -1 est renvoyé.
     </para>
 
@@ -262,15 +296,24 @@ Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
 <title>Écrire des données dans un objet large</title>
 
 <para>
+     <indexterm><primary>lo_write</primary></indexterm>
      La fonction
 <synopsis>int lo_write(PGconn *conn, int fd, const char *buf, size_t len);
 </synopsis>
-     <indexterm><primary>lo_write</primary></indexterm> écrit
-     <parameter>len</parameter> octets de <parameter>buf</parameter>
-     dans le descripteur <parameter>fd</parameter> de l'objet large. L'argument
-     <parameter>fd</parameter> doit avoir été renvoyé par un appel précédent à
-     <function>lo_open</function>. Le nombre d'octets réellement écrits est
-     renvoyé. Dans le cas d'une erreur, une valeur négative est renvoyée.
+     writes <parameter>len</parameter> bytes from <parameter>buf</parameter>
+     (which must be of size <parameter>len</parameter>) to large object
+     descriptor <parameter>fd</parameter>.  The <parameter>fd</parameter> argument must
+     have been returned by a previous <function>lo_open</function>.  The
+     number of bytes actually written is returned (in the current
+     implementation, this will always equal <parameter>len</parameter> unless
+     there is an error).  In the event of an error, the return value is -1.
+</para>
+
+<para>
+     Although the <parameter>len</parameter> parameter is declared as
+     <type>size_t</type>, this function will reject length values larger than
+     <literal>INT_MAX</literal>.  In practice, it's best to transfer data in chunks
+     of at most a few megabytes anyway.
 </para>
 </sect2>
 
@@ -278,15 +321,25 @@ Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
 <title>Lire des données à partir d'un objet large</title>
 
 <para>
+     <indexterm><primary>lo_read</primary></indexterm>
      La fonction
 <synopsis>int lo_read(PGconn *conn, int fd, char *buf, size_t len);
 </synopsis>
-     <indexterm><primary>lo_read</primary></indexterm> lit
-     <parameter>len</parameter> octets du descripteur de l'objet large
-     <parameter>fd</parameter> et les place dans <parameter>buf</parameter>.
-     L'argument <parameter>fd</parameter> doit avoir été renvoyé par un appel
-     précédent à <function>lo_open</function>. Le nombre d'octets réellement lus
-     est renvoyé. Dans le cas d'une erreur, une valeur négative est renvoyée.
+     reads up to <parameter>len</parameter> bytes from large object descriptor
+     <parameter>fd</parameter> into <parameter>buf</parameter> (which must be
+     of size <parameter>len</parameter>).  The <parameter>fd</parameter>
+     argument must have been returned by a previous
+     <function>lo_open</function>.  The number of bytes actually read is
+     returned; this will be less than <parameter>len</parameter> if the end of
+     the large object is reached first.  In the event of an error, the return
+     value is -1.
+</para>
+
+<para>
+     Although the <parameter>len</parameter> parameter is declared as
+     <type>size_t</type>, this function will reject length values larger than
+     <literal>INT_MAX</literal>.  In practice, it's best to transfer data in chunks
+     of at most a few megabytes anyway.
 </para>
 </sect2>
 
@@ -294,11 +347,12 @@ Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
 <title>Recherche dans un objet large</title>
 
 <para>
+     <indexterm><primary>lo_lseek</primary></indexterm>
      Pour modifier l'emplacement courant de lecture ou écriture associé au
      descripteur d'un objet large, on utilise
 <synopsis>int lo_lseek(PGconn *conn, int fd, int offset, int whence);
 </synopsis>
-     <indexterm><primary>lo_lseek</primary></indexterm> Cette fonction déplace le pointeur
+     Cette fonction déplace le pointeur
      d'emplacement courant pour le descripteur de l'objet large identifié par
      <parameter>fd</parameter> au nouvel emplacement spécifié avec le décalage
      (<parameter>offset</parameter>). Les valeurs valides pour
@@ -308,18 +362,60 @@ Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
      (rechercher depuis la fin de l'objet). Le code de retour est le nouvel
      emplacement du pointeur ou -1 en cas d'erreur.
 </para>
+
+<para>
+     <indexterm><primary>lo_lseek64</primary></indexterm>
+     When dealing with large objects that might exceed 2GB in size,
+     instead use
+<synopsis>
+pg_int64 lo_lseek64(PGconn *conn, int fd, pg_int64 offset, int whence);
+</synopsis>
+     This function has the same behavior
+     as <function>lo_lseek</function>, but it can accept an
+     <parameter>offset</parameter> larger than 2GB and/or deliver a result larger
+     than 2GB.
+     Note that <function>lo_lseek</function> will fail if the new location
+     pointer would be greater than 2GB.
+</para>
+
+<para>
+     <function>lo_lseek64</function> is new as of <productname>PostgreSQL</productname>
+     9.3.  If this function is run against an older server version, it will
+     fail and return -1.
+</para>
+
 </sect2>
 
 <sect2 id="lo-tell">
 <title>Obtenir la position de recherche d'un objet large</title>
 
 <para>
+    <indexterm><primary>lo_tell</primary></indexterm>
      Pour obtenir la position actuelle de lecture ou écriture d'un descripteur
      d'objet large, appelez
 <synopsis>int lo_tell(PGconn *conn, int fd);
 </synopsis>
-     <indexterm><primary>lo_tell</primary></indexterm> En cas d'erreur, le code de retour
-     est négatif.
+     If there is an error, the return value is -1.
+</para>
+
+<para>
+     <indexterm><primary>lo_tell64</primary></indexterm>
+     When dealing with large objects that might exceed 2GB in size,
+     instead use
+<synopsis>
+pg_int64 lo_tell64(PGconn *conn, int fd);
+</synopsis>
+     This function has the same behavior
+     as <function>lo_tell</function>, but it can deliver a result larger
+     than 2GB.
+     Note that <function>lo_tell</function> will fail if the current
+     read/write location is greater than 2GB.
+</para>
+
+<para>
+     <function>lo_tell64</function> is new as of <productname>PostgreSQL</productname>
+     9.3.  If this function is run against an older server version, it will
+     fail and return -1.
 </para>
 </sect2>
 
@@ -327,31 +423,54 @@ Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
 <title>Tronquer un Objet Large</title>
 
 <para>
+     <indexterm><primary>lo_truncate</primary></indexterm>
      Pour tronquer un objet large avec une longueur donnée, on utilise
 <synopsis>
 int lo_truncate(PGcon *conn, int fd, size_t len);
 </synopsis>
-     <indexterm><primary>lo_truncate</primary></indexterm> tronque l'objet large
+     Cette fonction tronque l'objet large
      décrit par <parameter>fd</parameter> avec la longueur <parameter>len</parameter>.  l'argument
      <parameter>fd</parameter> doit avoir été renvoyé par un appel précédent à
      <function>lo_open</function>.  Si le paramètre <parameter>len</parameter> est
-     plus grand que la taille de l'objet courant, l'objet sera completé
-     avec des octets de valeur null ('\0').
+     greater than the large object's current length, the large object
+     is extended to the specified length with null bytes ('\0').
+     On success, <function>lo_truncate</function> returns
+     zero.  On error, the return value is -1.
 </para>
 
 <para>
-     Le décalage reste inchangé.
+     The read/write location associated with the descriptor
+     <parameter>fd</parameter> is not changed.
+ </para>
+
+<para>
+     Although the <parameter>len</parameter> parameter is declared as
+     <type>size_t</type>, <function>lo_truncate</function> will reject length
+     values larger than <literal>INT_MAX</literal>.
 </para>
 
 <para>
-     En cas de succès <function>lo_truncate</function> retourne 
-     zero. En cas d'erreur, la valeur de retour est négative.
+     <indexterm><primary>lo_truncate64</primary></indexterm>
+     When dealing with large objects that might exceed 2GB in size,
+     instead use
+<synopsis>
+int lo_truncate64(PGcon *conn, int fd, pg_int64 len);
+</synopsis>
+     This function has the same
+     behavior as <function>lo_truncate</function>, but it can accept a
+     <parameter>len</parameter> value exceeding 2GB.
 </para>
 
 <para>
      <function>lo_truncate</function> est une nouveauté de <productname>PostgreSQL</productname>
      8.3; si cette fonction est également exécuté sur un version plus ancienne du serveur, 
-     elle échouera et retournera une valeur négative.
+     elle échouera et retournera -1.
+</para>
+
+<para>
+     <function>lo_truncate64</function> is new as of <productname>PostgreSQL</productname>
+     9.3; if this function is run against an older server version, it will
+     fail and return -1.
 </para>
 </sect2>
 
@@ -359,12 +478,13 @@ int lo_truncate(PGcon *conn, int fd, size_t len);
 <title>Fermer un descripteur d'objet large</title>
 
 <para>
+     <indexterm><primary>lo_close</primary></indexterm>
      Un descripteur d'objet large peut être fermé en appelant
 <synopsis>int lo_close(PGconn *conn, int fd);
 </synopsis>
-     <indexterm><primary>lo_close</primary></indexterm> où <parameter>fd</parameter> est un 
+     où <parameter>fd</parameter> est un 
      descripteur d'objet large renvoyé par <function>lo_open</function>. En
-     cas de succès, <function>lo_close</function> renvoie zéro. Une valeur negative en cas d'échec.
+     cas de succès, <function>lo_close</function> renvoie zéro. -1 en cas d'échec.
 </para>
 
 <para>
@@ -377,12 +497,13 @@ int lo_truncate(PGcon *conn, int fd, size_t len);
     <title>Supprimer un objet large</title>
 
     <para>
+     <indexterm><primary>lo_unlink</primary></indexterm>
      Pour supprimer un objet large de la base de données, on utilise
 <synopsis>int lo_unlink(PGconn *conn, Oid lobjId);
 </synopsis>
-     <indexterm><primary>lo_unlink</primary></indexterm> L'argument
+     L'argument
      <parameter>lobjId</parameter> spécifie l'OID de l'objet large à supprimer.
-     En cas d'erreur, le code de retour est négatif.
+     En cas d'erreur, le code de retour est -1.
     </para>
    </sect2>
 

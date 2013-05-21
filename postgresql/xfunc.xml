@@ -96,7 +96,8 @@
    </para>
 
    <para>
-    Une fonction SQL peut être déclarée de façon à renvoyer un ensemble (set)
+    Une fonction SQL peut être déclarée de façon à renvoyer un ensemble (set, that is,
+    multiple rows)
     en spécifiant le type renvoyé par la fonction comme <literal>SETOF
     <replaceable>un_type</replaceable></literal>, ou de façon équivalente en
     la déclarant comme  <literal>RETURNS
@@ -903,19 +904,15 @@ SELECT * FROM sum_n_product_with_tab(10);
     </para>
 
     <para>
-     Actuellement, les fonctions renvoyant des ensembles peuvent aussi être
-     appelées dans la liste du select d'une requête. Pour chaque ligne générée
-     par la requête, la fonction renvoyant un ensemble est appelée et une ligne
-     est générée pour chaque élément de l'ensemble résultat. Notez cependant que
-     cette fonctionnalité est déconseillée et pourra être supprimée dans une
-     version future. Voici un exemple de fonction renvoyant un ensemble à
-     partir de la liste d'un SELECT&nbsp;:
+     It is frequently useful to construct a query's result by invoking a
+     set-returning function multiple times, with the parameters for each
+     invocation coming from successive rows of a table or subquery.  The
+     preferred way to do this is to use the <literal>LATERAL</literal> key word,
+     which is described in <xref linkend="queries-lateral"/>.
+     Here is an example using a set-returning function to enumerate
+     elements of a tree structure:
 
-<screen>CREATE FUNCTION listeenfant(text) RETURNS SETOF text AS $$
-    SELECT nom FROM noeuds WHERE parent = $1
-$$ LANGUAGE SQL;
-
-SELECT * FROM noeuds;
+<screen>SELECT * FROM noeuds;
    nom        | parent
 --------------+--------
  Haut         |
@@ -925,6 +922,45 @@ SELECT * FROM noeuds;
  Sous-Enfant1 | Enfant1
  Sous-Enfant2 | Enfant1
 (6 rows)
+
+CREATE FUNCTION listchildren(text) RETURNS SETOF text AS $$
+    SELECT name FROM nodes WHERE parent = $1
+$$ LANGUAGE SQL STABLE;
+
+SELECT * FROM listchildren('Top');
+ listchildren
+--------------
+ Child1
+ Child2
+ Child3
+(3 rows)
+
+SELECT name, child FROM nodes, LATERAL listchildren(name) AS child;
+  name  |   child
+--------+-----------
+ Top    | Child1
+ Top    | Child2
+ Top    | Child3
+ Child1 | SubChild1
+ Child1 | SubChild2
+(5 rows)
+</screen>
+
+     This example does not do anything that we couldn't have done with a
+     simple join, but in more complex calculations the option to put
+     some of the work into a function can be quite convenient.
+    </para>
+
+    <para>
+     Currently, functions returning sets can also be called in the select list
+     of a query.  For each row that the query
+     generates by itself, the function returning set is invoked, and an output
+     row is generated for each element of the function's result set. Note,
+     however, that this capability is deprecated and might be removed in future
+     releases. The previous example could also be done with queries like
+     these:
+
+<screen>
 
 SELECT listeenfant('Haut');
  listeenfant
@@ -948,7 +984,9 @@ SELECT nom, listeenfant(nom) FROM noeuds;
      Notez, dans le dernier <command>SELECT</command>, qu'aucune ligne n'est
      renvoyée pour <literal>Enfant2</literal>, <literal>Enfant3</literal>, etc. C'est parce
      que la fonction <function>listeenfant</function> renvoie un ensemble vide
-     pour ces arguments et ainsi aucune ligne n'est générée.
+     pour ces arguments et ainsi aucune ligne n'est générée. This is the same
+     behavior as we got from an inner join to the function result when using
+     the <literal>LATERAL</literal> syntax.
     </para>
 
     <note>
@@ -962,6 +1000,19 @@ SELECT nom, listeenfant(nom) FROM noeuds;
       clause <literal>RETURNING</literal> sont silencieusement abandonnées mais
       les modifications de table sont pris en compte (et sont toutes terminées
       avant que la fonction ne se termine).
+     </para>
+    </note>
+
+    <note>
+     <para>
+      The key problem with using set-returning functions in the select list,
+      rather than the <literal>FROM</literal> clause, is that putting more than one
+      set-returning function in the same select list does not behave very
+      sensibly.  (What you actually get if you do so is a number of output
+      rows equal to the least common multiple of the numbers of rows produced
+      by each set-returning function.)  The <literal>LATERAL</literal> syntax
+      produces less surprising results when calling multiple set-returning
+      functions, and should usually be used instead.
      </para>
     </note>
    </sect2>
@@ -1120,7 +1171,7 @@ SELECT concat_values('|', 1, 4, 2);
 
     <para>
      Lorsqu'une fonction SQL dispose d'un ou plusieurs paramètres d'un
-     type de de données collationnable, le collationnement applicable
+     type de données collationnable, le collationnement applicable
      est déterminé pour chacun des appels à la fonction afin de
      correspondre au collationnement assigné aux arguments, tel que
      décrit à la section <xref linkend="collation"/>. Si un
@@ -1759,6 +1810,13 @@ PG_MODULE_MAGIC;
 typedef int int4;
 </programlisting>
 
+     (The actual PostgreSQL C code calls this type <type>int32</type>, because
+     it is a convention in C that <type>int<replaceable>XX</replaceable></type>
+     means <replaceable>XX</replaceable> <emphasis>bits</emphasis>.  Note
+     therefore also that the C type <type>int8</type> is 1 byte in size.  The
+     SQL type <type>int8</type> is called <type>int64</type> in C.  See also
+     <xref linkend="xfunc-c-type-table"/>.)
+
     </para>
 
     <para>
@@ -1823,7 +1881,7 @@ typedef struct
      ceci&nbsp;:
 
 <programlisting>typedef struct {
-    int4 length;
+    int32 length;
     char data[1];
 } text;
 </programlisting>
@@ -1938,7 +1996,7 @@ memcpy(destination->data, buffer, 40);
 	</row>
 	<row>
 	 <entry><type>smallint</type> (<type>int2</type>)</entry>
-	 <entry><type>int2</type> or <type>int16</type></entry>
+	 <entry><type>int16</type></entry>
 	 <entry><filename>postgres.h</filename></entry>
 	</row>
 	<row>
@@ -1948,7 +2006,7 @@ memcpy(destination->data, buffer, 40);
 	</row>
 	<row>
 	 <entry><type>integer</type> (<type>int4</type>)</entry>
-	 <entry><type>int4</type> or <type>int32</type></entry>
+	 <entry><type>int32</type></entry>
 	 <entry><filename>postgres.h</filename></entry>
 	</row>
 	<row>
@@ -3109,6 +3167,10 @@ CREATE OR REPLACE FUNCTION retcomposite(integer, integer)
      <literal>fcinfo-&gt;flinfo</literal>. Le paramètre <literal>argnum</literal> est basé à
      partir de zéro. <function>get_call_result_type</function> peut aussi être utilisé
      comme alternative à <function>get_fn_expr_rettype</function>.
+     There is also <function>get_fn_expr_variadic</function>, which can be used to
+     find out whether the call contained an explicit <literal>VARIADIC</literal>
+     keyword.  This is primarily useful for <literal>VARIADIC "any"</literal>
+     functions, as described below.
     </para>
     
     <para>
@@ -3191,7 +3253,12 @@ make_array(PG_FUNCTION_ARGS)
      passés séparément à la fonction. La macro <function>PG_NARGS()</function>
      et les méthodes décrites ci-dessus doivent être utilisées pour déterminer
      le nombre d'arguments réels et leur type lors de l'utilisation de cette
-     fonctionnalité.
+     fonctionnalité. Also, users of such
+     a function might wish to use the <literal>VARIADIC</literal> keyword in their
+     function call, with the expectation that the function would treat the
+     array elements as separate arguments.  The function itself must implement
+     that behavior if wanted, after using <function>get_fn_expr_variadic</function> to
+     detect that the actual argument was marked with <literal>VARIADIC</literal>.
     </para>
    </sect2>
 

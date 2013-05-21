@@ -73,9 +73,12 @@
    sauvegarder une base de données dans son intégralité&nbsp;;
    <application>pg_restore</application> peut alors être utilisé pour examiner
    l'archive et/ou sélectionner les parties de la base de données à
-   restaurer. Le format de fichier de sortie le plus flexible est le format
-   <quote>personnalisé</quote> (<foreignphrase>custom</foreignphrase> en anglais, <option>-Fc</option>).
-   Compressé par défaut, il permet de sélectionner et réordonner les éléments archivés.
+   restaurer. The most flexible output file formats are
+   the <quote>custom</quote> format (<option>-Fc</option>) and the
+   <quote>directory</quote> format(<option>-Fd</option>). They allow
+   for selection and reordering of all archived items, support parallel
+   restoration, and are compressed by default. The <quote>directory</quote>
+   format is the only format that supports parallel dumps.
   </para>
 
   <para>
@@ -144,7 +147,8 @@
        <para>
         Les commandes de nettoyage (suppression) des objets de la base
         sont écrites avant les commandes de création.
-        (La restauration peut générer des erreurs sans gravité.)
+        (La restauration peut générer des messages d'erreur sans gravité si des
+        objets ne sont pas présents dans la base de données de destination.)
        </para>
 
        <para>
@@ -161,8 +165,11 @@
       <listitem>
        <para>
         La sortie débute par une commande de création de la base de données
-	et de connexion à cette base. Peu importe, dans ce cas, la base de données
-        à laquelle la connexion est faite avant la restauration.
+        et de connexion à cette base. Peu importe, dans ce cas, la base de
+        données de connexion à la restauration.
+        De plus, si <option>--clean</option> est aussi spécifié, le script
+        supprime puis crée de nouveau la base de données cible avant de s'y
+        connecter.
        </para>
 
        <para>
@@ -226,8 +233,8 @@
            archive personnalisée utilisable par <application>pg_restore</application>.
 	   Avec le format de sortie répertoire, c'est le format le plus souple, car
 	   il permet la sélection manuelle et le réordonnancement des objets archivés
-	   au moment de la restauration. Ce format est aussi compressé par défaut.
-           default.
+	   au moment de la restauration. Ce format est aussi compressé par défaut and also supports parallel
+           dumps.
           </para>
          </listitem>
         </varlistentry>
@@ -238,7 +245,7 @@
          <listitem>
           <para>
 	   Produire une archive au format répertoire utilisable en entrée
-	   de de <application>pg_restore</application>. Cela créera un répertoire
+	   de <application>pg_restore</application>. Cela créera un répertoire
 	   avec un fichier pour chaque table et blob exporté, ainsi qu'un fichier appelé
 	   Table of Contents (Table des matières) décrivant les objets exportés dans
 	   un format machine que <application>pg_restore</application> peut lire. Une
@@ -275,6 +282,62 @@
       <listitem>
        <para>
         Une option obsolète qui est maintenant ignorée.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-j <replaceable class="parameter">njobs</replaceable></option></term>
+      <term><option>--jobs=<replaceable class="parameter">njobs</replaceable></option></term>
+      <listitem>
+       <para>
+        Run the dump in parallel by dumping <replaceable class="parameter">njobs</replaceable>
+        tables simultaneously. This option reduces the time of the dump but it also
+        increases the load on the database server. You can only use this option with the
+        directory output format because this is the only output format where multiple processes
+        can write their data at the same time.
+       </para>
+       <para>
+        <application>pg_dump</application> will open <replaceable class="parameter">njobs</replaceable>
+        + 1 connections to the database, so make sure your <xref linkend="guc-max-connections"/>
+        setting is high enough to accommodate all connections.
+       </para>
+       <para>
+        Requesting exclusive locks on database objects while running a parallel dump could
+        cause the dump to fail. The reason is that the <application>pg_dump</application> master process
+        requests shared locks on the objects that the worker processes are going to dump later
+        in order to
+        make sure that nobody deletes them and makes them go away while the dump is running.
+        If another client then requests an exclusive lock on a table, that lock will not be
+        granted but will be queued waiting for the shared lock of the master process to be
+        released.. Consequently any other access to the table will not be granted either and
+        will queue after the exclusive lock request. This includes the worker process trying
+        to dump the table. Without any precautions this would be a classic deadlock situation.
+        To detect this conflict, the <application>pg_dump</application> worker process requests another
+        shared lock using the <literal>NOWAIT</literal> option. If the worker process is not granted
+        this shared lock, somebody else must have requested an exclusive lock in the meantime
+        and there is no way to continue with the dump, so <application>pg_dump</application> has no choice
+        but to abort the dump.
+       </para>
+       <para>
+        For a consistent backup, the database server needs to support synchronized snapshots,
+        a feature that was introduced in <productname>PostgreSQL</productname> 9.2. With this
+        feature, database clients can ensure they see the same dataset even though they use
+        different connections. <command>pg_dump -j</command> uses multiple database 
+        connections; it connects to the database once with the master process and
+        once again for each worker job. Without the sychronized snapshot feature, the
+        different worker jobs wouldn't be guaranteed to see the same data in each connection,
+        which could lead to an inconsistent backup.
+       </para>
+       <para>
+        If you want to run a parallel dump of a pre-9.2 server, you need to make sure that the
+        database content doesn't change from between the time the master connects to the
+        database until the last worker job has connected to the database. The easiest way to
+        do this is to halt any data modifying processes (DDL and DML) accessing the database
+        before starting the backup. You also need to specify the
+        <option>--no-synchronized-snapshots</option> parameter when running
+        <command>pg_dump -j</command> against a pre-9.2 <productname>PostgreSQL</productname>
+        server.
        </para>
       </listitem>
      </varlistentry>
@@ -694,6 +757,17 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>--no-synchronized-snapshots</option></term>
+      <listitem>
+       <para>
+        This option allows running <command>pg_dump -j</command> against a pre-9.2
+        server, see the documentation of the <option>-j</option> parameter
+        for more details.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--no-tablespaces</option></term>
       <listitem>
        <para>
@@ -716,8 +790,10 @@
       <listitem>
        <para>
         Ne pas exporter le contenu des tables non journalisées (unlogged). Cette
-	option n'a aucun effet sur le fait que la définition (schéma) des tables
-	soit exportée ou non; seul l'export des données de la table est supprimé.
+        option n'a aucun effet sur le fait que la définition (schéma) des tables
+        soit exportée ou non; seul l'export des données de la table est supprimé.
+        Les données des tables non journalisées sont toujours exclues lors d'une
+        sauvegarde à partir d'un serveur en standby.
        </para>
       </listitem>
      </varlistentry>
@@ -745,10 +821,10 @@
          </para>
          <para>
           La section data contient toutes les données des tables ainsi que la
-          définition des Large Objects. Les éléments post-data consistent en la
-          définition des index, triggers, règles et constraintes (autres que
-          les contraintes de vérification). Les éléments pre-data consistent en
-          tous les autres éléments de définition.
+          définition des Large Objects et les valeurs des séquences. Les éléments
+          post-data incluent la définition des index, triggers, règles et
+          constraintes (autres que les contraintes de vérification). Les éléments
+          pre-data incluent en tous les autres éléments de définition.
          </para>
        </listitem>
      </varlistentry>
@@ -823,6 +899,26 @@
     Les options de ligne de commande suivantes gèrent les paramètres de connexion&nbsp;:
 
     <variablelist>
+     <varlistentry>
+      <term><option>-d <replaceable class="parameter">dbname</replaceable></option></term>
+      <term><option>--dbname=<replaceable class="parameter">dbname</replaceable></option></term>
+      <listitem>
+      <para>
+       Specifies the name of the database to connect to. This is
+       equivalent to specifying <replaceable
+       class="parameter">dbname</replaceable> as the first non-option
+       argument on the command line.
+      </para>
+      <para>
+       If this parameter contains an <symbol>=</symbol> sign or starts
+       with a valid <acronym>URI</acronym> prefix
+       (<literal>postgresql://</literal>
+       or <literal>postgres://</literal>), it is treated as a
+       <parameter>conninfo</parameter> string. See <xref linkend="libpq-connect"/> for more information.
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry>
       <term><option>-h <replaceable	class="parameter">hôte</replaceable></option></term>
       <term><option>--host <replaceable	class="parameter">hôte</replaceable></option></term>
@@ -1066,6 +1162,15 @@
    Sauvegarder une base dans un fichier au format personnalisé&nbsp;:
 
 <screen><prompt>$</prompt> <userinput>pg_dump -Fc ma_base &gt; base.dump</userinput>
+</screen>
+  </para>
+
+  <para>
+   To dump a database into a directory-format archive in parallel with
+   5 worker jobs:
+
+<screen>
+<prompt>$</prompt> <userinput>pg_dump -Fd mydb -j 5 -f dumpdir</userinput>
 </screen>
   </para>
 

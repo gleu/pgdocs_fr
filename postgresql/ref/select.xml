@@ -46,15 +46,15 @@ SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replac
     [ LIMIT { <replaceable class="parameter">nombre</replaceable> | ALL } ]
     [ OFFSET <replaceable class="parameter">début</replaceable> ] [ ROW | ROWS ] ]
     [ FETCH { FIRST | NEXT } [ <replaceable class="parameter">total</replaceable> ] { ROW | ROWS } ONLY ]
-    [ FOR { UPDATE | SHARE } [ OF <replaceable class="parameter">nom_table</replaceable> [, ...] ] [ NOWAIT ] [...] ]
+    [ FOR { UPDATE | NO KEY UPDATE | SHARE | KEY SHARE } [ OF <replaceable class="parameter">nom_table</replaceable> [, ...] ] [ NOWAIT ] [...] ]
 
 <phrase>avec <replaceable class="parameter">éléments_from</replaceable> qui peut être&nbsp;:</phrase>
 
     [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ] [ [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">alias_colonne</replaceable> [, ...] ) ] ]
-    ( <replaceable class="parameter">select</replaceable> ) [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">alias_colonne</replaceable> [, ...] ) ]
+    [ LATERAL ] ( <replaceable class="parameter">select</replaceable> ) [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">column_alias</replaceable> [, ...] ) ]
     <replaceable class="parameter">nom_requête_with</replaceable> [ [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">alias_colonne</replaceable> [, ...] ) ] ]
-    <replaceable class="parameter">nom_fonction</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">alias_colonne</replaceable> [, ...] | <replaceable class="parameter">définition_colonne</replaceable> [, ...] ) ]
-    <replaceable class="parameter">nom_fonction</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) AS ( <replaceable class="parameter">définition_colonne</replaceable> [, ...] )
+    [ LATERAL ] <replaceable class="parameter">function_name</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">column_alias</replaceable> [, ...] | <replaceable class="parameter">column_definition</replaceable> [, ...] ) ]
+    [ LATERAL ] <replaceable class="parameter">function_name</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) AS ( <replaceable class="parameter">column_definition</replaceable> [, ...] )
     <replaceable class="parameter">éléments_from</replaceable> [ NATURAL ] <replaceable class="parameter">type_jointure</replaceable> <replaceable class="parameter">éléments_from</replaceable> [ ON <replaceable class="parameter">condition_jointure</replaceable> | USING ( <replaceable class="parameter">colonne_jointure</replaceable> [, ...] ) ]
 
 <phrase>et <replaceable class="parameter">requête_with</replaceable> est&nbsp;:</phrase>
@@ -182,8 +182,9 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
 
     <listitem>
      <para>
-      Si la clause <literal>FOR UPDATE</literal> ou <literal>FOR
-      SHARE</literal> est spécifiée, l'instruction <command>SELECT</command>
+      Si la clause <literal>FOR UPDATE</literal>, <literal>FOR NO KEY UPDATE</literal>,
+      <literal>FOR SHARE</literal> ou <literal>FOR KEY SHARE</literal> est spécifiée,
+      l'instruction <command>SELECT</command>
       verrouille les lignes sélectionnées contre les mises à jour concurrentes.
       (Voir <xref linkend="sql-for-update-share"
      /> ci-dessous.)
@@ -195,8 +196,9 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
   <para>
    Le droit <literal>SELECT</literal> sur chaque colonne utilisée dans une
    commande <command>SELECT</command> est nécessaire pour lire
-   ses valeurs. L'utilisation de <literal>FOR UPDATE</literal> ou de
-   <literal>FOR SHARE</literal> requiert en plus le droit 
+   ses valeurs. L'utilisation de <literal>FOR NO KEY UPDATE</literal>,
+   <literal>FOR UPDATE</literal>, <literal>FOR SHARE</literal> ou
+   <literal>FOR KEY SHARE</literal> requiert en plus le droit 
    <literal>UPDATE</literal> (pour au moins une colonne de chaque table
    sélectionnée).
   </para>
@@ -287,7 +289,8 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
     La clause <literal>FROM</literal> spécifie une ou plusieurs tables source
     pour le <command>SELECT</command>. Si plusieurs sources sont spécifiées, le
     résultat est un produit cartésien (jointure croisée) de toutes les sources.
-    Mais habituellement, des conditions de qualification sont ajoutées pour
+    Mais habituellement, des conditions de qualification (via
+    <literal>WHERE</literal>) sont ajoutées pour
     restreindre les lignes renvoyées à un petit sous-ensemble du produit
     cartésien.
    </para>
@@ -301,10 +304,12 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
       <term><replaceable class="parameter">nom_table</replaceable></term>
       <listitem>
        <para>
-        Le nom (éventuellement qualifié par le nom du schéma) d'une table existante
-	ou d'une vue. Si <literal>ONLY</literal> est spécifié, seule cette table est
-	parcourue. Dans le cas contraire, la table et toutes ses
-	descendantes (s'il y en a) sont parcourues.
+        Le nom (éventuellement qualifié par le nom du schéma) d'une table ou
+        vue existante. Si <literal>ONLY</literal> est spécifié avant le nom de
+        la table, seule cette table est parcourue. Dans le cas contraire, la
+        table et toutes ses tables filles (s'il y en a) sont parcourues. En
+        option, <literal>*</literal> peut être ajouté après le nom de la table
+        pour indiquer explicitement que les tables filles sont inclues.
        </para>
       </listitem>
      </varlistentry>
@@ -422,7 +427,9 @@ pour considérer un appel de fonction comme un sous-select. SAS -->
 
        <para>
         Une clause <literal>JOIN</literal> combine deux éléments
-        <literal>FROM</literal>. Les parenthèses peuvent être utilisées pour
+        <literal>FROM</literal>, which for convenience we will refer to as
+        <quote>tables</quote>, though in reality they can be any type of
+        <literal>FROM</literal> item. Les parenthèses peuvent être utilisées pour
 	déterminer l'ordre d'imbrication. En l'absence de parenthèses,
 	les <literal>JOIN</literal> sont imbriqués de gauche à droite. Dans
 	tous les cas, <literal>JOIN</literal> est plus prioritaire que les
@@ -432,7 +439,7 @@ pour considérer un appel de fonction comme un sous-select. SAS -->
        <para>
         <literal>CROSS JOIN</literal> et <literal>INNER JOIN</literal> produisent un
 	simple produit cartésien. Le résultat est identique à celui obtenu 
-	lorsque les deux éléments sont listés au premier niveau du <literal>FROM</literal>, mais
+	lorsque les deux tables sont listés au premier niveau du <literal>FROM</literal>, mais
 	restreint par la condition de jointure (si elle existe). <literal>CROSS
 	JOIN</literal> est équivalent à <literal>INNER JOIN ON (TRUE)</literal>, c'est-à-dire
 	qu'aucune ligne n'est supprimée par qualification. Ces types de
@@ -458,7 +465,7 @@ pour considérer un appel de fonction comme un sous-select. SAS -->
 	jointes plus une ligne pour chaque ligne de droite sans correspondance
 	(complétée par des NULL pour le côté gauche). C'est une simple aide à
 	la notation car il est aisément convertible en <literal>LEFT</literal> en
-	inversant les entrées gauche et droite.
+	inversant les tables gauche et droite.
        </para>
 
        <para>
@@ -504,6 +511,57 @@ pour considérer un appel de fonction comme un sous-select. SAS -->
         <literal>NATURAL</literal> est un raccourci pour une liste
         <literal>USING</literal> qui mentionne toutes les colonnes de même nom dans les deux 
         tables.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>LATERAL</literal></term>
+      <listitem>
+       <para>
+        The <literal>LATERAL</literal> key word can precede a
+        sub-<command>SELECT</command> <literal>FROM</literal> item.  This allows the
+        sub-<command>SELECT</command> to refer to columns of <literal>FROM</literal>
+        items that appear before it in the <literal>FROM</literal> list.  (Without
+        <literal>LATERAL</literal>, each sub-<command>SELECT</command> is
+        evaluated independently and so cannot cross-reference any other
+        <literal>FROM</literal> item.)
+       </para>
+
+       <para>
+        <literal>LATERAL</literal> can also precede a function-call
+        <literal>FROM</literal> item, but in this case it is a noise word, because
+        the function expression can refer to earlier <literal>FROM</literal> items
+        in any case.
+       </para>
+
+       <para>
+        A <literal>LATERAL</literal> item can appear at top level in the
+        <literal>FROM</literal> list, or within a <literal>JOIN</literal> tree.  In the
+        latter case it can also refer to any items that are on the left-hand
+        side of a <literal>JOIN</literal> that it is on the right-hand side of.
+       </para>
+
+       <para>
+        When a <literal>FROM</literal> item contains <literal>LATERAL</literal>
+        cross-references, evaluation proceeds as follows: for each row of the
+        <literal>FROM</literal> item providing the cross-referenced column(s), or
+        set of rows of multiple <literal>FROM</literal> items providing the
+        columns, the <literal>LATERAL</literal> item is evaluated using that
+        row or row set's values of the columns.  The resulting row(s) are
+        joined as usual with the rows they were computed from.  This is
+        repeated for each row or set of rows from the column source table(s).
+       </para>
+
+       <para>
+        The column source table(s) must be <literal>INNER</literal> or
+        <literal>LEFT</literal> joined to the <literal>LATERAL</literal> item, else
+        there would not be a well-defined set of rows from which to compute
+        each set of rows for the <literal>LATERAL</literal> item.  Thus,
+        although a construct such as <literal><replaceable>X</replaceable> RIGHT JOIN
+        LATERAL <replaceable>Y</replaceable></literal> is syntactically valid, it is
+        not actually allowed for <replaceable>Y</replaceable> to reference
+        <replaceable>X</replaceable>.
        </para>
       </listitem>
      </varlistentry>
@@ -876,7 +934,8 @@ SELECT DISTINCT ON (lieu) lieu, heure, rapport
    </para>
     
    <para>
-    Actuellement, <literal>FOR UPDATE</literal> et <literal>FOR SHARE</literal> ne peuvent
+    Actuellement, <literal>FOR NO KEY UPDATE</literal>, <literal>FOR UPDATE</literal>,
+    <literal>FOR SHARE</literal> et <literal>FOR KEY SHARE</literal> ne peuvent
     pas être spécifiés pour un résultat d'<literal>UNION</literal> ou pour toute entrée
     d'un <literal>UNION</literal>.
    </para>
@@ -891,7 +950,8 @@ SELECT DISTINCT ON (lieu) lieu, heure, rapport
 </synopsis>
     <replaceable class="parameter">instruction_select</replaceable> est une
     instruction <command>SELECT</command> sans clause <literal>ORDER BY</literal>,
-    <literal>LIMIT</literal>, <literal>FOR UPDATE</literal> ou <literal>FOR SHARE</literal>.
+    <literal>LIMIT</literal>, <literal>FOR NO KEY UPDATE</literal>, <literal>FOR UPDATE</literal>,
+    <literal>FOR SHARE</literal> ou <literal>FOR KEY SHARE</literal>.
    </para>
 
    <para>
@@ -923,7 +983,8 @@ SELECT DISTINCT ON (lieu) lieu, heure, rapport
    </para>
 
    <para>
-    Actuellement, <literal>FOR UPDATE</literal> et <literal>FOR SHARE</literal> ne peuvent 
+    Actuellement, <literal>FOR NO KEY UPDATE</literal>, <literal>FOR UPDATE</literal>,
+    <literal>FOR SHARE</literal> et <literal>FOR KEY SHARE</literal> ne peuvent 
     pas être spécifiés pour un résultat d'<literal>INTERSECT</literal> ou pour une
     entrée d'<literal>INTERSECT</literal>.
    </para>
@@ -938,8 +999,9 @@ SELECT DISTINCT ON (lieu) lieu, heure, rapport
 </synopsis>
     <replaceable class="parameter">instruction_select</replaceable> est une
     instruction <command>SELECT</command> sans clause <literal>ORDER
-    BY</literal>, <literal>LIMIT</literal>, <literal>FOR UPDATE</literal> ou
-    <literal>FOR SHARE</literal>.
+    BY</literal>, <literal>LIMIT</literal>, <literal>FOR NO KEY UPDATE</literal>,
+    <literal>FOR UPDATE</literal>, <literal>FOR SHARE</literal> ou
+    <literal>FOR KEY SHARE</literal>.
    </para>
 
    <para>
@@ -968,7 +1030,8 @@ SELECT DISTINCT ON (lieu) lieu, heure, rapport
    </para>
 
    <para>
-    Actuellement, <literal>FOR UPDATE</literal> et <literal>FOR SHARE</literal> ne peuvent 
+    Actuellement, <literal>FOR NO KEY UPDATE</literal>, <literal>FOR UPDATE</literal>,
+    <literal>FOR SHARE</literal> et <literal>FOR KEY SHARE</literal> ne peuvent 
     pas être spécifiés dans un résultat <literal>EXCEPT</literal> ou pour une entrée
     d'un <literal>EXCEPT</literal>.
    </para>
@@ -1151,18 +1214,30 @@ FETCH { FIRST | NEXT } [ <replaceable class="parameter">compte</replaceable> ] {
   </refsect2>
 
   <refsect2 id="sql-for-update-share">
-   <title id="sql-for-update-share-title">Clause <literal>FOR UPDATE</literal>/<literal>FOR SHARE</literal></title>
+   <title id="sql-for-update-share-title">The Locking Clause</title>
 
    <para>
-    La clause <literal>FOR UPDATE</literal> a la forme&nbsp;:
-<synopsis>FOR UPDATE [ OF <replaceable class="parameter">nom_table</replaceable> [, ...] ] [ NOWAIT ]
-</synopsis>
+    <literal>FOR UPDATE</literal>, <literal>FOR NO KEY UPDATE</literal>, <literal>FOR SHARE</literal>
+    and <literal>FOR KEY SHARE</literal>
+    are <firstterm>locking clauses</firstterm>; they affect how <literal>SELECT</literal>
+    locks rows as they are obtained from the table.
    </para>
 
    <para>
-    La clause liée, <literal>FOR SHARE</literal>, a la forme&nbsp;:
-<synopsis>FOR SHARE [ OF <replaceable class="parameter">nom_table</replaceable> [, ...] ] [ NOWAIT ]
+    The locking clause has the general form
+
+<synopsis>
+FOR <replaceable>lock_strength</replaceable> [ OF <replaceable class="parameter">table_name</replaceable> [, ...] ] [ NOWAIT ]
 </synopsis>
+
+    where <replaceable>lock_strength</replaceable> can be one of
+
+ <synopsis>
+UPDATE
+NO KEY UPDATE
+SHARE
+KEY SHARE
+ </synopsis>
    </para>
 
 
@@ -1172,9 +1247,19 @@ FETCH { FIRST | NEXT } [ <replaceable class="parameter">compte</replaceable> ] {
     Cela les empêche d'être modifiées ou supprimées par les autres transactions
     jusqu'à la fin de la transaction en cours. Les autres
     transactions qui tentent des <command>UPDATE</command>,
-    <command>DELETE</command> ou <command>SELECT FOR UPDATE</command> sur ces
-    lignes sont bloquées jusqu'à la fin de la transaction courante. De
-    plus, si un <command>UPDATE</command>, <command>DELETE</command> ou
+    <command>DELETE</command> ou <command>SELECT FOR UPDATE</command>,
+    <command>SELECT FOR NO KEY UPDATE</command>,
+    <command>SELECT FOR SHARE</command> ou
+    <command>SELECT FOR KEY SHARE</command> sur ces
+    lignes sont bloquées jusqu'à la fin de la transaction courante.
+    The <literal>FOR UPDATE</literal> lock mode
+    is also acquired by any <command>DELETE</command> on a row, and also by an
+    <command>UPDATE</command> that modifies the values on certain columns.  Currently,
+    the set of columns considered for the <command>UPDATE</command> case are those that
+    have an unique index on them that can be used in a foreign key (so partial
+    indexes and expressional indexes are not considered), but this may change
+    in the future.
+    De plus, si un <command>UPDATE</command>, <command>DELETE</command> ou
     <command>SELECT FOR UPDATE</command> a
     déjà verrouillé une ligne ou un ensemble de lignes à partir d'une autre transaction,
     <command>SELECT FOR UPDATE</command> attend la fin de l'autre transaction puis verrouille et
@@ -1186,14 +1271,36 @@ FETCH { FIRST | NEXT } [ <replaceable class="parameter">compte</replaceable> ] {
    </para>
 
    <para>
+    <literal>FOR NO KEY UPDATE</literal> behaves similarly, except that the lock
+    acquired is weaker: this lock will not block
+    <literal>SELECT FOR KEY SHARE</literal> commands that attempt to acquire
+    a lock on the same rows. This lock mode is also acquired by any
+    <command>UPDATE</command> that does not acquire a <literal>FOR UPDATE</literal> lock.
+   </para>
+
+   <para>
     <literal>FOR SHARE</literal> a un comportement similaire. La différence
     se situe dans le type de verrou acquis. Contrairement à 
     <literal>FOR UPDATE</literal> qui pose un verrou exclusif,
     <literal>FOR SHARE</literal> pose un verrou partagé sur chaque ligne récupérée.
-    Un verrou partagée bloque les instructions <command>UPDATE</command>,
-    <command>DELETE</command> ou <command>SELECT FOR UPDATE</command>
-    des transaction concurrentes accédant à ces lignes, mais il n'interdit
-    pas les <command>SELECT FOR SHARE</command>.
+    Un verrou partagée bloque les instructions
+    <command>UPDATE</command>, <command>DELETE</command>, <command>SELECT
+    FOR UPDATE</command> or <command>SELECT FOR NO KEY UPDATE</command>
+    on these rows, but it does not prevent them
+    from performing <command>SELECT FOR SHARE</command> or
+    <command>SELECT FOR KEY SHARE</command>.
+   </para>
+
+   <para>
+    <literal>FOR KEY SHARE</literal> behaves similarly to <literal>FOR SHARE</literal>,
+    except that the lock
+    is weaker: <literal>SELECT FOR UPDATE</literal> is blocked, but
+    not <literal>SELECT FOR NO KEY UPDATE</literal>.  A key-shared
+    lock blocks other transactions from performing <command>DELETE</command>
+    or any <command>UPDATE</command> that changes the key values, but not
+    other <command>UPDATE</command>, and neither does it prevent
+    <command>SELECT FOR NO KEY UPDATE</command>, <command>SELECT FOR SHARE</command>, or
+    <command>SELECT FOR KEY SHARE</command>.
    </para>
 
    <para>
@@ -1210,61 +1317,54 @@ FETCH { FIRST | NEXT } [ <replaceable class="parameter">compte</replaceable> ] {
    </para>
 
    <para>
-    Si des tables particulières sont nommées dans les clauses <literal>FOR UPDATE</literal>
-    et <literal>FOR SHARE</literal>, alors seules les lignes provenant de ces
-    tables sont verrouillées&nbsp;; toute autre table utilisée dans le
-    <command>SELECT</command> est simplement lue. Une clause
-    <literal>FOR UPDATE</literal> ou <literal>FOR SHARE</literal> sans liste de
-    tables affecte toute les tables utilisées dans l'instruction. Si
-    <literal>FOR UPDATE</literal> ou <literal>FOR SHARE</literal> est appliquée
-    à une vue ou à une sous-requête, cela affecte toutes les tables utilisées
-    dans la vue ou la sous-requête.
-    Néanmoins, <literal>FOR UPDATE</literal>/<literal>FOR SHARE</literal>
-    ne s'appliquent pas aux requêtes <literal>WITH</literal> référencées par la
-    clé primaire. Si vous voulez qu'un verrouillage de lignes intervienne dans
-    une requête <literal>WITH</literal>, spécifiez <literal>FOR UPDATE</literal>
-    ou <literal>FOR SHARE</literal> à l'intérieur de la requête
-    <literal>WITH</literal>.
+    Si des tables particulières sont nommées dans une clause de verrouillage,
+    alors seules les lignes provenant de ces tables sont verrouillées&nbsp;;
+    toute autre table utilisée dans le <command>SELECT</command> est simplement
+    lue. Une clause de verrouillage sans liste de tables affecte toute les
+    tables utilisées dans l'instruction. Si une clause de verrouillage est
+    appliquée à une vue ou à une sous-requête, cela affecte toutes les tables
+    utilisées dans la vue ou la sous-requête. Néanmoins, ces clauses do not
+    apply to <literal>WITH</literal> queries referenced by the clé primaire.
+    Si vous voulez qu'un verrouillage de lignes intervienne dans une requête
+    <literal>WITH</literal>, spécifiez une clause de verrouillage à l'intérieur
+    de la requête <literal>WITH</literal>.
    </para>
 
    <para>
-    Plusieurs clauses <literal>FOR UPDATE</literal> et <literal>FOR SHARE</literal>
-    peuvent être données si il est nécessaire de spécifier différents
-    comportements de verrouillage pour différentes tables. Si la même table
-    est mentionné (ou affectée implicitement) par les clauses
-    <literal>FOR UPDATE</literal> et <literal>FOR SHARE</literal>, alors elle
-    est traitée comme un simple <literal>FOR UPDATE</literal>. De façon similaire,
-    une table est traitée avec <literal>NOWAIT</literal> si c'est spécifiée sur
-    au moins une des clauses qui l'affectent.
+    Plusieurs clauses de verrouillage peuvent être données si il est nécessaire
+    de spécifier différents comportements de verrouillage pour différentes
+    tables. Si la même table est mentionné (ou affectée implicitement) par plus
+    d'une clause de verrouillage, alors elle est traitée comme la clause la plus
+    forte. De façon similaire, une table est traitée avec <literal>NOWAIT</literal>
+    si c'est spécifiée sur au moins une des clauses qui l'affectent.
    </para>
 
    <para>
-    <literal>FOR UPDATE</literal> et <literal>FOR SHARE</literal> nécessitent
+    Les clauses de verrouillage nécessitent
     que chaque ligne retournée soit clairement identifiable par une ligne
     individuelle d'une table&nbsp;; ces options ne peuvent, par exemple, pas être
     utilisées avec des fonctions d'agrégats.
    </para>
 
    <para>
-    Quand <literal>FOR UPDATE</literal> ou <literal>FOR SHARE</literal>
+    Quand une clause de verrouillage
     apparaissent au niveau le plus élevé d'une requête <command>SELECT</command>, les lignes
     verrouillées sont exactement celles qui sont renvoyées par la requête&nbsp;; dans le 
     cas d'une requête avec jointure, les lignes verrouillées sont celles qui contribuent
-    aux lignes jointes renvoyées. De plus, les lignes qui 
+    aux lignes jointes renvoyées.
     De plus, les lignes qui ont satisfait aux conditions de la requête au moment de la prise de son instantané
     sont verrouillées, bien qu'elles ne seront pas retournées si elles ont été modifiées après la prise du
     snapshot et ne satisfont plus les conditions de la requête.  Si <literal>LIMIT</literal> 
     est utilisé, le verrouillage cesse une fois que suffisamment de lignes ont été renvoyées 
     pour satisfaire la limite (mais notez que les lignes ignorées à cause de la clause
      <literal>OFFSET</literal> seront verrouillées).  De la même manière,
-    si <literal>FOR UPDATE</literal> ou <literal>FOR SHARE</literal>
+    si une clause de verrouillage
     est utilisé pour la requête d'un curseur, seules les lignes réellement récupérées ou parcourues par le curseur 
     seront verrouillées.
    </para>
 
    <para>
-    Si <literal>FOR UPDATE</literal> ou <literal>FOR SHARE</literal>
-    apparaissent dans un sous-<command>SELECT</command>, les lignes verrouillées sont celles
+    Si une clause de verrouillage apparait dans un sous-<command>SELECT</command>, les lignes verrouillées sont celles
     renvoyées par la sous-requête à la requête externe. Cela peut concerner
     moins de lignes que l'étude de la sous-requête seule pourrait faire penser,
     parce que les conditions de la requête externe peuvent être utilisées 
@@ -1276,11 +1376,9 @@ SELECT * FROM (SELECT * FROM mytable FOR UPDATE) ss WHERE col1 = 5;
     même si cette condition n'est pas écrite dans la sous-requête.
    </para>
 
-  <caution>
-   <para>
-    Évitez de verrouiller une ligne puis de la modifier après un nouveau point
-    de sauvegarde ou après un bloc d'exception <application>PL/pgSQL</application>.
-    L'annulation suivante pourrait causer la perte du verrou. Par exemple&nbsp;:
+  <para>
+   Previous releases failed to preserve a lock which is upgraded by a later
+   savepoint.  For example, this code:
 <programlisting>
 BEGIN;
 SELECT * FROM ma_table WHERE cle = 1 FOR UPDATE;
@@ -1288,23 +1386,15 @@ SAVEPOINT s;
 UPDATE ma_table SET ... WHERE cle = 1;
 ROLLBACK TO s;
 </programlisting>
-    Après le <command>ROLLBACK</command>, la ligne est réellement déverrouillée
-    au lieu de retourner à son état avant le point de sauvegarde. Ceci peut
-    arriver si une ligne verrouillée dans la transaction en cours est mise à
-    jour ou supprimée, ou si un verrou partagé est passé en verrou exclusif&nbsp;:
-    dans tous ces cas, l'état précédent du verrou est oublié. Si la transaction
-    est ensuite annulée à un état entre la commande de verrou initiale et la
-    modification qui a suivi, la ligne n'apparaîtra plus verrouillée. Ceci est
-    une déficience de l'implémentation qui sera corrigée dans une prochaine
-    version de <productname>PostgreSQL</productname>.
-   </para>
-  </caution>
+   would fail to preserve the <literal>FOR UPDATE</literal> lock after the
+   <command>ROLLBACK TO</command>.  This has been fixed in release 9.3.
+  </para>
 
   <caution>
    <para>
     Il est possible qu'une commande <command>SELECT</command> exécutée
     au niveau d'isolation <literal>READ COMMITTED</literal> et utilisant
-    <literal>ORDER BY</literal> et <literal>FOR UPDATE/SHARE</literal>
+    <literal>ORDER BY</literal> et une clause de verrouillage
     renvoie les lignes dans le
     désordre. C'est possible car l' <literal>ORDER BY</literal> est appliqué en premier.
     La commande trie le résultat, mais peut alors être bloquée le temps d'obtenir un verrou
@@ -1542,6 +1632,26 @@ SELECT distance, nom_employe FROM recursion_employes;
    requête bouclera indéfiniment (Voir <xref linkend="queries-with"/> pour
    plus d'exemples).
   </para>
+
+  <para>
+   This example uses <literal>LATERAL</literal> to apply a set-returning function
+   <function>get_product_names()</function> for each row of the
+   <structname>manufacturers</structname> table:
+
+<programlisting>
+SELECT m.name AS mname, pname
+FROM manufacturers m, LATERAL get_product_names(m.id) pname;
+</programlisting>
+
+    Manufacturers not currently having any products would not appear in the
+    result, since it is an inner join.  If we wished to include the names of
+    such manufacturers in the result, we could do:
+
+<programlisting>
+SELECT m.name AS mname, pname
+FROM manufacturers m LEFT JOIN LATERAL get_product_names(m.id) pname ON true;
+</programlisting>
+  </para>
  </refsect1>
  
  <refsect1>
@@ -1608,14 +1718,45 @@ SELECT distance, nom_employe FROM recursion_employes;
   </refsect2>
 
   <refsect2>
-   <title><literal>ONLY</literal> et les parenthèses</title>
+   <title><literal>ONLY</literal> et l'héritage</title>
 
    <para>
-    Le standard SQL impose des parenthèses autour du nom de table après
-    <literal>ONLY</literal>, comme dans <literal>SELECT * FROM ONLY
-    (tab1), ONLY (tab2) WHERE ...</literal>. PostgreSQL supporte ceci aussi, mais
-    les parenthèses sont optionnelles (ce point s'applique également à toutes
-    les commandes SQL supportant l'option <literal>ONLY</literal>).
+    Le standard SQL impose des parenthèses autour du nom de table après la
+    clause <literal>ONLY</literal>, comme dans <literal>SELECT * FROM ONLY
+    (tab1), ONLY (tab2) WHERE ...</literal>.
+    <productname>PostgreSQL</productname> considère les parenthèses comme étant
+    optionnelles.
+   </para>
+
+   <para>
+    <productname>PostgreSQL</productname> autorise une <literal>*</literal> en
+    fin pour indiquer explicitement le comportement opposé de la clause
+    <literal>ONLY</literal> (donc inclure les tables filles). Le standard ne le
+    permet pas.
+   </para>
+
+   <para>
+    (Ces points s'appliquent de la même façon à toutes les commandes SQL
+    supportant l'option <literal>ONLY</literal>.)
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title>Function Calls in <literal>FROM</literal></title>
+
+   <para>
+    <productname>PostgreSQL</productname> allows a function call to be
+    written directly as a member of the <literal>FROM</literal> list.  In the SQL
+    standard it would be necessary to wrap such a function call in a
+    sub-<command>SELECT</command>; that is, the syntax
+    <literal>FROM <replaceable>func</replaceable>(...) <replaceable>alias</replaceable></literal>
+    is approximately equivalent to
+    <literal>FROM LATERAL (SELECT <replaceable>func</replaceable>(...)) <replaceable>alias</replaceable></literal>.
+    Note that <literal>LATERAL</literal> is considered to be implicit; this is
+    because the standard requires <literal>LATERAL</literal> semantics for an
+    <literal>UNNEST()</literal> item in <literal>FROM</literal>.
+    <productname>PostgreSQL</productname> treats <literal>UNNEST()</literal> the
+    same as other set-returning functions.
    </para>
   </refsect2>
 
@@ -1686,14 +1827,16 @@ SELECT distance, nom_employe FROM recursion_employes;
   </refsect2>
 
   <refsect2>
-   <title><literal>FOR UPDATE</literal> and <literal>FOR SHARE</literal></title>
+   <title><literal>FOR NO KEY UPDATE</literal>, <literal>FOR UPDATE</literal>, <literal>FOR SHARE</literal>, <literal>FOR KEY SHARE</literal></title>
 
    <para>
     Bien que <literal>FOR UPDATE</literal> soit présent dans le standard SQL, le standard 
     ne l'autorise que comme une option de <command>DECLARE CURSOR</command>.
     <productname>PostgreSQL</productname> l'autorise dans toute requête <command>SELECT</command>
     et dans toute sous-requête <command>SELECT</command>, mais c'est une extension.
-    Ni la variante <literal>FOR SHARE</literal>, ni l'option <literal>NOWAIT</literal> n'apparaissent
+    The <literal>FOR NO KEY UPDATE</literal>, <literal>FOR SHARE</literal> and
+    <literal>FOR KEY SHARE</literal> variants,
+    as well as the <literal>NOWAIT</literal> option n'apparaissent
     dans le standard.
    </para>
   </refsect2>
