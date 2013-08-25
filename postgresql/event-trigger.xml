@@ -39,16 +39,21 @@
    <para>
      L'évènement <literal>ddl_command_start</literal> se déclenche juste avant
      l'exécution d'une commande <literal>CREATE</literal>, <literal>ALTER</literal>,
-     ou <literal>DROP</literal>. Attention, cet évènement ne se déclenche pas
+     ou <literal>DROP</literal>. Aucune vérification n'est effectuée sur
+     l'existence ou non de l'objet avant de déclencher le trigger sur événement.
+     Attention, cet évènement ne se déclenche pas
      pour les commandes DDL visant les objets partagés &mdash; bases de données, rôles,
      et tablespaces &mdash; ou pour les commandes visant les triggers sur évènement
      eux-même. Le mécanisme de trigger sur évènement ne supporte pas ces types
      d'objets.
      <literal>ddl_command_start</literal> se déclenche également juste avant
      l'exécution d'une commande <literal>SELECT INTO</literal>, celle-ci étant
-     l'équivalent de <literal>CREATE TABLE AS</literal>. L'évènement
-     <literal>ddl_command_end</literal> se déclenche juste après l'exécution
-     de ces même ensembles de commandes.
+     l'équivalent de <literal>CREATE TABLE AS</literal>.
+   </para>
+
+   <para>
+    L'évènement <literal>ddl_command_end</literal> se déclenche juste après
+     l'exécution de ces même ensembles de commandes.
    </para>
 
    <para>
@@ -56,7 +61,7 @@
     sur évènement <literal>ddl_command_end</literal> pour toute opération qui
     supprime des objets de la base. Pour lister les objets qui ont été supprimés,
     utilisez la fontion retournant des ensembles d'objets <literal>pg_event_trigger_dropped_objects()</literal>
-    depuis le code de votre trigger sur évènement <literal>sql_drop</literal>
+    depuis le code du trigger sur évènement <literal>sql_drop</literal>
     (voir <xref linkend="functions-event-triggers"/>). Notez que le trigger est
     exécuté après que les objets aient été supprimés du catalogue système, il
     n'est donc plus possible de les examiner.
@@ -82,6 +87,8 @@
    </para>
 
    <para>
+     Les triggers sur événement sont créés en utilisant la commande <xref
+     linkend="sql-createeventtrigger"/>.
      Afin de créer un trigger sur évènement, vous devez d'abord créer une
      fonction avec le type de retour spécial <literal>event_trigger</literal>.
      Cette fonction n'a pas besoin (et ne devrait pas) retourner de valeur&nbsp;; le
@@ -613,6 +620,214 @@
       </tbody>
      </tgroup>
    </table>
+  </sect1>
+
+  <sect1 id="event-trigger-interface">
+   <title>Écrire des fonctions trigger sur événement en C</title>
+
+   <indexterm zone="event-trigger-interface">
+    <primary>trigger sur événement</primary>
+    <secondary>en C</secondary>
+   </indexterm>
+
+   <para>
+    Cette section décrit les détails bas niveau de l'interface pour une fonction
+    trigger sur événement bas niveau. Ces informations sont seulement nécessaires
+    si vous écrivez des fonctions triggers sur événement en C. Si vous utilisez
+    un langage de plus haut niveau, ces détails sont gérés pour vous. Dans la
+    plupart des cas, vous devriez songer sérieusement à utiliser un langage
+    procédural avant d'écrire vos triggers sur événement en C. La documentation
+    de chaque langage procédurale explique comment écrire un trigger sur événement
+    dans ce langage.
+   </para>
+
+   <para>
+    Les fonctions de trigger sur événement doivent utiliser l'interface du
+    gestionnaire de fonctions <quote>version 1</quote>.
+   </para>
+
+   <para>
+    Quand une fonction est appelée par le gestionnaire de triggers sur événement,
+    elle ne reçoit aucun argument normal mais un pointeur <quote>context</quote>
+    lui est fourni. Il pointe vers une structure de type
+    <structname>EventTriggerData</structname>. Les fonctions C peuvent vérifier
+    si elles ont été appelées par le gestionnaire de triggers sur événement en
+    exécutant la macro&nbsp;:
+<programlisting>
+CALLED_AS_EVENT_TRIGGER(fcinfo)
+</programlisting>
+    qui vaut en fait&nbsp;:
+<programlisting>
+((fcinfo)-&gt;context != NULL &amp;&amp; IsA((fcinfo)-&gt;context, EventTriggerData))
+</programlisting>
+    Si cela renvoie la valeur true, alors il est possible de convertir
+    <literal>fcinfo-&gt;context</literal> vers le type <literal>EventTriggerData
+    *</literal> et d'utiliser la structure pointée
+    <structname>EventTriggerData</structname>. La fonction ne doit
+    <emphasis>pas</emphasis> modifier la structure
+    <structname>EventTriggerData</structname> ou toute donnée qu'elle fournit.
+   </para>
+
+   <para>
+    <structname>struct EventTriggerData</structname> est défini dans
+    <filename>commands/event_trigger.h</filename>&nbsp;:
+
+<programlisting>
+typedef struct EventTriggerData
+{
+    NodeTag     type;
+    const char *event;      /* event name */
+    Node       *parsetree;  /* parse tree */
+    const char *tag;        /* command tag */
+} EventTriggerData;
+</programlisting>
+
+    dont les membres sont définis ainsi&nbsp;:
+
+    <variablelist>
+     <varlistentry>
+      <term><structfield>type</structfield></term>
+      <listitem>
+       <para>
+        Always <literal>T_EventTriggerData</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>event</structfield></term>
+      <listitem>
+       <para>
+        Décrit l'événement pour lequel la fonction a été appelée. Ce sera soit
+        <literal>"ddl_command_start"</literal>, soit <literal>"ddl_command_end"</literal>,
+        soit <literal>"sql_drop"</literal>.
+        Voir <xref linkend="event-trigger-definition"/> pour la signification de
+        ces événements.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>parsetree</structfield></term>
+      <listitem>
+       <para>
+        Un pointeur vers l'arbre d'analyse de la commande. Vérifiez le code
+        source de PostgreSQL pour les détails. La structure de l'arbre d'analyse
+        est sujet à modification sans notification.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tag</structfield></term>
+      <listitem>
+       <para>
+        La balise de la commande associée avec l'événement pour lequel le trigger
+        sur événement est exécuté, par exemple <literal>"CREATE FUNCTION"</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+
+   <para>
+    Une fonction trigger sur événement doit renvoyer un pointeur
+    <symbol>NULL</symbol> (et <emphasis>pas</emphasis> une valeur SQL NULL,
+    autrement dit ne pas configurer <parameter>isNull</parameter> à true).
+   </para>
+  </sect1>
+
+  <sect1 id="event-trigger-example">
+   <title>Un exemple complet de trigger sur événement</title>
+
+   <para>
+    Voici un exemple très simple d'une fonction trigger sur événement écrite en
+    C. (Les exemples de triggers écrits en langage procédural peuvent être trouvés
+    dans la documentation de ces langages procédurals.)
+   </para>
+
+   <para>
+    La fonction <function>noddl</function> lève une exception à chaque fois
+    qu'elle est appelée. La définition du trigger événement associe la fonction
+    à l'événement <literal>ddl_command_start</literal>. L'effet est qu'aucune
+    commande DDL (à l'exception de celles mentionnées dans <xref
+    linkend="event-trigger-definition"/>) ne peut être exécutée.
+   </para>
+
+   <para>
+    Voici le code source de la fonction trigger&nbsp;:
+<programlisting><![CDATA[
+#include "postgres.h"
+#include "commands/event_trigger.h"
+
+
+PG_MODULE_MAGIC;
+
+Datum noddl(PG_FUNCTION_ARGS);
+
+PG_FUNCTION_INFO_V1(noddl);
+
+Datum
+noddl(PG_FUNCTION_ARGS)
+{
+    EventTriggerData *trigdata;
+
+    if (!CALLED_AS_EVENT_TRIGGER(fcinfo))  /* internal error */
+        elog(ERROR, "not fired by event trigger manager");
+
+    trigdata = (EventTriggerData *) fcinfo->context;
+
+    ereport(ERROR,
+        (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+                 errmsg("command \"%s\" denied", trigdata->tag)));
+
+    PG_RETURN_NULL();
+}
+]]></programlisting>
+   </para>
+
+   <para>
+    Après avoir compilé le code source (voir <xref linkend="dfunc"/>),
+    déclarez la fonction et les triggers&nbsp;:
+<programlisting>
+CREATE FUNCTION noddl() RETURNS event_trigger
+    AS 'noddl' LANGUAGE C;
+
+CREATE EVENT TRIGGER noddl ON ddl_command_start
+    EXECUTE PROCEDURE noddl();
+</programlisting>
+   </para>
+
+   <para>
+    Maintenant vous pouvez tester le bon fonctionnement du trigger&nbsp;:
+<screen>
+=# \dy
+                     List of event triggers
+ Name  |       Event       | Owner | Enabled | Procedure | Tags 
+-------+-------------------+-------+---------+-----------+------
+ noddl | ddl_command_start | dim   | enabled | noddl     | 
+(1 row)
+
+=# CREATE TABLE foo(id serial);
+ERROR:  command "CREATE TABLE" denied
+</screen>
+   </para>
+
+   <para>
+    Dans ce cas, pour pouvoir activier l'exécution de certaines commandes DDL,
+    vous pouvez soit supprimer le trigger sur événement soit le désactiver. Il
+    est généralement plus simple de désactiver le trigger pendant la durée de
+    la transaction&nbsp;:
+<programlisting>
+BEGIN;
+ALTER EVENT TRIGGER noddl DISABLE;
+CREATE TABLE foo (id serial);
+ALTER EVENT TRIGGER noddl ENABLE;
+COMMIT;
+</programlisting>
+    (Pour rappel, les commandes DDL sur les triggers sur événement ne sont pas
+    affectées par les triggers sur événement.)
+   </para>
   </sect1>
 
 </chapter>
