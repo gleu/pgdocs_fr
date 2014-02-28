@@ -1,5 +1,507 @@
-<!-- $PostgreSQL: pgsql/doc/src/sgml/release-9.0.sgml,v 2.39.2.14 2010-09-16 18:15:28 tgl Exp $ -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- doc/src/sgml/release-9.0.sgml -->
 <!-- See header comment in release.sgml about typical markup -->
+
+ <sect1 id="release-9-0-16">
+  <title>Release 9.0.16</title>
+
+  <note>
+  <title>Release Date</title>
+  <simpara>2014-02-20</simpara>
+  </note>
+
+  <para>
+   This release contains a variety of fixes from 9.0.15.
+   For information about new features in the 9.0 major release, see
+   <xref linkend="release-9-0"/>.
+  </para>
+
+  <sect2>
+   <title>Migration to Version 9.0.16</title>
+
+   <para>
+    A dump/restore is not required for those running 9.0.X.
+   </para>
+
+   <para>
+    However, if you are upgrading from a version earlier than 9.0.15,
+    see <xref linkend="release-9-0-15"/>.
+   </para>
+
+  </sect2>
+
+  <sect2>
+   <title>Changes</title>
+
+   <itemizedlist>
+
+    <listitem>
+     <para>
+      Shore up <literal>GRANT ... WITH ADMIN OPTION</literal> restrictions
+      (Noah Misch)
+     </para>
+
+     <para>
+      Granting a role without <literal>ADMIN OPTION</literal> is supposed to
+      prevent the grantee from adding or removing members from the granted
+      role, but this restriction was easily bypassed by doing <literal>SET
+      ROLE</literal> first.  The security impact is mostly that a role member can
+      revoke the access of others, contrary to the wishes of his grantor.
+      Unapproved role member additions are a lesser concern, since an
+      uncooperative role member could provide most of his rights to others
+      anyway by creating views or <literal>SECURITY DEFINER</literal> functions.
+      (CVE-2014-0060)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent privilege escalation via manual calls to PL validator
+      functions (Andres Freund)
+     </para>
+
+     <para>
+      The primary role of PL validator functions is to be called implicitly
+      during <command>CREATE FUNCTION</command>, but they are also normal SQL
+      functions that a user can call explicitly.  Calling a validator on
+      a function actually written in some other language was not checked
+      for and could be exploited for privilege-escalation purposes.
+      The fix involves adding a call to a privilege-checking function in
+      each validator function.  Non-core procedural languages will also
+      need to make this change to their own validator functions, if any.
+      (CVE-2014-0061)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Avoid multiple name lookups during table and index DDL
+      (Robert Haas, Andres Freund)
+     </para>
+
+     <para>
+      If the name lookups come to different conclusions due to concurrent
+      activity, we might perform some parts of the DDL on a different table
+      than other parts.  At least in the case of <command>CREATE INDEX</command>,
+      this can be used to cause the permissions checks to be performed
+      against a different table than the index creation, allowing for a
+      privilege escalation attack.
+      (CVE-2014-0062)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent buffer overrun with long datetime strings (Noah Misch)
+     </para>
+
+     <para>
+      The <literal>MAXDATELEN</literal> constant was too small for the longest
+      possible value of type <type>interval</type>, allowing a buffer overrun
+      in <function>interval_out()</function>.  Although the datetime input
+      functions were more careful about avoiding buffer overrun, the limit
+      was short enough to cause them to reject some valid inputs, such as
+      input containing a very long timezone name.  The <application>ecpg</application>
+      library contained these vulnerabilities along with some of its own.
+      (CVE-2014-0063)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent buffer overrun due to integer overflow in size calculations
+      (Noah Misch, Heikki Linnakangas)
+     </para>
+
+     <para>
+      Several functions, mostly type input functions, calculated an
+      allocation size without checking for overflow.  If overflow did
+      occur, a too-small buffer would be allocated and then written past.
+      (CVE-2014-0064)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent overruns of fixed-size buffers
+      (Peter Eisentraut, Jozef Mlich)
+     </para>
+
+     <para>
+      Use <function>strlcpy()</function> and related functions to provide a clear
+      guarantee that fixed-size buffers are not overrun.  Unlike the
+      preceding items, it is unclear whether these cases really represent
+      live issues, since in most cases there appear to be previous
+      constraints on the size of the input string.  Nonetheless it seems
+      prudent to silence all Coverity warnings of this type.
+      (CVE-2014-0065)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Avoid crashing if <function>crypt()</function> returns NULL (Honza Horak,
+      Bruce Momjian)
+     </para>
+
+     <para>
+      There are relatively few scenarios in which <function>crypt()</function>
+      could return NULL, but <filename>contrib/chkpass</filename> would crash
+      if it did.  One practical case in which this could be an issue is
+      if <application>libc</application> is configured to refuse to execute unapproved
+      hashing algorithms (e.g., <quote>FIPS mode</quote>).
+      (CVE-2014-0066)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Document risks of <literal>make check</literal> in the regression testing
+      instructions (Noah Misch, Tom Lane)
+     </para>
+
+     <para>
+      Since the temporary server started by <literal>make check</literal>
+      uses <quote>trust</quote> authentication, another user on the same machine
+      could connect to it as database superuser, and then potentially
+      exploit the privileges of the operating-system user who started the
+      tests.  A future release will probably incorporate changes in the
+      testing procedure to prevent this risk, but some public discussion is
+      needed first.  So for the moment, just warn people against using
+      <literal>make check</literal> when there are untrusted users on the
+      same machine.
+      (CVE-2014-0067)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible mis-replay of WAL records when some segments of a
+      relation aren't full size (Greg Stark, Tom Lane)
+     </para>
+
+     <para>
+      The WAL update could be applied to the wrong page, potentially many
+      pages past where it should have been.  Aside from corrupting data,
+      this error has been observed to result in significant <quote>bloat</quote>
+      of standby servers compared to their masters, due to updates being
+      applied far beyond where the end-of-file should have been.  This
+      failure mode does not appear to be a significant risk during crash
+      recovery, only when initially synchronizing a standby created from a
+      base backup taken from a quickly-changing master.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix bug in determining when recovery has reached consistency
+      (Tomonari Katsumata, Heikki Linnakangas)
+     </para>
+
+     <para>
+      In some cases WAL replay would mistakenly conclude that the database
+      was already consistent at the start of replay, thus possibly allowing
+      hot-standby queries before the database was really consistent.  Other
+      symptoms such as <quote>PANIC: WAL contains references to invalid
+      pages</quote> were also possible.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix improper locking of btree index pages while replaying
+      a <literal>VACUUM</literal> operation in hot-standby mode (Andres Freund,
+      Heikki Linnakangas, Tom Lane)
+     </para>
+
+     <para>
+      This error could result in <quote>PANIC: WAL contains references to
+      invalid pages</quote> failures.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ensure that insertions into non-leaf GIN index pages write a full-page
+      WAL record when appropriate (Heikki Linnakangas)
+     </para>
+
+     <para>
+      The previous coding risked index corruption in the event of a
+      partial-page write during a system crash.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix race conditions during server process exit (Robert Haas)
+     </para>
+
+     <para>
+      Ensure that signal handlers don't attempt to use the
+      process's <varname>MyProc</varname> pointer after it's no longer valid.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix unsafe references to <varname>errno</varname> within error reporting
+      logic (Christian Kruse)
+     </para>
+
+     <para>
+      This would typically lead to odd behaviors such as missing or
+      inappropriate <literal>HINT</literal> fields.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible crashes from using <function>ereport()</function> too early
+      during server startup (Tom Lane)
+     </para>
+
+     <para>
+      The principal case we've seen in the field is a crash if the server
+      is started in a directory it doesn't have permission to read.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Clear retry flags properly in OpenSSL socket write
+      function (Alexander Kukushkin)
+     </para>
+
+     <para>
+      This omission could result in a server lockup after unexpected loss
+      of an SSL-encrypted connection.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix length checking for Unicode identifiers (<literal>U&amp;"..."</literal>
+      syntax) containing escapes (Tom Lane)
+     </para>
+
+     <para>
+      A spurious truncation warning would be printed for such identifiers
+      if the escaped form of the identifier was too long, but the
+      identifier actually didn't need truncation after de-escaping.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Allow keywords that are type names to be used in lists of roles
+      (Stephen Frost)
+     </para>
+
+     <para>
+      A previous patch allowed such keywords to be used without quoting
+      in places such as role identifiers; but it missed cases where a
+      list of role identifiers was permitted, such as <literal>DROP ROLE</literal>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible crash due to invalid plan for nested sub-selects, such
+      as <literal>WHERE (... x IN (SELECT ...) ...) IN (SELECT ...)</literal>
+      (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ensure that <command>ANALYZE</command> creates statistics for a table column
+      even when all the values in it are <quote>too wide</quote> (Tom Lane)
+     </para>
+
+     <para>
+      <command>ANALYZE</command> intentionally omits very wide values from its
+      histogram and most-common-values calculations, but it neglected to do
+      something sane in the case that all the sampled entries are too wide.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In <literal>ALTER TABLE ... SET TABLESPACE</literal>, allow the database's
+      default tablespace to be used without a permissions check
+      (Stephen Frost)
+     </para>
+
+     <para>
+      <literal>CREATE TABLE</literal> has always allowed such usage,
+      but <literal>ALTER TABLE</literal> didn't get the memo.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <quote>cannot accept a set</quote> error when some arms of
+      a <literal>CASE</literal> return a set and others don't (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix checks for all-zero client addresses in pgstat functions (Kevin
+      Grittner)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible misclassification of multibyte characters by the text
+      search parser (Tom Lane)
+     </para>
+
+     <para>
+      Non-ASCII characters could be misclassified when using C locale with
+      a multibyte encoding.  On Cygwin, non-C locales could fail as well.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible misbehavior in <function>plainto_tsquery()</function>
+      (Heikki Linnakangas)
+     </para>
+
+     <para>
+      Use <function>memmove()</function> not <function>memcpy()</function> for copying
+      overlapping memory regions.  There have been no field reports of
+      this actually causing trouble, but it's certainly risky.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Accept <literal>SHIFT_JIS</literal> as an encoding name for locale checking
+      purposes (Tatsuo Ishii)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix misbehavior of <function>PQhost()</function> on Windows (Fujii Masao)
+     </para>
+
+     <para>
+      It should return <literal>localhost</literal> if no host has been specified.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Improve error handling in <application>libpq</application> and <application>psql</application>
+      for failures during <literal>COPY TO STDOUT/FROM STDIN</literal> (Tom Lane)
+     </para>
+
+     <para>
+      In particular this fixes an infinite loop that could occur in 9.2 and
+      up if the server connection was lost during <literal>COPY FROM
+      STDIN</literal>.  Variants of that scenario might be possible in older
+      versions, or with other client applications.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix misaligned descriptors in <application>ecpg</application> (MauMau)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In <application>ecpg</application>, handle lack of a hostname in the connection
+      parameters properly (Michael Meskes)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix performance regression in <filename>contrib/dblink</filename> connection
+      startup (Joe Conway)
+     </para>
+
+     <para>
+      Avoid an unnecessary round trip when client and server encodings match.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In <filename>contrib/isn</filename>, fix incorrect calculation of the check
+      digit for ISMN values (Fabien Coelho)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ensure client-code-only installation procedure works as documented
+      (Peter Eisentraut)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In Mingw and Cygwin builds, install the <application>libpq</application> DLL
+      in the <filename>bin</filename> directory (Andrew Dunstan)
+     </para>
+
+     <para>
+      This duplicates what the MSVC build has long done.  It should fix
+      problems with programs like <application>psql</application> failing to start
+      because they can't find the DLL.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Avoid using the deprecated <literal>dllwrap</literal> tool in Cygwin builds
+      (Marco Atzeri)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Don't generate plain-text <filename>HISTORY</filename>
+      and <filename>src/test/regress/README</filename> files anymore (Tom Lane)
+     </para>
+
+     <para>
+      These text files duplicated the main HTML and PDF documentation
+      formats.  The trouble involved in maintaining them greatly outweighs
+      the likely audience for plain-text format.  Distribution tarballs
+      will still contain files by these names, but they'll just be stubs
+      directing the reader to consult the main documentation.
+      The plain-text <filename>INSTALL</filename> file will still be maintained, as
+      there is arguably a use-case for that.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Update time zone data files to <application>tzdata</application> release 2013i
+      for DST law changes in Jordan and historical changes in Cuba.
+     </para>
+
+     <para>
+      In addition, the zones <literal>Asia/Riyadh87</literal>,
+      <literal>Asia/Riyadh88</literal>, and <literal>Asia/Riyadh89</literal> have been
+      removed, as they are no longer maintained by IANA, and never
+      represented actual civil timekeeping practice.
+     </para>
+    </listitem>
+
+   </itemizedlist>
+
+  </sect2>
+ </sect1>
 
  <sect1 id="release-9-0-15">
   <title>Release 9.0.15</title>
@@ -30,7 +532,7 @@
 
    <para>
     Also, if you are upgrading from a version earlier than 9.0.13,
-    see the release notes for 9.0.13.
+    see <xref linkend="release-9-0-13"/>.
    </para>
 
   </sect2>
@@ -65,9 +567,9 @@
       to fix all pre-existing data errors.  However, an installation can be
       presumed safe after performing this vacuuming if it has executed fewer
       than 2^31 update transactions in its lifetime (check this with
-      <literal>SELECT txid_current() &lt; 2^31</literal>).
-     </para>
-    </listitem>
+      <literal>SELECT txid_current() < 2^31<>).
+     </ 2^31<>
+    </literal>
 
     <listitem>
      <para>
@@ -234,10 +736,10 @@
      </para>
     </listitem>
 
-   </itemizedlist>
+   </para>
 
-  </sect2>
- </sect1>
+  </listitem>
+ </itemizedlist>
 
  <sect1 id="release-9-0-14">
   <title>Release 9.0.14</title>
@@ -262,7 +764,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 9.0.13,
-    see the release notes for 9.0.13.
+    see <xref linkend="release-9-0-13"/>.
    </para>
 
   </sect2>
@@ -535,7 +1037,7 @@
 
    <para>
     Also, if you are upgrading from a version earlier than 9.0.6,
-    see the release notes for 9.0.6.
+    see <xref linkend="release-9-0-6"/>.
    </para>
 
   </sect2>
@@ -825,7 +1327,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 9.0.6,
-    see the release notes for 9.0.6.
+    see <xref linkend="release-9-0-6"/>.
    </para>
 
   </sect2>
@@ -1087,7 +1589,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 9.0.6,
-    see the release notes for 9.0.6.
+    see <xref linkend="release-9-0-6"/>.
    </para>
 
   </sect2>
@@ -1465,7 +1967,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 9.0.6,
-    see the release notes for 9.0.6.
+    see <xref linkend="release-9-0-6"/>.
    </para>
 
   </sect2>
@@ -1607,7 +2109,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 9.0.6,
-    see the release notes for 9.0.6.
+    see <xref linkend="release-9-0-6"/>.
    </para>
 
   </sect2>
@@ -1913,7 +2415,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 9.0.6,
-    see the release notes for 9.0.6.
+    see <xref linkend="release-9-0-6"/>.
    </para>
 
   </sect2>
@@ -2233,7 +2735,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 9.0.6,
-    see the release notes for 9.0.6.
+    see <xref linkend="release-9-0-6"/>.
    </para>
 
   </sect2>
@@ -2756,7 +3258,7 @@
 
    <para>
     Also, if you are upgrading from a version earlier than 9.0.4,
-    see the release notes for 9.0.4.
+    see <xref linkend="release-9-0-4"/>.
    </para>
 
   </sect2>
@@ -3133,7 +3635,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 9.0.4,
-    see the release notes for 9.0.4.
+    see <xref linkend="release-9-0-4"/>.
    </para>
 
   </sect2>
@@ -4108,7 +4610,7 @@
   <title>Release 9.0.3</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2011-01-31</simpara>
   </note>
 
@@ -4284,7 +4786,7 @@
   <title>Release 9.0.2</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2010-12-16</simpara>
   </note>
 
@@ -4731,7 +5233,7 @@
   <title>Release 9.0.1</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2010-10-04</simpara>
   </note>
 
@@ -4873,7 +5375,7 @@
   <title>Release 9.0</title>
 
   <note>
-   <title>Release date</title>
+   <title>Release Date</title>
    <simpara>2010-09-20</simpara>
   </note>
 
@@ -5021,7 +5523,7 @@
 
     <listitem>
      <para>
-      <link linkend="sql-explain"><command>EXPLAIN</command></link> enhancements.
+      <link linkend="sql-explain "><command>EXPLAIN</command></link> enhancements.
       The output is now available in JSON, XML, or YAML format, and includes
       buffer utilization and other data not previously available.
      </para>
@@ -6445,7 +6947,8 @@
       whether hex or traditional format is used for <type>bytea</type>
       output.  Libpq's <function>PQescapeByteaConn()</function> function automatically
       uses the hex format when connected to <productname>PostgreSQL</productname> 9.0
-      or newer servers.
+      or newer servers.  However, pre-9.0 libpq versions will not
+      correctly process hex format from newer servers.
      </para>
 
      <para>
@@ -6816,7 +7319,7 @@
     </itemizedlist>
 
     <sect4>
-    <title><link linkend="plpgsql">PL/PgSQL</link> Server-Side
+    <title><link linkend="plpgsql">PL/pgSQL</link> Server-Side
     Language</title>
 
     <itemizedlist>
@@ -7623,9 +8126,8 @@ if TG_OP = 'INSERT' and NEW.col1 = ... then
 
      <listitem>
       <para>
-       Add data and documentation installation location control to <link
-       linkend="xfunc-c-pgxs"><acronym>PGXS</acronym></link> Makefiles
-       (Mark Cave-Ayland)
+       Add data and documentation installation location control to
+       <acronym>PGXS</acronym> Makefiles (Mark Cave-Ayland)
       </para>
      </listitem>
 
