@@ -114,7 +114,8 @@
 
      <listitem>
       <simpara>pour prévenir la perte des données les plus anciennes à cause
-      d'un <firstterm>cycle de l'identifiant de transaction (XID)</firstterm>.</simpara>
+      d'un <firstterm>cycle de l'identifiant de transaction (XID)</firstterm>
+      ou d'un <firstterm>cycle de l'identifiant de multixact</firstterm>.</simpara>
      </listitem>
     </orderedlist>
 
@@ -398,6 +399,11 @@
     <secondary>cycle</secondary>
    </indexterm>
 
+    <indexterm>
+     <primary>ré-utilisation</primary>
+     <secondary>des identifiants de transaction</secondary>
+    </indexterm>
+
    <para>
     Le mécanisme de contrôle de concurrence multiversion (<acronym>MVCC</acronym>) de
     <productname>PostgreSQL</productname> s'appuie sur la possibilité de
@@ -422,7 +428,7 @@
     <literal>FrozenXID</literal>. Ce XID ne suit pas les règles standards de
     comparaison des identifiants de transactions et est toujours considéré
     comme plus âgé que les XID normaux. Les XID normaux sont comparés sur une
-    base modulo-2<superscript>31</superscript>. Cela signifie
+    base modulo-2<superscript>32</superscript>. Cela signifie
     que pour chaque XID normal, il y en a deux milliards qui sont plus vieux et
     deux milliards qui sont plus récents. Une autre manière de le dire est que
     l'ensemble de définition des XID est circulaire et sans limite. De plus,
@@ -623,6 +629,61 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
     simple utilisateur. Voir la page de référence de <xref linkend="app-postgres"/> pour
     des détails sur l'utilisation du moteur simple utilisateur.
    </para>
+
+   <sect3 id="vacuum-for-multixact-wraparound">
+    <title>Multixacts et cycle</title>
+
+    <indexterm>
+     <primary>MultiXactId</primary>
+    </indexterm>
+
+    <indexterm>
+     <primary>cycle</primary>
+     <secondary>d'identifiants multixact</secondary>
+    </indexterm>
+
+    <para>
+     Les <firstterm>identifiants multixact</firstterm> sont utilisés pour
+     supporter le verrouillage de lignes par des transactions multiples.
+     Comme l'espace est limité dans un en-tête de ligne pour y stocker des
+     informations, cette information est codée sous la forme d'un
+     <quote>identifiant de transaction multiple</quote>, ou ID multixact
+     pour faire court, à chaque fois qu'il y a plus d'une transaction
+     cherchant à verrouiller en parallèle une ligne. Les informations sur les
+     identifiants de transactions inclus dans tout identifiant multixact sont
+     enregistrées séparément dans le sous-répertoire
+     <filename>pg_multixact</filename> et seul l'identifiant multixact apparaît
+     dans le champ <structfield>xmax</structfield> de l'en-tête de ligne.
+     Comme les identifiants de transactions, les identifiants multi-transactions
+     sont implémentés avec un compteur 32 bits et le stockage correspondant,
+     ce qui nécessite une gestion attentive, un nettoyage du stockage et la
+     gestion du cycle (plus exactement de la ré-utilisation des identifiants).
+    </para>
+
+    <para>
+     Durant un parcours de table effectué par <command>VACUUM</command>, soit
+     partiel soit complet, tout identifiant multixact plus ancien que
+     <xref linkend="guc-vacuum-multixact-freeze-min-age"/> est remplacé par
+     une valeur différente, qui peut être la valeur zéro, un identifiant de
+     transaction ou un nouvel identifiant multixact. Pour chaque table,
+     <structname>pg_class</structname>.<structfield>relminmxid</structfield>
+     enregistre le plus ancien identifiant multixact possible apparaissant déjà
+     dans un enregistrement de cette table. Si cette valeur est plus ancienne
+     que <xref linkend="guc-vacuum-multixact-freeze-table-age"/>, un parcours
+     complet de la table est forcé. Les parcours complets de table avec
+     <command>VACUUM</command>, quelqu'en soit la cause, permet d'avancer la
+     valeur pour cette table. Comme toutes les tables de toutes les bases sont
+     parcourues et que leur plus anciennes valeurs multixact sont avancées,
+     le stockage sur disque pour les anciens multixacts peut être supprimé.
+    </para>
+
+    <para>
+     Comme moyen de sécurité supplémentaire, un parcours complet de table effectué
+     par un VACUUM surviendra pour toute table dont l'âge en identifiant multixact
+     est supérieur à <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>.
+     Cela surviendra même si l'autovacuum est spécifiquement désactivé.
+    </para>
+   </sect3>
   </sect2>
 
   <sect2 id="autovacuum">
@@ -782,7 +843,8 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
 
   <para>
    Dans certains cas, reconstruire périodiquement les index par la commande
-   <xref linkend="sql-reindex"/> vaut la peine.
+   <xref linkend="sql-reindex"/> ou une série d'étapes individuelles de
+   reconstruction en vaut la peine.
   </para>
 
   <para>
@@ -808,6 +870,25 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
    adjacentes dans un index nouvellement créé (cette considération ne s'applique
    pas aux index non B-tree). Il pourrait être intéressant de ré-indexer
    périodiquement simplement pour améliorer la vitesse d'accès.
+  </para>
+
+  <para>
+   <xref linkend="sql-reindex"/> peut être utilisé en toute sécurité et très
+   facilement dans tous les cas. Mais comme cette commande nécessite un
+   verrou exclusif sur la table, il est souvent préférable d'exécuter une
+   reconstruction d'index avec une séquence d'étapes de création et remplacement.
+   Les types d'index qui supportent <xref linkend="sql-createindex"/> avec
+   l'option <literal>CONCURRENTLY</literal> peuvent être recréés de cette façon.
+   Si cela fonctionne et que l'index résultant est valide, l'index original
+   peut être remplacé par le nouveau construit en utilisant une combinaison de
+   <xref linkend="sql-alterindex"/> et <xref linkend="sql-dropindex"/>. Quand
+   un index est utilisé pour forcer une contrainte d'unicité ou toute autre
+   contrainte, <xref linkend="sql-altertable"/> pourrait être nécessaire pour
+   basculer la constrainte existante sur celle forcée par le nouvel index.
+   Il faut mettre beaucoup d'attention dans la mise en place de cette
+   reconstruction alternative à plusieurs étapes avant de l'utiliser car il
+   existe des limitations pour lesquelles les index peuvent être réindexés de
+   cette façon et les erreurs doivent être gérées.
   </para>
  </sect1>
 
