@@ -1,8 +1,465 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Dernière modification
-     le       $Date: 2009-05-03 13:57:02 +0200 (dim. 03 mai 2009) $
-     par      $Author: gleu $
-     révision $Revision: 1317 $ -->
+<!-- doc/src/sgml/release-8.4.sgml -->
+<!-- See header comment in release.sgml about typical markup -->
+
+ <sect1 id="release-8-4-20">
+  <title>Release 8.4.20</title>
+
+  <note>
+  <title>Release Date</title>
+  <simpara>2014-02-20</simpara>
+  </note>
+
+  <para>
+   This release contains a variety of fixes from 8.4.19.
+   For information about new features in the 8.4 major release, see
+   <xref linkend="release-8-4"/>.
+  </para>
+
+  <para>
+   The <productname>PostgreSQL</productname> community will stop releasing updates
+   for the 8.4.X release series in July 2014.
+   Users are encouraged to update to a newer release branch soon.
+  </para>
+
+  <sect2>
+   <title>Migration to Version 8.4.20</title>
+
+   <para>
+    A dump/restore is not required for those running 8.4.X.
+   </para>
+
+   <para>
+    However, if you are upgrading from a version earlier than 8.4.19,
+    see <xref linkend="release-8-4-19"/>.
+   </para>
+
+  </sect2>
+
+  <sect2>
+   <title>Changes</title>
+
+   <itemizedlist>
+
+    <listitem>
+     <para>
+      Shore up <literal>GRANT ... WITH ADMIN OPTION</literal> restrictions
+      (Noah Misch)
+     </para>
+
+     <para>
+      Granting a role without <literal>ADMIN OPTION</literal> is supposed to
+      prevent the grantee from adding or removing members from the granted
+      role, but this restriction was easily bypassed by doing <literal>SET
+      ROLE</literal> first.  The security impact is mostly that a role member can
+      revoke the access of others, contrary to the wishes of his grantor.
+      Unapproved role member additions are a lesser concern, since an
+      uncooperative role member could provide most of his rights to others
+      anyway by creating views or <literal>SECURITY DEFINER</literal> functions.
+      (CVE-2014-0060)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent privilege escalation via manual calls to PL validator
+      functions (Andres Freund)
+     </para>
+
+     <para>
+      The primary role of PL validator functions is to be called implicitly
+      during <command>CREATE FUNCTION</command>, but they are also normal SQL
+      functions that a user can call explicitly.  Calling a validator on
+      a function actually written in some other language was not checked
+      for and could be exploited for privilege-escalation purposes.
+      The fix involves adding a call to a privilege-checking function in
+      each validator function.  Non-core procedural languages will also
+      need to make this change to their own validator functions, if any.
+      (CVE-2014-0061)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Avoid multiple name lookups during table and index DDL
+      (Robert Haas, Andres Freund)
+     </para>
+
+     <para>
+      If the name lookups come to different conclusions due to concurrent
+      activity, we might perform some parts of the DDL on a different table
+      than other parts.  At least in the case of <command>CREATE INDEX</command>,
+      this can be used to cause the permissions checks to be performed
+      against a different table than the index creation, allowing for a
+      privilege escalation attack.
+      (CVE-2014-0062)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent buffer overrun with long datetime strings (Noah Misch)
+     </para>
+
+     <para>
+      The <literal>MAXDATELEN</literal> constant was too small for the longest
+      possible value of type <type>interval</type>, allowing a buffer overrun
+      in <function>interval_out()</function>.  Although the datetime input
+      functions were more careful about avoiding buffer overrun, the limit
+      was short enough to cause them to reject some valid inputs, such as
+      input containing a very long timezone name.  The <application>ecpg</application>
+      library contained these vulnerabilities along with some of its own.
+      (CVE-2014-0063)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent buffer overrun due to integer overflow in size calculations
+      (Noah Misch, Heikki Linnakangas)
+     </para>
+
+     <para>
+      Several functions, mostly type input functions, calculated an
+      allocation size without checking for overflow.  If overflow did
+      occur, a too-small buffer would be allocated and then written past.
+      (CVE-2014-0064)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent overruns of fixed-size buffers
+      (Peter Eisentraut, Jozef Mlich)
+     </para>
+
+     <para>
+      Use <function>strlcpy()</function> and related functions to provide a clear
+      guarantee that fixed-size buffers are not overrun.  Unlike the
+      preceding items, it is unclear whether these cases really represent
+      live issues, since in most cases there appear to be previous
+      constraints on the size of the input string.  Nonetheless it seems
+      prudent to silence all Coverity warnings of this type.
+      (CVE-2014-0065)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Avoid crashing if <function>crypt()</function> returns NULL (Honza Horak,
+      Bruce Momjian)
+     </para>
+
+     <para>
+      There are relatively few scenarios in which <function>crypt()</function>
+      could return NULL, but <filename>contrib/chkpass</filename> would crash
+      if it did.  One practical case in which this could be an issue is
+      if <application>libc</application> is configured to refuse to execute unapproved
+      hashing algorithms (e.g., <quote>FIPS mode</quote>).
+      (CVE-2014-0066)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Document risks of <literal>make check</literal> in the regression testing
+      instructions (Noah Misch, Tom Lane)
+     </para>
+
+     <para>
+      Since the temporary server started by <literal>make check</literal>
+      uses <quote>trust</quote> authentication, another user on the same machine
+      could connect to it as database superuser, and then potentially
+      exploit the privileges of the operating-system user who started the
+      tests.  A future release will probably incorporate changes in the
+      testing procedure to prevent this risk, but some public discussion is
+      needed first.  So for the moment, just warn people against using
+      <literal>make check</literal> when there are untrusted users on the
+      same machine.
+      (CVE-2014-0067)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible mis-replay of WAL records when some segments of a
+      relation aren't full size (Greg Stark, Tom Lane)
+     </para>
+
+     <para>
+      The WAL update could be applied to the wrong page, potentially many
+      pages past where it should have been.  Aside from corrupting data,
+      this error has been observed to result in significant <quote>bloat</quote>
+      of standby servers compared to their masters, due to updates being
+      applied far beyond where the end-of-file should have been.  This
+      failure mode does not appear to be a significant risk during crash
+      recovery, only when initially synchronizing a standby created from a
+      base backup taken from a quickly-changing master.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ensure that insertions into non-leaf GIN index pages write a full-page
+      WAL record when appropriate (Heikki Linnakangas)
+     </para>
+
+     <para>
+      The previous coding risked index corruption in the event of a
+      partial-page write during a system crash.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix race conditions during server process exit (Robert Haas)
+     </para>
+
+     <para>
+      Ensure that signal handlers don't attempt to use the
+      process's <varname>MyProc</varname> pointer after it's no longer valid.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix unsafe references to <varname>errno</varname> within error reporting
+      logic (Christian Kruse)
+     </para>
+
+     <para>
+      This would typically lead to odd behaviors such as missing or
+      inappropriate <literal>HINT</literal> fields.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible crashes from using <function>ereport()</function> too early
+      during server startup (Tom Lane)
+     </para>
+
+     <para>
+      The principal case we've seen in the field is a crash if the server
+      is started in a directory it doesn't have permission to read.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Clear retry flags properly in OpenSSL socket write
+      function (Alexander Kukushkin)
+     </para>
+
+     <para>
+      This omission could result in a server lockup after unexpected loss
+      of an SSL-encrypted connection.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix length checking for Unicode identifiers (<literal>U&amp;"..."</literal>
+      syntax) containing escapes (Tom Lane)
+     </para>
+
+     <para>
+      A spurious truncation warning would be printed for such identifiers
+      if the escaped form of the identifier was too long, but the
+      identifier actually didn't need truncation after de-escaping.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible crash due to invalid plan for nested sub-selects, such
+      as <literal>WHERE (... x IN (SELECT ...) ...) IN (SELECT ...)</literal>
+      (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ensure that <command>ANALYZE</command> creates statistics for a table column
+      even when all the values in it are <quote>too wide</quote> (Tom Lane)
+     </para>
+
+     <para>
+      <command>ANALYZE</command> intentionally omits very wide values from its
+      histogram and most-common-values calculations, but it neglected to do
+      something sane in the case that all the sampled entries are too wide.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In <literal>ALTER TABLE ... SET TABLESPACE</literal>, allow the database's
+      default tablespace to be used without a permissions check
+      (Stephen Frost)
+     </para>
+
+     <para>
+      <literal>CREATE TABLE</literal> has always allowed such usage,
+      but <literal>ALTER TABLE</literal> didn't get the memo.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <quote>cannot accept a set</quote> error when some arms of
+      a <literal>CASE</literal> return a set and others don't (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix checks for all-zero client addresses in pgstat functions (Kevin
+      Grittner)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible misclassification of multibyte characters by the text
+      search parser (Tom Lane)
+     </para>
+
+     <para>
+      Non-ASCII characters could be misclassified when using C locale with
+      a multibyte encoding.  On Cygwin, non-C locales could fail as well.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible misbehavior in <function>plainto_tsquery()</function>
+      (Heikki Linnakangas)
+     </para>
+
+     <para>
+      Use <function>memmove()</function> not <function>memcpy()</function> for copying
+      overlapping memory regions.  There have been no field reports of
+      this actually causing trouble, but it's certainly risky.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Accept <literal>SHIFT_JIS</literal> as an encoding name for locale checking
+      purposes (Tatsuo Ishii)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix misbehavior of <function>PQhost()</function> on Windows (Fujii Masao)
+     </para>
+
+     <para>
+      It should return <literal>localhost</literal> if no host has been specified.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Improve error handling in <application>libpq</application> and <application>psql</application>
+      for failures during <literal>COPY TO STDOUT/FROM STDIN</literal> (Tom Lane)
+     </para>
+
+     <para>
+      In particular this fixes an infinite loop that could occur in 9.2 and
+      up if the server connection was lost during <literal>COPY FROM
+      STDIN</literal>.  Variants of that scenario might be possible in older
+      versions, or with other client applications.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix misaligned descriptors in <application>ecpg</application> (MauMau)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In <application>ecpg</application>, handle lack of a hostname in the connection
+      parameters properly (Michael Meskes)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix performance regression in <filename>contrib/dblink</filename> connection
+      startup (Joe Conway)
+     </para>
+
+     <para>
+      Avoid an unnecessary round trip when client and server encodings match.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In <filename>contrib/isn</filename>, fix incorrect calculation of the check
+      digit for ISMN values (Fabien Coelho)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ensure client-code-only installation procedure works as documented
+      (Peter Eisentraut)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In Mingw and Cygwin builds, install the <application>libpq</application> DLL
+      in the <filename>bin</filename> directory (Andrew Dunstan)
+     </para>
+
+     <para>
+      This duplicates what the MSVC build has long done.  It should fix
+      problems with programs like <application>psql</application> failing to start
+      because they can't find the DLL.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Don't generate plain-text <filename>HISTORY</filename>
+      and <filename>src/test/regress/README</filename> files anymore (Tom Lane)
+     </para>
+
+     <para>
+      These text files duplicated the main HTML and PDF documentation
+      formats.  The trouble involved in maintaining them greatly outweighs
+      the likely audience for plain-text format.  Distribution tarballs
+      will still contain files by these names, but they'll just be stubs
+      directing the reader to consult the main documentation.
+      The plain-text <filename>INSTALL</filename> file will still be maintained, as
+      there is arguably a use-case for that.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Update time zone data files to <application>tzdata</application> release 2013i
+      for DST law changes in Jordan and historical changes in Cuba.
+     </para>
+
+     <para>
+      In addition, the zones <literal>Asia/Riyadh87</literal>,
+      <literal>Asia/Riyadh88</literal>, and <literal>Asia/Riyadh89</literal> have been
+      removed, as they are no longer maintained by IANA, and never
+      represented actual civil timekeeping practice.
+     </para>
+    </listitem>
+
+   </itemizedlist>
+
+  </sect2>
+ </sect1>
 
  <sect1 id="release-8-4-19">
   <title>Release 8.4.19</title>
@@ -33,7 +490,7 @@
 
    <para>
     Also, if you are upgrading from a version earlier than 8.4.17,
-    see the release notes for 8.4.17.
+    see <xref linkend="release-8-4-17"/>.
    </para>
 
   </sect2>
@@ -68,9 +525,9 @@
       to fix all pre-existing data errors.  However, an installation can be
       presumed safe after performing this vacuuming if it has executed fewer
       than 2^31 update transactions in its lifetime (check this with
-      <literal>SELECT txid_current() &lt; 2^31</literal>).
-     </para>
-    </listitem>
+      <literal>SELECT txid_current() < 2^31<>).
+     </ 2^31<>
+    </literal>
 
     <listitem>
      <para>
@@ -200,10 +657,10 @@
      </para>
     </listitem>
 
-   </itemizedlist>
+   </para>
 
-  </sect2>
- </sect1>
+  </listitem>
+ </itemizedlist>
 
  <sect1 id="release-8-4-18">
   <title>Release 8.4.18</title>
@@ -227,8 +684,8 @@
    </para>
 
    <para>
-    Also, if you are upgrading from a version earlier than 8.4.17,
-    see the release notes for 8.4.17.
+    However, if you are upgrading from a version earlier than 8.4.17,
+    see <xref linkend="release-8-4-17"/>.
    </para>
 
   </sect2>
@@ -405,235 +862,235 @@
   </sect2>
  </sect1>
 
-  <sect1 id="release-8-4-17">
-   <title>Release 8.4.17</title>
- 
-   <note>
-   <title>Release Date</title>
-   <simpara>2013-04-04</simpara>
-   </note>
- 
+ <sect1 id="release-8-4-17">
+  <title>Release 8.4.17</title>
+
+  <note>
+  <title>Release Date</title>
+  <simpara>2013-04-04</simpara>
+  </note>
+
+  <para>
+   This release contains a variety of fixes from 8.4.16.
+   For information about new features in the 8.4 major release, see
+   <xref linkend="release-8-4"/>.
+  </para>
+
+  <sect2>
+   <title>Migration to Version 8.4.17</title>
+
    <para>
-    This release contains a variety of fixes from 8.4.16.
-    For information about new features in the 8.4 major release, see
-    <xref linkend="release-8-4"/>.
+    A dump/restore is not required for those running 8.4.X.
    </para>
- 
-   <sect2>
-    <title>Migration to Version 8.4.17</title>
- 
-    <para>
-     A dump/restore is not required for those running 8.4.X.
-    </para>
- 
-    <para>
-     However, this release corrects several errors in management of GiST
-     indexes.  After installing this update, it is advisable to
-     <command>REINDEX</command> any GiST indexes that meet one or more of the
-     conditions described below.
-    </para>
- 
-    <para>
-     Also, if you are upgrading from a version earlier than 8.4.10,
-     see the release notes for 8.4.10.
-    </para>
- 
-   </sect2>
- 
-   <sect2>
-    <title>Changes</title>
- 
-    <itemizedlist>
- 
-     <listitem>
-      <para>
-       Reset OpenSSL randomness state in each postmaster child process
-       (Marko Kreen)
-      </para>
- 
-      <para>
-       This avoids a scenario wherein random numbers generated by
-       <filename>contrib/pgcrypto</filename> functions might be relatively easy for
-       another database user to guess.  The risk is only significant when
-       the postmaster is configured with <varname>ssl</varname> = <literal>on</literal>
-       but most connections don't use SSL encryption.  (CVE-2013-1900)
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix GiST indexes to not use <quote>fuzzy</quote> geometric comparisons when
-       it's not appropriate to do so (Alexander Korotkov)
-      </para>
- 
-      <para>
-       The core geometric types perform comparisons using <quote>fuzzy</quote>
-       equality, but <function>gist_box_same</function> must do exact comparisons,
-       else GiST indexes using it might become inconsistent.  After installing
-       this update, users should <command>REINDEX</command> any GiST indexes on
-       <type>box</type>, <type>polygon</type>, <type>circle</type>, or <type>point</type>
-       columns, since all of these use <function>gist_box_same</function>.
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix erroneous range-union and penalty logic in GiST indexes that use
-       <filename>contrib/btree_gist</filename> for variable-width data types, that is
-       <type>text</type>, <type>bytea</type>, <type>bit</type>, and <type>numeric</type>
-       columns (Tom Lane)
-      </para>
- 
-      <para>
-       These errors could result in inconsistent indexes in which some keys
-       that are present would not be found by searches, and also in useless
-       index bloat.  Users are advised to <command>REINDEX</command> such indexes
-       after installing this update.
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix bugs in GiST page splitting code for multi-column indexes
-       (Tom Lane)
-      </para>
- 
-      <para>
-       These errors could result in inconsistent indexes in which some keys
-       that are present would not be found by searches, and also in indexes
-       that are unnecessarily inefficient to search.  Users are advised to
-       <command>REINDEX</command> multi-column GiST indexes after installing this
-       update.
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix infinite-loop risk in regular expression compilation (Tom Lane,
-       Don Porter)
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix potential null-pointer dereference in regular expression compilation
-       (Tom Lane)
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix <function>to_char()</function> to use ASCII-only case-folding rules where
-       appropriate (Tom Lane)
-      </para>
- 
-      <para>
-       This fixes misbehavior of some template patterns that should be
-       locale-independent, but mishandled <quote><literal>I</literal></quote> and
-       <quote><literal>i</literal></quote> in Turkish locales.
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix unwanted rejection of timestamp <literal>1999-12-31 24:00:00</literal>
-       (Tom Lane)
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Remove useless <quote>picksplit doesn't support secondary split</quote> log
-       messages (Josh Hansen, Tom Lane)
-      </para>
- 
-      <para>
-       This message seems to have been added in expectation of code that was
-       never written, and probably never will be, since GiST's default
-       handling of secondary splits is actually pretty good.  So stop nagging
-       end users about it.
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix possible failure to send a session's last few transaction
-       commit/abort counts to the statistics collector (Tom Lane)
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Eliminate memory leaks in PL/Perl's <function>spi_prepare()</function> function
-       (Alex Hunsaker, Tom Lane)
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix <application>pg_dumpall</application> to handle database names containing
-       <quote><literal>=</literal></quote> correctly (Heikki Linnakangas)
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Avoid crash in <application>pg_dump</application> when an incorrect connection
-       string is given (Heikki Linnakangas)
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Ignore invalid indexes in <application>pg_dump</application> (Michael Paquier)
-      </para>
- 
-      <para>
-       Dumping invalid indexes can cause problems at restore time, for example
-       if the reason the index creation failed was because it tried to enforce
-       a uniqueness condition not satisfied by the table's data.  Also, if the
-       index creation is in fact still in progress, it seems reasonable to
-       consider it to be an uncommitted DDL change, which
-       <application>pg_dump</application> wouldn't be expected to dump anyway.
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Fix <filename>contrib/pg_trgm</filename>'s <function>similarity()</function> function
-       to return zero for trigram-less strings (Tom Lane)
-      </para>
- 
-      <para>
-       Previously it returned <literal>NaN</literal> due to internal division by zero.
-      </para>
-     </listitem>
- 
-     <listitem>
-      <para>
-       Update time zone data files to <application>tzdata</application> release 2013b
-       for DST law changes in Chile, Haiti, Morocco, Paraguay, and some
-       Russian areas.  Also, historical zone data corrections for numerous
-       places.
-      </para>
- 
-      <para>
-       Also, update the time zone abbreviation files for recent changes in
-       Russia and elsewhere: <literal>CHOT</literal>, <literal>GET</literal>,
-       <literal>IRKT</literal>, <literal>KGT</literal>, <literal>KRAT</literal>, <literal>MAGT</literal>,
-       <literal>MAWT</literal>, <literal>MSK</literal>, <literal>NOVT</literal>, <literal>OMST</literal>,
-       <literal>TKT</literal>, <literal>VLAT</literal>, <literal>WST</literal>, <literal>YAKT</literal>,
-       <literal>YEKT</literal> now follow their current meanings, and
-       <literal>VOLT</literal> (Europe/Volgograd) and <literal>MIST</literal>
-       (Antarctica/Macquarie) are added to the default abbreviations list.
-      </para>
-     </listitem>
- 
-    </itemizedlist>
- 
-   </sect2>
-  </sect1>
- 
+
+   <para>
+    However, this release corrects several errors in management of GiST
+    indexes.  After installing this update, it is advisable to
+    <command>REINDEX</command> any GiST indexes that meet one or more of the
+    conditions described below.
+   </para>
+
+   <para>
+    Also, if you are upgrading from a version earlier than 8.4.10,
+    see <xref linkend="release-8-4-10"/>.
+   </para>
+
+  </sect2>
+
+  <sect2>
+   <title>Changes</title>
+
+   <itemizedlist>
+
+    <listitem>
+     <para>
+      Reset OpenSSL randomness state in each postmaster child process
+      (Marko Kreen)
+     </para>
+
+     <para>
+      This avoids a scenario wherein random numbers generated by
+      <filename>contrib/pgcrypto</filename> functions might be relatively easy for
+      another database user to guess.  The risk is only significant when
+      the postmaster is configured with <varname>ssl</varname> = <literal>on</literal>
+      but most connections don't use SSL encryption.  (CVE-2013-1900)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix GiST indexes to not use <quote>fuzzy</quote> geometric comparisons when
+      it's not appropriate to do so (Alexander Korotkov)
+     </para>
+
+     <para>
+      The core geometric types perform comparisons using <quote>fuzzy</quote>
+      equality, but <function>gist_box_same</function> must do exact comparisons,
+      else GiST indexes using it might become inconsistent.  After installing
+      this update, users should <command>REINDEX</command> any GiST indexes on
+      <type>box</type>, <type>polygon</type>, <type>circle</type>, or <type>point</type>
+      columns, since all of these use <function>gist_box_same</function>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix erroneous range-union and penalty logic in GiST indexes that use
+      <filename>contrib/btree_gist</filename> for variable-width data types, that is
+      <type>text</type>, <type>bytea</type>, <type>bit</type>, and <type>numeric</type>
+      columns (Tom Lane)
+     </para>
+
+     <para>
+      These errors could result in inconsistent indexes in which some keys
+      that are present would not be found by searches, and also in useless
+      index bloat.  Users are advised to <command>REINDEX</command> such indexes
+      after installing this update.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix bugs in GiST page splitting code for multi-column indexes
+      (Tom Lane)
+     </para>
+
+     <para>
+      These errors could result in inconsistent indexes in which some keys
+      that are present would not be found by searches, and also in indexes
+      that are unnecessarily inefficient to search.  Users are advised to
+      <command>REINDEX</command> multi-column GiST indexes after installing this
+      update.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix infinite-loop risk in regular expression compilation (Tom Lane,
+      Don Porter)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix potential null-pointer dereference in regular expression compilation
+      (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <function>to_char()</function> to use ASCII-only case-folding rules where
+      appropriate (Tom Lane)
+     </para>
+
+     <para>
+      This fixes misbehavior of some template patterns that should be
+      locale-independent, but mishandled <quote><literal>I</literal></quote> and
+      <quote><literal>i</literal></quote> in Turkish locales.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix unwanted rejection of timestamp <literal>1999-12-31 24:00:00</literal>
+      (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Remove useless <quote>picksplit doesn't support secondary split</quote> log
+      messages (Josh Hansen, Tom Lane)
+     </para>
+
+     <para>
+      This message seems to have been added in expectation of code that was
+      never written, and probably never will be, since GiST's default
+      handling of secondary splits is actually pretty good.  So stop nagging
+      end users about it.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible failure to send a session's last few transaction
+      commit/abort counts to the statistics collector (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Eliminate memory leaks in PL/Perl's <function>spi_prepare()</function> function
+      (Alex Hunsaker, Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <application>pg_dumpall</application> to handle database names containing
+      <quote><literal>=</literal></quote> correctly (Heikki Linnakangas)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Avoid crash in <application>pg_dump</application> when an incorrect connection
+      string is given (Heikki Linnakangas)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ignore invalid indexes in <application>pg_dump</application> (Michael Paquier)
+     </para>
+
+     <para>
+      Dumping invalid indexes can cause problems at restore time, for example
+      if the reason the index creation failed was because it tried to enforce
+      a uniqueness condition not satisfied by the table's data.  Also, if the
+      index creation is in fact still in progress, it seems reasonable to
+      consider it to be an uncommitted DDL change, which
+      <application>pg_dump</application> wouldn't be expected to dump anyway.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <filename>contrib/pg_trgm</filename>'s <function>similarity()</function> function
+      to return zero for trigram-less strings (Tom Lane)
+     </para>
+
+     <para>
+      Previously it returned <literal>NaN</literal> due to internal division by zero.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Update time zone data files to <application>tzdata</application> release 2013b
+      for DST law changes in Chile, Haiti, Morocco, Paraguay, and some
+      Russian areas.  Also, historical zone data corrections for numerous
+      places.
+     </para>
+
+     <para>
+      Also, update the time zone abbreviation files for recent changes in
+      Russia and elsewhere: <literal>CHOT</literal>, <literal>GET</literal>,
+      <literal>IRKT</literal>, <literal>KGT</literal>, <literal>KRAT</literal>, <literal>MAGT</literal>,
+      <literal>MAWT</literal>, <literal>MSK</literal>, <literal>NOVT</literal>, <literal>OMST</literal>,
+      <literal>TKT</literal>, <literal>VLAT</literal>, <literal>WST</literal>, <literal>YAKT</literal>,
+      <literal>YEKT</literal> now follow their current meanings, and
+      <literal>VOLT</literal> (Europe/Volgograd) and <literal>MIST</literal>
+      (Antarctica/Macquarie) are added to the default abbreviations list.
+     </para>
+    </listitem>
+
+   </itemizedlist>
+
+  </sect2>
+ </sect1>
+
  <sect1 id="release-8-4-16">
   <title>Release 8.4.16</title>
 
@@ -657,7 +1114,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 8.4.10,
-    see the release notes for 8.4.10.
+    see <xref linkend="release-8-4-10"/>.
    </para>
 
   </sect2>
@@ -867,7 +1324,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 8.4.10,
-    see the release notes for 8.4.10.
+    see <xref linkend="release-8-4-10"/>.
    </para>
 
   </sect2>
@@ -1169,7 +1626,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 8.4.10,
-    see the release notes for 8.4.10.
+    see <xref linkend="release-8-4-10"/>.
    </para>
 
   </sect2>
@@ -1285,7 +1742,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 8.4.10,
-    see the release notes for 8.4.10.
+    see <xref linkend="release-8-4-10"/>.
    </para>
 
   </sect2>
@@ -1519,7 +1976,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 8.4.10,
-    see the release notes for 8.4.10.
+    see <xref linkend="release-8-4-10"/>.
    </para>
 
   </sect2>
@@ -1804,7 +2261,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 8.4.10,
-    see the release notes for 8.4.10.
+    see <xref linkend="release-8-4-10"/>.
    </para>
 
   </sect2>
@@ -2173,7 +2630,7 @@
 
    <para>
     Also, if you are upgrading from a version earlier than 8.4.8,
-    see the release notes for 8.4.8.
+    see <xref linkend="release-8-4-8"/>.
    </para>
 
   </sect2>
@@ -2481,7 +2938,7 @@
 
    <para>
     However, if you are upgrading from a version earlier than 8.4.8,
-    see the release notes for 8.4.8.
+    see <xref linkend="release-8-4-8"/>.
    </para>
 
   </sect2>
@@ -3017,7 +3474,7 @@
 
    <para>
     Also, if you are upgrading from a version earlier than 8.4.2,
-    see the release notes for 8.4.2.
+    see <xref linkend="release-8-4-2"/>.
    </para>
 
   </sect2>
@@ -3235,7 +3692,7 @@
   <title>Release 8.4.7</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2011-01-31</simpara>
   </note>
 
@@ -3251,7 +3708,7 @@
    <para>
     A dump/restore is not required for those running 8.4.X.
     However, if you are upgrading from a version earlier than 8.4.2,
-    see the release notes for 8.4.2.
+    see <xref linkend="release-8-4-2"/>.
    </para>
 
   </sect2>
@@ -3367,7 +3824,7 @@
   <title>Release 8.4.6</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2010-12-16</simpara>
   </note>
 
@@ -3383,7 +3840,7 @@
    <para>
     A dump/restore is not required for those running 8.4.X.
     However, if you are upgrading from a version earlier than 8.4.2,
-    see the release notes for 8.4.2.
+    see <xref linkend="release-8-4-2"/>.
    </para>
 
   </sect2>
@@ -3678,7 +4135,7 @@
   <title>Release 8.4.5</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2010-10-04</simpara>
   </note>
 
@@ -3694,7 +4151,7 @@
    <para>
     A dump/restore is not required for those running 8.4.X.
     However, if you are upgrading from a version earlier than 8.4.2,
-    see the release notes for 8.4.2.
+    see <xref linkend="release-8-4-2"/>.
    </para>
 
   </sect2>
@@ -4200,7 +4657,7 @@
   <title>Release 8.4.4</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2010-05-17</simpara>
   </note>
 
@@ -4216,7 +4673,7 @@
    <para>
     A dump/restore is not required for those running 8.4.X.
     However, if you are upgrading from a version earlier than 8.4.2,
-    see the release notes for 8.4.2.
+    see <xref linkend="release-8-4-2"/>.
    </para>
 
   </sect2>
@@ -4491,7 +4948,7 @@
   <title>Release 8.4.3</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2010-03-15</simpara>
   </note>
 
@@ -4507,7 +4964,7 @@
    <para>
     A dump/restore is not required for those running 8.4.X.
     However, if you are upgrading from a version earlier than 8.4.2,
-    see the release notes for 8.4.2.
+    see <xref linkend="release-8-4-2"/>.
    </para>
 
   </sect2>
@@ -4958,7 +5415,7 @@
   <title>Release 8.4.2</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2009-12-14</simpara>
   </note>
 
@@ -5044,7 +5501,7 @@
      </para>
 
      <para>
-      This fix prevents a PANIC if a <literal>VACUUM FULL</literal> is cancelled
+      This fix prevents a PANIC if a <literal>VACUUM FULL</literal> is canceled
       after it's already committed its tuple movements, as well as transient
       errors if a plain <literal>VACUUM</literal> is interrupted after having
       truncated the table.
@@ -5406,6 +5863,13 @@ WITH w AS (SELECT * FROM foo) SELECT * FROM w, bar ... FOR UPDATE
 
     <listitem>
      <para>
+      In <filename>contrib/fuzzystrmatch</filename>, correct the calculation of
+      <function>levenshtein</function> distances with non-default costs (Marcin Mank)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
       In <filename>contrib/pg_standby</filename>, disable triggering failover with a
       signal on Windows (Fujii Masao)
      </para>
@@ -5482,7 +5946,7 @@ WITH w AS (SELECT * FROM foo) SELECT * FROM w, bar ... FOR UPDATE
   <title>Release 8.4.1</title>
 
   <note>
-  <title>Release date</title>
+  <title>Release Date</title>
   <simpara>2009-09-09</simpara>
   </note>
 
@@ -5714,7 +6178,7 @@ WITH w AS (SELECT * FROM foo) SELECT * FROM w, bar ... FOR UPDATE
 
      <para>
       They are now on the <ulink
-      url="http://wiki.postgresql.org/wiki/FAQ">wiki</ulink>.  The
+      url="http://wiki.postgresql.org/wiki/faq">wiki</ulink>.  The
       main FAQ was moved to the wiki some time ago.
      </para>
     </listitem>
@@ -5781,7 +6245,7 @@ WITH w AS (SELECT * FROM foo) SELECT * FROM w, bar ... FOR UPDATE
   <title>Release 8.4</title>
 
   <note>
-   <title>Release date</title>
+   <title>Release Date</title>
    <simpara>2009-07-01</simpara>
   </note>
 
@@ -6063,8 +6527,7 @@ WITH w AS (SELECT * FROM foo) SELECT * FROM w, bar ... FOR UPDATE
        by means of Sort/Unique processing (i.e., sort then remove adjacent
        duplicates).  Now they can be implemented by hashing, which will not
        produce sorted output.  If an application relied on the output being
-       in sorted order, the recommended fix is to add an <literal>ORDER
-BY</literal>
+       in sorted order, the recommended fix is to add an <literal>ORDER BY</literal>
        clause.  As a short-term workaround, the previous behavior can be
        restored by disabling <literal>enable_hashagg</literal>, but that is a very
        performance-expensive fix.  <literal>SELECT DISTINCT ON</literal> never uses
@@ -6790,8 +7253,7 @@ BY</literal>
       <listitem>
        <para>
         Add read-only configuration variables <varname>segment_size</varname>,
-        <varname>wal_block_size</varname>, and
-<varname>wal_segment_size</varname>
+        <varname>wal_block_size</varname>, and <varname>wal_segment_size</varname>
         (Bernd Helmle)
        </para>
       </listitem>
@@ -6879,7 +7341,7 @@ BY</literal>
       </para>
 
       <para>
-       In particular, this means that functions written in PL/PgSQL
+       In particular, this means that functions written in PL/pgSQL
        and other PL languages can now be called this way.
       </para>
      </listitem>
@@ -7484,8 +7946,7 @@ BY</literal>
 
       <listitem>
        <para>
-        Add <literal>--freeze</literal> option to
-<application>vacuumdb</application>
+        Add <literal>--freeze</literal> option to <application>vacuumdb</application>
         (Bruce)
        </para>
       </listitem>
@@ -8006,7 +8467,7 @@ BY</literal>
     </sect4>
 
     <sect4>
-     <title>PL/PgSQL Server-Side Language</title>
+     <title>PL/pgSQL Server-Side Language</title>
      <itemizedlist>
 
       <listitem>
@@ -8445,7 +8906,7 @@ BY</literal>
        <para>
         Allow <application>pg_dump</application>, <application>pg_dumpall</application>, and
         <application>pg_restore</application> to use a specified role (Benedek
-        László)
+        L&aacute;szl&oacute;)
        </para>
       </listitem>
 
@@ -9166,7 +9627,7 @@ BY</literal>
       <para>
        To make this work safely, you now need to set the new
        <literal>recovery_end_command</literal> option in <filename>recovery.conf</filename>
-       to clean up the trigger file after failover.  <application>pg_standby</application>
+       to clean up the trigger file after failover. <application>pg_standby</application>
        will no longer remove the trigger file itself.
       </para>
      </listitem>
