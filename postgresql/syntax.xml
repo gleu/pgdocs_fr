@@ -1525,6 +1525,18 @@ $1.unecolonne
     <secondary>appel</secondary>
    </indexterm>
 
+   <indexterm zone="syntax-aggregates">
+    <primary>ordered-set aggregate</primary>
+   </indexterm>
+
+   <indexterm zone="syntax-aggregates">
+    <primary>WITHIN GROUP</primary>
+   </indexterm>
+
+   <indexterm zone="syntax-aggregates">
+    <primary>FILTER</primary>
+   </indexterm>
+
    <para>
     Une <firstterm>expression d'agrégat</firstterm> représente l'application
     d'une fonction d'agrégat à travers les lignes sélectionnées par une requête.
@@ -1532,17 +1544,19 @@ $1.unecolonne
     sortie, comme la somme ou la moyenne des valeurs en entrée. La syntaxe d'une
     expression d'agrégat est une des suivantes&nbsp;:
 
-<synopsis><replaceable>nom_agregat</replaceable> (<replaceable>expression</replaceable> [ , ... ] [ <replaceable>clause_order_by</replaceable> ] )
-<replaceable>nom_agregat</replaceable> (ALL <replaceable>expression</replaceable> [ , ... ] [ <replaceable>clause_order_by</replaceable> ] )
-<replaceable>nom_agregat</replaceable> (DISTINCT <replaceable>expression</replaceable> [ , ... ] [ <replaceable>clause_order_by</replaceable> ] )
-<replaceable>nom_agregat</replaceable> ( * )</synopsis>
+<synopsis><replaceable>nom_agregat</replaceable> (<replaceable>expression</replaceable> [ , ... ] [ <replaceable>clause_order_by</replaceable> ] ) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ]
+<replaceable>nom_agregat</replaceable> (ALL <replaceable>expression</replaceable> [ , ... ] [ <replaceable>clause_order_by</replaceable> ] ) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ]
+<replaceable>nom_agregat</replaceable> (DISTINCT <replaceable>expression</replaceable> [ , ... ] [ <replaceable>clause_order_by</replaceable> ] ) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ]
+<replaceable>nom_agregat</replaceable> ( * ) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ]
+<replaceable>nom_agregat</replaceable> ( [ <replaceable>expression</replaceable> [ , ... ] ] ) WITHIN GROUP ( <replaceable>clause_order_by</replaceable> ) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ]</synopsis>
 
     où <replaceable>nom_agregat</replaceable> est un agrégat précédemment
     défini (parfois qualifié d'un nom de schéma),
     <replaceable>expression</replaceable> est toute expression de valeur qui ne
     contient pas lui-même une expression d'agrégat ou un appel à une fonction
-    de fenêtrage. <replaceable>order_by_clause</replaceable> est une clause
-    <literal>ORDER BY</literal> optionnelle comme décrite ci-dessous.
+    de fenêtrage. The optional
+    <replaceable>order_by_clause</replaceable> and
+    <replaceable>filter_clause</replaceable> are described below.
    </para>
 
    <para>
@@ -1551,10 +1565,12 @@ $1.unecolonne
     <literal>ALL</literal> est une clause active par défaut. La troisième forme
     fait appel à l'agrégat une fois pour chaque valeur distincte de l'expression
     (ou ensemble distinct de valeurs, pour des expressions multiples) trouvée
-    dans les lignes en entrée. La dernière forme appelle l'agrégat une fois pour
+    dans les lignes en entrée. La quatrième forme appelle l'agrégat une fois pour
     chaque ligne en entrée&nbsp;; comme aucune valeur particulière en entrée
     n'est spécifiée, c'est généralement utile pour la fonction d'agrégat
     <function>count(*)</function>.
+    The last form is used with <firstterm>ordered-set</firstterm> aggregate
+    functions, which are described below.
    </para>
 
    <para>
@@ -1620,6 +1636,70 @@ $1.unecolonne
    </note>
 
    <para>
+    Placing <literal>ORDER BY</literal> within the aggregate's regular argument
+    list, as described so far, is used when ordering the input rows for
+    a <quote>normal</quote> aggregate for which ordering is optional.  There is a
+    subclass of aggregate functions called <firstterm>ordered-set
+    aggregates</firstterm> for which an <replaceable>order_by_clause</replaceable>
+    is <emphasis>required</emphasis>, usually because the aggregate's computation is
+    only sensible in terms of a specific ordering of its input rows.
+    Typical examples of ordered-set aggregates include rank and percentile
+    calculations.  For an ordered-set aggregate,
+    the <replaceable>order_by_clause</replaceable> is written
+    inside <literal>WITHIN GROUP (...)</literal>, as shown in the final syntax
+    alternative above.  The expressions in
+    the <replaceable>order_by_clause</replaceable> are evaluated once per
+    input row just like normal aggregate arguments, sorted as per
+    the <replaceable>order_by_clause</replaceable>'s requirements, and fed
+    to the aggregate function as input arguments.  (This is unlike the case
+    for a non-<literal>WITHIN GROUP</literal> <replaceable>order_by_clause</replaceable>,
+    which is not treated as argument(s) to the aggregate function.)  The
+    argument expressions preceding <literal>WITHIN GROUP</literal>, if any, are
+    called <firstterm>direct arguments</firstterm> to distinguish them from
+    the <firstterm>aggregated arguments</firstterm> listed in
+    the <replaceable>order_by_clause</replaceable>.  Unlike normal aggregate
+    arguments, direct arguments are evaluated only once per aggregate call,
+    not once per input row.  This means that they can contain variables only
+    if those variables are grouped by <literal>GROUP BY</literal>; this restriction
+    is the same as if the direct arguments were not inside an aggregate
+    expression at all.  Direct arguments are typically used for things like
+    percentile fractions, which only make sense as a single value per
+    aggregation calculation.  The direct argument list can be empty; in this
+    case, write just <literal>()</literal> not <literal>(*)</literal>.
+    (<productname>PostgreSQL</productname> will actually accept either spelling, but
+    only the first way conforms to the SQL standard.)
+    An example of an ordered-set aggregate call is:
+
+<programlisting>
+SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY income) FROM households;
+ percentile_disc
+-----------------
+           50489
+</programlisting>
+
+   which obtains the 50th percentile, or median, value of
+   the <structfield>income</structfield> column from table <structname>households</structname>.
+   Here, <literal>0.5</literal> is a direct argument; it would make no sense
+   for the percentile fraction to be a value varying across rows.
+   </para>
+
+   <para>
+    If <literal>FILTER</literal> is specified, then only the input
+    rows for which the <replaceable>filter_clause</replaceable>
+    evaluates to true are fed to the aggregate function; other rows
+    are discarded.  For example:
+<programlisting><![CDATA[
+SELECT
+    count(*) AS unfiltered,
+    count(*) FILTER (WHERE i < 5) AS filtered
+FROM generate_series(1,10) AS s(i);
+ unfiltered | filtered
+------------+----------
+         10 |        4
+(1 row)]]></programlisting>
+   </para>
+
+   <para>
     Les fonctions d'agrégat prédéfinies sont décrites dans la <xref
     linkend="functions-aggregate"/>. D'autres fonctions d'agrégat pourraient
     être ajoutées par l'utilisateur.
@@ -1638,7 +1718,8 @@ $1.unecolonne
     <xref linkend="sql-syntax-scalar-subqueries"/> et la <xref
     linkend="functions-subquery"/>), l'agrégat est normalement évalué sur les
     lignes de la sous-requête. Cependant, une exception survient si les
-    arguments de l'agrégat contiennent seulement des niveaux externes de
+    arguments de l'agrégat (and <replaceable>filter_clause</replaceable>
+    if any) contiennent seulement des niveaux externes de
     variables&nbsp;: ensuite, l'agrégat appartient au niveau externe le plus
     proche et est évalué sur les lignes de cette requête. L'expression de
     l'agrégat est une référence externe pour la sous-requête dans laquelle il
@@ -1674,10 +1755,10 @@ $1.unecolonne
     fenêtrage est une des suivantes&nbsp;:
 
 <synopsis>
-<replaceable>nom_fonction</replaceable> (<optional><replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> ... </optional></optional>) OVER <replaceable>nom_window</replaceable>
-<replaceable>nom_fonction</replaceable> (<optional><replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> ... </optional></optional>) OVER ( <replaceable class="parameter">définition_window</replaceable> )
-<replaceable>nom_fonction</replaceable> ( * ) OVER <replaceable>nom_window</replaceable>
-<replaceable>nom_fonction</replaceable> ( * ) OVER ( <replaceable class="parameter">définition_window</replaceable> )
+<replaceable>nom_fonction</replaceable> (<optional><replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> ... </optional></optional>) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ] OVER <replaceable>nom_window</replaceable>
+<replaceable>nom_fonction</replaceable> (<optional><replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> ... </optional></optional>) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ] OVER ( <replaceable class="parameter">définition_window</replaceable> )
+<replaceable>nom_fonction</replaceable> ( * ) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ] OVER <replaceable>nom_window</replaceable>
+<replaceable>nom_fonction</replaceable> ( * ) [ FILTER ( WHERE <replaceable>clause_filtre</replaceable> ) ] OVER ( <replaceable class="parameter">définition_window</replaceable> )
 </synopsis>
     où <replaceable class="parameter">définition_fenêtrage</replaceable> a comme
     syntaxe&nbsp;:
@@ -1806,10 +1887,20 @@ UNBOUNDED FOLLOWING
    </para>
 
    <para>
+    If <literal>FILTER</literal> is specified, then only the input
+    rows for which the <replaceable>filter_clause</replaceable>
+    evaluates to true are fed to the window function; other rows
+    are discarded.  Only window functions that are aggregates accept
+    a <literal>FILTER</literal> clause.
+   </para>
+
+   <para>
     Les fonctions de fenêtrage internes sont décrites dans la <xref
     linkend="functions-window-table"/>. D'autres fonctions de fenêtrage peuvent
     être ajoutées par l'utilisateur. De plus, toute fonction d'agrégat interne
     ou définie par l'utilisateur peut être utilisée comme fonction de fenêtrage.
+    Ordered-set aggregates presently
+    cannot be used as window functions, however.
    </para>
 
    <para>

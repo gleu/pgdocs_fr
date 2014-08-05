@@ -5,6 +5,10 @@
      révision $Revision$ -->
 
 <refentry id="sql-altertable">
+ <indexterm zone="sql-altertable">
+  <primary>ALTER TABLE</primary>
+ </indexterm>
+
  <refmeta>
   <refentrytitle>ALTER TABLE</refentrytitle>
   <manvolnum>7</manvolnum>
@@ -42,6 +46,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">nom_colonne</replaceable> SET STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN }
     ADD <replaceable class="PARAMETER">contrainte_table</replaceable> [ NOT VALID ]
     ADD <replaceable class="PARAMETER">contrainte_table_utilisant_index</replaceable>
+    ALTER CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable> [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
     VALIDATE CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable>
     DROP CONSTRAINT [ IF EXISTS ] <replaceable class="parameter">nom_contrainte</replaceable> [ RESTRICT | CASCADE ]
     DISABLE TRIGGER [ <replaceable class="parameter">nom_declencheur</replaceable> | ALL | USER ]
@@ -64,6 +69,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     NOT OF
     OWNER TO <replaceable class="parameter">nouveau_proprietaire</replaceable>
     SET TABLESPACE <replaceable class="parameter">nouvel_espacelogique</replaceable>
+    REPLICA IDENTITY {DEFAULT | USING INDEX <replaceable class="PARAMETER">index_name</replaceable> | FULL | NOTHING}
 
 <phrase>et <replaceable class="PARAMETER">table_constraint_using_index</replaceable> est:</phrase>
 
@@ -75,13 +81,13 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
 
  <refsect1>
   <title>Description</title>
-  <indexterm zone="sql-altertable">
-   <primary>ALTER TABLE</primary>
-  </indexterm>
 
   <para>
    <command>ALTER TABLE</command> modifie la définition d'une table existante.
-   Il existe plusieurs variantes&nbsp;:
+   Il existe plusieurs variantes described below. Note that the lock level required
+   may differ for each subform. An <literal>ACCESS EXCLUSIVE</literal> lock is held
+   unless explicitly noted. When multiple subcommands are listed, the lock
+   held will be the strictest one required from any subcommand.
 
   <variablelist>
    <varlistentry>
@@ -174,6 +180,9 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
       l'utilisation des statistiques par le planificateur de requêtes de
       <productname>PostgreSQL</productname>, voir <xref linkend="planner-stats"/>.
      </para>
+     <para>
+      SET STATISTICS acquires a <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -208,16 +217,23 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
       <productname>PostgreSQL</productname>, référez vous à <xref
       linkend="planner-stats"/>.
      </para>
+     <para>
+      Changing per-attribute options acquires a
+      <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
+     </para>
     </listitem>
    </varlistentry>
 
    <varlistentry>
     <term><literal>SET STORAGE</literal></term>
     <listitem>
-    <indexterm>
-     <primary>TOAST</primary>
-     <secondary>configuration de stockage par colonne</secondary>
-    </indexterm>
+    <term>
+     <literal>SET STORAGE</literal>
+     <indexterm>
+      <primary>TOAST</primary>
+      <secondary>per-column storage settings</secondary>
+     </indexterm>
+    </term>
 
      <para>
       Modifie le mode de stockage pour une colonne. Cela permet de contrôler si
@@ -317,6 +333,16 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
    </varlistentry>
 
    <varlistentry>
+    <term><literal>ALTER CONSTRAINT</literal></term>
+    <listitem>
+     <para>
+      This form alters the attributes of a constraint that was previously
+      created. Currently only foreign key constraints may be altered.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>VALIDATE CONSTRAINT</literal></term>
     <listitem>
      <para>
@@ -328,12 +354,18 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
       la contrainte est déjà marquée valide, cette clause ne fait rien.
      </para>
      <para>
-      La validation peut être un long processus sur des tables volumineuses
-      et nécessite actuellement un verrou <literal>ACCESS EXCLUSIVE</literal>.
+      La validation peut être un long processus sur des tables volumineuses.
       L'intérêt de séparer la validation de la création initiale est que vous
       pouvez déférer la validation à un moment plus calme, ou peut être utilisé
       pour donner un temps supplémentaire pour corriger les erreurs existantes
-      tout en évitant de nouvelles erreurs.
+      tout en évitant de nouvelles erreurs. Note also that validation on its own
+      does not prevent normal write commands against the table while it runs.
+     </para>
+     <para>
+      Validation acquires only a <literal>SHARE UPDATE EXCLUSIVE</literal> lock
+      on the table being altered. If the constraint is a foreign key then
+      a <literal>ROW SHARE</literal> lock is also required on
+      the table referenced by the constraint.
      </para>
     </listitem>
    </varlistentry>
@@ -405,6 +437,9 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
       opérations <xref linkend="sql-cluster"/>.
       La table n'est pas réorganisée.
      </para>
+     <para>
+      Changing cluster options acquires a <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -415,6 +450,9 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
       Supprime de la table la spécification d'index
 	  <xref linkend="sql-cluster"/> la plus récemment
       utilisée. Cela agit sur les opérations de réorganisation suivantes qui ne spécifient pas d'index.
+     </para>
+     <para>
+      Changing cluster options acquires a <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
      </para>
     </listitem>
    </varlistentry>
@@ -554,9 +592,9 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     <term><literal>OWNER</literal></term>
     <listitem>
      <para>
-      Change le propriétaire d'une table, d'une
-      séquence ou d'une vue. Le nouveau propriétaire est celui passé 
-      en paramètre.
+      Change le propriétaire d'une table, d'une séquence, d'une vue, d'une vue
+      matérialisée ou d'une table distante. Le nouveau propriétaire est celui
+      passé en paramètre.
      </para>
     </listitem>
    </varlistentry>
@@ -575,13 +613,34 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     </listitem>
    </varlistentry>
 
+   <varlistentry id="SQL-CREATETABLE-REPLICA-IDENTITY">
+    <term><literal>REPLICA IDENTITY</literal></term>
+    <listitem>
+     <para>
+      This form changes the information which is written to the write-ahead log
+      to identify rows which are updated or deleted.  This option has no effect
+      except when logical replication is in use.  <literal>DEFAULT</literal>
+      (the default for non-system tables) records the 
+      old values of the columns of the primary key, if any.  <literal>USING INDEX</literal>
+      records the old values of the columns covered by the named index, which
+      must be unique, not partial, not deferrable, and include only columns marked
+      <literal>NOT NULL</literal>.  <literal>FULL</literal> records the old values of all columns
+      in the row.  <literal>NOTHING</literal> records no information about the old row.
+      (This is the default for system tables.)
+      In all cases, no old values are logged unless at least one of the columns
+      that would be logged differs between the old and new versions of the row.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry>
     <term><literal>RENAME</literal></term>
     <listitem>
      <para>
-      Change le nom d'une table (d'un index, d'une séquence ou d'une vue) ou
-      le nom d'une colonne individuelle de la table ou le nom d'une contrainte
-      de la table. Cela n'a aucun effet sur la donnée stockée.
+      Change le nom d'une table (ou d'un index, d'une séquence, d'une vue, d'une
+      vue matérialisée ou d'une table distante) ou le nom d'une colonne
+      individuelle de la table ou le nom d'une contrainte de la table. Cela n'a
+      aucun effet sur la donnée stockée.
      </para>
     </listitem>
    </varlistentry>
@@ -675,7 +734,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
      </varlistentry>
 
      <varlistentry>
-      <term><replaceable class="parameter">type</replaceable></term>
+      <term><replaceable class="parameter">type_données</replaceable></term>
       <listitem>
        <para>
         Le type de données de la nouvelle colonne, ou le nouveau type de données d'une
@@ -697,7 +756,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
       <term><replaceable class="parameter">nomdecontrainte</replaceable></term>
       <listitem>
        <para>
-        Le nom d'une contrainte existante à supprimer.
+        Le nom d'une nouvelle contrainte ou d'une contrainte existante à supprimer.
        </para>
       </listitem>
      </varlistentry>
@@ -763,7 +822,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
       <term><replaceable class="parameter">nomindex</replaceable></term>
       <listitem>
        <para>
-        Le nom de l'index sur lequel la table doit être réorganisée.
+        Le nom d'un index existant.
        </para>
       </listitem>
      </varlistentry>
@@ -842,13 +901,17 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     les lignes existantes de cette table sont initialisées avec la valeur par
     défaut de la colonne (NULL si aucune clause <literal>DEFAULT</literal> n'a été
     définie).
+    If there is no <literal>DEFAULT</literal> clause, this is merely a metadata
+    change and does not require any immediate update of the table's data;
+    the added NULL values are supplied on readout, instead.
    </para>
 
    <para>
-    Ajouter une colonne avec une valeur par défaut différente de NULL ou
-    modifier le type d'une colonne existante requiert que la table entière et
-    les index soient réécrits.
-    Il existe une exception : si la clause  <literal>USING</literal> ne change pas le
+    Adding a column with a <literal>DEFAULT</literal> clause or changing the type of
+    an existing column will require the entire table and its indexes to be
+    rewritten.  As an exception when changing the type of an existing column,
+    if the <literal>USING</literal> clause
+    ne change pas le
     contenu de la colonne et que l'ancien type est soit transformable de façon binaire 
     dans le nouveau type, ou bien un domaine sans contrainte reposant sur le nouveau type, alors
     il n'est pas nécessaire de réécrire la table, mais tous les index sur les colonnes affectées
@@ -1060,6 +1123,14 @@ ALTER TABLE ONLY distributeurs DROP CONSTRAINT verif_cp;
   </para>
 
   <para> 
+   To add a foreign key constraint to a table with the least impact on other work:
+<programlisting>
+ALTER TABLE distributors ADD CONSTRAINT distfk FOREIGN KEY (address) REFERENCES addresses (address) NOT VALID;
+ALTER TABLE distributors VALIDATE CONSTRAINT distfk;
+</programlisting>
+  </para>
+
+  <para>
    Ajouter une contrainte unique (multicolonnes) à une table&nbsp;:
 <programlisting>ALTER TABLE distributeurs ADD CONSTRAINT dist_id_codepostal_key UNIQUE (dist_id, code_postal);
 </programlisting>

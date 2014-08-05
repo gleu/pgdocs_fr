@@ -693,7 +693,9 @@ protocol to make nodes agree on a serializable transactional order.
     standby&nbsp;; c'est-à-dire, créez un rôle et mettez en place une ou des entrées appropriées dans
     <filename>pg_hba.conf</filename> avec le champ database positionné à
     <literal>replication</literal>. Vérifiez aussi que <varname>max_wal_senders</varname> est positionné
-    à une valeur suffisamment grande dans le fichier de configuration du serveur primaire.
+    à une valeur suffisamment grande dans le fichier de configuration du serveur primaire. If replication slots will be used,
+    ensure that <varname>max_replication_slots</varname> is set sufficiently
+    high as well.
    </para>
 
    <para>
@@ -809,13 +811,14 @@ archive_cleanup_command = 'pg_archivecleanup /path/to/archive %r'
 
    <para>
     Si vous utilisez la streaming replication sans archivage en continu des fichiers,
-    vous devez positionner <varname>wal_keep_segments</varname> sur le maître à une valeur
-    suffisamment grande pour garantir que les anciens segments de WAL ne sont pas
-    recyclés trop tôt, alors que le standby pourrait toujours avoir besoin d'eux pour
-    rattraper son retard. Si le standby prend trop de retard, il aura besoin d'être réinitialisé
-    à partir d'une nouvelle sauvegarde de base. Si vous positionnez une archive de WAL qui est accessible
-    du standby, <varname>wal_keep_segments</varname> n'est pas nécessaire, puisque le standby peut toujours
-    utiliser l'archive pour rattraper son retard.
+    the server might recycle old WAL segments before the standby
+    has received them.  If this occurs, the standby will need to be
+    reinitialized from a new base backup.  You can avoid this by setting
+    <varname>wal_keep_segments</varname> to a value large enough to ensure that
+    WAL segments are not recycled too early, or by configuring a replication
+    slot for the standby.  If you set up a WAL archive that's accessible from
+    the standby, these solutions are not required, since the standby can
+    always use the archive to catch up provided it retains enough segments.
    </para>
 
    <para>
@@ -931,6 +934,83 @@ primary_conninfo = 'host=192.168.1.50 port=5432 user=foo password=foopass'
     </para>
    </sect3>
 
+  </sect2>
+
+  <sect2 id="streaming-replication-slots">
+   <title>Replication Slots</title>
+   <indexterm>
+    <primary>replication slot</primary>
+    <secondary>streaming replication</secondary>
+   </indexterm>
+   <para>
+    Replication slots provide an automated way to ensure that the master does
+    not remove WAL segments until they have been received by all standbys,
+    and that the master does not remove rows which could cause a
+    <link linkend="hot-standby-conflict">recovery conflict</link> even when the
+    standby is disconnected.
+   </para>
+   <para>
+    In lieu of using replication slots, it is possible to prevent the removal
+    of old WAL segments using <xref linkend="guc-wal-keep-segments"/>, or by
+    storing the segments in an archive using
+    <xref linkend="guc-archive-command"/>.
+    However, these methods often result in retaining more WAL segments than
+    required, whereas replication slots retain only the number of segments
+    known to be needed.  An advantage of these methods is that they bound
+    the space requirement for <literal>pg_xlog</literal>; there is currently no way
+    to do this using replication slots.
+   </para>
+   <para>
+    Similarly, <xref linkend="guc-hot-standby-feedback"/>
+    and <xref linkend="guc-vacuum-defer-cleanup-age"/> provide protection against
+    relevant rows being removed by vacuum, but the former provides no
+    protection during any time period when the standby is not connected,
+    and the latter often needs to be set to a high value to provide adequate
+    protection.  Replication slots overcome these disadvantages.
+   </para>
+   <sect3 id="streaming-replication-slots-manipulation">
+    <title>Querying and manipulating replication slots</title>
+    <para>
+     Each replication slot has a name, which can contain lower-case letters,
+     numbers, and the underscore character.
+    </para>
+    <para>
+     Existing replication slots and their state can be seen in the
+     <link linkend="catalog-pg-replication-slots"><structname>pg_replication_slots</structname></link>
+     view.
+    </para>
+    <para>
+     Slots can be created and dropped either via the streaming replication
+     protocol (see <xref linkend="protocol-replication"/>) or via SQL
+     functions (see <xref linkend="functions-replication"/>).
+    </para>
+   </sect3>
+   <sect3 id="streaming-replication-slots-config">
+    <title>Configuration Example</title>
+    <para>
+     You can create a replication slot like this:
+<programlisting>
+postgres=# SELECT * FROM pg_create_physical_replication_slot('node_a_slot');
+  slot_name  | xlog_position
+-------------+---------------
+ node_a_slot |
+
+postgres=# SELECT * FROM pg_replication_slots;
+  slot_name  | slot_type | datoid | database | active | xmin | restart_lsn
+-------------+-----------+--------+----------+--------+------+-------------
+ node_a_slot | physical  |        |          | f      |      |
+(1 row)
+</programlisting>
+     To configure the standby to use this slot, <varname>primary_slot_name</varname>
+     should be configured in the standby's <filename>recovery.conf</filename>.
+     Here is a simple example:
+<programlisting>
+standby_mode = 'on'
+primary_conninfo = 'host=192.168.1.50 port=5432 user=foo password=foopass'
+primary_slot_name = 'node_a_slot'
+</programlisting>
+    </para>
+   </sect3>
   </sect2>
 
   <sect2 id="cascading-replication">
@@ -1920,10 +2000,14 @@ if (!triggered)
     ne sera pas meilleure si les requêtes du serveur en attente s'exécutaient
     directement sur le serveur maître. Vous avez toujours le bénéfice de
     l'exécution sur un serveur distant.
-    <varname>max_standby_archive_delay</varname> doit être configuré avec une
-    valeur suffisamment large dans ce cas car les journaux de transactions
-    en retard pourraient déjà contenir des entrées en conflit avec les requêtes
-    sur le serveur en attente.
+    If standby servers connect and disconnect frequently, you
+    might want to make adjustments to handle the period when
+    <varname>hot_standby_feedback</varname> feedback is not being provided.
+    For example, consider increasing <varname>max_standby_archive_delay</varname>
+    so that queries are not rapidly canceled by conflicts in WAL archive
+    files during disconnected periods.  You should also consider increasing
+    <varname>max_standby_streaming_delay</varname> to avoid rapid cancellations
+    by newly-arrived streaming WAL entries after reconnection.
    </para>
 
    <para>
@@ -1973,7 +2057,7 @@ LOG:  database system is ready to accept read only connections
     L'information sur la cohérence est enregistrée une fois par checkpoint sur le primaire.
     Il n'est pas possible d'activer le hot standby si on lit des WAL générés durant
     une période pendant laquelle <varname>wal_level</varname> n'était pas positionné
-    à <literal>hot_standby</literal> sur le primaire. L'arrivée à un état cohérent
+    à <literal>hot_standby</literal> ou <literal>logical</literal> sur le primaire. L'arrivée à un état cohérent
     peut aussi être retardée si ces deux conditions se présentent:
 
       <itemizedlist>

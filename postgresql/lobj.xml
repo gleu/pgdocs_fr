@@ -516,12 +516,81 @@ int lo_truncate64(PGcon *conn, int fd, pg_int64 len);
 <title>Fonctions du côté serveur</title>
 
 <para>
-	Ce sont des fonctions côté serveur appelables à partir de SQL et
-	correspondant à chaque fonction côté client décrite ci-dessus&nbsp;; en
-	fait, pour leur grande part, les fonctions côté client sont simplement
-	des interfaces vers les fonctions équivalentes côté serveur. Celles qui
-	sont réellement utiles à appeler via des commandes SQL sont
-	<function>lo_creat</function><indexterm><primary>lo_creat</primary></indexterm>,
+   Server-side functions tailored for manipulating large objects from SQL are
+   listed in <xref linkend="lo-funcs-table"/>.
+  </para>
+
+  <table id="lo-funcs-table">
+   <title>SQL-oriented Large Object Functions</title>
+   <tgroup cols="5">
+    <thead>
+     <row>
+      <entry>Function</entry>
+      <entry>Return Type</entry>
+      <entry>Description</entry>
+      <entry>Example</entry>
+      <entry>Result</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry>
+       <indexterm>
+        <primary>lo_from_bytea</primary>
+       </indexterm>
+       <literal><function>lo_from_bytea(<parameter>loid</parameter> <type>oid</type>, <parameter>string</parameter> <type>bytea</type>)</function></literal>
+      </entry>
+      <entry><type>oid</type></entry>
+      <entry>
+       Create a large object and store data there, returning its OID.
+       Pass <literal>0</literal> to have the system choose an OID.
+      </entry>
+      <entry><literal>lo_from_bytea(0, E'\\xffffff00')</literal></entry>
+      <entry><literal>24528</literal></entry>
+     </row>
+
+     <row>
+      <entry>
+       <indexterm>
+        <primary>lo_put</primary>
+       </indexterm>
+       <literal><function>lo_put(<parameter>loid</parameter> <type>oid</type>, <parameter>offset</parameter> <type>bigint</type>, <parameter>str</parameter> <type>bytea</type>)</function></literal>
+      </entry>
+      <entry><type>void</type></entry>
+      <entry>
+       Write data at the given offset.
+      </entry>
+      <entry><literal>lo_put(24528, 1, E'\\xaa')</literal></entry>
+      <entry></entry>
+     </row>
+
+     <row>
+      <entry>
+       <indexterm>
+        <primary>lo_get</primary>
+       </indexterm>
+       <literal><function>lo_get(<parameter>loid</parameter> <type>oid</type> <optional>, <parameter>from</parameter> <type>bigint</type>, <parameter>for</parameter> <type>int</type></optional>)</function></literal>
+      </entry>
+      <entry><type>bytea</type></entry>
+      <entry>
+       Extract contents or a substring thereof.
+      </entry>
+      <entry><literal>lo_get(24528, 0, 3)</literal></entry>
+      <entry><literal>\xffaaff</literal></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   There are additional server-side functions corresponding to each of the
+   client-side functions described earlier; indeed, for the most part the
+   client-side functions are simply interfaces to the equivalent server-side
+   functions.  The ones just as convenient to call via SQL commands are
+    <function>lo_creat</function><indexterm><primary>lo_creat</primary></indexterm>,
+    <function>lo_create</function>,
 	<function>lo_create</function><indexterm><primary>lo_create</primary></indexterm>,
 	<function>lo_unlink</function><indexterm><primary>lo_unlink</primary></indexterm>,
 	<function>lo_import</function><indexterm><primary>lo_import</primary></indexterm> et
@@ -585,28 +654,39 @@ pas le droit superutilisateur.
   <example id="lo-example">
    <title>Exemple de programme sur les objets larges avec
 <application>libpq</application></title>
-<programlisting><![CDATA[/*--------------------------------------------------------------
+<programlisting><![CDATA[/*-------------------------------------------------------------------------
  *
- * testlo.c--
+ * testlo.c
  *    test utilisant des objets larges avec libpq
  *
- * Copyright (c) 1994, Regents of the University of California
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
  *
- *--------------------------------------------------------------
+ *
+ * IDENTIFICATION
+ *    src/test/examples/testlo.c
+ *
+ *-------------------------------------------------------------------------
  */
-#include <stdio.h>
+#include <stdlib.h>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "libpq-fe.h"
 #include "libpq/libpq-fs.h"
 
-#define BUFSIZE          1024
+#define BUFSIZE         1024
 
 /*
- * importFile
+ * importFile -
  *    importe le fichier "in_filename" dans la base de données
  *    en tant qu'objet "lobjOid"
  *
  */
-Oid
+static Oid
 importFile(PGconn *conn, char *filename)
 {
     Oid         lobjId;
@@ -622,7 +702,7 @@ importFile(PGconn *conn, char *filename)
     fd = open(filename, O_RDONLY, 0666);
     if (fd < 0)
     {                           /* error */
-        fprintf(stderr, "can't open unix file %s\n", filename);
+        fprintf(stderr, "cannot open unix file\"%s\"\n", filename);
     }
 
     /*
@@ -630,7 +710,7 @@ importFile(PGconn *conn, char *filename)
      */
     lobjId = lo_creat(conn, INV_READ | INV_WRITE);
     if (lobjId == 0)
-        fprintf(stderr, "can't create large object\n");
+        fprintf(stderr, "cannot create large object");
 
     lobj_fd = lo_open(conn, lobjId, INV_WRITE);
 
@@ -641,16 +721,16 @@ importFile(PGconn *conn, char *filename)
     {
         tmp = lo_write(conn, lobj_fd, buf, nbytes);
         if (tmp < nbytes)
-            fprintf(stderr, "error while reading large object\n");
+            fprintf(stderr, "error while reading \"%s\"", filename);
     }
 
-    (void) close(fd);
-    (void) lo_close(conn, lobj_fd);
+    close(fd);
+    lo_close(conn, lobj_fd);
 
     return lobjId;
 }
 
-void
+static void
 pickout(PGconn *conn, Oid lobjId, int start, int len)
 {
     int         lobj_fd;
@@ -660,10 +740,7 @@ pickout(PGconn *conn, Oid lobjId, int start, int len)
 
     lobj_fd = lo_open(conn, lobjId, INV_READ);
     if (lobj_fd < 0)
-    {
-        fprintf(stderr, "can't open large object %d\n",
-                lobjId);
-    }
+        fprintf(stderr, "cannot open large object %u", lobjId);
 
     lo_lseek(conn, lobj_fd, start, SEEK_SET);
     buf = malloc(len + 1);
@@ -672,16 +749,18 @@ pickout(PGconn *conn, Oid lobjId, int start, int len)
     while (len - nread > 0)
     {
         nbytes = lo_read(conn, lobj_fd, buf, len - nread);
-        buf[nbytes] = ' ';
+        buf[nbytes] = '\0';
         fprintf(stderr, ">>> %s";, buf);
         nread += nbytes;
+        if (nbytes <= 0)
+            break;              /* no more data? */
     }
     free(buf);
     fprintf(stderr, "\n");
     lo_close(conn, lobj_fd);
 }
 
-void
+static void
 overwrite(PGconn *conn, Oid lobjId, int start, int len)
 {
     int         lobj_fd;
@@ -692,23 +771,25 @@ overwrite(PGconn *conn, Oid lobjId, int start, int len)
 
     lobj_fd = lo_open(conn, lobjId, INV_WRITE);
     if (lobj_fd < 0)
-    {
-        fprintf(stderr, "can't open large object %d\n",
-                lobjId);
-    }
+        fprintf(stderr, "cannot open large object %u", lobjId);
 
     lo_lseek(conn, lobj_fd, start, SEEK_SET);
     buf = malloc(len + 1);
 
     for (i = 0; i < len; i++)
         buf[i] = 'X';
-    buf[i] = ' ';
+    buf[i] = '\0';
 
     nwritten = 0;
     while (len - nwritten > 0)
     {
         nbytes = lo_write(conn, lobj_fd, buf + nwritten, len - nwritten);
         nwritten += nbytes;
+        if (nbytes <= 0)
+        {
+            fprintf(stderr, "\nWRITE FAILED!\n");
+            break;
+        }
     }
     free(buf);
     fprintf(stderr, "\n");
@@ -716,12 +797,12 @@ overwrite(PGconn *conn, Oid lobjId, int start, int len)
 }
 
 /*
- * exportFile
+ * exportFile -
  *    exporte l'objet large "lobjOid" dans le fichier
  * "out_filename"
  *
  */
-void
+static void
 exportFile(PGconn *conn, Oid lobjId, char *filename)
 {
     int         lobj_fd;
@@ -735,18 +816,15 @@ exportFile(PGconn *conn, Oid lobjId, char *filename)
      */
     lobj_fd = lo_open(conn, lobjId, INV_READ);
     if (lobj_fd < 0)
-    {
-        fprintf(stderr, "can't open large object %d\n",
-                lobjId);
-    }
+        fprintf(stderr, "cannot open large object %u", lobjId);
 
     /*
      * ouvre le fichier à écrire
      */
-    fd = open(filename, O_CREAT | O_WRONLY, 0666);
+    fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (fd < 0)
     {                           /* error */
-        fprintf(stderr, "can't open unix file %s\n",
+        fprintf(stderr, "cannot open unix file\"%s\"",
                 filename);
     }
 
@@ -758,13 +836,13 @@ exportFile(PGconn *conn, Oid lobjId, char *filename)
         tmp = write(fd, buf, nbytes);
         if (tmp < nbytes)
         {
-            fprintf(stderr, "error while writing %s\n",
+            fprintf(stderr, "error while writing \"%s\"",
                     filename);
         }
     }
 
-    (void) lo_close(conn, lobj_fd);
-    (void) close(fd);
+    lo_close(conn, lobj_fd);
+    close(fd);
 
     return;
 }
@@ -803,37 +881,40 @@ main(int argc, char **argv)
     conn = PQsetdb(NULL, NULL, NULL, NULL, database);
 
     /* check to see that the backend connection was successfully made */
-    if (PQstatus(conn) == CONNECTION_BAD)
+    if (PQstatus(conn) != CONNECTION_OK)
     {
-        fprintf(stderr, "Connection to database '%s' failed.\n", database);
-        fprintf(stderr, "%s", PQerrorMessage(conn));
+        fprintf(stderr, "Connection to database failed: %s",
+                PQerrorMessage(conn));
         exit_nicely(conn);
     }
 
     res = PQexec(conn, "begin");
     PQclear(res);
-
-    printf("importing file %s\n", in_filename);
+    printf("importing file \"%s\" ...\n", in_filename);
 /*  lobjOid = importFile(conn, in_filename); */
     lobjOid = lo_import(conn, in_filename);
-/*
-    printf("as large object %d.\n", lobjOid);
+    if (lobjOid == 0)
+        fprintf(stderr, "%s\n", PQerrorMessage(conn));
+    else
+    {
+        printf("\tas large object %u.\n", lobjOid);
 
-    printf("picking out bytes 1000-2000 of the large object\n");
-    pickout(conn, lobjOid, 1000, 1000);
-
-    printf("overwriting bytes 1000-2000 of the large object with X's\n");
-    overwrite(conn, lobjOid, 1000, 1000);
-*/
-
-    printf("exporting large object to file %s\n", out_filename);
-/*    exportFile(conn, lobjOid, out_filename); */
-    lo_export(conn, lobjOid, out_filename);
-
+        printf("picking out bytes 1000-2000 of the large object\n");
+        pickout(conn, lobjOid, 1000, 1000);
+ 
+        printf("overwriting bytes 1000-2000 of the large object with X's\n");
+        overwrite(conn, lobjOid, 1000, 1000);
+ 
+        printf("exporting large object to file \"%s\" ...\n", out_filename);
+/*      exportFile(conn, lobjOid, out_filename); */
+        if (lo_export(conn, lobjOid, out_filename) < 0)
+            fprintf(stderr, "%s\n", PQerrorMessage(conn));
+    }
+ 
     res = PQexec(conn, "end");
     PQclear(res);
     PQfinish(conn);
-    exit(0);
+    return 0;
 }
 ]]></programlisting>
 </example>

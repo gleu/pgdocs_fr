@@ -423,9 +423,12 @@
    </para>
 
    <para>
-    La raison pour laquelle un VACUUM périodique résout le problème est que
-    <productname>PostgreSQL</productname> réserve un ID de transaction spécial,
-    <literal>FrozenXID</literal>. Ce XID ne suit pas les règles standards de
+    <command>VACUUM</command> will mark rows as <emphasis>frozen</emphasis>, indicating that
+    they were inserted by a transaction which committed sufficiently far in
+    the past that the effects of the inserting transaction is certain to be
+    visible, from an MVCC perspective, to all current and future transactions.
+    <productname>PostgreSQL</productname> reserves a special XID,
+    <literal>FrozenTransactionId</literal>, which ne suit pas les règles standards de
     comparaison des identifiants de transactions et est toujours considéré
     comme plus âgé que les XID normaux. Les XID normaux sont comparés sur une
     base modulo-2<superscript>32</superscript>. Cela signifie
@@ -436,28 +439,26 @@
     comme appartenant au passé pour les deux milliards de transactions qui
     suivront quelque soit le XID. Si la ligne existe encore après deux milliards
     de transactions, elle apparaîtra soudainement comme appartenant au futur.
-    Pour éviter ceci, les versions trop anciennes doivent
-    se voir affecter le XID <literal>FrozenXID</literal> avant d'atteindre le seuil
-    fatidique des deux milliards de transactions. Une fois qu'elles ont ce XID
-    spécifique, elles appartiendront au passé pour toutes les transactions même
-    en cas de cycle. Cette affectation des anciens XID est réalisée par
-    <command>VACUUM</command>.
+    frozen row versions are treated as if the inserting XID were
+    <literal>FrozenTransactionId</literal>, so that they will appear to be
+    <quote>in the past</quote> to all normal transactions regardless of wraparound
+    issues, and so such row versions will be valid until deleted, no matter
+    how long that is.
    </para>
 
    <para>
-    <xref linkend="guc-vacuum-freeze-min-age"/> contrôle l'âge que doit avoir une
-    valeur XID avant qu'elle soit remplacée par <literal>FrozenXID</literal>. Les
-    valeurs plus importantes de ces deux paramètres préservent l'information
-    transactionnelle plus longtemps alors que les valeurs plus petites
-    augmentent le nombre de transactions qui peuvent survenir avant un nouveau
+    <xref linkend="guc-vacuum-freeze-min-age"/> its row version will be
+    frozen.  Increasing this setting may avoid unnecessary work if the
+    rows that would otherwise be frozen will soon be modified again,
+    but decreasing this setting increases le nombre de transactions qui peuvent survenir avant un nouveau
     VACUUM de la table.
    </para>
 
    <para>
     <command>VACUUM</command> ignore habituellement les pages qui n'ont pas de
     lignes mortes, mais ces pages pourraient toujours avoir des versions de
-    lignes avec d'anciennes valeurs XID. Pour s'assurer que tous les anciens
-    XID ont été remplacés par <literal>FrozenXID</literal>, un parcours complet
+    lignes avec d'anciennes valeurs XID. Pour s'assurer que toutes les anciennes
+    versions de lignes ont été gelées, un parcours complet
     de la table est nécessaire. <xref linkend="guc-vacuum-freeze-table-age"/>
     contrôle quand <command>VACUUM</command> fait cela&nbsp;: un parcours
     complet est forcé si la table n'a pas été parcourue complètement pendant
@@ -474,7 +475,7 @@
     fois. Si elle devait rester sans VACUUM après
     cela, des pertes de données pourraient survenir. Pour s'assurer que cela
     n'arrive pas, autovacuum est appelé sur chaque table qui pourrait
-    contenir des XID plus âgés que ne l'indique le paramètre de configuration
+    contenir des lignes non gelées dont les XID ont un âge plus avancé que le paramètre de configuration
     <xref linkend="guc-autovacuum-freeze-max-age"/>. (Ceci arrivera même si
     autovacuum est désactivé.)
    </para>
@@ -535,31 +536,28 @@
    <para>
     Un inconvénient causé par la diminution de
     <varname>vacuum_freeze_min_age</varname> est que cela pourrait faire que
-    <command>VACUUM</command> travaille sans raison&nbsp;: modifier le XID de
-    la ligne d'une table à <literal>FrozenXID</literal> est une perte de temps
+    <command>VACUUM</command> travaille sans raison&nbsp;: geler une version de
+    ligne est une perte de temps
     si la ligne est modifiée rapidement après (ce qui fait qu'elle obtiendra
     un nouveau XID). Donc ce paramètre doit être suffisamment important pour
     que les lignes ne soient pas gelées jusqu'à ce qu'il soit pratiquement
-    certain qu'elles ne seront plus modifiées. Un autre inconvénient en
-    diminuant ce paramètre est que les détails sur la transaction exacte
-    qui a inséré ou modifié une ligne seront perdus plus tôt. Cette information
-    est quelque fois utile, particulièrement lors d'une analyse de ce qui s'est
-    mal passé sur une base après un problème. Pour ces deux raisons, baisser
-    ce paramètre n'est pas recommandé sauf pour les tables entièrement statiques.
+    certain qu'elles ne seront plus modifiées.
    </para>
 
    <para>
-    Pour tracer l'âge des plus anciens XID de la base, <command>VACUUM</command>
+    Pour tracer l'âge des plus anciens XID non gelés de la base, <command>VACUUM</command>
     stocke les statistiques sur XID dans les tables systèmes
     <structname>pg_class</structname> et <structname>pg_database</structname>.
     En particulier, la colonne <structfield>relfrozenxid</structfield> de la
     ligne <structname>pg_class</structname> d'une table contient le XID final
     du gel qui a été utilisé par le dernier <command>VACUUM</command> pour cette
     table. Il est garanti que tous les XID plus anciens que ce XID ont été
-    remplacés par <literal>FrozenXID</literal> pour cette table. De façon
+    remplacés par <literal>FrozenXID</literal> pour cette table.All rows
+    inserted by transactions with XIDs older than this cutoff XID are
+    guaranteed to have been frozen. De façon
     similaire, la colonne <structfield>datfrozenxid</structfield> de la ligne
     <structname>pg_database</structname> de la base est une limite inférieure des
-    XID normaux apparaissant dans cette base &mdash; c'est tout simplement le
+    XID non gelés apparaissant dans cette base &mdash; c'est tout simplement le
     minimum des valeurs <structfield>relfrozenxid</structfield> par table dans
     cette base. Pour examiner cette information, le plus simple est d'exécuter
     des requêtes comme&nbsp;:
@@ -616,7 +614,7 @@ HINT:  To avoid a database shutdown, execute a database-wide VACUUM in "mydb".
 
 <programlisting>
 ERROR:  database is not accepting commands to avoid wraparound data loss in database "mydb"
-HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
+HINT:  Stop the postmaster and vacuum that database in single-user mode.
 </programlisting>
 
     La marge de sécurité de un million de transactions existe pour permettre à
@@ -624,10 +622,10 @@ HINT:  Stop the postmaster and use a standalone backend to VACUUM in "mydb".
     manuellement les commandes <command>VACUUM</command> requises. Néanmoins, comme le
     système n'exécute pas de commandes tant qu'il n'est pas sorti du mode
     d'arrêt par sécurité, la seule façon de le faire est de stopper le
-    serveur et d'utiliser un moteur simple utilisateur pour exécuter le
+    serveur et de démarrer le serveur en mode simple utilisateur pour exécuter le
     <command>VACUUM</command>. Le mode d'arrêt n'est pas pris en compte par le moteur
-    simple utilisateur. Voir la page de référence de <xref linkend="app-postgres"/> pour
-    des détails sur l'utilisation du moteur simple utilisateur.
+    en mode simple utilisateur. Voir la page de référence de <xref linkend="app-postgres"/> pour
+    des détails sur l'utilisation du moteur en mode simple utilisateur.
    </para>
 
    <sect3 id="vacuum-for-multixact-wraparound">

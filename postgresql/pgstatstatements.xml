@@ -31,8 +31,8 @@
   <para>
    Les statistiques collectées par le module sont rendues disponibles par une
    vue système nommée <structname>pg_stat_statements</structname>. Cette vue
-   contient une ligne pour chaque texte de requête, identifiant de base de
-   données et identifiant utilisateur distincts (jusqu'au nombre maximum
+   contient une ligne pour chaque identifiant de base de données, identifiant
+   utilisateur et identifiant de requête distincts (jusqu'au nombre maximum
    d'ordres distincts que le module peut surveiller). Les colonnes de la vue
    sont affichées dans <xref linkend="pgstatstatements-columns"/>.
   </para>
@@ -64,11 +64,18 @@
       <entry>OID de la base de données dans laquelle l'ordre SQL a été exécuté</entry>
      </row>
 
-    <row>
+     <row>
+      <entry><structfield>queryid</structfield></entry>
+      <entry><type>bigint</type></entry>
+      <entry></entry>
+      <entry>Internal hash code, computed from the statement's parse tree</entry>
+     </row>
+
+     <row>
       <entry><structfield>query</structfield></entry>
       <entry><type>text</type></entry>
       <entry></entry>
-      <entry>Texte de l'ordre SQL représentatif (jusqu'à <xref linkend="guc-track-activity-query-size"/> octets)</entry>
+      <entry>Texte de l'ordre SQL représentatif</entry>
      </row>
 
      <row>
@@ -91,7 +98,7 @@
       <entry></entry>
       <entry>Nombre total de lignes renvoyées ou affectées par l'ordre SQL</entry>
      </row>
-     
+
      <row>
       <entry><structfield>shared_blks_hit</structfield></entry>
       <entry><type>bigint</type></entry>
@@ -193,7 +200,8 @@
   </table>
 
   <para>
-   Cette vue, et la fonction <function>pg_stat_statements_reset</function>,
+   Cette vue, la fonction <function>pg_stat_statements_reset</function> et la
+   fonction <function>pg_stat_statements</function>
    sont disponibles seulement dans les bases de données dans lesquelles elles 
    ont été installées spécifiquement via l'installation de l'extension
    <literal>pg_stat_statements</literal>. Cependant, 
@@ -204,7 +212,8 @@
 
   <para>
    Pour des raisons de sécurité, les utilisateurs qui ne sont pas
-   super-utilisateurs ne sont pas autorisés à voir le texte des requêtes
+   super-utilisateurs ne sont pas autorisés à voir la requête SQL et le
+   <structfield>queryid</structfield> des requêtes
    exécutées par les autres utilisateurs. Ils peuvent cependant voir les
    statistiques si la vue a été installée sur leur base de données.
   </para>
@@ -225,7 +234,10 @@
    il est composé du texte de la première requête dont la valeur de hachage
    correspond à l'entrée en question. Toutefois, lorsqu'une valeur constante a
    été ignorée de manière à faire correspondre une requête à cette première
-   requête, la constante est remplacée par <literal>?</literal>.   
+   requête, la constante est remplacée par <literal>?</literal>. The rest of the query
+   text is that of the first query that had the particular
+   <structfield>queryid</structfield> hash value associated with the
+   <structname>pg_stat_statements</structname> entry.
   </para>
 
   <para>
@@ -239,11 +251,43 @@
   </para>
 
   <para>
-   Parce que le hachage est calculé à partir de la représentation après analyse
-   de la requête, le résultat inverse est aussi possible&nbsp;: des requêtes
-   avec un texte identique peuvent apparaître dans des entrées différentes,
-   notamment si elles peuvent être interprétées de différentes façons par
-   l'intermédiaire de facteurs tels que le paramètre <varname>search_path</varname>.
+   Since the <structfield>queryid</structfield> hash value is computed on the
+   post-parse-analysis representation of the queries, the opposite is
+   also possible: queries with identical texts might appear as
+   separate entries, if they have different meanings as a result of
+   factors such as different <varname>search_path</varname> settings.
+  </para>
+
+  <para>
+   Consumers of <literal>pg_stat_statements</literal> may wish to use
+   <structfield>queryid</structfield> (perhaps in combination with
+   <structfield>dbid</structfield> and <structfield>userid</structfield>) as a more stable
+   and reliable identifier for each entry than its query text.
+   However, it is important to understand that there are only limited
+   guarantees around the stability of the <structfield>queryid</structfield> hash
+   value.  Since the identifier is derived from the
+   post-parse-analysis tree, its value is a function of, among other
+   things, the internal object identifiers appearing in this representation.
+   This has some counterintuitive implications.  For example,
+   <literal>pg_stat_statements</literal> will consider two apparently-identical
+   queries to be distinct, if they reference a table that was dropped
+   and recreated between the executions of the two queries.
+   The hashing process is also sensitive to differences in
+   machine architecture and other facets of the platform.
+   Furthermore, it is not safe to assume that <structfield>queryid</structfield>
+   will be stable across major versions of <productname>PostgreSQL</productname>.
+  </para>
+
+  <para>
+   As a rule of thumb, <structfield>queryid</structfield> values can be assumed to be
+   stable and comparable only so long as the underlying server version and
+   catalog metadata details stay exactly the same.  Two servers
+   participating in replication based on physical WAL replay can be expected
+   to have identical <structfield>queryid</structfield> values for the same query.
+   However, logical replication schemes do not promise to keep replicas
+   identical in all relevant details, so <structfield>queryid</structfield> will
+   not be a useful identifier for accumulating costs across a set of logical
+   replicas.  If in doubt, direct testing is recommended.
   </para>
  </sect2>
 
@@ -252,12 +296,12 @@
 
   <variablelist>
    <varlistentry>
-   <indexterm>
-    <primary>pg_stat_statements_reset</primary>
-   </indexterm>
 
     <term>
      <function>pg_stat_statements_reset() returns void</function>
+    <indexterm>
+     <primary>pg_stat_statements_reset</primary>
+    </indexterm>
     </term>
 
     <listitem>
@@ -270,6 +314,35 @@
     </listitem>
    </varlistentry>
 
+   <varlistentry>
+    <term>
+     <function>pg_stat_statements(showtext boolean) returns setof record</function>
+     <indexterm>
+      <primary>pg_stat_statements</primary>
+      <secondary>function</secondary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      The <structname>pg_stat_statements</structname> view is defined in
+      terms of a function also named <function>pg_stat_statements</function>.
+      It is possible for clients to call
+      the <function>pg_stat_statements</function> function directly, and by
+      specifying <literal>showtext := false</literal> have query text be
+      omitted (that is, the <literal>OUT</literal> argument that corresponds
+      to the view's <structfield>query</structfield> column will return nulls).  This
+      feature is intended to support external tools that might wish to avoid
+      the overhead of repeatedly retrieving query texts of indeterminate
+      length.  Such tools can instead cache the first query text observed
+      for each entry themselves, since that is
+      all <filename>pg_stat_statements</filename> itself does, and then retrieve
+      query texts only as needed.  Since the server stores query texts in a
+      file, this approach may reduce physical I/O for repeated examination
+      of the <structname>pg_stat_statements</structname> data.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
  </sect2>
 
@@ -288,7 +361,7 @@
       tracés par le module (c'est-à-dire le nombre maximum de lignes dans la
       vue <structname>pg_stat_statements</structname>). Si un nombre supérieur
       d'ordres SQL distincts a été observé, c'est l'information sur les ordres
-      les moins exécutés qui est ignorée. La valeur par défaut est 1000.
+      les moins exécutés qui est ignorée. La valeur par défaut est 5000.
       Ce paramètre peut uniquement être positionné au démarrage du serveur.
      </para>
     </listitem>
@@ -353,9 +426,8 @@
   </variablelist>
 
   <para>
-   Le module a besoin de mémoire partagée supplémentaire d'environ
-   <varname>pg_stat_statements.max</varname> <literal>*</literal>
-   <xref linkend="guc-track-activity-query-size"/> octets.  Notez que cette
+   Le module a besoin de mémoire partagée supplémentaire proportionnelle à
+   <varname>pg_stat_statements.max</varname>.  Notez que cette
    mémoire est consommée quand le module est chargé, même si
    <varname>pg_stat_statements.track</varname> est positionné à
    <literal>none</literal>.

@@ -198,10 +198,12 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
    par défaut <filename>pg_stat_tmp</filename>.
    Pour de meilleures performances, <varname>stats_temp_directory</varname>
    peut pointer vers un disque en RAM, diminuant ainsi les besoins en
-   entrées/sorties physique. Quand le serveur s'arrête, une copie permanente
+   entrées/sorties physique. Quand le serveur s'arrête proprement, une copie permanente
    des données statistiques est stockée dans le sous-répertoire
-   <filename>global</filename>, pour que les statistiques puissent être
-   conservées après un arrêt du serveur.
+   <filename>pg_stat</filename>, pour que les statistiques puissent être
+   conservées après un arrêt du serveur. When recovery is
+   performed at server start (e.g. after immediate shutdown, server crash,
+   and point-in-time recovery), all statistics counters are reset.
   </para>
 
   <para>
@@ -287,6 +289,14 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
        liées à l'activité courante du processus, comme l'état et la
        requête en cours. Voir <xref linkend="pg-stat-activity-view"/>
        pour plus de détails.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structname>pg_stat_archiver</structname><indexterm><primary>pg_stat_archiver</primary></indexterm></entry>
+      <entry>One row only, showing statistics about the
+       WAL archiver process's activity. See
+       <xref linkend="pg-stat-archiver-view"/> for details.
       </entry>
      </row>
 
@@ -654,6 +664,16 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
      </entry>
     </row>
     <row>
+     <entry><structfield>backend_xid</structfield></entry>
+     <entry><type>xid</type></entry>
+     <entry>Top-level transaction identifier of this backend, if any.</entry>
+    </row>
+    <row>
+     <entry><structfield>backend_xmin</structfield></entry>
+     <entry><type>xid</type></entry>
+     <entry>The current backend's <literal>xmin</literal> horizon.</entry>
+    </row>
+    <row>
      <entry><structfield>query</structfield></entry>
      <entry><type>text</type></entry>
      <entry>Texte de la requête la plus récente pour ce processus serveur. Si
@@ -680,6 +700,63 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
     exécutée, mais qu'elle est bloquée par un verrou quelque part sur le système.
    </para>
   </note>
+
+  <table id="pg-stat-archiver-view" xreflabel="pg_stat_archiver">
+   <title><structname>pg_stat_archiver</structname> View</title>
+
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>archived_count</structfield></entry>
+      <entry><type>bigint</type></entry>
+      <entry>Number of WAL files that have been successfully archived</entry>
+     </row>
+     <row>
+      <entry><structfield>last_archived_wal</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry>Name of the last WAL file successfully archived</entry>
+     </row>
+     <row>
+      <entry><structfield>last_archived_time</structfield></entry>
+      <entry><type>timestamp with time zone</type></entry>
+      <entry>Time of the last successful archive operation</entry>
+     </row>
+     <row>
+      <entry><structfield>failed_count</structfield></entry>
+      <entry><type>bigint</type></entry>
+      <entry>Number of failed attempts for archiving WAL files</entry>
+     </row>
+     <row>
+      <entry><structfield>last_failed_wal</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry>Name of the WAL file of the last failed archival operation</entry>
+     </row>
+     <row>
+      <entry><structfield>last_failed_time</structfield></entry>
+      <entry><type>timestamp with time zone</type></entry>
+      <entry>Time of the last failed archival operation</entry>
+     </row>
+     <row>
+      <entry><structfield>stats_reset</structfield></entry>
+      <entry><type>timestamp with time zone</type></entry>
+      <entry>Time at which these statistics were last reset</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_archiver</structname> view will always have a
+   single row, containing data about the archiver process of the cluster.
+  </para>
 
   <table id="pg-stat-bgwriter-view" xreflabel="pg_stat_bgwriter">
    <title>Vue <structname>pg_stat_bgwriter</structname></title>
@@ -984,6 +1061,11 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
      <entry><structfield>n_dead_tup</structfield></entry>
      <entry><type>bigint</type></entry>
      <entry>Nombre estimé de lignes mortes</entry>
+    </row>
+    <row>
+     <entry><structfield>n_mod_since_analyze</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>Estimated number of rows modified since this table was last analyzed</entry>
     </row>
     <row>
      <entry><structfield>last_vacuum</structfield></entry>
@@ -1452,30 +1534,36 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
      </entry>
     </row>
     <row>
+     <entry><structfield>backend_xmin</structfield></entry>
+     <entry><type>xid</type></entry>
+     <entry>This standby's <literal>xmin</literal> horizon reported
+     by <xref linkend="guc-hot-standby-feedback"/>.</entry>
+    </row>
+    <row>
      <entry><structfield>state</structfield></entry>
      <entry><type>text</type></entry>
      <entry>État courant du processus walsender</entry>
     </row>
     <row>
      <entry><structfield>sent_location</structfield></entry>
-     <entry><type>text</type></entry>
+     <entry><type>pg_lsn</type></entry>
      <entry>Dernière position du journal de transactions envoyée sur cette connexion</entry>
     </row>
     <row>
      <entry><structfield>write_location</structfield></entry>
-     <entry><type>text</type></entry>
+     <entry><type>pg_lsn</type></entry>
      <entry>Dernière position du journal de transactions écrite sur disque
       par ce serveur de standby</entry>
     </row>
     <row>
      <entry><structfield>flush_location</structfield></entry>
-     <entry><type>text</type></entry>
+     <entry><type>pg_lsn</type></entry>
      <entry>Dernière position du journal de transactions vidée sur disque
       par ce serveur de standby</entry>
     </row>
     <row>
      <entry><structfield>replay_location</structfield></entry>
-     <entry><type>text</type></entry>
+     <entry><type>pg_lsn</type></entry>
      <entry>Dernière position du journal de transactions rejouée sur la base
       de données sur ce serveur de standby</entry>
     </row>
@@ -1651,6 +1739,8 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
        Appeler <literal>pg_stat_reset_shared('bgwriter')</literal>
        réinitialisera tous les compteurs montrés dans la vue
        <structname>pg_stat_bgwriter</structname>.
+       Calling <literal>pg_stat_reset_shared('archiver')</literal> will zero all the
+       counters shown in the <structname>pg_stat_archiver</structname> view.
       </entry>
      </row>
 
@@ -2282,50 +2372,56 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
     </row>
     <row>
      <entry>lwlock-acquire</entry>
-     <entry>(LWLockId, LWLockMode)</entry>
+     <entry>(char *, int, LWLockMode)</entry>
      <entry>Sonde qui se déclenche quand un LWLock a été acquis.
-      arg0 est l'identifiant du LWLock.
-      arg1 est le mode de verrou demandé, soit exclusif soit partagé</entry>
+      arg0 is the LWLock's tranche.
+      arg1 is the LWLock's offset within its tranche.
+      arg2 is the requested lock mode, either exclusive or shared.</entry>
     </row>
     <row>
      <entry>lwlock-release</entry>
-     <entry>(LWLockId)</entry>
+     <entry>(char *, int)</entry>
      <entry>Sonde qui se déclenche quand un LWLock a été relâché (mais notez
       que tout processus en attente n'a pas encore été réveillé).
-      arg0 est l'identifiant du LWLock</entry>
+      arg0 is the LWLock's tranche.
+      arg1 is the LWLock's offset within its tranche.</entry>
     </row>
     <row>
      <entry>lwlock-wait-start</entry>
-     <entry>(LWLockId, LWLockMode)</entry>
+     <entry>(char *, int, LWLockMode)</entry>
      <entry>Sonde qui se déclenche quand un LWLock n'était pas immédiatement
       disponible et qu'un processus serveur a commencé à attendre la
       disponibilité du verrou.
-      arg0 est l'identifiant du LWLock.
-      arg1 est le mode de verrou demandé, soit exclusif soit partagé</entry>
+      arg0 is the LWLock's tranche.
+      arg1 is the LWLock's offset within its tranche.
+      arg2 is the requested lock mode, either exclusive or shared.</entry>
     </row>
     <row>
      <entry>lwlock-wait-done</entry>
-     <entry>(LWLockId, LWLockMode)</entry>
+     <entry>(char *, int, LWLockMode)</entry>
      <entry>Sonde qui se déclenche quand un processus serveur n'est plus en
       attente d'un LWLock (il n'a pas encore le verrou).
-      arg0 est l'identifiant du LWLock.
-      arg1 est le mode de verrou demandé, soit exclusif soit partagé</entry>
+      arg0 is the LWLock's tranche.
+      arg1 is the LWLock's offset within its tranche.
+      arg2 is the requested lock mode, either exclusive or shared.</entry>
     </row>
     <row>
      <entry>lwlock-condacquire</entry>
-     <entry>(LWLockId, LWLockMode)</entry>
+     <entry>(char *, int, LWLockMode)</entry>
      <entry>Sonde qui se déclenche quand un LWLock a été acquis avec succès
       malgré le fait que l'appelant ait demandé de ne pas attendre.
-      arg0 est l'identifiant du LWLock.
-      arg1 est le mode de verrou demandé, soit exclusif soit partagé</entry>
+      arg0 is the LWLock's tranche.
+      arg1 is the LWLock's offset within its tranche.
+      arg2 is the requested lock mode, either exclusive or shared.</entry>
     </row>
     <row>
      <entry>lwlock-condacquire-fail</entry>
-     <entry>(LWLockId, LWLockMode)</entry>
+     <entry>(char *, int, LWLockMode)</entry>
      <entry>Sonde qui se déclenche quand un LWLock, demandé sans attente, n'est
       pas accepté.
-      arg0 est l'identifiant du LWLock.
-      arg1 est le mode de verrou demandé, soit exclusif soit partagé</entry>
+      arg0 is the LWLock's tranche.
+      arg1 is the LWLock's offset within its tranche.
+      arg2 is the requested lock mode, either exclusive or shared.</entry>
     </row>
     <row>
      <entry>lock-wait-start</entry>
@@ -2371,10 +2467,6 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
     <row>
      <entry>LocalTransactionId</entry>
      <entry>unsigned int</entry>
-    </row>
-    <row>
-     <entry>LWLockId</entry>
-     <entry>int</entry>
     </row>
     <row>
      <entry>LWLockMode</entry>

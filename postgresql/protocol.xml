@@ -275,7 +275,8 @@
         Le client doit alors prendre part à un dialogue
         d'authentification Kerberos V5 (spécification Kerberos, non décrite ici)
         avec le serveur. En cas de succès, le serveur répond AuthenticationOk,
-        ErrorResponse sinon.
+        ErrorResponse sinon. This is no
+        longer supported. This is not supported any more.
        </para>
       </listitem>
      </varlistentry>
@@ -1423,10 +1424,28 @@ qui ne tiennent pas dans le tampon de taille fixe.
 
 <para>
 Pour initier la réplication en flux continu, le client envoi le paramètre 
-<literal>replication</literal> dans son message d'ouverture. Il indique au 
-serveur de se placer en mode walsender dans lequel en petit ensemble de 
-commandes de réplication peuvent être utilisées à la place d'ordres SQL. 
-Dans le mode walsender, seul le protocole de requête simple est disponible.
+<literal>replication</literal> dans son message d'ouverture. A Boolean value
+of <literal>true</literal> tells the backend to go into walsender mode, wherein a
+small set of replication commands can be issued instead of SQL statements. Only
+the simple query protocol can be used in walsender mode.
+Passing <literal>database</literal> as the value instructs walsender to connect to
+the database specified in the <literal>dbname</literal> parameter, which will allow
+the connection to be used for logical replication from that database.
+</para>
+<para>
+ For the purpose of testing replication commands, you can make a replication
+ connection via <application>psql</application> or any other <literal>libpq</literal>-using
+ tool with a connection string including the <literal>replication</literal> option,
+ e.g.:
+<programlisting>
+psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
+</programlisting>
+ However it is often more useful to use
+ <application>pg_receivexlog</application> (for physical replication) or
+ <application>pg_recvlogical</application> (for logical replication).
+</para>
+ 
+<para>
 
 Les commandes acceptées en mode walsender sont:
 
@@ -1436,7 +1455,7 @@ Les commandes acceptées en mode walsender sont:
     <listitem>
      <para>
       Demande au serveur de s'identifier. Le serveur répond avec un set de 
-      résultat d'une seule ligne contenant trois champs:
+      résultat d'une seule ligne contenant quatre champs:
      </para>
 
      <para>
@@ -1476,6 +1495,17 @@ Les commandes acceptées en mode walsender sont:
        Utile pour connaître un emplacement dans les journaux de
        transactions à partir duquel le mode de réplication en flux peut
        commencer.
+      </para>
+      </listitem>
+      </varlistentry>
+
+      <varlistentry>
+      <term>
+       dbname
+      </term>
+      <listitem>
+      <para>
+       Database connected to or NULL.
       </para>
       </listitem>
       </varlistentry>
@@ -1525,13 +1555,46 @@ Les commandes acceptées en mode walsender sont:
   </varlistentry>
 
   <varlistentry>
-    <term>START_REPLICATION <replaceable class="parameter">XXX/XXX</replaceable> TIMELINE <replaceable class="parameter">tli</replaceable></term>
+    <term>CREATE_REPLICATION_SLOT <replaceable class="parameter">slot_name</replaceable> { <literal>PHYSICAL</literal> | <literal>LOGICAL</literal> <replaceable class="parameter">output_plugin</replaceable> } <indexterm><primary>CREATE_REPLICATION_SLOT</primary></indexterm></term>
+    <listitem>
+     <para>
+      Create a physical or logical replication
+      slot. See <xref linkend="streaming-replication-slots"/> for more about
+      replication slots.
+     </para>
+     <variablelist>
+      <varlistentry>
+       <term><replaceable class="parameter">slot_name</replaceable></term>
+       <listitem>
+         <para>
+          The name of the slot to create. Must be a valid replication slot
+          name (see <xref linkend="streaming-replication-slots-manipulation"/>).
+         </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><replaceable class="parameter">output_plugin</replaceable></term>
+       <listitem>
+         <para>
+          The name of the output plugin used for logical decoding
+          (see <xref linkend="logicaldecoding-output-plugin"/>).
+         </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term>START_REPLICATION [<literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable>] [<literal>PHYSICAL</literal>] <replaceable class="parameter">XXX/XXX</replaceable> [<literal>TIMELINE</literal> <replaceable class="parameter">tli</replaceable>]</term>
     <listitem>
      <para>
       Demande au serveur de débuter l'envoi de WAL en continu, en commençant 
-      à la position 
-      <replaceable class="parameter">XXX/XXX</replaceable> dans le
-      WAL sur la ligne de temps <replaceable class="parameter">tli</replaceable>.
+      à la position <replaceable class="parameter">XXX/XXX</replaceable> dans
+      le WAL. If <literal>TIMELINE</literal> option is specified,
+      streaming starts on timeline <replaceable class="parameter">tli</replaceable>;
+      otherwise, the server's current timeline is selected. 
       Le serveur peu répondre avec une erreur, par exemple si la section de 
       WAL demandée a déjà été recyclée. En cas de succès, le serveur 
       répond avec un message CopyBothResponse et débute l'envoi en continu de 
@@ -1571,6 +1634,14 @@ Les commandes acceptées en mode walsender sont:
       rencontre une erreur après la début de l'envoi en continu des données).
       Le contenu de chaque message CopyData à partir du serveur vers le client
       contient un message faisant partie d'un des formats suivants&nbsp;:
+     </para>
+
+     <para>
+      If a slot's name is provided
+      via <replaceable class="parameter">slot_name</replaceable>, it will be updated
+      as replication progresses so that the server knows which WAL segments -
+      and if <varname>hot_standby_feedback</varname> is on which transactions -
+      are still needed by the standby.
      </para>
 
      <para>
@@ -1853,7 +1924,89 @@ Les commandes acceptées en mode walsender sont:
   </varlistentry>
 
   <varlistentry>
-    <term>BASE_BACKUP [<literal>LABEL</literal> <replaceable>'label'</replaceable>] [<literal>PROGRESS</literal>] [<literal>FAST</literal>] [<literal>WAL</literal>] [<literal>NOWAIT</literal>]</term>
+    <term>START_REPLICATION <literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable> <literal>LOGICAL</literal> <replaceable class="parameter">XXX/XXX</replaceable> [ ( <replaceable>option_name</replaceable> [<replaceable>option_value</replaceable>] [, ... ] ) ]</term>
+    <listitem>
+     <para>
+      Instructs server to start streaming WAL for logical replication, starting
+      at WAL position <replaceable class="parameter">XXX/XXX</replaceable>. The server can
+      reply with an error, e.g. if the requested section of WAL has already
+      been recycled. On success, server responds with a CopyBothResponse
+      message, and then starts to stream WAL to the frontend.
+     </para>
+
+     <para>
+      The messages inside the CopyBothResponse messages are of the same format
+      documented for <literal>START_REPLICATION ... PHYSICAL</literal>.
+     </para>
+
+     <para>
+      The output plugin associated with the selected slot is used
+      to process the output for streaming.
+     </para>
+
+     <variablelist>
+      <varlistentry>
+       <term><literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable></term>
+       <listitem>
+         <para>
+          The name of the slot to stream changes from. This parameter is required,
+          and must correspond to an existing logical replication slot created
+          with <literal>CREATE_REPLICATION_SLOT</literal> in
+          <literal>LOGICAL</literal> mode.
+         </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry>
+       <term><replaceable class="parameter">XXX/XXX</replaceable></term>
+       <listitem>
+        <para>
+         The WAL position to begin streaming at.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry>
+       <term><replaceable class="parameter">option_name</replaceable></term>
+       <listitem>
+        <para>
+         The name of an option passed to the slot's logical decoding plugin.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry>
+       <term><replaceable class="parameter">option_value</replaceable></term>
+       <listitem>
+        <para>
+         Optional value, in the form of a string constant, associated with the
+         specified option.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term>DROP_REPLICATION_SLOT <replaceable class="parameter">slot_name</replaceable></term>
+    <listitem>
+     <para>
+      Drops a replication slot, freeing any reserved server-side resources. If
+      the slot is currently in use by an active connection, this command fails.
+     </para>
+     <variablelist>
+      <varlistentry>
+       <term><replaceable class="parameter">slot_name</replaceable></term>
+       <listitem>
+         <para>
+          The name of the slot to drop.
+         </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term>BASE_BACKUP [<literal>LABEL</literal> <replaceable>'label'</replaceable>] [<literal>PROGRESS</literal>] [<literal>FAST</literal>] [<literal>WAL</literal>] [<literal>NOWAIT</literal>] [<literal>MAX_RATE</literal> <replaceable>rate</replaceable>]</term>
     <listitem>
      <para>
       Demande au serveur de commencer l'envoi d'une sauvegarde de base.
@@ -1927,7 +2080,21 @@ Les commandes acceptées en mode walsender sont:
           responsable de la disponibilité des journaux de transactions
           requis.
          </para>
-         </listitem>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>MAX_RATE</literal> <replaceable>rate</replaceable></term>
+        <listitem>
+         <para>
+          Limit (throttle) the maximum amount of data transferred from server
+          to client per unit of time.  The expected unit is kilobytes per second.
+          If this option is specified, the value must either be equal to zero
+          or it must fall within the range from 32 kB through 1 GB (inclusive).
+          If zero is passed or the option is not specified, no restriction is
+          imposed on the transfer.
+         </para>
+        </listitem>
        </varlistentry>
       </variablelist>
      </para>
@@ -2009,12 +2176,29 @@ Les commandes acceptées en mode walsender sont:
        </listitem>
        <listitem>
         <para>
+         various temporary files created during the operation of the PostgreSQL server
+        </para>
+       </listitem>
+       <listitem>
+        <para>
          <filename>pg_xlog</filename>, ainsi que les sous-répertoires.
          Si la sauvegarde est lancée avec ajout des journaux de
          transactions, une version synthéthisée de <filename>pg_xlog</filename> sera inclus
          mais elle ne contiendra que les fichiers nécessaires au bon
          fonctionnement de la sauvegarde, et pas le reste de son
          contenu.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         <filename>pg_replslot</filename> is copied as an empty directory.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Files other than regular files and directories, such as symbolic
+         links and special device files, are skipped.  (Symbolic links
+         in <filename>pg_tblspc</filename> are maintained.)
         </para>
        </listitem>
       </itemizedlist>
