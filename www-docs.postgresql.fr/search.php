@@ -60,20 +60,20 @@ $version['904'] = '9.4';
 <div id="top">
   <div id="pgHeader">
     <span id="pgHeaderLogoLeft">
-      <a href="/" title="PostgreSQL"><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_left.png" width="230" height="80" alt="PostgreSQL" /></a>
+      <a href="/" title="PostgreSQL"><img src="http://www.postgresql.fr/lib/tpl/tortoise/images/hdr_left.png" width="230" height="80" alt="PostgreSQL" /></a>
     </span>
     <span id="pgHeaderLogoRight">
-      <a href="/" title="La base de donnees la plus sophistiquee au monde."><img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/hdr_right.png" width="210" height="80" alt="La base de donnees la plus sophistiquee au monde." /></a>
+      <a href="/" title="La base de donnees la plus sophistiquee au monde."><img src="http://www.postgresql.fr/lib/tpl/tortoise/images/hdr_right.png" width="210" height="80" alt="La base de donnees la plus sophistiquee au monde." /></a>
     </span>
   </div>
 </div>
 
 <div class="pgTopNav">
   <div class="pgTopNavLeft"> 
-    <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_lft.png" width="7" height="23" alt="" />
+    <img src="http://www.postgresql.fr/lib/tpl/tortoise/images/nav_lft.png" width="7" height="23" alt="" />
   </div>
   <div class="pgTopNavRight">
-    <img src="http://babar.postgresql.fr/~guillaume/dotclear/themes/postgresql/img/nav_rgt.png" width="7" height="23" alt="" />
+    <img src="http://www.postgresql.fr/lib/tpl/tortoise/images/nav_rgt.png" width="7" height="23" alt="" />
   </div>
   <ul class="pgTopNavList">
     <li><a href="http://www.postgresql.fr/" title="Accueil">Accueil</a></li>
