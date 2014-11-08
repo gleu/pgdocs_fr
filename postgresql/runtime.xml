@@ -740,7 +740,6 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
         <command>sysctl</command>&nbsp;:
 <screen><prompt>#</prompt> <userinput>sysctl kern.ipc.shmall=32768</userinput>
 <prompt>#</prompt> <userinput>sysctl kern.ipc.shmmax=134217728</userinput>
-<prompt>#</prompt> <userinput>sysctl kern.ipc.semmap=256</userinput>
 </screen>
         Pour que ces paramètres persistent après les redémarrages, modifiez
         <filename>/etc/sysctl.conf</filename>.
@@ -756,7 +755,10 @@ kern.ipc.semmns=512
 kern.ipc.semmnu=256
 </programlisting>
         Après la modification de ces valeurs, un redémarrage est nécessaire pour
-        que le nouveau paramétrage prenne effet.
+        que le nouveau paramétrage prenne effet. (Note: FreeBSD does not use
+        <varname>SEMMAP</varname>.  Older versions would accept but ignore a setting
+        for <literal>kern.ipc.semmap</literal>; newer versions reject it altogether.)
+
        </para>
 
        <para>
@@ -916,9 +918,9 @@ option        SEMMAP=256</programlisting>
 
 
      <varlistentry>
-      <term><systemitem class="osname">Mac OS X</systemitem></term>
+      <term><systemitem class="osname">OS X</systemitem></term>
       <listitem>
-      <indexterm><primary>Mac OS X</primary><secondary>configuration ipc</secondary></indexterm>
+      <indexterm><primary>OS X</primary><secondary>configuration ipc</secondary></indexterm>
        <para>
         La méthode recommandée pour configurer la mémoire partagée sous OS X
         est de créer un fichier nommé <filename>/etc/sysctl.conf</filename>
@@ -1506,8 +1508,9 @@ $ <userinput>sysctl -w vm.nr_hugepages=3170</userinput>
    des données est sujet à modification, ce qui complique les mises à
    jour. La méthode traditionnelle de migration des données vers une
    nouvelle version majeure est de sauvegarder puis recharger la base
-   de données. D'autres méthodes sont disponibles, ce qui est expliqué
-   ci-dessous.
+   de données, though this can be slow.  A faster method is <xref
+   linkend="pgupgrade">.  Replication methods are also available, as
+   discussed below.
   </para>
 
   <para>
@@ -1588,14 +1591,14 @@ $ <userinput>sysctl -w vm.nr_hugepages=3170</userinput>
 
   </variablelist>
 
-  <sect2 id="upgrade-methods-pgdump">
-   <title>Mise à jour des données via <application>pg_dump</application></title>
+  <sect2 id="upgrading-via-pgdumpall">
+   <title>Upgrading Data via <application>pg_dumpall</application></title>
 
    <para>
-    Pour sauvegarder les données d'une version majeure de
-    <productname>PostgreSQL</productname> et les recharger dans une
-    autre, vous devez utiliser <application>pg_dump</application>&nbsp;;
-    une sauvegarde au niveau système de fichiers ne fonctionnera pas.
+    One upgrade method is to dump data from one major version of
+    <productname>PostgreSQL</productname> and reload it in another &mdash;  to do
+    this, you must use a <emphasis>logical</emphasis> backup tool like
+    <application>pg_dumpall</application>; une sauvegarde au niveau système de fichiers ne fonctionnera pas.
     Des vérifications sont faites pour vous empêcher d'utiliser un
     répertoire de données avec une version incompatible de
     <productname>PostgreSQL</productname>, donc aucun mal ne sera fait
@@ -1606,7 +1609,7 @@ $ <userinput>sysctl -w vm.nr_hugepages=3170</userinput>
    <para>
     Il est recommandé d'utiliser les programmes
     <application>pg_dump</application> et
-    <application>pg_dumpall</application> provenant de la nouvelle
+    <application>pg_dumpall</application> provenant de la <emphasis>nouvelle</emphasis>
     version de <productname>PostgreSQL</productname>, pour bénéficier
     des améliorations apportées à ces programmes. Les versions actuelles
     de ces programmes peuvent lire des données provenant de tout serveur
@@ -1645,16 +1648,13 @@ $ <userinput>sysctl -w vm.nr_hugepages=3170</userinput>
 <screen>
 <userinput>pg_dumpall &gt; <replaceable>fichier_en_sortie</replaceable></userinput>
 </screen>
-      Si vous devez conserver les OID (parce que vous les utilisez en
-      tant que clés étrangères, par exemple), utilisez l'option
-      <option>-o</option> lors de l'exécution de
-      <application>pg_dumpall</application>.
      </para>
 
      <para>
       Pour faire la sauvegarde, vous pouvez utiliser la commande
       <application>pg_dumpall</application> de la version en cours
-      d'exécution. Néanmoins, pour de meilleurs résultats, essayez
+      d'exécution;  see <xref
+      linkend="backup-dump-all"> for more details. Néanmoins, pour de meilleurs résultats, essayez
       d'utiliser la commande <application>pg_dumpall</application>
       provenant de la version &version; de
       <productname>PostgreSQL</productname>, car cette version contient
@@ -1690,7 +1690,7 @@ $ <userinput>sysctl -w vm.nr_hugepages=3170</userinput>
     <step>
      <para>
       Lors de la restauration de la sauvegarde, renommez ou supprimez
-      l'ancien répertoire d'installation. Il est préférable de le
+      l'ancien répertoire d'installation if it is not version-specific. Il est préférable de le
       renommer car, en cas de problème, vous pourrez le récupérer. Garder
       en tête que le répertoire peut prendre beaucoup d'espace disque.
       Pour renommer le répertoire, utilisez une commande comme
@@ -1767,16 +1767,22 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
 
   </sect2>
 
-  <sect2 id="upgrading-methods-other">
-   <title>Méthodes de mise à jour sans sauvegarde</title>
+  <sect2 id="upgrading-via-pg-upgrade">
+   <title>Upgrading Data via <application>pg_upgrade</application></title>
 
    <para>
-    Le module <link linkend="pgupgrade">pg_upgrade</link> permet la
-    migration d'une installation d'une version majeure de
-    <productname>PostgreSQL</productname> à une autre, par modification
-    des fichiers présents. Les mises à jour se réalisent en quelques
-    minutes.
-   </para>
+    The <xref linkend="pgupgrade"/> module allows an installation to
+    be migrated in-place from one major <productname>PostgreSQL</productname>
+    version to another.  Upgrades can be performed in minutes,
+    particularly with <option>--link</option> mode.  It requires steps similar to
+    <application>pg_dumpall</application> above, e.g.  starting/stopping the server,
+    running <application>initdb</application>.  The <application>pg_upgrade</application> <link
+    linkend="pgupgrade">documentation</link> outlines the necessary steps.
+    </para>
+  </sect2>
+
+  <sect2 id="upgrading-via-replication">
+   <title>Upgrading Data via Replication</title>
 
    <para>
     Il est aussi possible d'utiliser certaines méthodes de réplication,
