@@ -113,8 +113,10 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
 
     <listitem>
      <para>
-      Si la clause <literal>GROUP BY</literal> est spécifiée, l'affichage est
-      divisé en groupes de lignes qui correspondent à une ou plusieurs valeurs.
+      Si la clause <literal>GROUP BY</literal> est spécifiée or if there are
+      aggregate function calls, l'affichage est divisé en groupes de lignes qui
+      correspondent à une ou plusieurs valeurs, and the results of aggregate
+      functions are computed.
       Si la clause <literal>HAVING</literal> est présente, elle élimine les
       groupes qui ne satisfont pas la condition donnée. (Voir <xref
       linkend="sql-groupby"/> et <xref
@@ -651,23 +653,34 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
    </para>
 
    <para>
-    Les fonctions d'agrégat, si utilisées, sont calculées pour
-    toutes les lignes composant un groupe, produisant une valeur séparée
-    pour chaque groupe (alors que sans <literal>GROUP BY</literal>, un agrégat
-    produit une valeur unique calculée pour toutes les lignes
-    sélectionnées).
+    Les fonctions d'agrégat, si utilisées, sont calculées pour toutes les lignes
+    composant un groupe, produisant une valeur séparée pour chaque groupe. (If
+    there are aggregate functions but no <literal>GROUP BY</literal> clause, the
+    query is treated as having a single group comprising all the selected rows.)
     L'ensemble de lignes envoyées à la fonction d'agrégat peut être en plus filtré
     en ajoutant une clause <literal>FILTER</literal> lors de l'appel à la fonction
     d'agrégat&nbsp;; voir <xref linkend="syntax-aggregates"/> pour plus
     d'informations. Quand une clause <literal>FILTER</literal> est présente,
-    seules les lignes correspondant au filtre sont incluses.
-    Quand <literal>GROUP BY</literal> est présent, 
-    les expressions du <command>SELECT</command> ne peuvent faire
+    seules les lignes correspondant au filtre sont incluses in the input to that
+    aggregate function.
+   </para>
+
+   <para>
+    Quand <literal>GROUP BY</literal> est présent or any aggregate functions
+    are present, les expressions du <command>SELECT</command> ne peuvent faire
     référence qu'à des colonnes groupées, sauf à l'intérieur de fonctions
     d'agrégat, ou bien si la colonne non groupée dépend fonctionnellement des colonnes groupées.
     En effet, s'il en était autrement, il y aurait plus d'une valeur possible pour la colonne non groupée.
     Une dépendance fonctionnelle existe si les colonnes groupées (ou un sous-ensemble de ces dernières) sont la clé primaire de la
     table contenant les colonnes non groupées.
+   </para>
+
+   <para>
+    Keep in mind that all aggregate functions are evaluated before
+    evaluating any <quote>scalar</quote> expressions in the <literal>HAVING</literal>
+    clause or <literal>SELECT</literal> list.  This means that, for example,
+    a <literal>CASE</literal> expression cannot be used to skip evaluation of
+    an aggregate function; see <xref linkend="syntax-express-eval"/>.
    </para>
 
    <para>
@@ -698,7 +711,8 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
     <literal>GROUP BY</literal>. Chaque colonne référencée dans <replaceable
     class="parameter">condition</replaceable> doit faire référence sans ambiguïté 
     à une colonne groupée, sauf si la référence apparaît dans une fonction
-    d'agrégat.
+    d'agrégat or the ungrouped column is functionally dependent on the grouping
+    columns.
    </para>
     
    <para>
@@ -1322,64 +1336,9 @@ KEY SHARE
  </synopsis>
    </para>
 
-
    <para>
-    <literal>FOR UPDATE</literal> verrouille pour modification les lignes
-    récupérées par l'instruction <command>SELECT</command>. Cela les empêche
-    d'être modifiées ou supprimées par les autres transactions jusqu'à la fin
-    de la transaction en cours. Les autres transactions qui tentent des
-    <command>UPDATE</command>, <command>DELETE</command> ou <command>SELECT
-    FOR UPDATE</command>, <command>SELECT FOR NO KEY UPDATE</command>,
-    <command>SELECT FOR SHARE</command> ou <command>SELECT FOR KEY
-    SHARE</command> sur ces lignes sont bloquées jusqu'à la fin de la
-    transaction courante. Le mode de verrouillage <literal>FOR UPDATE</literal>
-    est aussi acquis par toute commande <command>DELETE</command> sur une ligne
-    ainsi que par un <command>UPDATE</command> qui modifie les valeurs de
-    certaines colonnes. Actuellement, l'ensemble de colonnes considéré par le
-    cas <command>UPDATE</command> est celui qu'a un index unique lors de son
-    utilisation par une clé étrangère (donc les index partiels et fonctionnels
-    ne sont pas considérés), mais cela pourra être modifié dans le futur.
-    De plus, si un <command>UPDATE</command>, <command>DELETE</command> ou
-    <command>SELECT FOR UPDATE</command> a
-    déjà verrouillé une ligne ou un ensemble de lignes à partir d'une autre transaction,
-    <command>SELECT FOR UPDATE</command> attend la fin de l'autre transaction puis verrouille et
-    renvoie la ligne modifiée (ou aucune ligne si elle a été supprimée).
-    Cependant, au sein d'une transaction <literal>REPEATABLE READ</literal> ou <literal>SERIALIZABLE</literal>,
-    une erreur est levée si une ligne à verrouiller à changé depuis le début de la
-    transaction. Pour
-    plus d'informations, voir <xref linkend="mvcc"/>.
-   </para>
-
-   <para>
-    <literal>FOR NO KEY UPDATE</literal> se comporte de la même façon sauf
-    que le verrou acquis est moins fort&nbsp;: ce verrou ne bloquera pas les
-    commandes <literal>SELECT FOR KEY SHARE</literal> qui tenteraient d'acquérir
-    un verrou sur les mêmes lignes. Ce mode de verrou est aussi acquis par tout
-    <command>UPDATE</command> qui ne nécessite pas un verrou <literal>FOR
-    UPDATE</literal>.
-   </para>
-
-   <para>
-    <literal>FOR SHARE</literal> a un comportement similaire. La différence
-    se situe dans le type de verrou acquis. Contrairement à <literal>FOR
-    UPDATE</literal> qui pose un verrou exclusif, <literal>FOR SHARE</literal>
-    pose un verrou partagé sur chaque ligne récupérée. Un verrou partagée bloque
-    les instructions <command>UPDATE</command>, <command>DELETE</command>,
-    <command>SELECT FOR UPDATE</command> et <command>SELECT FOR NO KEY
-    UPDATE</command> sur ces lignes mais il n'empêche pas les <command>SELECT
-    FOR SHARE</command> et <command>SELECT FOR KEY SHARE</command>.
-   </para>
-
-   <para>
-    <literal>FOR KEY SHARE</literal> a un comportement similaire à <literal>FOR
-    SHARE</literal>, sauf que le verrou est plus faible&nbsp;: <literal>SELECT
-    FOR UPDATE</literal> est verrouillé alors que <literal>SELECT FOR NO KEY
-    UPDATE</literal> ne l'est pas. Un verrou à clé partagée bloque les autres
-    transactions lors de l'exécution d'un <command>DELETE</command> ou d'un
-    <command>UPDATE</command> qui modifie les valeurs clés mais pas les autres
-    <command>UPDATE</command>. Il n'empêche pas non plus les <command>SELECT FOR
-    NO KEY UPDATE</command>, <command>SELECT FOR SHARE</command> et
-    <command>SELECT FOR KEY SHARE</command>.
+    For more information on each row-level lock mode, refer to
+    <xref linkend="locking-rows"/>.
    </para>
 
    <para>

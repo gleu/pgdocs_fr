@@ -1134,32 +1134,109 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
 
     <para>
      En plus des verrous au niveau table, il existe des verrous au niveau
-     ligne, qui peuvent être des verrous exclusifs ou partagés. Un verrou
-     exclusif sur une ligne spécifique est automatiquement acquis
-     lorsque la ligne est mise à jour ou supprimée. Le verrou est détenu jusqu'à
-     la fin de la transaction, que ce soit une validation ou une annulation, de
-     la même façon que les verrous de niveau table. Les verrous au niveau ligne
-     n'affectent pas les requêtes sur les données&nbsp;; ils bloquent seulement
-     les <emphasis>modifieurs d'une même ligne</emphasis>.
+     ligne
+     are listed as below with the contexts in which they are used
+     automatically by <productname>PostgreSQL</productname>.  See
+     <xref linkend="row-lock-compatibility"/> for a complete table of
+     row-level lock conflicts.  Note that a transaction can hold
+     conflicting locks on the same row, even in different subtransactions;
+     but other than that, two transactions can never hold conflicting locks
+     on the same row.  Row-level locks do not affect data querying; they
+     block only <emphasis>writers and lockers</emphasis> to the same row.
     </para>
 
-    <para>
-     Pour acquérir un verrou exclusif
-     au niveau ligne sans modifier réellement la ligne, sélectionnez la ligne
-     avec <command>SELECT FOR UPDATE</command>. Notez qu'une fois le verrou au
-     niveau ligne acquis, la transaction pourrait mettre à jour la ligne
-     plusieurs fois sans peur des conflits.
-    </para>
+     <variablelist>
+      <title>Row-level Lock Modes</title>
+      <varlistentry>
+       <term>
+        <literal>FOR UPDATE</literal>
+       </term>
+       <listitem>
+        <para>
+         <literal>FOR UPDATE</literal> causes the rows retrieved by the
+         <command>SELECT</command> statement to be locked as though for
+         update.  This prevents them from being locked, modified or deleted by
+         other transactions until the current transaction ends.  That is,
+         other transactions that attempt <command>UPDATE</command>,
+         <command>DELETE</command>,
+         <command>SELECT FOR UPDATE</command>,
+         <command>SELECT FOR NO KEY UPDATE</command>,
+         <command>SELECT FOR SHARE</command> or
+         <command>SELECT FOR KEY SHARE</command>
+         of these rows will be blocked until the current transaction ends;
+         conversely, <command>SELECT FOR UPDATE</command> will wait for a
+         concurrent transaction that has run any of those commands on the
+         same row,
+         and will then lock and return the updated row (or no row, if the
+         row was deleted).  Within a <literal>REPEATABLE READ</literal> or
+         <literal>SERIALIZABLE</literal> transaction,
+         however, an error will be thrown if a row to be locked has changed
+         since the transaction started.  For further discussion see
+         <xref linkend="applevel-consistency"/>.
+        </para>
+        <para>
+         The <literal>FOR UPDATE</literal> lock mode
+         is also acquired by any <command>DELETE</command> on a row, and also by an
+         <command>UPDATE</command> that modifies the values on certain columns.  Currently,
+         the set of columns considered for the <command>UPDATE</command> case are those that
+         have a unique index on them that can be used in a foreign key (so partial
+         indexes and expressional indexes are not considered), but this may change
+         in the future.
+        </para>
+       </listitem>
+      </varlistentry>
+ 
+      <varlistentry>
+       <term>
+        <literal>FOR NO KEY UPDATE</literal>
+       </term>
+       <listitem>
+        <para>
+         Behaves similarly to <literal>FOR UPDATE</literal>, except that the lock
+         acquired is weaker: this lock will not block
+         <literal>SELECT FOR KEY SHARE</literal> commands that attempt to acquire
+         a lock on the same rows. This lock mode is also acquired by any
+         <command>UPDATE</command> that does not acquire a <literal>FOR UPDATE</literal> lock.
+        </para>
+       </listitem>
+      </varlistentry>
 
-    <para>
-     Pour acquérir un verrou partagé niveau ligne sur une ligne spécifique,
-     sélectionnez la ligne avec <command>SELECT FOR SHARE</command>.  Un verrou
-     partagé n'empêche pas les autres transactions d'obtenir le même verrou
-     partagé. Néanmoins, aucune transaction n'est autorisée à mettre à jour,
-     supprimer ou verrouiller exclusivement une ligne dont une autre
-     transaction a obtenu un verrou partagé. Toute tentative de le faire
-     bloque tant que les verrous partagés n'ont pas été enlevés.
-    </para>
+      <varlistentry>
+       <term>
+        <literal>FOR SHARE</literal>
+       </term>
+       <listitem>
+        <para>
+         Behaves similarly to <literal>FOR NO KEY UPDATE</literal>, except that it
+         acquires a shared lock rather than exclusive lock on each retrieved
+         row.  A shared lock blocks other transactions from performing
+         <command>UPDATE</command>, <command>DELETE</command>,
+         <command>SELECT FOR UPDATE</command> or
+         <command>SELECT FOR NO KEY UPDATE</command> on these rows, but it does not
+         prevent them from performing <command>SELECT FOR SHARE</command> or
+         <command>SELECT FOR KEY SHARE</command>.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>
+        <literal>FOR KEY SHARE</literal>
+       </term>
+       <listitem>
+        <para>
+         Behaves similarly to <literal>FOR SHARE</literal>, except that the
+         lock is weaker: <literal>SELECT FOR UPDATE</literal> is blocked, but not
+         <literal>SELECT FOR NO KEY UPDATE</literal>.  A key-shared lock blocks
+         other transactions from performing <command>DELETE</command> or
+         any <command>UPDATE</command> that changes the key values, but not
+         other <command>UPDATE</command>, and neither does it prevent
+         <command>SELECT FOR NO KEY UPDATE</command>, <command>SELECT FOR SHARE</command>,
+         or <command>SELECT FOR KEY SHARE</command>.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
 
     <para>
      <productname>PostgreSQL</productname> ne garde en mémoire aucune information
@@ -1169,6 +1246,61 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
      <command>SELECT FOR UPDATE</command> modifie les lignes sélectionnées
      pour les marquer verrouillées et cela aboutit à des écritures disques.
     </para>
+
+    <table tocentry="1" id="row-lock-compatibility">
+     <title>Conflicting Row-level Locks</title>
+     <tgroup cols="5">
+      <colspec colnum="2" colname="lockst">
+      <colspec colnum="5" colname="lockend">
+      <spanspec namest="lockst" nameend="lockend" spanname="lockreq">
+      <thead>
+       <row>
+        <entry morerows="1">Requested Lock Mode</entry>
+        <entry spanname="lockreq">Current Lock Mode</entry>
+       </row>
+       <row>
+        <entry>FOR KEY SHARE</entry>
+        <entry>FOR SHARE</entry>
+        <entry>FOR NO KEY UPDATE</entry>
+        <entry>FOR UPDATE</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+        <entry>FOR KEY SHARE</entry>
+        <entry align="center"></entry>
+        <entry align="center"></entry>
+        <entry align="center"></entry>
+        <entry align="center">X</entry>
+       </row>
+       <row>
+        <entry>FOR SHARE</entry>
+        <entry align="center"></entry>
+        <entry align="center"></entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+       </row>
+       <row>
+        <entry>FOR NO KEY UPDATE</entry>
+        <entry align="center"></entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+       </row>
+       <row>
+        <entry>FOR UPDATE</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+   </sect2>
+
+   <sect2 id="locking-pages">
+    <title>Page-level Locks</title>
 
     <para>
      En plus des verrous tables et lignes, les verrous partagés/exclusifs sur
