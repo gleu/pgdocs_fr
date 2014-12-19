@@ -23,6 +23,7 @@ $version['900'] = '9.0';
 $version['901'] = '9.1';
 $version['902'] = '9.2';
 $version['903'] = '9.3';
+$version['904'] = '9.4';
 ?>
 <!DOCTYPE html SYSTEM "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -127,7 +128,7 @@ $version['903'] = '9.3';
     <p>Certaines vieilles versions, non maintenues, sont disponibles sur
     l'<a href="index_obsoletes.php">index des version obsolètes</a>.</p>
     <div id="pg94">
-      <h2>Documentation PostgreSQL, version 9.4 (BETA)</h2>
+      <h2>Documentation PostgreSQL, version 9.4</h2>
       <div class="listes">
         <ul>
             <li>Manuel au format HTML&nbsp;:
