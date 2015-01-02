@@ -4,289 +4,289 @@
      par      $Author$
      révision $Revision$ -->
 
- <chapter id="mvcc">
-  <title>Contrôle d'accès simultané</title>
+<chapter id="mvcc">
+ <title>Contrôle d'accès simultané</title>
+
+ <indexterm>
+  <primary>concurrence</primary>
+ </indexterm>
+
+ <para>
+  Ce chapitre décrit le comportement de <productname>PostgreSQL</productname>
+  lorsque deux sessions, ou plus, essaient d'accéder aux mêmes données au
+  même moment. Le but dans cette situation est de permettre un accès
+  efficace pour toutes les sessions tout en maintenant une intégrité stricte
+  des données. Chaque développeur d'applications utilisant des bases de
+  données doit avoir une bonne compréhension des thèmes couverts dans ce
+  chapitre.
+ </para>
+
+ <sect1 id="mvcc-intro">
+  <title>Introduction</title>
 
   <indexterm>
-   <primary>concurrence</primary>
+   <primary>Multiversion Concurrency Control</primary>
+  </indexterm>
+
+  <indexterm>
+   <primary>MVCC</primary>
+  </indexterm>
+
+  <indexterm>
+   <primary>Serializable Snapshot Isolation</primary>
+  </indexterm>
+
+  <indexterm>
+   <primary>SSI</primary>
   </indexterm>
 
   <para>
-   Ce chapitre décrit le comportement de <productname>PostgreSQL</productname>
-   lorsque deux sessions, ou plus, essaient d'accéder aux mêmes données au
-   même moment. Le but dans cette situation est de permettre un accès
-   efficace pour toutes les sessions tout en maintenant une intégrité stricte
-   des données. Chaque développeur d'applications utilisant des bases de
-   données doit avoir une bonne compréhension des thèmes couverts dans ce
-   chapitre.
+   <productname>PostgreSQL</productname> fournit un ensemble d'outils
+   pour les développeurs qui souhaitent gérer des accès simulatnés aux données.
+   En interne, la cohérence des données est obtenue avec l'utilisation d'un
+   modèle multiversion (Multiversion Concurrency Control, <acronym>MVCC</acronym>).
+   Ceci signifie que chaque requête SQL voit une image des données (une
+   <firstterm>version de la base de données</firstterm>) telle qu'elles
+   étaient quelque temps auparavant, quel que soit l'état actuel des données
+   sous-jacentes.
+   Cela évite que les requêtes puissent voir des données non cohérentes
+   produites par des transactions concurrentes effectuant des mises à jour
+   sur les mêmes lignes de données, fournissant ainsi une
+   <firstterm>isolation des transactions</firstterm> pour chaque session de la
+   base de données. <acronym>MVCC</acronym>, en évitant les méthodes des verrous
+   des systèmes de bases de données traditionnels, minimise la
+   durée des verrous pour permettre des performances raisonnables dans
+   des environnements multiutilisateurs.
   </para>
 
-  <sect1 id="mvcc-intro">
-   <title>Introduction</title>
+  <para>
+   Le principal avantage de l'utilisation du modèle <acronym>MVCC</acronym>
+   pour le contrôle des accès simultanés, contrairement au verrouillage, est que, dans
+   les verrous acquis par <acronym>MVCC</acronym> pour récupérer (en lecture)
+   des données, aucun conflit n'intervient avec les verrous acquis pour écrire
+   des données. Du coup, lire ne bloque jamais l'écriture et écrire ne bloque
+   jamais la lecture.
+   <productname>PostgreSQL</productname> maintient cette garantie même quand
+   il fournit le niveau d'isolation le plus strict au moyen d'un niveau
+   <firstterm>Serializable Snapshot Isolation</firstterm> (<acronym>SSI</acronym>)
+   innovant.
+  </para>
 
-   <indexterm>
-    <primary>Multiversion Concurrency Control</primary>
-   </indexterm>
+  <para>
+   Des possibilités de verrouillage des tables ou des lignes sont aussi disponibles
+   dans <productname>PostgreSQL</productname> pour les applications qui n'ont
+   pas besoin en général d'une isolation complète des transactions et
+   préfèrent gérer explicitement les points de conflits particuliers. Néanmoins,
+   un bon usage de <acronym>MVCC</acronym> fournira généralement de
+   meilleures performances que les verrous. De plus, les verrous informatifs
+   définis par l'utilisateur fournissent un mécanisme d'acquisition de verrous
+   qui n'est pas lié à une transaction.
+  </para>
+ </sect1>
 
-   <indexterm>
-    <primary>MVCC</primary>
-   </indexterm>
+ <sect1 id="transaction-iso">
+  <title>Isolation des transactions</title>
 
-   <indexterm>
-    <primary>Serializable Snapshot Isolation</primary>
-   </indexterm>
+  <indexterm>
+   <primary>isolation des transactions</primary>
+  </indexterm>
 
-   <indexterm>
-    <primary>SSI</primary>
-   </indexterm>
+  <para>
+   Le standard <acronym>SQL</acronym> définit quatre niveaux d'isolation de
+   transaction.
+   Le plus strict est Serializable, qui est défini par le standard dans
+   un paragraphe qui déclare que toute exécution concurrente d'un jeu
+   de transactions sérialisables doit apporter la garantie de produire
+   le même effet que l'exécution consécutive de chacun d'entre eux
+   dans un certain ordre. Les trois autres niveaux sont définis en terme
+   de phénomènes, résultant de l'intéraction entre les transactions
+   concurrentes, qui ne doivent pas se produire à chaque niveau. Le
+   standard note qu'en raison de la définition de Serializable, aucun
+   de ces phénomènes n'est possible à ce niveau. (Cela n'a rien de
+   surprenant -- si l'effet des transactions doit être cohérent avec
+   l'exécution consécutive de chacune d'entre elles, comment pourriez
+   vous voir un phénomène causé par des interactions?).
+  </para>
 
-   <para>
-    <productname>PostgreSQL</productname> fournit un ensemble d'outils
-    pour les développeurs qui souhaitent gérer des accès simulatnés aux données.
-    En interne, la cohérence des données est obtenue avec l'utilisation d'un
-    modèle multiversion (Multiversion Concurrency Control, <acronym>MVCC</acronym>).
-    Ceci signifie que chaque requête SQL voit une image des données (une
-    <firstterm>version de la base de données</firstterm>) telle qu'elles
-    étaient quelque temps auparavant, quel que soit l'état actuel des données
-    sous-jacentes.
-    Cela évite que les requêtes puissent voir des données non cohérentes
-    produites par des transactions concurrentes effectuant des mises à jour
-    sur les mêmes lignes de données, fournissant ainsi une
-    <firstterm>isolation des transactions</firstterm> pour chaque session de la
-    base de données. <acronym>MVCC</acronym>, en évitant les méthodes des verrous
-    des systèmes de bases de données traditionnels, minimise la
-    durée des verrous pour permettre des performances raisonnables dans
-    des environnements multiutilisateurs.
-   </para>
+  <para>
+   Les phénomènes qui sont interdits à chaque niveau sont:
 
-   <para>
-    Le principal avantage de l'utilisation du modèle <acronym>MVCC</acronym>
-    pour le contrôle des accès simultanés, contrairement au verrouillage, est que, dans
-    les verrous acquis par <acronym>MVCC</acronym> pour récupérer (en lecture)
-    des données, aucun conflit n'intervient avec les verrous acquis pour écrire
-    des données. Du coup, lire ne bloque jamais l'écriture et écrire ne bloque
-    jamais la lecture.
-    <productname>PostgreSQL</productname> maintient cette garantie même quand
-    il fournit le niveau d'isolation le plus strict au moyen d'un niveau
-    <firstterm>Serializable Snapshot Isolation</firstterm> (<acronym>SSI</acronym>)
-    innovant.
-   </para>
-
-   <para>
-    Des possibilités de verrouillage des tables ou des lignes sont aussi disponibles
-    dans <productname>PostgreSQL</productname> pour les applications qui n'ont
-    pas besoin en général d'une isolation complète des transactions et
-    préfèrent gérer explicitement les points de conflits particuliers. Néanmoins,
-    un bon usage de <acronym>MVCC</acronym> fournira généralement de
-    meilleures performances que les verrous. De plus, les verrous informatifs
-    définis par l'utilisateur fournissent un mécanisme d'acquisition de verrous
-    qui n'est pas lié à une transaction.
-   </para>
-  </sect1>
-
-  <sect1 id="transaction-iso">
-   <title>Isolation des transactions</title>
-
-   <indexterm>
-    <primary>isolation des transactions</primary>
-   </indexterm>
-
-   <para>
-    Le standard <acronym>SQL</acronym> définit quatre niveaux d'isolation de
-    transaction.
-    Le plus strict est Serializable, qui est défini par le standard dans
-    un paragraphe qui déclare que toute exécution concurrente d'un jeu
-    de transactions sérialisables doit apporter la garantie de produire
-    le même effet que l'exécution consécutive de chacun d'entre eux
-    dans un certain ordre. Les trois autres niveaux sont définis en terme
-    de phénomènes, résultant de l'intéraction entre les transactions
-    concurrentes, qui ne doivent pas se produire à chaque niveau. Le
-    standard note qu'en raison de la définition de Serializable, aucun
-    de ces phénomènes n'est possible à ce niveau. (Cela n'a rien de
-    surprenant -- si l'effet des transactions doit être cohérent avec
-    l'exécution consécutive de chacune d'entre elles, comment pourriez
-    vous voir un phénomène causé par des interactions?).
-   </para>
-
-   <para>
-    Les phénomènes qui sont interdits à chaque niveau sont:
-
-    <variablelist>
-     <varlistentry>
-      <term>
-       lecture sale
-       <indexterm><primary>lecture sale</primary></indexterm>
-      </term>
+   <variablelist>
+    <varlistentry>
+     <term>
+      lecture sale
+      <indexterm><primary>lecture sale</primary></indexterm>
+     </term>
      <listitem>
       <para>
        Une transaction lit des données écrites par une transaction concurrente
        non validée (dirty read).
-       </para>
-      </listitem>
-     </varlistentry>
+      </para>
+     </listitem>
+    </varlistentry>
 
-     <varlistentry>
-      <term>
-       lecture non reproductible
-       <indexterm><primary>lecture non reproductible</primary></indexterm>
-      </term>
+    <varlistentry>
+     <term>
+      lecture non reproductible
+      <indexterm><primary>lecture non reproductible</primary></indexterm>
+     </term>
      <listitem>
       <para>
        Une transaction relit des données qu'elle a lu
        précédemment et trouve que les données ont été modifiées par une autre
        transaction (validée depuis la lecture initiale) (non repeatable read).
-       </para>
-      </listitem>
-     </varlistentry>
+      </para>
+     </listitem>
+    </varlistentry>
 
-     <varlistentry>
-      <term>
-       lecture fantôme
-       <indexterm><primary>lecture fantôme</primary></indexterm>
-      </term>
-      <listitem>
-       <para>
-        Une transaction ré-exécute une requête renvoyant un ensemble de lignes
-        satisfaisant une condition de recherche et trouve que l'ensemble des
-        lignes satisfaisant la condition a changé du fait d'une autre transaction
-        récemment validée (phantom read).
-       </para>
-      </listitem>
-     </varlistentry>
-    </variablelist>
-   </para>
+    <varlistentry>
+     <term>
+      lecture fantôme
+      <indexterm><primary>lecture fantôme</primary></indexterm>
+     </term>
+     <listitem>
+      <para>
+       Une transaction ré-exécute une requête renvoyant un ensemble de lignes
+       satisfaisant une condition de recherche et trouve que l'ensemble des
+       lignes satisfaisant la condition a changé du fait d'une autre transaction
+       récemment validée (phantom read).
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
 
+  <para>
+   <indexterm>
+    <primary>niveau d'isolation de transaction</primary>
+   </indexterm>
+   Les quatre niveaux d'isolation de transaction et les comportements
+   correspondants sont décrits dans le <xref linkend="mvcc-isolevel-table"/>.
+  </para>
+
+  <table tocentry="1" id="mvcc-isolevel-table">
+   <title>Niveaux d'isolation standards des transactions <acronym>SQL</acronym></title>
+   <tgroup cols="4">
+    <colspec colnum="1" colwidth="2.2*"/>
+    <colspec colnum="2" colwidth="0.6*"/>
+    <colspec colnum="3" colwidth="0.6*"/>
+    <colspec colnum="4" colwidth="0.6*"/>
+    <thead>
+     <row>
+      <entry>
+       Niveau d'isolation
+      </entry>
+      <entry>
+       Lecture sale
+      </entry>
+      <entry>
+       Lecture non reproductible
+      </entry>
+      <entry>
+       Lecture fantôme
+      </entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry>
+       Uncommited Read (en français, <quote>Lecture de données non validées</quote>)
+      </entry>
+      <entry>
+       Possible
+      </entry>
+      <entry>
+       Possible
+      </entry>
+      <entry>
+       Possible
+      </entry>
+     </row>
+
+     <row>
+      <entry>
+       Commited Read (en français, <quote>Lecture de données validées</quote>)
+      </entry>
+      <entry>
+       Impossible
+      </entry>
+      <entry>
+       Possible
+      </entry>
+      <entry>
+       Possible
+      </entry>
+     </row>
+
+     <row>
+      <entry>
+       Repeatable Read (en français, <quote>Lecture répétée</quote>)
+      </entry>
+      <entry>
+       Impossible
+      </entry>
+      <entry>
+       Impossible
+      </entry>
+      <entry>
+       Possible
+      </entry>
+     </row>
+
+     <row>
+      <entry>
+       Serializable (en français, <quote>Sérialisable</quote>)
+      </entry>
+      <entry>
+       Impossible
+      </entry>
+      <entry>
+       Impossible
+      </entry>
+      <entry>
+       Impossible
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   Dans <productname>PostgreSQL</productname>, vous pouvez demander un des
+   quatre niveaux standards d'isolation de transaction. Mais, en interne,
+   il existe seulement trois niveaux distincts d'isolation, qui correspondent
+   aux niveaux Read Committed et Repeatable Read, and Serializable. Lorsque vous sélectionnez le
+   niveau Read Uncommitted, vous obtenez réellement Read Committed, et
+   les lectures fantômes ne sont pas possibles dans l'implémentation
+   <productname>PostgreSQL</productname> de Repeatable Read.
+   Le niveau d'isolation actuel pourrait donc être plus strict que ce que vous
+   sélectionnez. Ceci est permis par le standard SQL. Les quatre niveaux
+   d'isolation définissent seulement quel phénomène ne doit pas survenir, ils
+   ne définissent pas ce qui doit arriver. La raison pour laquelle
+   <productname>PostgreSQL</productname> fournit seulement trois niveaux d'isolation est
+   qu'il s'agit de la seule façon raisonnable de faire correspondre les niveaux
+   d'isolation standards avec l'architecture de contrôle des accès simultanés
+   multiversion. Le comportement des niveaux standards d'isolation est détaillé
+   dans les sous-sections suivantes.
+  </para>
+
+  <para>
+   Pour initialiser le niveau d'isolation d'une transaction, utilisez la
+   commande <xref linkend="sql-set-transaction"/>.
+  </para>
+
+  <important>
    <para>
-    <indexterm>
-     <primary>niveau d'isolation de transaction</primary>
-    </indexterm>
-    Les quatre niveaux d'isolation de transaction et les comportements
-    correspondants sont décrits dans le <xref linkend="mvcc-isolevel-table"/>.
+    Certains types de données et certaines fonctions de
+    <productname>PostgreSQL</productname> ont des règles spéciales sur le
+    comportement des transactions. En particulier, les modifications réalisées
+    sur une séquence (et du coup sur le compteur d'une
+    colonne déclarée <type>serial</type>) sont immédiatement visibles
+    de toutes les autres transactions et ne sont pas annulées si la transaction
+    qui a fait la modification est annulée. Voir
+    <xref linkend="functions-sequence"/> et <xref linkend="datatype-serial"/>.
    </para>
-
-    <table tocentry="1" id="mvcc-isolevel-table">
-     <title>Niveaux d'isolation standards des transactions <acronym>SQL</acronym></title>
-     <tgroup cols="4">
-     <colspec colnum="1" colwidth="2.2*"/>
-     <colspec colnum="2" colwidth="0.6*"/>
-     <colspec colnum="3" colwidth="0.6*"/>
-     <colspec colnum="4" colwidth="0.6*"/>
-      <thead>
-       <row>
-        <entry>
-         Niveau d'isolation
-        </entry>
-        <entry>
-         Lecture sale
-        </entry>
-        <entry>
-         Lecture non reproductible
-        </entry>
-        <entry>
-         Lecture fantôme
-        </entry>
-       </row>
-      </thead>
-      <tbody>
-       <row>
-        <entry>
-         Uncommited Read (en français, <quote>Lecture de données non validées</quote>)
-        </entry>
-        <entry>
-         Possible
-        </entry>
-        <entry>
-         Possible
-        </entry>
-        <entry>
-         Possible
-        </entry>
-       </row>
-
-       <row>
-        <entry>
-         Commited Read (en français, <quote>Lecture de données validées</quote>)
-        </entry>
-        <entry>
-         Impossible
-        </entry>
-        <entry>
-         Possible
-        </entry>
-        <entry>
-         Possible
-        </entry>
-       </row>
-
-       <row>
-        <entry>
-         Repeatable Read (en français, <quote>Lecture répétée</quote>)
-        </entry>
-        <entry>
-         Impossible
-        </entry>
-        <entry>
-         Impossible
-        </entry>
-        <entry>
-         Possible
-        </entry>
-       </row>
-
-       <row>
-        <entry>
-         Serializable (en français, <quote>Sérialisable</quote>)
-        </entry>
-        <entry>
-         Impossible
-        </entry>
-        <entry>
-         Impossible
-        </entry>
-        <entry>
-         Impossible
-        </entry>
-       </row>
-      </tbody>
-     </tgroup>
-    </table>
-
-    <para>
-    Dans <productname>PostgreSQL</productname>, vous pouvez demander un des
-    quatre niveaux standards d'isolation de transaction. Mais, en interne,
-    il existe seulement trois niveaux distincts d'isolation, qui correspondent
-    aux niveaux Read Committed et Repeatable Read, and Serializable. Lorsque vous sélectionnez le
-    niveau Read Uncommitted, vous obtenez réellement Read Committed, et
-    les lectures fantômes ne sont pas possibles dans l'implémentation
-    <productname>PostgreSQL</productname> de Repeatable Read.
-    Le niveau d'isolation actuel pourrait donc être plus strict que ce que vous
-    sélectionnez. Ceci est permis par le standard SQL. Les quatre niveaux
-    d'isolation définissent seulement quel phénomène ne doit pas survenir, ils
-    ne définissent pas ce qui doit arriver. La raison pour laquelle
-    <productname>PostgreSQL</productname> fournit seulement trois niveaux d'isolation est
-    qu'il s'agit de la seule façon raisonnable de faire correspondre les niveaux
-    d'isolation standards avec l'architecture de contrôle des accès simultanés
-    multiversion. Le comportement des niveaux standards d'isolation est détaillé
-    dans les sous-sections suivantes.
-    </para>
-
-    <para>
-    Pour initialiser le niveau d'isolation d'une transaction, utilisez la
-    commande <xref linkend="sql-set-transaction"/>.
-    </para>
-
-   <important>
-     <para>
-       Certains types de données et certaines fonctions de
-       <productname>PostgreSQL</productname> ont des règles spéciales sur le
-       comportement des transactions. En particulier, les modifications réalisées
-       sur une séquence (et du coup sur le compteur d'une
-       colonne déclarée <type>serial</type>) sont immédiatement visibles
-       de toutes les autres transactions et ne sont pas annulées si la transaction
-       qui a fait la modification est annulée. Voir
-       <xref linkend="functions-sequence"/> et <xref linkend="datatype-serial"/>.
-     </para>
-   </important>
+  </important>
 
   <sect2 id="xact-read-committed">
    <title>Niveau d'isolation Read committed (lecture uniquement des données validées)</title>
@@ -356,7 +356,7 @@
     les cas simples. Par exemple, considérons la mise à jour de balances de
     banque avec des transactions comme&nbsp;:
 
-<screen>BEGIN;
+    <screen>BEGIN;
 UPDATE comptes SET balance = balance + 100.00 WHERE no_compte = 12345;
 UPDATE comptes SET balance = balance - 100.00 WHERE no_compte = 7534;
 COMMIT;</screen>
@@ -382,7 +382,7 @@ BEGIN;
 UPDATE website SET hits = hits + 1;
 -- exécuté par une autre session :  DELETE FROM website WHERE hits = 10;
 COMMIT;
-</screen>
+    </screen>
 
     La commande <command>DELETE</command> n'aura pas d'effet même s'il existe
     une ligne <literal>website.hits = 10</literal> avant et après la commande
@@ -472,7 +472,7 @@ COMMIT;
     la ligne est mise à jour ou supprimée, pas simplement verrouillée),
     alors la transaction repeatable read sera annulée avec le message
 
-<screen>ERROR:  could not serialize access due to concurrent update</screen>
+    <screen>ERROR:  could not serialize access due to concurrent update</screen>
 
     parce qu'une transaction sérialisable ne peut pas modifier ou verrouiller
     les lignes changées par d'autres transactions après que la transaction
@@ -582,12 +582,12 @@ COMMIT;
 
 <screen>
 ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parallèle"
-</screen>
+    </screen>
 
     C'est parce que si A a été exécuté avant B, B aurait trouvé la somme 330, et non pas 300.
-      De façon similaire, l'autre ordre aurait eu comme résultat une somme
-      différente pour le calcul par A.
-     </para>
+    De façon similaire, l'autre ordre aurait eu comme résultat une somme
+    différente pour le calcul par A.
+   </para>
 
    <para>
     Si on se fie aux transactions sérialisées pour empêcher les anomalies, il
@@ -638,7 +638,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
     verrous plus grossiers (par exemple, des verrous de page) pendant le
     déroulement de la transaction afin d'éviter d'épuiser la mémoire
     utilisée pour suivre les verrous. Une transaction <literal>READ
-    ONLY</literal> pourra libérer ses verrous SIRead avant sa fin, si
+     ONLY</literal> pourra libérer ses verrous SIRead avant sa fin, si
     elle détecte qu'aucun conflit ne peut encore se produire pouvant
     potentiellement entrainer une anomalie de sérialisation. En fait,
     les transaction <literal>READ ONLY</literal> seront souvent capable
@@ -651,9 +651,9 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
     SIRead doivent souvent être gardés après la fin d'une transaction,
     jusqu'à ce que toutes les lectures-écritures s'étant déroulées
     simultanément soient terminées.
-    </para>
+   </para>
 
-    <para>
+   <para>
     L'utilisation systématique de transactions Serializable peut
     simplifier le développement. La garantie que n'importe quel jeu
     de transactions concurrentes aura le même effet que si elles
@@ -673,9 +673,9 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
     dépendances lecture/écriture a un coût, tout comme l'échec,
     mais mis en face du coût et du blocage entrainés par les verrous
     explicites et <literal>SELECT FOR UPDATE</literal> ou <literal>SELECT
-    FOR SHARE</literal>, les transactions serializable sont le meilleur
+     FOR SHARE</literal>, les transactions serializable sont le meilleur
     choix en termes de performances pour certains environnements.
-    </para>
+   </para>
 
    <para>
     Pour une performance optimale quand on s'appuie sur les transactions
@@ -756,33 +756,33 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
   </sect2>
  </sect1>
 
-  <sect1 id="explicit-locking">
-   <title>Verrouillage explicite</title>
+ <sect1 id="explicit-locking">
+  <title>Verrouillage explicite</title>
 
-   <indexterm>
-    <primary>verrou</primary>
-   </indexterm>
+  <indexterm>
+   <primary>verrou</primary>
+  </indexterm>
 
-   <para>
-    <productname>PostgreSQL</productname> fournit de nombreux modes de verrous
-    pour contrôler les accès simultanés aux données des tables. Ces modes
-    peuvent être utilisés pour contrôler le verrouillage par l'application dans
-    des situations où <acronym>MVCC</acronym> n'a pas le comportement désiré. De
-    plus, la plupart des commandes <productname>PostgreSQL</productname>
-    acquièrent automatiquement des verrous avec les modes appropriés pour
-    s'assurer que les tables référencées ne sont pas supprimées ou modifiées de
-    façon incompatible lorsque la commande s'exécute (par exemple,
-    <command>TRUNCATE</command> ne peut pas être exécuté de façon sûr en
-    même temps que d'autres opérations sur la même table, donc il obtient un
-    verrou exclusif sur la table pour s'assurer d'une bonne exécution).
-   </para>
+  <para>
+   <productname>PostgreSQL</productname> fournit de nombreux modes de verrous
+   pour contrôler les accès simultanés aux données des tables. Ces modes
+   peuvent être utilisés pour contrôler le verrouillage par l'application dans
+   des situations où <acronym>MVCC</acronym> n'a pas le comportement désiré. De
+   plus, la plupart des commandes <productname>PostgreSQL</productname>
+   acquièrent automatiquement des verrous avec les modes appropriés pour
+   s'assurer que les tables référencées ne sont pas supprimées ou modifiées de
+   façon incompatible lorsque la commande s'exécute (par exemple,
+   <command>TRUNCATE</command> ne peut pas être exécuté de façon sûr en
+   même temps que d'autres opérations sur la même table, donc il obtient un
+   verrou exclusif sur la table pour s'assurer d'une bonne exécution).
+  </para>
 
-   <para>
-    Pour examiner une liste des verrous en cours, utilisez la vue système <link
-    linkend="view-pg-locks"><structname>pg_locks</structname></link>. Pour plus
-    d'informations sur la surveillance du statut du sous-système de gestion des
-    verrous, référez-vous au <xref linkend="monitoring"/>.
-   </para>
+  <para>
+   Pour examiner une liste des verrous en cours, utilisez la vue système <link
+   linkend="view-pg-locks"><structname>pg_locks</structname></link>. Pour plus
+   d'informations sur la surveillance du statut du sous-système de gestion des
+   verrous, référez-vous au <xref linkend="monitoring"/>.
+  </para>
 
   <sect2 id="locking-tables">
    <title>Verrous de niveau table</title>
@@ -807,200 +807,200 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
     peuvent pas conserver des verrous de modes en conflit sur la même table au
     même moment (néanmoins, une transaction n'entre jamais en conflit avec
     elle-même. Par exemple, elle pourrait acquérir un verrou <literal>ACCESS
-    EXCLUSIVE</literal> et acquérir plus tard un verrou <literal>ACCESS
-    SHARE</literal> sur la même table). Des modes de verrou sans conflit
+     EXCLUSIVE</literal> et acquérir plus tard un verrou <literal>ACCESS
+     SHARE</literal> sur la même table). Des modes de verrou sans conflit
     peuvent être détenus en même temps par plusieurs transactions. Notez, en
     particulier, que certains modes de verrous sont en conflit avec eux-même (par
     exemple, un verrou <literal>ACCESS EXCLUSIVE</literal> ne peut pas être
     détenu par plus d'une transaction à la fois) alors que d'autres n'entrent
     pas en conflit avec eux-même (par exemple, un verrou <literal>ACCESS
-    SHARE</literal> peut être détenu par plusieurs transactions).
+     SHARE</literal> peut être détenu par plusieurs transactions).
    </para>
 
-     <variablelist>
-      <title>Modes de verrous au niveau table</title>
-      <varlistentry>
-       <term>
-        <literal>ACCESS SHARE</literal>
-       </term>
-       <listitem>
-        <para>
-         En conflit avec le mode verrou <literal>ACCESS EXCLUSIVE</literal>.
-        </para>
-
-        <para>
-         Les commandes <command>SELECT</command> acquièrent un verrou de ce
-         mode avec les tables référencées. En général, tout requête <emphasis>lisant</emphasis>
-         seulement une table et ne la modifiant pas obtient ce mode de verrou.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term>
-        <literal>ROW SHARE</literal>
-       </term>
-       <listitem>
-        <para>
-         En conflit avec les modes de verrous <literal>EXCLUSIVE</literal> et
-         <literal>ACCESS EXCLUSIVE</literal>.
-        </para>
-
-        <para>
-         La commande <command>SELECT FOR UPDATE</command> et <command>SELECT
-         FOR SHARE</command> acquièrent un verrou de ce mode
-         avec la table cible (en plus des verrous <literal>ACCESS
-         SHARE</literal> des autres tables référencées mais pas
-         sélectionnées <option>FOR UPDATE/FOR SHARE</option>).
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term>
-        <literal>ROW EXCLUSIVE</literal>
-       </term>
-       <listitem>
-        <para>
-         En conflit avec les modes de verrous <literal>SHARE</literal>,
-         <literal>SHARE ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>
-         et <literal>ACCESS EXCLUSIVE</literal>.
-        </para>
-
-        <para>
-         Les commandes <command>UPDATE</command>,
-         <command>DELETE</command> et <command>INSERT</command> acquièrent ce
-         mode de verrou sur la table cible (en plus des verrous <literal>ACCESS
-         SHARE</literal> sur toutes les autres tables référencées). En général,
-         ce mode de verrouillage sera acquis par toute commande <emphasis>modifiant</emphasis> des
-         données de la table.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term>
-        <literal>SHARE UPDATE EXCLUSIVE</literal>
-       </term>
-       <listitem>
-        <para>
-         En conflit avec les modes de verrous <literal>SHARE UPDATE
-         EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE ROW
-         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
-         <literal>ACCESS EXCLUSIVE</literal>. Ce mode protège une table contre
-         les modifications simultanées de schéma et l'exécution d'un
-         <command>VACUUM</command>.
-        </para>
-
-        <para>
-         Acquis par <command>VACUUM</command> (sans <option>FULL</option>),
-         <command>ANALYZE</command>, <command>CREATE INDEX CONCURRENTLY</command>, et
-         <command>ALTER TABLE VALIDATE</command> et toutes les autres variantes
-         d'<command>ALTER TABLE</command> (pour plus de détail voir
-         <xref linkend="sql-altertable"/>).
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term>
-        <literal>SHARE</literal>
-       </term>
-       <listitem>
-        <para>
-         En conflit avec les modes de verrous <literal>ROW EXCLUSIVE</literal>,
-         <literal>SHARE UPDATE EXCLUSIVE</literal>, <literal>SHARE ROW
-         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
-         <literal>ACCESS EXCLUSIVE</literal>. Ce mode protège une table
-         contre les modifications simultanées des données.
-        </para>
-
-        <para>
-         Acquis par <command>CREATE INDEX</command> (sans <option>CONCURRENTLY</option>).
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term>
-        <literal>SHARE ROW EXCLUSIVE</literal>
-       </term>
-       <listitem>
-        <para>
-         En conflit avec les modes de verrous <literal>ROW EXCLUSIVE</literal>,
-         <literal>SHARE UPDATE EXCLUSIVE</literal>,
-         <literal>SHARE</literal>, <literal>SHARE ROW
-         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
-         <literal>ACCESS EXCLUSIVE</literal>.
-         Ce mode protège une table contre les modifications concurrentes de données,
-         et est en conflit avec elle-même, afin qu'une seule session puisse le
-         posséder à un moment donné.
-        </para>
-
-        <para>
-         Acquis par <command>REFRESH MATERIALIZED VIEW CONCURRENTLY</command>.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term>
-        <literal>EXCLUSIVE</literal>
-       </term>
-       <listitem>
-        <para>
-         En conflit avec les modes de verrous <literal>ROW SHARE</literal>,
-         <literal>ROW EXCLUSIVE</literal>, <literal>SHARE UPDATE
-         EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE
-         ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
-         <literal>ACCESS EXCLUSIVE</literal>. Ce mode autorise uniquement les
-         verrous <literal>ACCESS SHARE</literal> concurrents, c'est-à-dire que
-         seules les lectures à partir de la table peuvent être effectuées en
-         parallèle avec une transaction contenant ce mode de verrouillage.
-        </para>
-
-        <para>
-         Ce mode de verrouillage n'est acquis automatiquement sur
-         des tables par aucune commande <productname>PostgreSQL</productname>.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term>
-        <literal>ACCESS EXCLUSIVE</literal>
-       </term>
-       <listitem>
-        <para>
-         Entre en conflit avec tous les modes (<literal>ACCESS
-         SHARE</literal>, <literal>ROW SHARE</literal>, <literal>ROW
-         EXCLUSIVE</literal>, <literal>SHARE UPDATE
-         EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE
-         ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
-         <literal>ACCESS EXCLUSIVE</literal>).
-         Ce mode garantit que le détenteur est la seule transaction à accéder à
-         la table de quelque façon que ce soit.
-        </para>
-
-        <para>
-         Acquis par les commandes <command>DROP
-         TABLE</command>, <command>TRUNCATE</command>, <command>REINDEX</command>,
-         <command>CLUSTER</command> et <command>VACUUM FULL</command>.
-         De nombreuses forme d'<command>ALTER TABLE</command> acquièrent également
-         un verrou de ce niveau (voir <xref linkend="sql-altertable"/>).
-         C'est aussi le mode de verrou par défaut des instructions <command>LOCK
-         TABLE</command> qui ne spécifient pas explicitement de mode de verrouillage.
-        </para>
-       </listitem>
-      </varlistentry>
-     </variablelist>
-
-     <tip>
+   <variablelist>
+    <title>Modes de verrous au niveau table</title>
+    <varlistentry>
+     <term>
+      <literal>ACCESS SHARE</literal>
+     </term>
+     <listitem>
       <para>
-       Seul un verrou <literal>ACCESS EXCLUSIVE</literal> bloque une instruction
-       <command>SELECT</command> (sans <option>FOR UPDATE/SHARE</option>).
+       En conflit avec le mode verrou <literal>ACCESS EXCLUSIVE</literal>.
       </para>
-     </tip>
+
+      <para>
+       Les commandes <command>SELECT</command> acquièrent un verrou de ce
+       mode avec les tables référencées. En général, tout requête <emphasis>lisant</emphasis>
+       seulement une table et ne la modifiant pas obtient ce mode de verrou.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      <literal>ROW SHARE</literal>
+     </term>
+     <listitem>
+      <para>
+       En conflit avec les modes de verrous <literal>EXCLUSIVE</literal> et
+       <literal>ACCESS EXCLUSIVE</literal>.
+      </para>
+
+      <para>
+       La commande <command>SELECT FOR UPDATE</command> et <command>SELECT
+        FOR SHARE</command> acquièrent un verrou de ce mode
+       avec la table cible (en plus des verrous <literal>ACCESS
+        SHARE</literal> des autres tables référencées mais pas
+       sélectionnées <option>FOR UPDATE/FOR SHARE</option>).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      <literal>ROW EXCLUSIVE</literal>
+     </term>
+     <listitem>
+      <para>
+       En conflit avec les modes de verrous <literal>SHARE</literal>,
+       <literal>SHARE ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>
+       et <literal>ACCESS EXCLUSIVE</literal>.
+      </para>
+
+      <para>
+       Les commandes <command>UPDATE</command>,
+       <command>DELETE</command> et <command>INSERT</command> acquièrent ce
+       mode de verrou sur la table cible (en plus des verrous <literal>ACCESS
+        SHARE</literal> sur toutes les autres tables référencées). En général,
+       ce mode de verrouillage sera acquis par toute commande <emphasis>modifiant</emphasis> des
+       données de la table.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      <literal>SHARE UPDATE EXCLUSIVE</literal>
+     </term>
+     <listitem>
+      <para>
+       En conflit avec les modes de verrous <literal>SHARE UPDATE
+        EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE ROW
+        EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
+       <literal>ACCESS EXCLUSIVE</literal>. Ce mode protège une table contre
+       les modifications simultanées de schéma et l'exécution d'un
+       <command>VACUUM</command>.
+      </para>
+
+      <para>
+       Acquis par <command>VACUUM</command> (sans <option>FULL</option>),
+       <command>ANALYZE</command>, <command>CREATE INDEX CONCURRENTLY</command>, et
+       <command>ALTER TABLE VALIDATE</command> et toutes les autres variantes
+       d'<command>ALTER TABLE</command> (pour plus de détail voir
+       <xref linkend="sql-altertable"/>).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      <literal>SHARE</literal>
+     </term>
+     <listitem>
+      <para>
+       En conflit avec les modes de verrous <literal>ROW EXCLUSIVE</literal>,
+       <literal>SHARE UPDATE EXCLUSIVE</literal>, <literal>SHARE ROW
+        EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
+       <literal>ACCESS EXCLUSIVE</literal>. Ce mode protège une table
+       contre les modifications simultanées des données.
+      </para>
+
+      <para>
+       Acquis par <command>CREATE INDEX</command> (sans <option>CONCURRENTLY</option>).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      <literal>SHARE ROW EXCLUSIVE</literal>
+     </term>
+     <listitem>
+      <para>
+       En conflit avec les modes de verrous <literal>ROW EXCLUSIVE</literal>,
+       <literal>SHARE UPDATE EXCLUSIVE</literal>,
+       <literal>SHARE</literal>, <literal>SHARE ROW
+        EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
+       <literal>ACCESS EXCLUSIVE</literal>.
+       Ce mode protège une table contre les modifications concurrentes de données,
+       et est en conflit avec elle-même, afin qu'une seule session puisse le
+       posséder à un moment donné.
+      </para>
+
+      <para>
+       Acquis par <command>REFRESH MATERIALIZED VIEW CONCURRENTLY</command>.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      <literal>EXCLUSIVE</literal>
+     </term>
+     <listitem>
+      <para>
+       En conflit avec les modes de verrous <literal>ROW SHARE</literal>,
+       <literal>ROW EXCLUSIVE</literal>, <literal>SHARE UPDATE
+        EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE
+        ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
+       <literal>ACCESS EXCLUSIVE</literal>. Ce mode autorise uniquement les
+       verrous <literal>ACCESS SHARE</literal> concurrents, c'est-à-dire que
+       seules les lectures à partir de la table peuvent être effectuées en
+       parallèle avec une transaction contenant ce mode de verrouillage.
+      </para>
+
+      <para>
+       Ce mode de verrouillage n'est acquis automatiquement sur
+       des tables par aucune commande <productname>PostgreSQL</productname>.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      <literal>ACCESS EXCLUSIVE</literal>
+     </term>
+     <listitem>
+      <para>
+       Entre en conflit avec tous les modes (<literal>ACCESS
+        SHARE</literal>, <literal>ROW SHARE</literal>, <literal>ROW
+        EXCLUSIVE</literal>, <literal>SHARE UPDATE
+        EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE
+        ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal> et
+       <literal>ACCESS EXCLUSIVE</literal>).
+       Ce mode garantit que le détenteur est la seule transaction à accéder à
+       la table de quelque façon que ce soit.
+      </para>
+
+      <para>
+       Acquis par les commandes <command>DROP
+        TABLE</command>, <command>TRUNCATE</command>, <command>REINDEX</command>,
+       <command>CLUSTER</command> et <command>VACUUM FULL</command>.
+       De nombreuses forme d'<command>ALTER TABLE</command> acquièrent également
+       un verrou de ce niveau (voir <xref linkend="sql-altertable"/>).
+       C'est aussi le mode de verrou par défaut des instructions <command>LOCK
+        TABLE</command> qui ne spécifient pas explicitement de mode de verrouillage.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+
+   <tip>
+    <para>
+     Seul un verrou <literal>ACCESS EXCLUSIVE</literal> bloque une instruction
+     <command>SELECT</command> (sans <option>FOR UPDATE/SHARE</option>).
+    </para>
+   </tip>
 
    <para>
     Une fois acquis, un verrou est normalement détenu jusqu'à la fin de la
@@ -1013,341 +1013,341 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
     d'erreur à partir du bloc lâche les verrous acquis dans le bloc.
    </para>
 
-    <table tocentry="1" id="table-lock-compatibility">
-     <title>Modes de verrou conflictuels</title>
-     <tgroup cols="9">
-      <colspec colnum="2" colname="lockst" />
-      <colspec colnum="9" colname="lockend" />
-      <spanspec namest="lockst" nameend="lockend" spanname="lockreq"/>
-      <thead>
-       <row>
-        <entry morerows="1">Verrou demandé</entry>
-        <entry spanname="lockreq">Verrou déjà détenu</entry>
-       </row>
-       <row>
-        <entry>ACCESS SHARE</entry>
-        <entry>ROW SHARE</entry>
-        <entry>ROW EXCLUSIVE</entry>
-        <entry>SHARE UPDATE EXCLUSIVE</entry>
-        <entry>SHARE</entry>
-        <entry>SHARE ROW EXCLUSIVE</entry>
-        <entry>EXCLUSIVE</entry>
-        <entry>ACCESS EXCLUSIVE</entry>
-       </row>
-      </thead>
-      <tbody>
-       <row>
-        <entry>ACCESS SHARE</entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>ROW SHARE</entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>ROW EXCLUSIVE</entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>SHARE UPDATE EXCLUSIVE</entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>SHARE</entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>SHARE ROW EXCLUSIVE</entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>EXCLUSIVE</entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>ACCESS EXCLUSIVE</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-      </tbody>
-     </tgroup>
-    </table>
-   </sect2>
+   <table tocentry="1" id="table-lock-compatibility">
+    <title>Modes de verrou conflictuels</title>
+    <tgroup cols="9">
+     <colspec colnum="2" colname="lockst" />
+     <colspec colnum="9" colname="lockend" />
+     <spanspec namest="lockst" nameend="lockend" spanname="lockreq"/>
+     <thead>
+      <row>
+       <entry morerows="1">Verrou demandé</entry>
+       <entry spanname="lockreq">Verrou déjà détenu</entry>
+      </row>
+      <row>
+       <entry>ACCESS SHARE</entry>
+       <entry>ROW SHARE</entry>
+       <entry>ROW EXCLUSIVE</entry>
+       <entry>SHARE UPDATE EXCLUSIVE</entry>
+       <entry>SHARE</entry>
+       <entry>SHARE ROW EXCLUSIVE</entry>
+       <entry>EXCLUSIVE</entry>
+       <entry>ACCESS EXCLUSIVE</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>ACCESS SHARE</entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>ROW SHARE</entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>ROW EXCLUSIVE</entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>SHARE UPDATE EXCLUSIVE</entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>SHARE</entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>SHARE ROW EXCLUSIVE</entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>EXCLUSIVE</entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>ACCESS EXCLUSIVE</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+  </sect2>
 
-   <sect2 id="locking-rows">
-    <title>Verrous au niveau ligne</title>
+  <sect2 id="locking-rows">
+   <title>Verrous au niveau ligne</title>
 
-    <para>
-     En plus des verrous au niveau table, il existe des verrous au niveau
-     ligne. Ils sont listés ci-dessous, avec les contextes de leur
-     utilisation automatique par <productname>PostgreSQL</productname>. Voir
-     <xref linkend="row-lock-compatibility"/> pour une table complète des
-     conflits de verrou niveau ligne. Notez qu'une transaction peut détenir
-     des verrous en conflit sur la même ligne, y compris sur des sous-transactions
-     différentes&nbsp;; mais en dehors de cela, deux transactions ne peuvent
-     jamais détenir des verrous en conflit pour la même ligne. Les verrous
-     au niveau ligne n'affectent pas les lectures des données&nbsp;; elles
-     bloquent seulement les <emphasis>écrivains et verrouilleurs</emphasis>
-     sur la même ligne.
-    </para>
+   <para>
+    En plus des verrous au niveau table, il existe des verrous au niveau
+    ligne. Ils sont listés ci-dessous, avec les contextes de leur
+    utilisation automatique par <productname>PostgreSQL</productname>. Voir
+    <xref linkend="row-lock-compatibility"/> pour une table complète des
+    conflits de verrou niveau ligne. Notez qu'une transaction peut détenir
+    des verrous en conflit sur la même ligne, y compris sur des sous-transactions
+    différentes&nbsp;; mais en dehors de cela, deux transactions ne peuvent
+    jamais détenir des verrous en conflit pour la même ligne. Les verrous
+    au niveau ligne n'affectent pas les lectures des données&nbsp;; elles
+    bloquent seulement les <emphasis>écrivains et verrouilleurs</emphasis>
+    sur la même ligne.
+   </para>
 
-     <variablelist>
-      <title>Modes des verrous au niveau ligne</title>
-      <varlistentry>
-       <term>
-        <literal>FOR UPDATE</literal>
-       </term>
-       <listitem>
-        <para>
-         <literal>FOR UPDATE</literal> verrouille pour modification les lignes
-         récupérées par l'instruction <command>SELECT</command>. Cela les empêche
-         d'être modifiées ou supprimées par les autres transactions jusqu'à la fin
-         de la transaction en cours. Les autres transactions qui tentent des
-         <command>UPDATE</command>, <command>DELETE</command>, <command>SELECT
-         FOR UPDATE</command>, <command>SELECT FOR NO KEY UPDATE</command>,
-         <command>SELECT FOR SHARE</command> ou <command>SELECT FOR KEY
-         SHARE</command> sur ces lignes sont bloquées jusqu'à la fin de la
-         transaction courante&nbsp;; et inversement, <command>SELECT FOR
-         UPDATE</command> attendra une transaction concurrente qui a exécuté
-         une de ces commandes sur la même ligne et qui verrouillera et renverra
-         la ligne mise à jour (ou aucune ligne si elle a été supprimée).
-         Néanmoins, à l'intérieur d'une transactions <literal>REPEATABLE READ</literal>
-         ou <literal>SERIALIZABLE</literal>, une erreur sera renvoyée si une
-         ligne à verrouiller a changé depuis que la transaction a commencé.
-         Pour plus de discussions, voir <xref linkend="applevel-consistency"/>.
-        </para>
-        <para>
-         Le mode de verrouillage <literal>FOR UPDATE</literal>
-         est aussi acquis par toute commande <command>DELETE</command> sur une ligne
-         ainsi que par un <command>UPDATE</command> qui modifie les valeurs de
-         certaines colonnes. Actuellement, l'ensemble de colonnes considéré par le
-         cas <command>UPDATE</command> est celui qui a un index unique lors de son
-         utilisation par une clé étrangère (donc les index partiels et fonctionnels
-         ne sont pas considérés), mais cela pourra être modifié dans le futur.
-        </para>
-       </listitem>
-      </varlistentry>
- 
-      <varlistentry>
-       <term>
-        <literal>FOR NO KEY UPDATE</literal>
-       </term>
-       <listitem>
-        <para>
-         <literal>FOR NO KEY UPDATE</literal> se comporte de la même façon que
-         <literal>FOR UPDATE</literal> sauf que le verrou acquis est moins
-         fort&nbsp;: ce verrou ne bloquera pas les commandes <literal>SELECT FOR
-         KEY SHARE</literal> qui tenteraient d'acquérir un verrou sur les mêmes
-         lignes. Ce mode de verrou est aussi acquis par tout
-         <command>UPDATE</command> qui ne nécessite pas un verrou <literal>FOR
-         UPDATE</literal>.
-        </para>
-       </listitem>
-      </varlistentry>
+   <variablelist>
+    <title>Modes des verrous au niveau ligne</title>
+    <varlistentry>
+     <term>
+      <literal>FOR UPDATE</literal>
+     </term>
+     <listitem>
+      <para>
+       <literal>FOR UPDATE</literal> verrouille pour modification les lignes
+       récupérées par l'instruction <command>SELECT</command>. Cela les empêche
+       d'être modifiées ou supprimées par les autres transactions jusqu'à la fin
+       de la transaction en cours. Les autres transactions qui tentent des
+       <command>UPDATE</command>, <command>DELETE</command>, <command>SELECT
+        FOR UPDATE</command>, <command>SELECT FOR NO KEY UPDATE</command>,
+       <command>SELECT FOR SHARE</command> ou <command>SELECT FOR KEY
+        SHARE</command> sur ces lignes sont bloquées jusqu'à la fin de la
+       transaction courante&nbsp;; et inversement, <command>SELECT FOR
+        UPDATE</command> attendra une transaction concurrente qui a exécuté
+       une de ces commandes sur la même ligne et qui verrouillera et renverra
+       la ligne mise à jour (ou aucune ligne si elle a été supprimée).
+       Néanmoins, à l'intérieur d'une transactions <literal>REPEATABLE READ</literal>
+       ou <literal>SERIALIZABLE</literal>, une erreur sera renvoyée si une
+       ligne à verrouiller a changé depuis que la transaction a commencé.
+       Pour plus de discussions, voir <xref linkend="applevel-consistency"/>.
+      </para>
+      <para>
+       Le mode de verrouillage <literal>FOR UPDATE</literal>
+       est aussi acquis par toute commande <command>DELETE</command> sur une ligne
+       ainsi que par un <command>UPDATE</command> qui modifie les valeurs de
+       certaines colonnes. Actuellement, l'ensemble de colonnes considéré par le
+       cas <command>UPDATE</command> est celui qui a un index unique lors de son
+       utilisation par une clé étrangère (donc les index partiels et fonctionnels
+       ne sont pas considérés), mais cela pourra être modifié dans le futur.
+      </para>
+     </listitem>
+    </varlistentry>
 
-      <varlistentry>
-       <term>
-        <literal>FOR SHARE</literal>
-       </term>
-       <listitem>
-        <para>
-         <literal>FOR SHARE</literal> a un comportement similaire à
-         <literal>FOR NO KEY UPDATE</literal>, sauf qu'il obtient un verrou
-         partagé plutôt qu'un verrou exclusif sur chaque ligne récupérée.
-         Un verrou partagée bloque les autres transactions réalisant des
-         <command>UPDATE</command>, <command>DELETE</command>,
-         <command>SELECT FOR UPDATE</command> et <command>SELECT FOR NO KEY
-         UPDATE</command> sur ces lignes mais il n'empêche pas les <command>SELECT
-         FOR SHARE</command> et <command>SELECT FOR KEY SHARE</command>.
-        </para>
-       </listitem>
-      </varlistentry>
+    <varlistentry>
+     <term>
+      <literal>FOR NO KEY UPDATE</literal>
+     </term>
+     <listitem>
+      <para>
+       <literal>FOR NO KEY UPDATE</literal> se comporte de la même façon que
+       <literal>FOR UPDATE</literal> sauf que le verrou acquis est moins
+       fort&nbsp;: ce verrou ne bloquera pas les commandes <literal>SELECT FOR
+        KEY SHARE</literal> qui tenteraient d'acquérir un verrou sur les mêmes
+       lignes. Ce mode de verrou est aussi acquis par tout
+       <command>UPDATE</command> qui ne nécessite pas un verrou <literal>FOR
+        UPDATE</literal>.
+      </para>
+     </listitem>
+    </varlistentry>
 
-      <varlistentry>
-       <term>
-        <literal>FOR KEY SHARE</literal>
-       </term>
-       <listitem>
-        <para>
-         <literal>FOR KEY SHARE</literal> a un comportement similaire à <literal>FOR
-         SHARE</literal>, sauf que le verrou est plus faible&nbsp;: <literal>SELECT
-         FOR UPDATE</literal> est bloqué alors que <literal>SELECT FOR NO KEY
-         UPDATE</literal> ne l'est pas. Un verrou à clé partagée bloque les autres
-         transactions lors de l'exécution d'un <command>DELETE</command> ou d'un
-         <command>UPDATE</command> qui modifie les valeurs clés mais pas les autres
-         <command>UPDATE</command>. Il n'empêche pas non plus les <command>SELECT FOR
-         NO KEY UPDATE</command>, <command>SELECT FOR SHARE</command> et
-         <command>SELECT FOR KEY SHARE</command>.
-        </para>
-       </listitem>
-      </varlistentry>
-     </variablelist>
+    <varlistentry>
+     <term>
+      <literal>FOR SHARE</literal>
+     </term>
+     <listitem>
+      <para>
+       <literal>FOR SHARE</literal> a un comportement similaire à
+       <literal>FOR NO KEY UPDATE</literal>, sauf qu'il obtient un verrou
+       partagé plutôt qu'un verrou exclusif sur chaque ligne récupérée.
+       Un verrou partagée bloque les autres transactions réalisant des
+       <command>UPDATE</command>, <command>DELETE</command>,
+       <command>SELECT FOR UPDATE</command> et <command>SELECT FOR NO KEY
+        UPDATE</command> sur ces lignes mais il n'empêche pas les <command>SELECT
+        FOR SHARE</command> et <command>SELECT FOR KEY SHARE</command>.
+      </para>
+     </listitem>
+    </varlistentry>
 
-    <para>
-     <productname>PostgreSQL</productname> ne garde en mémoire aucune information
-     sur les lignes modifiées, il n'y a donc aucune limite sur le
-     nombre de lignes verrouillées à un moment donné. Néanmoins, verrouiller une
-     ligne peut causer une écriture disque&nbsp;; ainsi, par exemple,
-     <command>SELECT FOR UPDATE</command> modifie les lignes sélectionnées
-     pour les marquer verrouillées et cela aboutit à des écritures disques.
-    </para>
+    <varlistentry>
+     <term>
+      <literal>FOR KEY SHARE</literal>
+     </term>
+     <listitem>
+      <para>
+       <literal>FOR KEY SHARE</literal> a un comportement similaire à <literal>FOR
+        SHARE</literal>, sauf que le verrou est plus faible&nbsp;: <literal>SELECT
+        FOR UPDATE</literal> est bloqué alors que <literal>SELECT FOR NO KEY
+        UPDATE</literal> ne l'est pas. Un verrou à clé partagée bloque les autres
+       transactions lors de l'exécution d'un <command>DELETE</command> ou d'un
+       <command>UPDATE</command> qui modifie les valeurs clés mais pas les autres
+       <command>UPDATE</command>. Il n'empêche pas non plus les <command>SELECT FOR
+        NO KEY UPDATE</command>, <command>SELECT FOR SHARE</command> et
+       <command>SELECT FOR KEY SHARE</command>.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
 
-    <table tocentry="1" id="row-lock-compatibility">
-     <title>Verrous en conflit au niveau ligne</title>
-     <tgroup cols="5">
-      <colspec colnum="2" colname="lockst"/>
-      <colspec colnum="5" colname="lockend"/>
-      <spanspec namest="lockst" nameend="lockend" spanname="lockreq"/>
-      <thead>
-       <row>
-        <entry morerows="1">Verrou demandé</entry>
-        <entry spanname="lockreq">Verrou en cours</entry>
-       </row>
-       <row>
-        <entry></entry>
-        <entry>FOR KEY SHARE</entry>
-        <entry>FOR SHARE</entry>
-        <entry>FOR NO KEY UPDATE</entry>
-        <entry>FOR UPDATE</entry>
-       </row>
-      </thead>
-      <tbody>
-       <row>
-        <entry>FOR KEY SHARE</entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>FOR SHARE</entry>
-        <entry align="center"></entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>FOR NO KEY UPDATE</entry>
-        <entry align="center"></entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-       <row>
-        <entry>FOR UPDATE</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-        <entry align="center">X</entry>
-       </row>
-      </tbody>
-     </tgroup>
-    </table>
-   </sect2>
+   <para>
+    <productname>PostgreSQL</productname> ne garde en mémoire aucune information
+    sur les lignes modifiées, il n'y a donc aucune limite sur le
+    nombre de lignes verrouillées à un moment donné. Néanmoins, verrouiller une
+    ligne peut causer une écriture disque&nbsp;; ainsi, par exemple,
+    <command>SELECT FOR UPDATE</command> modifie les lignes sélectionnées
+    pour les marquer verrouillées et cela aboutit à des écritures disques.
+   </para>
 
-   <sect2 id="locking-pages">
-    <title>Verrous au niveau page</title>
+   <table tocentry="1" id="row-lock-compatibility">
+    <title>Verrous en conflit au niveau ligne</title>
+    <tgroup cols="5">
+     <colspec colnum="2" colname="lockst"/>
+     <colspec colnum="5" colname="lockend"/>
+     <spanspec namest="lockst" nameend="lockend" spanname="lockreq"/>
+     <thead>
+      <row>
+       <entry morerows="1">Verrou demandé</entry>
+       <entry spanname="lockreq">Verrou en cours</entry>
+      </row>
+      <row>
+       <entry></entry>
+       <entry>FOR KEY SHARE</entry>
+       <entry>FOR SHARE</entry>
+       <entry>FOR NO KEY UPDATE</entry>
+       <entry>FOR UPDATE</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>FOR KEY SHARE</entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>FOR SHARE</entry>
+       <entry align="center"></entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>FOR NO KEY UPDATE</entry>
+       <entry align="center"></entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+      <row>
+       <entry>FOR UPDATE</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+       <entry align="center">X</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+  </sect2>
 
-    <para>
-     En plus des verrous tables et lignes, les verrous partagés/exclusifs sur
-     les pages sont utilisés pour contrôler la lecture et l'écriture des pages
-     de table dans l'ensemble des tampons partagées. Ces verrous sont
-     immédiatement relâchés une fois la ligne récupérée ou mise à jour. Les
-     développeurs d'applications ne sont normalement pas concernés par les
-     verrous au niveau page mais nous les mentionnons dans un souci d'exhaustivité.
-    </para>
+  <sect2 id="locking-pages">
+   <title>Verrous au niveau page</title>
 
-   </sect2>
+   <para>
+    En plus des verrous tables et lignes, les verrous partagés/exclusifs sur
+    les pages sont utilisés pour contrôler la lecture et l'écriture des pages
+    de table dans l'ensemble des tampons partagées. Ces verrous sont
+    immédiatement relâchés une fois la ligne récupérée ou mise à jour. Les
+    développeurs d'applications ne sont normalement pas concernés par les
+    verrous au niveau page mais nous les mentionnons dans un souci d'exhaustivité.
+   </para>
 
-   <sect2 id="locking-deadlocks">
-    <title>Verrous morts (blocage)</title>
+  </sect2>
 
-    <indexterm zone="locking-deadlocks">
-     <primary>verrou mort</primary>
-    </indexterm>
+  <sect2 id="locking-deadlocks">
+   <title>Verrous morts (blocage)</title>
 
-    <indexterm zone="locking-deadlocks">
-     <primary>blocage de verrous</primary>
-    </indexterm>
+   <indexterm zone="locking-deadlocks">
+    <primary>verrou mort</primary>
+   </indexterm>
 
-    <para>
-     L'utilisation de verrous explicites accroît le risque de
-     <firstterm>verrous morts</firstterm> lorsque deux transactions (voire plus) détiennent
-     chacune un verrou que l'autre convoite. Par exemple, si la transaction 1 a
-     acquis un verrou exclusif sur la table A puis essaie d'acquérir un verrou
-     exclusif sur la table B alors que la transaction 2 possède déjà un verrou
-     exclusif sur la table B et souhaite maintenant un verrou exclusif sur la
-     table A, alors aucun des deux ne peut continuer.
-     <productname>PostgreSQL</productname> détecte automatiquement ces
-     situations de blocage et les résout en annulant une des transactions
-     impliquées, permettant ainsi à l'autre (aux autres) de se terminer
-     (quelle est exactement la transaction annulée est difficile à prévoir mais
-     vous ne devriez pas vous en préoccuper).
-    </para>
+   <indexterm zone="locking-deadlocks">
+    <primary>blocage de verrous</primary>
+   </indexterm>
 
-    <para>
-     Notez que les verrous morts peuvent aussi se produire en conséquence à
-     des verrous de niveau ligne (et du coup, ils peuvent se produire même si
-     le verrouillage explicite n'est pas utilisé). Considérons le cas où il
-     existe deux transactions concurrentes modifiant une table. La première
-     transaction exécute&nbsp;:
+   <para>
+    L'utilisation de verrous explicites accroît le risque de
+    <firstterm>verrous morts</firstterm> lorsque deux transactions (voire plus) détiennent
+    chacune un verrou que l'autre convoite. Par exemple, si la transaction 1 a
+    acquis un verrou exclusif sur la table A puis essaie d'acquérir un verrou
+    exclusif sur la table B alors que la transaction 2 possède déjà un verrou
+    exclusif sur la table B et souhaite maintenant un verrou exclusif sur la
+    table A, alors aucun des deux ne peut continuer.
+    <productname>PostgreSQL</productname> détecte automatiquement ces
+    situations de blocage et les résout en annulant une des transactions
+    impliquées, permettant ainsi à l'autre (aux autres) de se terminer
+    (quelle est exactement la transaction annulée est difficile à prévoir mais
+    vous ne devriez pas vous en préoccuper).
+   </para>
 
-<screen>UPDATE comptes SET balance = balance + 100.00 WHERE no_compte = 11111;</screen>
+   <para>
+    Notez que les verrous morts peuvent aussi se produire en conséquence à
+    des verrous de niveau ligne (et du coup, ils peuvent se produire même si
+    le verrouillage explicite n'est pas utilisé). Considérons le cas où il
+    existe deux transactions concurrentes modifiant une table. La première
+    transaction exécute&nbsp;:
+
+    <screen>UPDATE comptes SET balance = balance + 100.00 WHERE no_compte = 11111;</screen>
 
      Elle acquiert un verrou au niveau ligne sur la ligne spécifiée par
      le numéro de compte (no_compte). Ensuite, la deuxième transaction
@@ -1490,263 +1490,263 @@ SELECT pg_advisory_lock(q.id) FROM
 (
   SELECT id FROM foo WHERE id &gt; 12345 LIMIT 100
 ) q; -- ok
-</screen>
-     Dans les requêtes ci-dessus, la deuxième forme est dangereuse parce qu'il
-     n'est pas garanti que l'application de <literal>LIMIT</literal> ait lieu avant que la
-     fonction du verrou soit exécutée. Ceci pourrait entraîner l'acquisition
-     de certains verrous que l'application n'attendait pas, donc qu'elle
-     ne pourrait, du coup, pas relâcher (sauf à la fin de la session). Du point de vue de
-     l'application, de tels verrous sont en attente, bien qu'ils soient visibles dans
-     <structname>pg_locks</structname>.
-    </para>
-
-    <para>
-     Les fonctions fournies pour manipuler les verrous informatifs sont décrites dans
-     <xref linkend="functions-advisory-locks"/>.
-    </para>
-   </sect2>
-
-  </sect1>
-
-  <sect1 id="applevel-consistency">
-   <title>Vérification de cohérence des données au niveau de l'application</title>
+    </screen>
+    Dans les requêtes ci-dessus, la deuxième forme est dangereuse parce qu'il
+    n'est pas garanti que l'application de <literal>LIMIT</literal> ait lieu avant que la
+    fonction du verrou soit exécutée. Ceci pourrait entraîner l'acquisition
+    de certains verrous que l'application n'attendait pas, donc qu'elle
+    ne pourrait, du coup, pas relâcher (sauf à la fin de la session). Du point de vue de
+    l'application, de tels verrous sont en attente, bien qu'ils soient visibles dans
+    <structname>pg_locks</structname>.
+   </para>
 
    <para>
-    Il est très difficile d'implémenter des règles de gestion sur l'intégrité
-    des données en utilisant des transactions Read Committed parce que la vue
-    des données est changeante avec chaque ordre, met même un seul ordre peut
-    ne pas se cantonner à son propre instantané si un conflit en écriture
-    se produit.
-    </para>
+    Les fonctions fournies pour manipuler les verrous informatifs sont décrites dans
+    <xref linkend="functions-advisory-locks"/>.
+   </para>
+  </sect2>
 
+ </sect1>
+
+ <sect1 id="applevel-consistency">
+  <title>Vérification de cohérence des données au niveau de l'application</title>
+
+  <para>
+   Il est très difficile d'implémenter des règles de gestion sur l'intégrité
+   des données en utilisant des transactions Read Committed parce que la vue
+   des données est changeante avec chaque ordre, met même un seul ordre peut
+   ne pas se cantonner à son propre instantané si un conflit en écriture
+   se produit.
+  </para>
+
+  <para>
+   Bien qu'une transaction Repeatable Read ait une vue stable des
+   données dans toute la durée de son exécution, il y a un problème
+   subtil quand on utilise les instantanés <acronym>MVCC</acronym> pour
+   vérifier la cohérence des données, impliquant quelque chose connu
+   sous le nom de <firstterm>conflits lecture/écriture</firstterm>. Si
+   une transaction écrit des données et qu'une transaction
+   concurrent essaye de lire la même donnée (que ce soit avant ou
+   après l'écriture), elle ne peut pas voir le travail de l'autre
+   transaction. Le lecteur donne donc l'impression de s'être exécuté
+   le premier quel que soit celui qui a commencé le premier ou qui a
+   validé le premier. Si on s'en tient là, ce n'est pas un problème,
+   mais si le lecteur écrit aussi des données qui sont lues par
+   une transaction concurrente il y a maintenant une transaction qui
+   semble s'être exécutée avant les transactions précédemment
+   mentionnées. Si la transaction qui semble s'être exécutée en
+   dernier valide en premier, il est très facile qu'un cycle apparaisse
+   dans l'ordre d'exécution des transactions. Quand un cycle de ce
+   genre apparaît, les contrôles d'intégrité ne fonctionneront pas
+   correctement sans aide.
+  </para>
+
+  <para>
+   Comme mentionné dans <xref linkend="xact-serializable"/>, les
+   transactions Serializable ne sont que des transactions Repeatable
+   Read qui ajoutent une supervision no-bloquante de formes dangereuses
+   de conflits lecture/écriture. Quand une de ces formes est détectée
+   qui pourrait entraîner un cycle dans l'ordre apparent d'exécution,
+   une des transactions impliquées est annulée pour casser le cycle.
+  </para>
+
+  <sect2 id="serializable-consistency">
+   <title>Garantir la Cohérence avec Des Transactions Serializable</title>
+
+   <para>
+    Si le niveau d'isolation de transactions Serializable est utilisé
+    pour toutes les écritures et toutes les lectures qui ont besoin
+    d'une vue cohérente des données, aucun autre effort n'est requis
+    pour garantir la cohérence. Un logiciel d'un autre environnement
+    écrit pour utiliser des transactions serializable pour garantir
+    la cohérence devrait <quote>fonctionner sans modification</quote>
+    de ce point de vue dans <productname>PostgreSQL</productname>.
+   </para>
+
+   <para>
+    L'utilisation de cette technique évitera de créer une
+    charge de travail inutile aux développeurs d'applications
+    si le logiciel utilise un framework qui réessaye le
+    s transactions annulées pour échec de sérialisation
+    automatiquement. Cela pourrait être une bonne idée de
+    positionner <literal>default_transaction_isolation</literal> à
+    <literal>serializable</literal>. Il serait sage, par ailleurs, de
+    vous assurer qu'aucun autre niveau d'isolation n'est utilisé, soit
+    par inadvertance, soit pour contourner les contrôles d'intégrité,
+    en vérifiant les niveaux d'isolations dans les triggers.
+   </para>
+
+   <para>
+    Voyez <xref linkend="xact-serializable"/> pour des suggestions sur
+    les performances.
+   </para>
+
+   <warning>
     <para>
-    Bien qu'une transaction Repeatable Read ait une vue stable des
-    données dans toute la durée de son exécution, il y a un problème
-    subtil quand on utilise les instantanés <acronym>MVCC</acronym> pour
-    vérifier la cohérence des données, impliquant quelque chose connu
-    sous le nom de <firstterm>conflits lecture/écriture</firstterm>. Si
-    une transaction écrit des données et qu'une transaction
-    concurrent essaye de lire la même donnée (que ce soit avant ou
-    après l'écriture), elle ne peut pas voir le travail de l'autre
-    transaction. Le lecteur donne donc l'impression de s'être exécuté
-    le premier quel que soit celui qui a commencé le premier ou qui a
-    validé le premier. Si on s'en tient là, ce n'est pas un problème,
-    mais si le lecteur écrit aussi des données qui sont lues par
-    une transaction concurrente il y a maintenant une transaction qui
-    semble s'être exécutée avant les transactions précédemment
-    mentionnées. Si la transaction qui semble s'être exécutée en
-    dernier valide en premier, il est très facile qu'un cycle apparaisse
-    dans l'ordre d'exécution des transactions. Quand un cycle de ce
-    genre apparaît, les contrôles d'intégrité ne fonctionneront pas
-    correctement sans aide.
+     Ce niveau de protection de protection de l'intégrité en utilisant
+     des transactions Serializable ne s'étend pour le moment pas
+     jusqu'au mode standby (<xref linkend="hot-standby"/>). Pour cette
+     raison, les utilisateurs du hot standby voudront peut-être utiliser
+     Repeatable Read et un verrouillage explicite sur le maître.
     </para>
+   </warning>
+  </sect2>
 
-    <para>
-    Comme mentionné dans <xref linkend="xact-serializable"/>, les
-    transactions Serializable ne sont que des transactions Repeatable
-    Read qui ajoutent une supervision no-bloquante de formes dangereuses
-    de conflits lecture/écriture. Quand une de ces formes est détectée
-    qui pourrait entraîner un cycle dans l'ordre apparent d'exécution,
-    une des transactions impliquées est annulée pour casser le cycle.
-    </para>
+  <sect2 id="non-serializable-consistency">
+   <title>Garantir la Cohérence avec des Verrous Bloquants Explicites</title>
 
-   <sect2 id="serializable-consistency">
-    <title>Garantir la Cohérence avec Des Transactions Serializable</title>
-
-    <para>
-     Si le niveau d'isolation de transactions Serializable est utilisé
-     pour toutes les écritures et toutes les lectures qui ont besoin
-     d'une vue cohérente des données, aucun autre effort n'est requis
-     pour garantir la cohérence. Un logiciel d'un autre environnement
-     écrit pour utiliser des transactions serializable pour garantir
-     la cohérence devrait <quote>fonctionner sans modification</quote>
-     de ce point de vue dans <productname>PostgreSQL</productname>.
-    </para>
-
-    <para>
-     L'utilisation de cette technique évitera de créer une
-     charge de travail inutile aux développeurs d'applications
-     si le logiciel utilise un framework qui réessaye le
-     s transactions annulées pour échec de sérialisation
-     automatiquement. Cela pourrait être une bonne idée de
-     positionner <literal>default_transaction_isolation</literal> à
-     <literal>serializable</literal>. Il serait sage, par ailleurs, de
-     vous assurer qu'aucun autre niveau d'isolation n'est utilisé, soit
-     par inadvertance, soit pour contourner les contrôles d'intégrité,
-     en vérifiant les niveaux d'isolations dans les triggers.
-    </para>
-
-    <para>
-     Voyez <xref linkend="xact-serializable"/> pour des suggestions sur
-     les performances.
-    </para>
-
-    <warning>
-     <para>
-      Ce niveau de protection de protection de l'intégrité en utilisant
-      des transactions Serializable ne s'étend pour le moment pas
-      jusqu'au mode standby (<xref linkend="hot-standby"/>). Pour cette
-      raison, les utilisateurs du hot standby voudront peut-être utiliser
-      Repeatable Read et un verrouillage explicite sur le maître.
-     </para>
-    </warning>
-   </sect2>
-
-   <sect2 id="non-serializable-consistency">
-    <title>Garantir la Cohérence avec des Verrous Bloquants Explicites</title>
-
-    <para>
-     Quand des écritures non-sérialisables sont possibles, pour garantir
-     la validité courante d'un enregistrement et le protéger contre
-     des mises à jour concurrentes, on doit utiliser <command>SELECT
+   <para>
+    Quand des écritures non-sérialisables sont possibles, pour garantir
+    la validité courante d'un enregistrement et le protéger contre
+    des mises à jour concurrentes, on doit utiliser <command>SELECT
      FOR UPDATE</command>, <command>SELECT FOR SHARE</command>, ou un
-     ordre <command>LOCK TABLE</command> approprié. (<command>SELECT
+    ordre <command>LOCK TABLE</command> approprié. (<command>SELECT
      FOR UPDATE</command> et <command>SELECT FOR SELECT</command> ne
-     verrouillent que les lignes retournées contre les mises à jour
-     concurrentes, tandis que <command>LOCK TABLE</command> verrouille
-     toute la table.) Cela doit être pris en considération quand
-     vous portez des applications <productname>PostgreSQL</productname>
-     à partir d'autres environnements.
-    </para>
+    verrouillent que les lignes retournées contre les mises à jour
+    concurrentes, tandis que <command>LOCK TABLE</command> verrouille
+    toute la table.) Cela doit être pris en considération quand
+    vous portez des applications <productname>PostgreSQL</productname>
+    à partir d'autres environnements.
+   </para>
 
-    <para>
-     Il est aussi important de noter pour ceux qui convertissent à
-     partir d'autres environnements le fait que <command>SELECT
+   <para>
+    Il est aussi important de noter pour ceux qui convertissent à
+    partir d'autres environnements le fait que <command>SELECT
      FOR UPDATE</command> ne garantit pas qu'une transaction
-     concurrente ne mettra pas à jour ou n'effacera
-     pas l'enregistrement selectionné. Pour faire cela dans
-     <productname>PostgreSQL</productname> vous devez réellement modifier
-     l'enregistrement, même si vous n'avez pas besoin de modifier une
-     valeur. <command>SELECT FOR UPDATE</command> <emphasis>empêche
+    concurrente ne mettra pas à jour ou n'effacera
+    pas l'enregistrement selectionné. Pour faire cela dans
+    <productname>PostgreSQL</productname> vous devez réellement modifier
+    l'enregistrement, même si vous n'avez pas besoin de modifier une
+    valeur. <command>SELECT FOR UPDATE</command> <emphasis>empêche
      temporairement</emphasis> les autres transactions d'acquérir
-     le même verrou ou d'exécuter un <command>UPDATE</command>
-     ou <command>DELETE</command> qui modifierait l'enregistrement
-     verrouillé, mais une fois que la transaction possédant ce verrou
-     valide ou annule, une transaction bloquée pourra continuer avec son
-     opération en conflit sauf si un réel <command>UPDATE</command>
-     de l'enregistement a été effectué pendant que le verrou était
-     possédé.
-    </para>
-
-    <para>
-     Les verrifications globales de validité demandent davantage de
-     réflexion sous un <acronym>MVCC</acronym> non sérialisable. Par
-     exemple, une application bancaire pourrait vouloir vérifier que
-     la somme de tous les crédits d'une table est égale à la somme
-     de tous les débits d'une autre, alors que les deux tables sont
-     en cours de mise à jour. La comparaison des résultas de deux
-     <literal>SELECT sum(...)</literal> successifs ne fonctionnera pas
-     correctement en mode Read Committed, puisque la seconde requête
-     incluera probablement les résultats de transactions pas prises en
-     compte dans la première. Effectuer les deux sommes dans une seule
-     transaction repeatable read donnera une image précise des effets
-     d'uniquement les transactions  qui ont validé avant le début de la
-     transaction repeatable read $mdash; mais on pourrait légitimement
-     se demander si la réponse est toujours valide au moment où elle
-     est fournie. Si la transaction repeatable read a elle même effectué
-     des modifications avant d'effectuer le test de cohérence, l'utilité
-     de la vérification devient encore plus sujette à caution, puisque
-     maintenant elle inclut des modifications depuis le début de la
-     transaction, mais pas toutes. Dans ce genre de cas, une personne
-     prudente pourra vouloir verrouiller toutes les tables nécessaires
-     à la vérification, afin d'avoir une vision incontestable de
-     la réalité courante. Un mode <literal>SHARE</literal> (ou plus
-     élevé) garantit qu'il n'y a pas de changements non validés dans
-     la table verrouillée, autres que ceux de la transaction courante.
-    </para>
-
-    <para>
-     Notez aussi que si on se fie au verrouillage explicite pour
-     empêcher les mises à jour concurrentes, on devrait soit utiliser
-     Read Committed, soit utiliser Repeatable Read et faire attenion
-     à obtenir les verrous avant d'effectuer les requêtes. Un verrou
-     obtenu par une transaction repeatable read guarantit qu'aucune autre
-     transaction modifiant la table n'est en cours d'exécution, mais si
-     l'instantané vu par la transaction est antérieur à l'obtention du
-     verrou, il pourrait aussi précéder des modifications maintenant
-     validées dans la table. Un instantané de transaction repeatable
-     read est en fait figé à l'exécution de sa première requête ou
-     commande de modification de données (<literal>SELECT</literal>,
-     <literal>INSERT</literal>, <literal>UPDATE</literal>, ou
-     <literal>DELETE</literal>), il est donc possible d'obtenir les
-     verrous explicitement avant que l'instantané ne soit figé.
-    </para>
-   </sect2>
-  </sect1>
-
-  <sect1 id="locking-indexes">
-   <title>Verrous et index</title>
-
-   <indexterm zone="locking-indexes">
-    <primary>index</primary>
-    <secondary>verrous</secondary>
-   </indexterm>
-
-   <para>
-    Bien que <productname>PostgreSQL</productname> fournisse un accès en
-    lecture/écriture non bloquant aux données de la table, l'accès en
-    lecture/écriture non bloquant n'est pas proposé pour chaque méthode
-    d'accès aux index implémentées dans <productname>PostgreSQL</productname>.
-    Les différents types d'index sont gérés ainsi&nbsp;:
-
-    <variablelist>
-     <varlistentry>
-      <term>
-       Index B-tree, <acronym>GiST</acronym> et <acronym>SP-GiST</acronym>
-      </term>
-      <listitem>
-       <para>
-        Des verrous partagés/exclusifs au niveau page à court terme sont
-        utilisés pour les accès en lecture/écriture. Les verrous sont
-        relachés immédiatement après que chaque ligne d'index soit
-        lu ou inséré. Ces types d'index fournissent la plus grande
-        concurrence d'accès, sans conditions de verrous mortels.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
-      <term>
-       Index hash
-      </term>
-      <listitem>
-       <para>
-        Des verrous partagés/exclusifs au niveau des blocs de hachage sont
-        utilisés pour l'accès en lecture/écriture. Les verrous sont relachés
-        après qu'un bloc a été traité entièrement. Les verrous au niveau bloc
-        fournissent une meilleur concurrence d'accès que les verrous au
-        niveau index, mais les verrous mortels sont possibles car les
-        verrous sont détenus plus longtemps que l'opération sur l'index.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
-      <term>
-       Index <acronym>GIN</acronym>
-      </term>
-      <listitem>
-       <para>
-        Des verrous partagés/exclusifs au niveau page à court terme sont
-        utilisés pour les accès en lecture/écriture. Les verrous sont
-        relachés immédiatement après que chaque ligne d'index soit
-        lu ou inséré. Cependant, notez que l'insertion d'une valeur indexée
-        par GIN produit généralement plusieurs insertions de clés d'index
-        par ligne, donc GIN peut avoir un travail important à réaliser
-        pour l'insertion d'une seule valeur.
-       </para>
-      </listitem>
-     </varlistentry>
-    </variablelist>
+    le même verrou ou d'exécuter un <command>UPDATE</command>
+    ou <command>DELETE</command> qui modifierait l'enregistrement
+    verrouillé, mais une fois que la transaction possédant ce verrou
+    valide ou annule, une transaction bloquée pourra continuer avec son
+    opération en conflit sauf si un réel <command>UPDATE</command>
+    de l'enregistement a été effectué pendant que le verrou était
+    possédé.
    </para>
 
    <para>
-    Actuellement, les index B-tree offrent les meilleures performances pour les
-    applications concurrentes. Comme ils ont plus de fonctionnalités que les
-    index hash, ils sont le type d'index recommandé pour les applications
-    concurrentes qui ont besoin d'indexer des données scalaires. Lors du
-    traitement de données non scalaires, les index B-tree ne sont pas utiles.
-    Les index GiST, SP-GiST ou GIN doivent être utilisés à la place.
+    Les verrifications globales de validité demandent davantage de
+    réflexion sous un <acronym>MVCC</acronym> non sérialisable. Par
+    exemple, une application bancaire pourrait vouloir vérifier que
+    la somme de tous les crédits d'une table est égale à la somme
+    de tous les débits d'une autre, alors que les deux tables sont
+    en cours de mise à jour. La comparaison des résultas de deux
+    <literal>SELECT sum(...)</literal> successifs ne fonctionnera pas
+    correctement en mode Read Committed, puisque la seconde requête
+    incluera probablement les résultats de transactions pas prises en
+    compte dans la première. Effectuer les deux sommes dans une seule
+    transaction repeatable read donnera une image précise des effets
+    d'uniquement les transactions  qui ont validé avant le début de la
+    transaction repeatable read $mdash; mais on pourrait légitimement
+    se demander si la réponse est toujours valide au moment où elle
+    est fournie. Si la transaction repeatable read a elle même effectué
+    des modifications avant d'effectuer le test de cohérence, l'utilité
+    de la vérification devient encore plus sujette à caution, puisque
+    maintenant elle inclut des modifications depuis le début de la
+    transaction, mais pas toutes. Dans ce genre de cas, une personne
+    prudente pourra vouloir verrouiller toutes les tables nécessaires
+    à la vérification, afin d'avoir une vision incontestable de
+    la réalité courante. Un mode <literal>SHARE</literal> (ou plus
+    élevé) garantit qu'il n'y a pas de changements non validés dans
+    la table verrouillée, autres que ceux de la transaction courante.
    </para>
-  </sect1>
- </chapter>
+
+   <para>
+    Notez aussi que si on se fie au verrouillage explicite pour
+    empêcher les mises à jour concurrentes, on devrait soit utiliser
+    Read Committed, soit utiliser Repeatable Read et faire attenion
+    à obtenir les verrous avant d'effectuer les requêtes. Un verrou
+    obtenu par une transaction repeatable read guarantit qu'aucune autre
+    transaction modifiant la table n'est en cours d'exécution, mais si
+    l'instantané vu par la transaction est antérieur à l'obtention du
+    verrou, il pourrait aussi précéder des modifications maintenant
+    validées dans la table. Un instantané de transaction repeatable
+    read est en fait figé à l'exécution de sa première requête ou
+    commande de modification de données (<literal>SELECT</literal>,
+    <literal>INSERT</literal>, <literal>UPDATE</literal>, ou
+    <literal>DELETE</literal>), il est donc possible d'obtenir les
+    verrous explicitement avant que l'instantané ne soit figé.
+   </para>
+  </sect2>
+ </sect1>
+
+ <sect1 id="locking-indexes">
+  <title>Verrous et index</title>
+
+  <indexterm zone="locking-indexes">
+   <primary>index</primary>
+   <secondary>verrous</secondary>
+  </indexterm>
+
+  <para>
+   Bien que <productname>PostgreSQL</productname> fournisse un accès en
+   lecture/écriture non bloquant aux données de la table, l'accès en
+   lecture/écriture non bloquant n'est pas proposé pour chaque méthode
+   d'accès aux index implémentées dans <productname>PostgreSQL</productname>.
+   Les différents types d'index sont gérés ainsi&nbsp;:
+
+   <variablelist>
+    <varlistentry>
+     <term>
+      Index B-tree, <acronym>GiST</acronym> et <acronym>SP-GiST</acronym>
+     </term>
+     <listitem>
+      <para>
+       Des verrous partagés/exclusifs au niveau page à court terme sont
+       utilisés pour les accès en lecture/écriture. Les verrous sont
+       relachés immédiatement après que chaque ligne d'index soit
+       lu ou inséré. Ces types d'index fournissent la plus grande
+       concurrence d'accès, sans conditions de verrous mortels.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      Index hash
+     </term>
+     <listitem>
+      <para>
+       Des verrous partagés/exclusifs au niveau des blocs de hachage sont
+       utilisés pour l'accès en lecture/écriture. Les verrous sont relachés
+       après qu'un bloc a été traité entièrement. Les verrous au niveau bloc
+       fournissent une meilleur concurrence d'accès que les verrous au
+       niveau index, mais les verrous mortels sont possibles car les
+       verrous sont détenus plus longtemps que l'opération sur l'index.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      Index <acronym>GIN</acronym>
+     </term>
+     <listitem>
+      <para>
+       Des verrous partagés/exclusifs au niveau page à court terme sont
+       utilisés pour les accès en lecture/écriture. Les verrous sont
+       relachés immédiatement après que chaque ligne d'index soit
+       lu ou inséré. Cependant, notez que l'insertion d'une valeur indexée
+       par GIN produit généralement plusieurs insertions de clés d'index
+       par ligne, donc GIN peut avoir un travail important à réaliser
+       pour l'insertion d'une seule valeur.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+
+  <para>
+   Actuellement, les index B-tree offrent les meilleures performances pour les
+   applications concurrentes. Comme ils ont plus de fonctionnalités que les
+   index hash, ils sont le type d'index recommandé pour les applications
+   concurrentes qui ont besoin d'indexer des données scalaires. Lors du
+   traitement de données non scalaires, les index B-tree ne sont pas utiles.
+   Les index GiST, SP-GiST ou GIN doivent être utilisés à la place.
+  </para>
+ </sect1>
+</chapter>
