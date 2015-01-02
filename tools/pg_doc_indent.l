@@ -67,6 +67,12 @@ bool INTAG = false;
 	printf("%s", yytext);
 }
 
+"<!ENTITY".*">" {
+	/* dtd declaration, just display it */
+	DO_INDENT;
+	printf("%s", yytext);
+}
+
 "<!--" {
 	/*
 	 * begin of xml comment
@@ -87,7 +93,7 @@ bool INTAG = false;
 	printf("%s", yytext);
 }
 
-"<programlisting>"|"<synopsis>" {
+"<programlisting>"|"<synopsis>"|"<screen>" {
 	/*
 	 * special tags
 	 * do not indent inside
@@ -117,6 +123,17 @@ bool INTAG = false;
 	IGNORE_INDENT = false;
 	DO_INDENT;
 	printf("%s", "</synopsis>");
+}
+
+^[" "]*"</screen>" {
+	/* end of special tag synopsis
+	 * ignore trailing space(s)
+	 * indent this tag and re-enable
+	 * indenting after that.
+	 */
+	IGNORE_INDENT = false;
+	DO_INDENT;
+	printf("%s", "</screen>");
 }
 
 "</" {
