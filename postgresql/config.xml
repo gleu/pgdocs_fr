@@ -201,6 +201,14 @@ shared_buffers = 128MB</programlisting>
      <filename>postgresql.auto.conf</filename> surchargent ceux configurés dans
      <filename>postgresql.conf</filename>.
     </para>
+
+    <para>
+     The system view
+     <link linkend="view-pg-file-settings"><structname>pg_file_settings</structname></link>
+     can be helpful for pre-testing changes to the configuration file, or for
+     diagnosing problems if a <systemitem>SIGHUP</systemitem> signal did not have the
+     desired effects.
+    </para>
    </sect2>
 
    <sect2 id="config-setting-sql-command-interaction">
@@ -1196,45 +1204,6 @@ include 'nom_fichier'
    </listitem>
   </varlistentry>
 
-  <varlistentry>
-   <term><varname>ssl_renegotiation_limit</varname> (<type>integer</type>)</term>
-   <indexterm>
-    <primary>paramètre de configuration <varname>ssl_renegotiation_limit</varname></primary>
-   </indexterm>
-   <listitem>
-    <para>
-     Indique la quantité de données pouvant passer sur une connexion
-     <acronym>SSL</acronym> avant qu'une renégotiation des clés de session
-     ne prenne place. La renégotiation diminue les chances d'un attaquant
-     de faire de l'analyse du chiffrage lorsque de grandes quantités de trafic
-     peuvent être examinées, mais cela ajoute aussi une grosse pénalité sur
-     les performances. La quantité de trafic envoyé et reçu est utilisé pour
-     vérifier la limite. Si ce paramètre vaut 0, la renégotiation est
-     désactivée. La valeur par défaut est <literal>0</literal>.
-    </para>
-    <note>
-     <para>
-      Les bibliothèques SSL d'avant novembre 2009 ne sont pas sécurisées
-      lors de l'utilisation de la renégotiation SSL à cause d'une
-      vulnérabilité dans le protocole SSL. Comme correctif de cette
-      vulnérabilité, certains vendeurs de bibliothèques SSL fournissent des
-      bibliothèques incapables de faire de la renégotiation. Si de telles
-      bibliothèques sont utilisées sur le client ou le serveur, la
-      renégotiation SSL devra être désactivée.
-     </para>
-    </note>
-
-    <warning>
-     <para>
-      À cause de bugs dans l'activation de la renégotiation SSL avec
-      <productname>OpenSSL</productname>, configurer une valeur différente
-      de 0 pour <varname>ssl_renegotiation_limit</varname> a un fort risque
-      d'amener des problèmes comme l'arrêt inattendu de connexions longues.
-     </para>
-    </warning>
-   </listitem>
-  </varlistentry>
-
   <varlistentry id="guc-password-encryption"
   xreflabel="password_encryption">
    <term><varname>password_encryption</varname> (<type>boolean</type>)</term>
@@ -1413,7 +1382,7 @@ include 'nom_fichier'
      la mémoire fonctionnera mieux qu'une valeur plus restreinte. Des valeurs
      importantes pour le paramètre <varname>shared_buffers</varname>
      requièrent généralement une augmentation proportionnelle du
-     <varname>checkpoint_segments</varname>, pour étendre dans le temps les
+     <varname>max_wal_size</varname>, pour étendre dans le temps les
      écritures de grandes quantités de données, nouvelles ou modifiées.
     </para>
 
@@ -2025,6 +1994,10 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
      erreur. Sur certains systèmes (par exemple Solaris), cette fonction
      est présente mais n'a pas d'effet.
     </para>
+
+    <para>
+     The default is 1 on supported systems, otherwise 0.
+    </para>
    </listitem>
   </varlistentry>
 
@@ -2411,6 +2384,31 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
    </listitem>
   </varlistentry>
 
+  <varlistentry id="guc-wal-compression" xreflabel="wal_compression">
+   <term><varname>wal_compression</varname> (<type>boolean</type>)
+   <indexterm>
+    <primary><varname>wal_compression</varname> configuration parameter</primary>
+   </indexterm>
+   </term>
+   <listitem>
+    <para>
+     When this parameter is <literal>on</literal>, the <productname>PostgreSQL</productname>
+     server compresses a full page image written to WAL when
+     <xref linkend="guc-full-page-writes"/> is on or during a base backup.
+     A compressed page image will be decompressed during WAL replay.
+     The default value is <literal>off</literal>.
+     Only superusers can change this setting.
+    </para>
+
+    <para>
+     Turning this parameter on can reduce the WAL volume without
+     increasing the risk of unrecoverable data corruption,
+     but at the cost of some extra CPU spent on the compression during
+     WAL logging and on the decompression during WAL replay.
+    </para>
+   </listitem>
+  </varlistentry>
+
   <varlistentry id="guc-wal-buffers" xreflabel="wal_buffers">
    <term><varname>wal_buffers</varname> (<type>integer</type>)</term>
    <listitem>
@@ -2529,24 +2527,6 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
  <title>Points de vérification</title>
 
  <variablelist>
-  <varlistentry id="guc-checkpoint-segments" xreflabel="checkpoint_segments">
-   <term><varname>checkpoint_segments</varname> (<type>integer</type>)</term>
-   <listitem>
-    <indexterm>
-     <primary>paramètre de configuration <varname>checkpoint_segments</varname></primary>
-    </indexterm>
-    <para>
-     Nombre maximum de journaux de transaction entre deux points de
-     vérification automatique des WAL (chaque segment fait
-     normalement 16&nbsp;Mo). La valeur par défaut est de trois segments.
-     Augmenter ce paramètre peut accroitre le temps nécessaire à une
-     récupération après un arrêt brutal.
-     Ce paramètre ne peut être configuré que dans le fichier
-     <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
-    </para>
-   </listitem>
-  </varlistentry>
-
   <varlistentry id="guc-checkpoint-timeout" xreflabel="checkpoint_timeout">
    <term><varname>checkpoint_timeout</varname> (<type>integer</type>)</term>
    <listitem>
@@ -2554,10 +2534,10 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
      <primary>paramètre de configuration <varname>checkpoint_timeout</varname></primary>
     </indexterm>
     <para>
-     Temps maximum entre deux points de vérification automatique des
-     WAL, en secondes. La valeur par défaut est de cinq minutes.
-     Augmenter ce paramètre peut accroitre le temps nécessaire à une
-     récupération après un arrêt brutal.
+     Temps maximum entre deux points de vérification automatique des WAL, en
+     secondes. L'intervalle valide se situe entre 30 secondes et une heure. La
+     valeur par défaut est de cinq minutes. Augmenter ce paramètre peut
+     accroitre le temps nécessaire à une récupération après un arrêt brutal.
      Ce paramètre ne peut être configuré que dans le fichier
      <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
     </para>
@@ -2589,13 +2569,53 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
      Si deux points de vérification imposés par le remplissage des
      fichiers segment interviennent dans un délai plus court que celui
      indiqué par ce paramètre (ce qui laisse supposer qu'il faut augmenter la
-     valeur du paramètre <varname>checkpoint_segments</varname>), un message
+     valeur du paramètre <varname>max_wal_size</varname>), un message
      est écrit dans le fichier de traces du serveur. Par défaut, 30 secondes.
      Une valeur nulle (0) désactive cet avertissement.
      Aucun avertissement ne sera fait si <varname>checkpoint_timeout</varname>
      est inférieur à <varname>checkpoint_warning</varname>.
      Ce paramètre ne peut être configuré que dans le fichier
      <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
+    </para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry id="guc-max-wal-size" xreflabel="max_wal_size">
+   <term><varname>max_wal_size</varname> (<type>integer</type>)
+   <indexterm>
+    <primary><varname>max_wal_size</varname> configuration parameter</primary>
+   </indexterm>
+   </term>
+   <listitem>
+    <para>
+     Maximum size to let the WAL grow to between automatic WAL
+     checkpoints. This is a soft limit; WAL size can exceed
+     <varname>max_wal_size</varname> under special circumstances, like
+     under heavy load, a failing <varname>archive_command</varname>, or a high
+     <varname>wal_keep_segments</varname> setting. The default is 1 GB.
+     Increasing this parameter can increase the amount of time needed for
+     crash recovery.
+     This parameter can only be set in the <filename>postgresql.conf</filename>
+     file or on the server command line.
+    </para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry id="guc-min-wal-size" xreflabel="min_wal_size">
+   <term><varname>min_wal_size</varname> (<type>integer</type>)
+   <indexterm>
+    <primary><varname>min_wal_size</varname> configuration parameter</primary>
+   </indexterm>
+   </term>
+   <listitem>
+    <para>
+     As long as WAL disk usage stays below this setting, old WAL files are
+     always recycled for future use at a checkpoint, rather than removed.
+     This can be used to ensure that enough WAL space is reserved to
+     handle spikes in WAL usage, for example when running large batch
+     jobs. The default is 80 MB.
+     This parameter can only be set in the <filename>postgresql.conf</filename>
+     file or on the server command line.
     </para>
    </listitem>
   </varlistentry>
@@ -2608,7 +2628,7 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
 
  <variablelist>
   <varlistentry id="guc-archive-mode" xreflabel="archive_mode">
-   <term><varname>archive_mode</varname> (<type>boolean</type>)</term>
+   <term><varname>archive_mode</varname> (<type>enum</type>)</term>
    <listitem>
     <indexterm>
      <primary>paramètre de configuration <varname>archive_mode</varname></primary>
@@ -2616,7 +2636,18 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
     <para>
      Quand <varname>archive_mode</varname> est activé, les segments
      WAL remplis peuvent être archivés en configurant <xref
-     linkend="guc-archive-command"/>. <varname>archive_mode</varname>
+     linkend="guc-archive-command"/>. In addition to <literal>off</literal>,
+     to disable, there are two modes: <literal>on</literal>, and
+     <literal>always</literal>. During normal operation, there is no
+     difference between the two modes, but when set to <literal>always</literal>
+     the WAL archiver is enabled also during archive recovery or standby
+     mode. In <literal>always</literal> mode, all files restored from the archive
+     or streamed with streaming replication will be archived (again). See
+     <xref linkend="continuous-archiving-in-standby"/> for details.
+    </para>
+
+    <para>
+     <varname>archive_mode</varname>
      et <varname>archive_command</varname> sont des variables
      séparées de façon à ce que <varname>archive_command</varname>
      puisse être modifiée sans quitter le mode d'archivage. Ce
@@ -2838,6 +2869,20 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
    </listitem>
   </varlistentry>
 
+  <varlistentry id="guc-track-commit-timestamp" xreflabel="track_commit_timestamp">
+   <term><varname>track_commit_timestamp</varname> (<type>bool</type>)
+    <indexterm>
+     <primary><varname>track_commit_timestamp</varname> configuration parameter</primary>
+    </indexterm>
+   </term>
+   <listitem>
+    <para>
+     Record commit time of transactions. This parameter
+     can only be set in <filename>postgresql.conf</filename> file or on the server
+     command line. The default value is <literal>off</literal>.
+    </para>
+   </listitem>
+  </varlistentry>
  </variablelist>
 </sect2>
 
@@ -3120,6 +3165,34 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
    </listitem>
   </varlistentry>
 
+  <varlistentry id="guc-wal-retrieve-retry-interval" xreflabel="wal_retrieve_retry_interval">
+   <term><varname>wal_retrieve_retry_interval</varname> (<type>integer</type>)
+   <indexterm>
+    <primary><varname>wal_retrieve_retry_interval</varname> configuration parameter</primary>
+   </indexterm>
+   </term>
+   <listitem>
+    <para>
+     Specify how long the standby server should wait when WAL data is not
+     available from any sources (streaming replication,
+     local <filename>pg_xlog</filename> or WAL archive) before retrying to
+     retrieve WAL data.  This parameter can only be set in the
+     <filename>postgresql.conf</filename> file or on the server command line.
+     The default value is 5 seconds. Units are milliseconds if not specified.
+    </para>
+    <para>
+     This parameter is useful in configurations where a node in recovery
+     needs to control the amount of time to wait for new WAL data to be
+     available. For example, in archive recovery, it is possible to
+     make the recovery more responsive in the detection of a new WAL
+     log file by reducing the value of this parameter. On a system with
+     low WAL activity, increasing it reduces the amount of requests necessary
+     to access WAL archives, something useful for example in cloud
+     environments where the amount of times an infrastructure is accessed
+     is taken into account.
+    </para>
+   </listitem>
+  </varlistentry>
  </variablelist>
 </sect2>
 </sect1>
@@ -4524,8 +4597,10 @@ local0.*    /var/log/postgresql
    </indexterm>
    <para>
     Trace chaque tentative de connexion sur le serveur, ainsi que la réussite
-    de l'authentification du client. Désactivé par défaut, ce paramètre
-    ne peut pas être désactivé après le démarrage de la session.
+    de l'authentification du client.
+    Only superusers can change this parameter at session start,
+    and it cannot be changed at all within a session.
+    The default is <literal>off</literal>.
    </para>
 
    <note>
@@ -4547,11 +4622,12 @@ local0.*    /var/log/postgresql
     <primary>paramètre de configuration <varname>log_disconnections</varname></primary>
    </indexterm>
    <para>
-    Affiche dans les traces du serveur une ligne similaire à
-    <varname>log_connections</varname> mais à la fin d'une session, en
-    incluant la durée de la session. Désactivé par défaut,
-    ce paramètre
-    ne peut pas être désactivé après le démarrage de la session.
+    Causes session terminations to be logged.  The log output
+    provides information similar to <varname>log_connections</varname>,
+    plus the duration of the session.
+    Only superusers can change this parameter at session start,
+    and it cannot be changed at all within a session.
+    The default is <literal>off</literal>.
    </para>
   </listitem>
  </varlistentry>
@@ -4770,7 +4846,7 @@ local0.*    /var/log/postgresql
     Par exemple, pour générer l'identifiant de session à partir de
     <literal>pg_stat_activity</literal>, utilisez cette requête&nbsp;:
     <programlisting>
-SELECT to_hex(EXTRACT(EPOCH FROM backend_start)::integer) || '.' ||
+SELECT to_hex(trunc(EXTRACT(EPOCH FROM backend_start))::integer) || '.' ||
        to_hex(pid)
 FROM pg_stat_activity;
     </programlisting>
@@ -4855,6 +4931,22 @@ FROM pg_stat_activity;
      <literal>ERROR</literal> pour tracer ce type d'instructions.
     </para>
    </note>
+  </listitem>
+ </varlistentry>
+
+ <varlistentry id="guc-log-replication-commands" xreflabel="log_replication_commands">
+  <term><varname>log_replication_commands</varname> (<type>boolean</type>)
+  <indexterm>
+   <primary><varname>log_replication_commands</varname> configuration parameter</primary>
+  </indexterm>
+  </term>
+  <listitem>
+   <para>
+    Causes each replication command to be logged in the server log.
+    See <xref linkend="protocol-replication"/> for more information about
+    replication command. The default value is <literal>off</literal>.
+    Only superusers can change this setting.
+   </para>
   </listitem>
  </varlistentry>
 
@@ -5019,7 +5111,60 @@ COPY postgres_log FROM '/chemin/complet/vers/le/logfile.csv' WITH csv;
 </para>
 
 </sect2>
-</sect1>
+
+   <sect2>
+    <title>Process Title</title>
+
+    <para>
+     These settings control how the process title as seen
+     by <command>ps</command> is modified.  See <xref linkend="monitoring-ps"/>
+     for details.
+    </para>
+
+    <variablelist>
+     <varlistentry id="guc-cluster-name" xreflabel="cluster_name">
+      <term><varname>cluster_name</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>cluster_name</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the cluster name that appears in the process title for all
+        processes in this cluster. The name can be any string of less than
+        <symbol>NAMEDATALEN</symbol> characters (64 characters in a standard
+        build). Only printable ASCII characters may be used in the
+        <varname>cluster_name</varname> value. Other characters will be
+        replaced with question marks (<literal>?</literal>).  No name is shown
+        if this parameter is set to the empty string <literal>''</literal> (which is
+        the default). This parameter can only be set at server start.
+       </para>
+       <para>
+        The process title is typically viewed using programs like
+        <application>ps</application> or, on Windows, <application>Process Explorer</application>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-update-process-title" xreflabel="update_process_title">
+      <term><varname>update_process_title</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>update_process_title</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables updating of the process title every time a new SQL command
+        is received by the server.  The process title is typically viewed
+        by the <command>ps</command> command,
+        or in Windows by using the <application>Process Explorer</application>.
+        Only superusers can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </sect2>
+  </sect1>
 
 <sect1 id="runtime-config-statistics">
 <title>Statistiques d'exécution</title>
@@ -5136,22 +5281,6 @@ COPY postgres_log FROM '/chemin/complet/vers/le/logfile.csv' WITH csv;
   </listitem>
  </varlistentry>
 
- <varlistentry id="guc-update-process-title" xreflabel="update_process_title">
-  <term><varname>update_process_title</varname> (<type>boolean</type>)</term>
-  <listitem>
-   <indexterm>
-    <primary>paramètre de configuration <varname>update_process_title</varname></primary>
-   </indexterm>
-   <para>
-    Active la mise à jour du titre du processus à chaque fois qu'une
-    nouvelle commande SQL est reçue par le serveur. Le titre du processus
-    est visible typiquement avec la commande <command>ps</command> sur Unix
-    ou en utilisant l'<application>explorateur de processus</application>
-    sur Windows. Seuls les superutilisateurs peuvent modifier ce paramètre.
-   </para>
-  </listitem>
- </varlistentry>
-
  <varlistentry id="guc-stats-temp-directory" xreflabel="stats_temp_directory">
   <term><varname>stats_temp_directory</varname> (<type>string</type>)</term>
   <indexterm>
@@ -5228,6 +5357,9 @@ COPY postgres_log FROM '/chemin/complet/vers/le/logfile.csv' WITH csv;
 Ces paramètres contrôlent le comportement de la fonctionnalité appelée
 <firstterm>autovacuum</firstterm>. Se référer à la
 <xref linkend="autovacuum"/> pour plus de détails.
+ Note that many of these settings can be overridden on a per-table
+ basis; see <xref linkend="sql-createtable-storage-parameters"
+ endterm="sql-createtable-storage-parameters-title"/>.
 </para>
 
 <variablelist>
@@ -5243,7 +5375,9 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    Celui-ci est activé par défaut. <xref linkend="guc-track-counts"/>
    doit aussi être activé pour que ce
    démon soit démarré. Ce paramètre ne peut être configuré que dans le fichier
-   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
+   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande;
+   however, autovacuuming can be disabled for individual tables by changing
+   table storage parameters.
   </para>
   <para>
    Même si ce paramètre est désactivé, le système lance
@@ -5276,7 +5410,9 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    être utile pour tracer l'activité de l'autovacuum. Ce paramètre
    ne peut être configuré que dans le fichier
    <filename>postgresql.conf</filename> ou indiqué sur la ligne de
-   commande.
+   commande;
+   but the setting can be overridden for individual tables by
+   changing table storage parameters.
   </para>
  </listitem>
 </varlistentry>
@@ -5324,9 +5460,9 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    nécessaire pour déclencher un <command>VACUUM</command> sur une table.
    La valeur par défaut est de 50 lignes.
    Ce paramètre ne peut être configuré que dans le fichier
-   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
-   Il est possible de surcharger ce paramètre pour toute table en
-   modifiant les paramètres de stockage.
+   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande
+   mais il est possible de surcharger ce paramètre pour toute table en
+   modifiant les paramètres de stockage de la table.
   </para>
  </listitem>
 </varlistentry>
@@ -5342,9 +5478,9 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    nécessaire pour déclencher un <command>ANALYZE</command> sur une table. La valeur
    par défaut est de 50 lignes.
    Ce paramètre ne peut être configuré que dans le fichier
-   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
-   Il est possible de surcharger ce paramètre pour toute table en
-   modifiant les paramètres de stockage.
+   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande
+   mais il est possible de surcharger ce paramètre pour toute table en
+   modifiant les paramètres de stockage de la table.
   </para>
  </listitem>
 </varlistentry>
@@ -5361,9 +5497,9 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    auquel déclencher un <command>VACUUM</command>. La valeur par défaut
    est 0.2 (20&nbsp;% de la taille de la table).
    Ce paramètre ne peut être configuré que dans le fichier
-   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
-   Il est possible de surcharger ce paramètre pour toute table en
-   modifiant les paramètres de stockage.
+   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande
+   mais il est possible de surcharger ce paramètre pour toute table en
+   modifiant les paramètres de stockage de la table.
   </para>
  </listitem>
 </varlistentry>
@@ -5380,9 +5516,9 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    moment auquel déclencher une commande <command>ANALYZE</command>.
    La valeur par défaut est 0.1 (10&nbsp;% de la taille de la table).
    Ce paramètre ne peut être configuré que dans le fichier
-   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
-   Il est possible de surcharger ce paramètre pour toute table en
-   modifiant les paramètres de stockage.
+   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande
+   mais il est possible de surcharger ce paramètre pour toute table en
+   modifiant les paramètres de stockage de la table.
   </para>
  </listitem>
 </varlistentry>
@@ -5408,7 +5544,7 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    la valeur par défaut est relativement basse (200 millions de transactions).
    Ce paramètre
    n'est lu qu'au démarrage du serveur, mais il peut être diminué pour
-   toute table en modifiant les paramètres de stockage. Pour plus
+   toute table en modifiant les paramètres de stockage de la table. Pour plus
    d'informations, voir <xref linkend="vacuum-for-wraparound"/>.
   </para>
  </listitem>
@@ -5437,7 +5573,7 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    la valeur par défaut est relativement basse (400 million de multixacts).
    Ce paramètre est seulement configurable au démarrage du serveur mais sa
    valeur peut être réduite pour des tables individuelles en modifiant les
-   paramètres de stockage. Pour plus d'informations, voir <xref
+   paramètres de stockage de la table. Pour plus d'informations, voir <xref
    linkend="vacuum-for-multixact-wraparound"/>.
   </para>
  </listitem>
@@ -5455,9 +5591,9 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    la valeur habituelle de <xref linkend="guc-vacuum-cost-delay"/> est
    utilisée. La valeur par défaut est 20 millisecondes.
    Ce paramètre ne peut être configuré que dans le fichier
-   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
-   Il est possible de le surcharger pour toute table en
-   modifiant les paramètres de stockage.
+   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande
+   mais il est possible de le surcharger pour toute table en
+   modifiant les paramètres de stockage de la table.
   </para>
  </listitem>
 </varlistentry>
@@ -5478,8 +5614,8 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    somme des limites de chaque processus ne dépasse jamis la limite de
    cette variable.
    Ce paramètre ne peut être configuré que dans le fichier
-   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande.
-   Il est possible de le surcharger pour toute tableen modifiant les
+   <filename>postgresql.conf</filename> ou indiqué sur la ligne de commande
+   mais il est possible de le surcharger pour toute table en modifiant les
    paramètres de stockage.
   </para>
  </listitem>
@@ -5578,6 +5714,32 @@ Ces paramètres contrôlent le comportement de la fonctionnalité appelée
    <para>
     Pour plus d'informations sur la gestion des schémas, voir la
     <xref linkend="ddl-schemas"/>.
+   </para>
+  </listitem>
+ </varlistentry>
+
+ <varlistentry id="guc-row-security" xreflabel="row_security">
+  <term><varname>row_security</varname> (<type>boolean</type>)
+  <indexterm>
+   <primary><varname>row_security</varname> configuration parameter</primary>
+  </indexterm>
+  </term>
+  <listitem>
+   <para>
+    This variable controls whether to raise an error in lieu of applying a
+    row security policy.  When set to <literal>on</literal>, policies apply
+    normally.  When set to <literal>off</literal>, queries fail which would
+    otherwise apply at least one policy.  The default is <literal>on</literal>.
+    Change to <literal>off</literal> where limited row visibility could cause
+    incorrect results; for example, <application>pg_dump</application> makes that
+    change by default.  This variable has no effect on roles which bypass
+    every row security policy, to wit, superusers and roles with
+    the <literal>BYPASSRLS</literal> attribute.
+   </para>
+
+   <para>
+    For more information on row security policies,
+    see <xref linkend="sql-createpolicy"/>.
    </para>
   </listitem>
  </varlistentry>
@@ -6099,10 +6261,11 @@ SET XML OPTION { DOCUMENT | CONTENT };
   </term>
   <listitem>
    <para>
-    Cette variable précise une ou plusieurs bibliothèques partagées qu'il
-    faut charger au début d'une connexion. Ce paramètre ne peut pas être
-    modifié après le début d'une session particulière. Si une bibliothèque
-    spécifiée n'est pas trouvée, la tentative de connexion échoue.
+    Cette variable précise une ou plusieurs bibliothèques partagées qu'il faut
+    charger au début d'une connexion. The parameter value only takes effect at
+    the start of the connection. Subsequent changes have no effect. Si une
+    bibliothèque spécifiée n'est pas trouvée, la tentative de connexion
+    échoue.
    </para>
 
    <para>
@@ -6120,7 +6283,17 @@ SET XML OPTION { DOCUMENT | CONTENT };
    </para>
 
    <para>
-    Sauf si un module est conçu spécifiquement pour être utilisé de cette
+    The intent of this feature is to allow unprivileged users to load
+    debugging or performance-measurement libraries into specific sessions
+    without requiring an explicit <command>LOAD</command> command.  To that end,
+    it would be typical to set this parameter using
+    the <envar>PGOPTIONS</envar> environment variable on the client or by
+    using
+    <command>ALTER ROLE SET</command>.
+   </para>
+
+   <para>
+    Néanmoins, sauf si un module est conçu spécifiquement pour être utilisé de cette
     façon par des utilisateurs non administrateurs, ceci n'est pas le bon
     paramétrage pour vous. Regardez plutôt <xref
     linkend="guc-session-preload-libraries"/>.
@@ -6214,6 +6387,27 @@ SET XML OPTION { DOCUMENT | CONTENT };
      besoin de réaliser des opérations au démarrage du postmaster.
     </para>
    </note>
+  </listitem>
+ </varlistentry>
+
+ <varlistentry id="guc-gin-pending-list-limit" xreflabel="gin_pending_list_limit">
+  <term><varname>gin_pending_list_limit</varname> (<type>integer</type>)
+  <indexterm>
+   <primary><varname>gin_pending_list_limit</varname> configuration parameter</primary>
+  </indexterm>
+  </term>
+  <listitem>
+   <para>
+    Sets the maximum size of the GIN pending list which is used
+    when <literal>fastupdate</literal> is enabled. If the list grows
+    larger than this maximum size, it is cleaned up by moving
+    the entries in it to the main GIN data structure in bulk.
+    The default is four megabytes (<literal>4MB</literal>). This setting
+    can be overridden for individual GIN indexes by changing
+    index storage parameters.
+     See <xref linkend="gin-fast-update"/> and <xref linkend="gin-tips"/>
+     for more information.
+   </para>
   </listitem>
  </varlistentry>
 </variablelist>
@@ -6839,6 +7033,29 @@ SET XML OPTION { DOCUMENT | CONTENT };
       </listitem>
      </varlistentry>
 
+    <varlistentry id="guc-operator-precedence-warning" xreflabel="operator_precedence_warning">
+     <term><varname>operator_precedence_warning</varname> (<type>boolean</type>)
+     <indexterm>
+      <primary><varname>operator_precedence_warning</varname> configuration parameter</primary>
+     </indexterm>
+     </term>
+     <listitem>
+      <para>
+       When on, the parser will emit a warning for any construct that might
+       have changed meanings since <productname>PostgreSQL</productname> 9.4 as a result
+       of changes in operator precedence.  This is useful for auditing
+       applications to see if precedence changes have broken anything; but it
+       is not meant to be kept turned on in production, since it will warn
+       about some perfectly valid, standard-compliant SQL code.
+       The default is <literal>off</literal>.
+      </para>
+
+      <para>
+       See <xref linkend="sql-precedence"/> for more information.
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="guc-quote-all-identifiers" xreflabel="quote-all-identifiers">
       <term><varname>quote_all_identifiers</varname> (<type>boolean</type>)</term>
       <indexterm>
@@ -7088,6 +7305,26 @@ SET XML OPTION { DOCUMENT | CONTENT };
     </listitem>
    </varlistentry>
 
+   <varlistentry id="guc-debug-assertions" xreflabel="debug_assertions">
+    <term><varname>debug_assertions</varname> (<type>boolean</type>)
+    <indexterm>
+     <primary><varname>debug_assertions</varname> configuration parameter</primary>
+    </indexterm>
+    </term>
+    <listitem>
+     <para>
+      Reports whether <productname>PostgreSQL</productname> has been built
+      with assertions enabled. That is the case if the
+      macro <symbol>USE_ASSERT_CHECKING</symbol> is defined
+      when <productname>PostgreSQL</productname> is built (accomplished
+      e.g. by the <command>configure</command> option
+      <option>--enable-cassert</option>). By
+      default <productname>PostgreSQL</productname> is built without
+      assertions.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="guc-integer-datetimes" xreflabel="integer_datetimes">
     <term><varname>integer_datetimes</varname> (<type>boolean</type>)</term>
     <listitem>
@@ -7327,27 +7564,6 @@ SET XML OPTION { DOCUMENT | CONTENT };
       Autorise la modification de la structure des tables systèmes.
       Ce paramètre, utilisé par <command>initdb</command>,
       n'est modifiable qu'au démarrage du serveur.
-     </para>
-    </listitem>
-   </varlistentry>
-
-   <varlistentry id="guc-debug-assertions" xreflabel="debug_assertions">
-    <term><varname>debug_assertions</varname> (<type>boolean</type>)</term>
-    <listitem>
-     <indexterm>
-      <primary>paramètre de configuration <varname>debug_assertions</varname></primary>
-     </indexterm>
-     <para>
-      Active différentes vérifications d'affectations. C'est une aide au
-      débogage. En cas de problèmes étranges ou d'arrêts
-      brutaux, ce paramètre peut être activé car il permet de remonter des
-      erreurs de programmation. Pour utiliser ce paramètre, la
-      macro <symbol>USE_ASSERT_CHECKING</symbol> doit être définie lors de
-      la construction de <productname>PostgreSQL</productname> (à l'aide
-      de l'option <option>--enable-cassert</option> de
-      <command>configure</command>). Ce paramètre est activé par défaut si
-      <productname>PostgreSQL</productname> a été construit avec
-      l'activation des assertions.
      </para>
     </listitem>
    </varlistentry>
@@ -7709,10 +7925,6 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
     </thead>
 
     <tbody>
-     <row>
-      <entry><option>-A <replaceable>x</replaceable></option></entry>
-      <entry><literal>debug_assertions = <replaceable>x</replaceable></literal></entry>
-     </row>
      <row>
       <entry><option>-B <replaceable>x</replaceable></option></entry>
       <entry><literal>shared_buffers = <replaceable>x</replaceable></literal></entry>

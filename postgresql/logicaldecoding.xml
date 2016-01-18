@@ -63,10 +63,10 @@ postgres=# SELECT * FROM pg_create_logical_replication_slot('regression_slot', '
  regression_slot | 0/16B1970
 (1 row)
 
-postgres=# SELECT * FROM pg_replication_slots;
-    slot_name    |    plugin     | slot_type | datoid | database | active |  xmin  | catalog_xmin | restart_lsn
------------------+---------------+-----------+--------+----------+--------+--------+--------------+-------------
- regression_slot | test_decoding | logical   |  12052 | postgres | f      |        |          684 | 0/16A4408
+postgres=# SELECT slot_name, plugin, slot_type, database, active, restart_lsn FROM pg_replication_slots;
+    slot_name    |    plugin     | slot_type | database | active | restart_lsn
+-----------------+---------------+-----------+----------+--------+-------------
+ regression_slot | test_decoding | logical   | postgres | f      | 0/16A4408
 (1 row)
 
 postgres=# -- Il n'y a pas encore de changement à voir
@@ -357,6 +357,7 @@ typedef struct OutputPluginCallbacks
     LogicalDecodeBeginCB begin_cb;
     LogicalDecodeChangeCB change_cb;
     LogicalDecodeCommitCB commit_cb;
+    LogicalDecodeFilterByOriginCB filter_by_origin_cb;
     LogicalDecodeShutdownCB shutdown_cb;
 } OutputPluginCallbacks;
 
@@ -364,7 +365,7 @@ typedef void (*LogicalOutputPluginInit)(struct OutputPluginCallbacks *cb);
     </programlisting>
     Les callbacks <function>begin_cb</function>, <function>change_cb</function>
     et <function>commit_cb</function> sont obligatoires,
-    alors que <function>startup_cb</function>
+    alors que <function>startup_cb</function>, <function>filter_by_origin_cb</function>
     et <function>shutdown_cb</function> sont facultatifs.
    </para>
   </sect2>
@@ -550,6 +551,37 @@ typedef void (*LogicalDecodeChangeCB) (
       avec le décodage logique.
      </para>
     </note>
+   </sect3>
+
+   <sect3 id="logicaldecoding-output-plugin-filter-origin">
+    <title>Fonction de filtre sur l'origine</title>
+
+     <para>
+      La fonction optionnelle <function>filter_by_origin_cb</function> est
+      appelée pour déterminer si les données rejouées à partir de
+      <parameter>origin_id</parameter> ont un intérêt pour le plugin de
+      sortie.
+<programlisting>
+typedef bool (*LogicalDecodeChangeCB) (
+    struct LogicalDecodingContext *ctx,
+    RepNodeId origin_id
+);
+</programlisting>
+     Le paramètre <parameter>ctx</parameter> a le même contenu que pour les
+     autres fonctions. Aucune information mais l'originie est disponible. Pour
+     signaler que les changements provenant du nœud sont hors de propos, elle
+     renvoie true, ce qui permet de les filtrer. Elle renvoie false dans les
+     autres cas. Les autres fonctions ne seront pas appelées pour les
+     transactions et changements qui ont été filtrées.
+    </para>
+    <para>
+     Ceci est utile pour implémenter des solutions de réplication en cascade
+     ou des solutions de réplication multi-directionnelles. Filtrer par
+     rapport à l'origine perment d'empêcher la réplication dans les deux sesns
+     des mêmes modifications dans ce type de configuration. Quand les
+     transactions et les modifications contiennent aussi des informations sur
+     l'origine, le filtre via cette fonction est beaucoup plus efficace.
+    </para>
    </sect3>
   </sect2>
   <sect2 id="logicaldecoding-output-plugin-output">
