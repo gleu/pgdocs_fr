@@ -275,6 +275,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <para>
       La clause optionnelle <literal>INHERITS</literal> indique une liste de tables
       dont les colonnes sont automatiquement héritées par la nouvelle table.
+      Parent tables can be plain tables or foreign tables.
      </para>
 
      <para>
@@ -451,6 +452,14 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <para>
       Une contrainte marquée <literal>NO INHERIT</literal> ne sera pas propagée
       aux tables filles.
+     </para>
+
+     <para>
+      When a table has multiple <literal>CHECK</literal> constraints,
+      they will be tested for each row in alphabetical order by name,
+      after checking <literal>NOT NULL</literal> constraints.
+      (<productname>PostgreSQL</productname> versions before 9.5 did not honor any
+      particular firing order for <literal>CHECK</literal> constraints.)
      </para>
     </listitem>
    </varlistentry>
@@ -726,7 +735,9 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>PRIMARY KEY</literal>, <literal>EXCLUDE</literal> et
       <literal>REFERENCES</literal> (clé étrangère) acceptent cette clause.
       Les contraintes<literal>NOT NULL</literal> et <literal>CHECK</literal>
-      ne sont pas déferrables.
+      ne sont pas déferrables. Note that deferrable constraints cannot be used as
+      conflict arbitrators in an <command>INSERT</command> statement that
+      includes an <literal>ON CONFLICT DO UPDATE</literal> clause.
      </para>
     </listitem>
    </varlistentry>
@@ -886,14 +897,15 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      KEY</literal>, ou <literal>EXCLUDE</literal>. Les paramètres de stockage des index sont documentés dans
     <xref linkend="sql-createindex"/>.
     Les paramètres de stockage actuellement disponibles pour les tables sont
-    listés ci-dessous. Pour chaque paramètre, sauf contre-indication, il y a un
+    listés ci-dessous. Pour beaucoup de ces paramètres, comme indiqué, il y a un
     paramètre additionnel, de même nom mais préfixé par
-    <literal>toast.</literal>, qui peut être utilisé pour contrôler le
+    <literal>toast.</literal>, qui contrôle le
     le comportement de la table <acronym>TOAST</acronym> (stockage
     supplémentaire), si elle existe (voir <xref linkend="storage-toast"/> pour
-    plus d'informations sur TOAST). La table TOAST hérite ses valeurs
-    <literal>autovacuum</literal> de sa table parente s'il n'y a pas de paramètre
-    <literal>toast.autovacuum_*</literal> positionné.
+    plus d'informations sur TOAST).
+    If a table parameter value is set and the
+    equivalent <literal>toast.</literal> parameter is not, the TOAST table
+    will use the table's parameter value.
    </para>
 
    <variablelist>
@@ -923,22 +935,19 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>toast.autovacuum_enabled</literal> (<type>boolean</type>)</term>
      <listitem>
       <para>
-       Active ou désactive le processus d'autovacuum sur une table particulière.
-       Si à true, le processus d'autovacuum démarrera une opération <command>VACUUM</command>
-       sur une table particulière quand le nombre d'enregistrements mis à jour ou supprimés
-       dépassera <literal>autovacuum_vacuum_threshold</literal> plus
-       <literal>autovacuum_vacuum_scale_factor</literal> multiplié par le nombre
-       d'enregistrements estimés actifs dans la relation.
-       De façon similaire, il démarrera une opération <command>ANALYZE</command> quand
-       le nombre d'enregistrements insérés, mis à jour ou supprimés dépassera
-       <literal>autovacuum_analyze_threshold</literal> plus
-       <literal>autovacuum_analyze_scale_factor</literal> multiplié par le nombre
-       d'enregistrements estimés actifs dans la relation.
-       Si à false, la table ne sera pas traitée par autovacuum, sauf pour prévenir
-       le bouclage des identifiants de transaction. Voir <xref linkend="vacuum-for-wraparound"/>
-       pour plus d'information sur la prévention de ce bouclage.
-       Notez que cette variable hérite sa valeur du paramètre <xref
-       linkend="guc-autovacuum"/>.
+     Enables or disables the autovacuum daemon for a particular table.
+     If true, the autovacuum daemon will perform automatic <command>VACUUM</command>
+     and/or <command>ANALYZE</command> operations on this table following the rules
+     discussed in <xref linkend="autovacuum"/>.
+     If false, this table will not be autovacuumed, except to prevent
+     transaction ID wraparound. See <xref linkend="vacuum-for-wraparound"/> for
+     more about wraparound prevention.
+     Note that the autovacuum daemon does not run at all (except to prevent
+     transaction ID wraparound) if the <xref linkend="guc-autovacuum"/>
+     parameter is false; setting individual tables' storage parameters does
+     not override that.  Therefore there is seldom much point in explicitly
+     setting this storage parameter to <literal>true</literal>, only
+     to <literal>false</literal>.
       </para>
      </listitem>
     </varlistentry>
@@ -948,9 +957,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>toast.autovacuum_vacuum_threshold</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Nombre minimum d'enregistrements mis à jour ou supprimés avant
-       de démarrer une opération <command>VACUUM</command> sur une table
-       particulière.
+      Per-table value for <xref linkend="guc-autovacuum-vacuum-threshold"/>
+      parameter.
       </para>
      </listitem>
     </varlistentry>
@@ -960,8 +968,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>toast.autovacuum_vacuum_scale_factor</literal> (<type>float4</type>)</term>
      <listitem>
       <para>
-       Coefficient multiplicateur pour <structfield>reltuples</structfield> (nombre estimé
-       d'enregistrements d'une relation) à ajouter à <literal>autovacuum_vacuum_threshold</literal>.
+      Per-table value for <xref linkend="guc-autovacuum-vacuum-scale-factor"/>
+      parameter.
       </para>
      </listitem>
     </varlistentry>
@@ -970,8 +978,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_analyze_threshold</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Nombre minimum d'enregistrements insérés, mis à jour ou supprimés avant de
-       démarrer une opération <command>ANALYZE</command> sur une table particulière.
+      Per-table value for <xref linkend="guc-autovacuum-analyze-threshold"/>
+      parameter.
       </para>
      </listitem>
     </varlistentry>
@@ -980,8 +988,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_analyze_scale_factor</literal> (<type>float4</type>)</term>
      <listitem>
       <para>
-       Coefficient multiplicateur pour <structfield>reltuples</structfield> (nombre estimé
-       d'enregistrements d'une relation) à ajouter à <literal>autovacuum_analyze_threshold</literal>.
+      Per-table value for <xref linkend="guc-autovacuum-analyze-scale-factor"/>
+      parameter.
       </para>
      </listitem>
     </varlistentry>
@@ -991,7 +999,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>toast.autovacuum_vacuum_cost_delay</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Paramètre <xref linkend="guc-autovacuum-vacuum-cost-delay"/> personnalisé.
+      Per-table value for <xref linkend="guc-autovacuum-vacuum-cost-delay"/>
+      parameter.
       </para>
      </listitem>
     </varlistentry>
@@ -1001,7 +1010,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>toast.autovacuum_vacuum_cost_limit</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Paramètre <xref linkend="guc-autovacuum-vacuum-cost-limit"/> personnalisé.
+      Per-table value for <xref linkend="guc-autovacuum-vacuum-cost-limit"/>
+      parameter.
       </para>
      </listitem>
     </varlistentry>
@@ -1011,11 +1021,11 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>toast.autovacuum_freeze_min_age</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Paramètre <xref linkend="guc-vacuum-freeze-min-age"/> personnalisé. Notez que
-       autovacuum rejettera les tentatives de positionner un
-       <literal>autovacuum_freeze_min_age</literal> plus grand que le paramètre
-       <xref linkend="guc-autovacuum-freeze-max-age"/> à la moitié de la plage système
-       d'identifiants.
+      Per-table value for <xref linkend="guc-vacuum-freeze-min-age"/>
+      parameter.  Note that autovacuum will ignore
+      per-table <literal>autovacuum_freeze_min_age</literal> parameters that are
+      larger than half the
+      system-wide <xref linkend="guc-autovacuum-freeze-max-age"/> setting.
       </para>
      </listitem>
     </varlistentry>
@@ -1025,10 +1035,10 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>toast.autovacuum_freeze_max_age</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Paramètre <xref linkend="guc-autovacuum-freeze-max-age"/> personnalisé.
-       L'autovacuum rejettera les tentatives de positionner un
-       <literal>autovacuum_freeze_max_age</literal> plus grand que le paramètre système
-       (il ne peut être que plus petit).
+      Per-table value for <xref linkend="guc-autovacuum-freeze-max-age"/>
+      parameter.  Note that autovacuum will ignore
+      per-table <literal>autovacuum_freeze_max_age</literal> parameters that are
+      larger than the system-wide setting (it can only be set smaller).
       </para>
      </listitem>
     </varlistentry>
@@ -1038,7 +1048,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>toast.autovacuum_freeze_table_age</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Paramètre <xref linkend="guc-vacuum-freeze-table-age"/> personnalisé.
+      Per-table value for <xref linkend="guc-vacuum-freeze-table-age"/>
+      parameter.
       </para>
      </listitem>
     </varlistentry>
@@ -1047,11 +1058,12 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_multixact_freeze_min_age</literal>, <literal>toast.autovacuum_multixact_freeze_min_age</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Paramètre <xref linkend="guc-vacuum-multixact-freeze-min-age"/> personnalisé.
-       Il faut noter que l'autovacuum ignorera les tentatives de configuration
-       par table d'un <literal>autovacuum_multixact_freeze_min_age</literal> plus
-       grand que la moitié du paramètre <xref
-       linkend="guc-autovacuum-multixact-freeze-max-age"/> au niveau système.
+       Per-table value for <xref linkend="guc-vacuum-multixact-freeze-min-age"/>
+       parameter.  Note that autovacuum will ignore
+       per-table <literal>autovacuum_multixact_freeze_min_age</literal> parameters
+       that are larger than half the
+       system-wide <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>
+       setting.
       </para>
      </listitem>
     </varlistentry>
@@ -1060,12 +1072,12 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_multixact_freeze_max_age</literal>, <literal>toast.autovacuum_multixact_freeze_max_age</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Paramètre <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>
-       personnalisé. Il faut noter que l'autovacuum ignorera les tentatives de
-       configuration par table d'un <literal>autovacuum_multixact_freeze_max_age</literal>
-       plus grand que la valeur du paramètre <xref
-       linkend="guc-autovacuum-multixact-freeze-max-age"/> au niveau système (il
-       peut seulement être configuré plus petit).
+      Per-table value
+      for <xref linkend="guc-autovacuum-multixact-freeze-max-age"/> parameter.
+      Note that autovacuum will ignore
+      per-table <literal>autovacuum_multixact_freeze_max_age</literal> parameters
+      that are larger than the system-wide setting (it can only be set
+      smaller).
       </para>
      </listitem>
     </varlistentry>
@@ -1074,7 +1086,18 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_multixact_freeze_table_age</literal>, <literal>toast.autovacuum_multixact_freeze_table_age</literal> (<type>integer</type>)</term>
      <listitem>
       <para>
-       Paramètre <xref linkend="guc-vacuum-multixact-freeze-table-age"/> personnalisé.
+      Per-table value
+      for <xref linkend="guc-vacuum-multixact-freeze-table-age"/> parameter.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>log_autovacuum_min_duration</literal>, <literal>toast.log_autovacuum_min_duration</literal> (<type>integer</type>)</term>
+    <listitem>
+     <para>
+      Per-table value for <xref linkend="guc-log-autovacuum-min-duration"/>
+      parameter.
       </para>
      </listitem>
     </varlistentry>
@@ -1083,9 +1106,10 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>user_catalog_table</literal> (<type>boolean</type>)</term>
      <listitem>
       <para>
-       Déclare une table comme une autre table du catalogue dans le cadre de la
+       Déclare la table comme une autre table du catalogue dans le cadre de la
        réplication logique. Voir <xref linkend="logicaldecoding-capabilities"/>
        pour les détails.
+       This parameter cannot be set for TOAST tables.
       </para>
      </listitem>
     </varlistentry>

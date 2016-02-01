@@ -13,7 +13,7 @@
   vu soit comme un utilisateur de la base de données, soit comme un groupe
   d'utilisateurs de la base de données, suivant la façon dont le rôle est
   configuré. Les rôles peuvent posséder des objets de la base de données (par
-  exemple des tables) et peuvent affecter des droits sur ces objets à d'autres
+  exemple des tables et des fonctions) et peuvent affecter des droits sur ces objets à d'autres
   rôles pour contrôler qui a accès à ces objets. De plus, il est possible de
   donner l'<firstterm>appartenance</firstterm> d'un rôle à un autre rôle, l'autorisant
   du coup à utiliser les droits affectés à un autre rôle.
@@ -216,7 +216,7 @@ CREATE USER <replaceable>nom</replaceable>;</programlisting>
         Un rôle doit se voir explicitement donné le droit d'initier une
         réplication en flux (sauf pour les superutilisateurs, puisqu'ils ne sont pas
         soumis aux vérifications de permissions). Un rôle utilisé pour la réplication en flux doit
-        toujours avoir le droit <literal>LOGIN</literal>. Pour créer un tel
+        avoir le droit <literal>LOGIN</literal>. Pour créer un tel
         rôle, utilisez <literal>CREATE ROLE <replaceable>nom</replaceable>
         REPLICATION LOGIN</literal>.
        </para>
@@ -399,10 +399,78 @@ RESET ROLE;</programlisting>
    linkend="sql-droprole"/>:
 <synopsis>DROP ROLE <replaceable>nom</replaceable>;</synopsis>
    Toute appartenance à ce rôle est automatiquement supprimée (mais les rôles
-   membres ne sont pas autrement affectés). Notez néanmoins que tous les objets
-   dont le groupe était propriétaire doivent d'abord être supprimés ou
-   réaffectés&nbsp;; et tous les droits accordés au rôle groupe doivent être
-   supprimés.
+   membres ne sont pas autrement affectés).
+  </para>
+ </sect1>
+
+ <sect1 id="role-removal">
+  <title>Dropping Roles</title>
+
+  <para>
+   Because roles can own database objects and can hold privileges
+   to access other objects, dropping a role is often not just a matter of a
+   quick <xref linkend="sql-droprole"/>.  Any objects owned by the role must
+   first be dropped or reassigned to other owners; and any permissions
+   granted to the role must be revoked.
+  </para>
+
+  <para>
+   Ownership of objects can be transferred one at a time
+   using <command>ALTER</command> commands, for example:
+<programlisting>
+ALTER TABLE bobs_table OWNER TO alice;
+</programlisting>
+   Alternatively, the <xref linkend="sql-reassign-owned"/> command can be
+   used to reassign ownership of all objects owned by the role-to-be-dropped
+   to a single other role.  Because <command>REASSIGN OWNED</command> cannot access
+   objects in other databases, it is necessary to run it in each database
+   that contains objects owned by the role.  (Note that the first
+   such <command>REASSIGN OWNED</command> will change the ownership of any
+   shared-across-databases objects, that is databases or tablespaces, that
+   are owned by the role-to-be-dropped.)
+  </para>
+
+  <para>
+   Once any valuable objects have been transferred to new owners, any
+   remaining objects owned by the role-to-be-dropped can be dropped with
+   the <xref linkend="sql-drop-owned"/> command.  Again, this command cannot
+   access objects in other databases, so it is necessary to run it in each
+   database that contains objects owned by the role.  Also, <command>DROP
+   OWNED</command> will not drop entire databases or tablespaces, so it is
+   necessary to do that manually if the role owns any databases or
+   tablespaces that have not been transferred to new owners.
+  </para>
+
+  <para>
+   <command>DROP OWNED</command> also takes care of removing any privileges granted
+   to the target role for objects that do not belong to it.
+   Because <command>REASSIGN OWNED</command> does not touch such objects, it's
+   typically necessary to run both <command>REASSIGN OWNED</command>
+   and <command>DROP OWNED</command> (in that order!) to fully remove the
+   dependencies of a role to be dropped.
+  </para>
+
+  <para>
+   In short then, the most general recipe for removing a role that has been
+   used to own objects is:
+  </para>
+<programlisting>
+REASSIGN OWNED BY doomed_role TO successor_role;
+DROP OWNED BY doomed_role;
+-- repeat the above commands in each database of the cluster
+DROP ROLE doomed_role;
+</programlisting>
+
+  <para>
+   When not all owned objects are to be transferred to the same successor
+   owner, it's best to handle the exceptions manually and then perform
+   the above steps to mop up.
+  </para>
+
+  <para>
+   If <command>DROP ROLE</command> is attempted while dependent objects still
+   remain, it will issue messages identifying which objects need to be
+   reassigned or dropped.
   </para>
  </sect1>
 

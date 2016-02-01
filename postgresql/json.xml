@@ -275,7 +275,7 @@ SELECT '{"reading": 1.230e-5}'::json, '{"reading": 1.230e-5}'::jsonb;
    <type>jsonb</type> est contenu dans un autre.  Ces exemples renvoient vrai
    sauf note explicite&nbsp;:
   </para>
-  <programlisting>
+  <programlisting><![CDATA[
 -- Simple valeur scalaire/primitive qui contient une seule valeur identique :
 SELECT '"foo"'::jsonb @> '"foo"'::jsonb;
 
@@ -302,7 +302,10 @@ SELECT '[1, 2, [1, 3]]'::jsonb @> '[[1, 3]]'::jsonb;
 
 -- De la même manière, l'inclusion n'est pas valable ici :
 SELECT '{"foo": {"bar": "baz"}}'::jsonb @> '{"bar": "baz"}'::jsonb;  -- renvoie faux
-  </programlisting>
+
+-- A top-level key and an empty object is contained:
+SELECT '{"foo": {"bar": "baz"}}'::jsonb @> '{"foo": {}}'::jsonb;
+  ]]></programlisting>
 
   <para>
    Le principe général est que l'objet inclus doit correspondre à l'objet devant
@@ -318,13 +321,13 @@ SELECT '{"foo": {"bar": "baz"}}'::jsonb @> '{"bar": "baz"}'::jsonb;  -- renvoie 
    Comme exception qui confirme la règle que les structures doivent
    correspondre, un tableau peut inclure une valeur primitive&nbsp;:
   </para>
-  <programlisting>
--- Ce tableau incluts la valeur primitive chaîne :
+  <programlisting><![CDATA[
+-- Ce tableau inclut la valeur primitive chaîne :
 SELECT '["foo", "bar"]'::jsonb @> '"bar"'::jsonb;
 
 -- Cette exception n'est pas réciproque, la non inclusion est rapportée ici :
 SELECT '"bar"'::jsonb @> '["bar"]'::jsonb;  -- renvoie faux
-  </programlisting>
+  ]]></programlisting>
 
   <para>
    <type>jsonb</type> a également un opérateur d'<firstterm>existence</firstterm>,
@@ -357,6 +360,34 @@ SELECT '"foo"'::jsonb ? 'foo';
    recherche et n'ont pas besoin d'être parcourus linéairement.
   </para>
 
+  <tip>
+   <para>
+    Because JSON containment is nested, an appropriate query can skip
+    explicit selection of sub-objects.  As an example, suppose that we have
+    a <structfield>doc</structfield> column containing objects at the top level, with
+    most objects containing <literal>tags</literal> fields that contain arrays of
+    sub-objects.  This query finds entries in which sub-objects containing
+    both <literal>"term":"paris"</literal> and <literal>"term":"food"</literal> appear,
+    while ignoring any such keys outside the <literal>tags</literal> array:
+<programlisting>
+SELECT doc-&gt;'site_name' FROM websites
+  WHERE doc @&gt; '{"tags":[{"term":"paris"}, {"term":"food"}]}';
+</programlisting>
+    One could accomplish the same thing with, say,
+<programlisting>
+SELECT doc-&gt;'site_name' FROM websites
+  WHERE doc-&gt;'tags' @&gt; '[{"term":"paris"}, {"term":"food"}]';
+</programlisting>
+    but that approach is less flexible, and often less efficient as well.
+   </para>
+
+   <para>
+    On the other hand, the JSON existence operator is not nested: it will
+    only look for the specified key or array element at top level of the
+    JSON value.
+   </para>
+  </tip>
+
   <para>
    Les différents opérateurs d'inclusion de d'existence, avec tous les autres
    opérateurs et fonctions JSON sont documéntés dans
@@ -379,19 +410,20 @@ SELECT '"foo"'::jsonb ? 'foo';
   </para>
   <para>
    La classe d'opérateur GIN par défaut pour <type>jsonb</type> supporte les
-   requêtes avec les opérateurs <literal>@&gt;</literal>, <literal>?</literal>,
-   <literal>?&amp;</literal> et <literal>?|</literal>.
+   requêtes avec top-level key-exists operators <literal>?</literal>, <literal>?&amp;</literal>
+   and <literal>?|</literal> operators and path/value-exists operator
+   <literal>@&gt;</literal>.
    (Pour des détails sur la sémantique que ces opérateurs implémentent,
    voir <xref linkend="functions-jsonb-op-table"/>.)
    Un exemple de création d'index avec cette classe d'opérateur est&nbsp;:
    <programlisting>
-CREATE INDEX idxgin ON api USING gin (jdoc);
+CREATE INDEX idxgin ON api USING GIN (jdoc);
    </programlisting>
    La classe d'opérateur GIN qui n'est pas par défaut <literal>jsonb_path_ops
    </literal> supporte l'indexation de l'opérateur <literal>@&gt;</literal>
    seulement.  Un exemple de création d'index avec cette classe d'opérateur est&nbsp;:
    <programlisting>
-CREATE INDEX idxginp ON api USING gin (jdoc jsonb_path_ops);
+CREATE INDEX idxginp ON api USING GIN (jdoc jsonb_path_ops);
    </programlisting>
   </para>
 
@@ -440,7 +472,7 @@ SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc -&gt; 'tags' ? 'qui'
 -- À noter que l'opérateur "jsonb -&gt; text" ne peut être appelé que sur un
 -- objet JSON, donc la conséquence de créer cet index est que le premier niveau de
 -- chaque valeur "jdoc" doit être un objet.  Ceci est vérifié lors de chaque insertion.
-CREATE INDEX idxgintags ON api USING gin ((jdoc -&gt; 'tags'));
+CREATE INDEX idxgintags ON api USING GIN ((jdoc -&gt; 'tags'));
    </programlisting>
    Dorénavant, la clause <literal>WHERE</literal>
    <literal>jdoc -&gt; 'tags' ? 'qui'</literal> sera reconnue comme une

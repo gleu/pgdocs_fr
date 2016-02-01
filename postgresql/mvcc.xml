@@ -153,6 +153,20 @@
       </para>
      </listitem>
     </varlistentry>
+
+     <varlistentry>
+      <term>
+       serialization anomaly
+       <indexterm><primary>serialization anomaly</primary></indexterm>
+      </term>
+     <listitem>
+      <para>
+        The result of successfully committing a group of transactions
+        is inconsistent with all possible orderings of running those
+        transactions one at a time.
+       </para>
+      </listitem>
+     </varlistentry>
    </variablelist>
   </para>
 
@@ -160,16 +174,17 @@
    <indexterm>
     <primary>niveau d'isolation de transaction</primary>
    </indexterm>
-   Les quatre niveaux d'isolation de transaction et les comportements
-   correspondants sont décrits dans le <xref linkend="mvcc-isolevel-table"/>.
+   The SQL standard and PostgreSQL-implemented transaction isolation levels
+   are described in <xref linkend="mvcc-isolevel-table"/>.
   </para>
 
   <table tocentry="1" id="mvcc-isolevel-table">
-   <title>Niveaux d'isolation standards des transactions <acronym>SQL</acronym></title>
-   <tgroup cols="4">
+   <title>Niveaux d'isolation des transactions</title>
+   <tgroup cols="5">
     <colspec colnum="1" colwidth="2.2*"/>
     <colspec colnum="2" colwidth="0.6*"/>
     <colspec colnum="3" colwidth="0.6*"/>
+    <colspec colnum="4" colwidth="0.6*"/>
     <colspec colnum="4" colwidth="0.6*"/>
     <thead>
      <row>
@@ -185,6 +200,9 @@
       <entry>
        Lecture fantôme
       </entry>
+        <entry>
+         Serialization Anomaly
+        </entry>
      </row>
     </thead>
     <tbody>
@@ -199,6 +217,9 @@
        Possible
       </entry>
       <entry>
+         Allowed, but not in PG
+        </entry>
+        <entry>
        Possible
       </entry>
      </row>
@@ -216,6 +237,9 @@
       <entry>
        Possible
       </entry>
+        <entry>
+         Possible
+        </entry>
      </row>
 
      <row>
@@ -229,6 +253,9 @@
        Impossible
       </entry>
       <entry>
+         Allowed, but not in PG
+        </entry>
+        <entry>
        Possible
       </entry>
      </row>
@@ -246,28 +273,30 @@
       <entry>
        Impossible
       </entry>
+        <entry>
+         Not possible
+        </entry>
      </row>
     </tbody>
    </tgroup>
   </table>
 
   <para>
-   Dans <productname>PostgreSQL</productname>, vous pouvez demander un des
-   quatre niveaux standards d'isolation de transaction. Mais, en interne,
-   il existe seulement trois niveaux distincts d'isolation, qui correspondent
-   aux niveaux Read Committed et Repeatable Read, and Serializable. Lorsque vous sélectionnez le
-   niveau Read Uncommitted, vous obtenez réellement Read Committed, et
-   les lectures fantômes ne sont pas possibles dans l'implémentation
-   <productname>PostgreSQL</productname> de Repeatable Read.
-   Le niveau d'isolation actuel pourrait donc être plus strict que ce que vous
-   sélectionnez. Ceci est permis par le standard SQL. Les quatre niveaux
-   d'isolation définissent seulement quel phénomène ne doit pas survenir, ils
-   ne définissent pas ce qui doit arriver. La raison pour laquelle
-   <productname>PostgreSQL</productname> fournit seulement trois niveaux d'isolation est
-   qu'il s'agit de la seule façon raisonnable de faire correspondre les niveaux
-   d'isolation standards avec l'architecture de contrôle des accès simultanés
-   multiversion. Le comportement des niveaux standards d'isolation est détaillé
-   dans les sous-sections suivantes.
+    In <productname>PostgreSQL</productname>, you can request any of
+    the four standard transaction isolation levels, but internally only
+    three distinct isolation levels are implemented, i.e. PostgreSQL's
+    Read Uncommitted mode behaves like Read Committed.  This is because
+    it is the only sensible way to map the standard isolation levels to
+    PostgreSQL's multiversion concurrency control architecture.
+   </para>
+
+   <para>
+    The table also shows that PostgreSQL's Repeatable Read implementation
+    does not allow phantom reads.  Stricter behavior is permitted by the
+    SQL standard: the four isolation levels only define which phenomena
+    must not happen, not which phenomena <emphasis>must</emphasis> happen.
+    The behavior of the available isolation levels is detailed in the
+    following subsections.
   </para>
 
   <para>
@@ -342,6 +371,25 @@
     ligne. Dans le cas des commandes <command>SELECT FOR UPDATE</command> et
     <command>SELECT FOR SHARE</command>, cela signifie que la version mise à
     jour de la ligne est verrouillée et renvoyée au client.
+   </para>
+
+   <para>
+    <command>INSERT</command> with an <literal>ON CONFLICT DO UPDATE</literal> clause
+    behaves similarly. In Read Committed mode, each row proposed for insertion
+    will either insert or update. Unless there are unrelated errors, one of
+    those two outcomes is guaranteed.  If a conflict originates in another
+    transaction whose effects are not yet visible to the <command>INSERT
+    </command>, the <command>UPDATE</command> clause will affect that row,
+    even though possibly <emphasis>no</emphasis> version of that row is
+    conventionally visible to the command.
+   </para>
+
+   <para>
+    <command>INSERT</command> with an <literal>ON CONFLICT DO
+    NOTHING</literal> clause may have insertion not proceed for a row due to
+    the outcome of another transaction whose effects are not visible
+    to the <command>INSERT</command> snapshot.  Again, this is only
+    the case in Read Committed mode.
    </para>
 
    <para>
@@ -925,7 +973,8 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
       </para>
 
       <para>
-       Acquis par <command>REFRESH MATERIALIZED VIEW CONCURRENTLY</command>.
+         Acquired by <command>CREATE TRIGGER</command> and many forms of
+         <command>ALTER TABLE</command> (see <xref linkend="sql-altertable"/>).
       </para>
      </listitem>
     </varlistentry>
@@ -947,8 +996,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
       </para>
 
       <para>
-       Ce mode de verrouillage n'est acquis automatiquement sur
-       des tables par aucune commande <productname>PostgreSQL</productname>.
+         Acquired by <command>REFRESH MATERIALIZED VIEW CONCURRENTLY</command>.
       </para>
      </listitem>
     </varlistentry>
@@ -970,11 +1018,13 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
       </para>
 
       <para>
-       Acquis par les commandes <command>DROP
-        TABLE</command>, <command>TRUNCATE</command>, <command>REINDEX</command>,
-       <command>CLUSTER</command> et <command>VACUUM FULL</command>.
+       Acquis par les commandes <command>DROP TABLE</command>,
+         <command>TRUNCATE</command>, <command>REINDEX</command>,
+         <command>CLUSTER</command>, <command>VACUUM FULL</command>,
+         <command>REFRESH MATERIALIZED VIEW</command> (sans l'option
+         <option>CONCURRENTLY</option>).
        De nombreuses forme d'<command>ALTER TABLE</command> acquièrent également
-       un verrou de ce niveau (voir <xref linkend="sql-altertable"/>).
+       un verrou de ce niveau.
        C'est aussi le mode de verrou par défaut des instructions <command>LOCK
         TABLE</command> qui ne spécifient pas explicitement de mode de verrouillage.
       </para>

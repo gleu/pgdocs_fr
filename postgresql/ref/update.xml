@@ -27,7 +27,9 @@
   <synopsis>[ WITH [ RECURSIVE ] <replaceable class="parameter">requête_with</replaceable> [, ...] ]
 UPDATE [ ONLY ] <replaceable class="PARAMETER">nom_table</replaceable> [ * ] [ [ AS ] <replaceable class="parameter">alias</replaceable> ]
     SET { <replaceable class="parameter">nom_colonne</replaceable> = { <replaceable class="parameter">expression</replaceable> | DEFAULT } |
-          ( <replaceable class="parameter">nom_colonne</replaceable> [, ...] ) = ( { <replaceable class="parameter">expression</replaceable> | DEFAULT } [, ...] ) } [, ...]
+          ( <replaceable class="PARAMETER">nom_colonne</replaceable> [, ...] ) = ( { <replaceable class="PARAMETER">expression</replaceable> | DEFAULT } [, ...] ) |
+          ( <replaceable class="PARAMETER">nom_colonne</replaceable> [, ...] ) = ( <replaceable class="PARAMETER">sous-SELECT</replaceable> )
+        } [, ...]
     [ FROM <replaceable class="parameter">liste_from</replaceable> ]
     [ WHERE <replaceable class="parameter">condition</replaceable> | WHERE CURRENT OF <replaceable class="parameter">nom_curseur</replaceable> ]
     [ RETURNING * | <replaceable class="parameter">expression_sortie</replaceable> [ [ AS ] <replaceable class="parameter">nom_sortie</replaceable> ] [, ...] ]
@@ -145,6 +147,21 @@ UPDATE [ ONLY ] <replaceable class="PARAMETER">nom_table</replaceable> [ * ] [ [
      <para>
       Réinitialise la colonne à sa valeur par défaut (qui vaut NULL si aucune
       expression par défaut ne lui a été affectée).
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="PARAMETER">sous-SELECT</replaceable></term>
+    <listitem>
+     <para>
+      A <literal>SELECT</literal> sub-query that produces as many output columns
+      as are listed in the parenthesized column list preceding it.  The
+      sub-query must yield no more than one row when executed.  If it
+      yields one row, its column values are assigned to the target columns;
+      if it yields no rows, NULL values are assigned to the target columns.
+      The sub-query can refer to old values of the current row of the table
+      being updated.
      </para>
     </listitem>
    </varlistentry>
@@ -324,6 +341,38 @@ UPDATE [ ONLY ] <replaceable class="PARAMETER">nom_table</replaceable> [ * ] [ [
   </para>
 
   <para>
+   Update contact names in an accounts table to match the currently assigned
+   salesmen:
+<programlisting>
+UPDATE accounts SET (contact_first_name, contact_last_name) =
+    (SELECT first_name, last_name FROM salesmen
+     WHERE salesmen.id = accounts.sales_id);
+</programlisting>
+   A similar result could be accomplished with a join:
+<programlisting>
+UPDATE accounts SET contact_first_name = first_name,
+                    contact_last_name = last_name
+  FROM salesmen WHERE salesmen.id = accounts.sales_id;
+</programlisting>
+   However, the second query may give unexpected results
+   if <structname>salesmen</structname>.<structfield>id</structfield> is not a unique key, whereas
+   the first query is guaranteed to raise an error if there are multiple
+   <structfield>id</structfield> matches.  Also, if there is no match for a particular
+   <structname>accounts</structname>.<structfield>sales_id</structfield> entry, the first query
+   will set the corresponding name fields to NULL, whereas the second query
+   will not update that row at all.
+  </para>
+
+  <para>
+   Update statistics in a summary table to match the current data:
+<programlisting>
+UPDATE summary s SET (sum_x, sum_y, avg_x, avg_y) =
+    (SELECT sum(x), sum(y), avg(x), avg(y) FROM data d
+     WHERE d.group_id = s.group_id);
+</programlisting>
+  </para>
+
+  <para>
    Tenter d'insérer un nouvel élément dans le stock avec sa quantité. Si
    l'élément existe déjà, mettre à jour le total du stock de l'élément.
    Les points de sauvegarde sont utilisés pour ne pas avoir à annuler
@@ -361,24 +410,22 @@ UPDATE films SET genre = 'Dramatic' WHERE CURRENT OF c_films;
   </para>
 
   <para>
-   D'après le standard, la syntaxe de la liste de colonnes permet qu'une liste
-   de colonnes soit affectée à une expression de ligne comme une
-   sous-sélection&nbsp;:
-   <programlisting>UPDATE comptes SET (nom_contact, prenom_contact) =
-    (SELECT nom, prenom FROM commerciaux
-     WHERE commerciaux.id = comptes.vendeur_id);
-   </programlisting>
-   Ceci n'est pas encore implémenté &mdash; la source doit être une liste
-   d'expressions indépendantes.
-  </para>
-
-  <para>
    D'autres systèmes de bases de données offrent l'option
    <literal>FROM</literal> dans laquelle la table cible est supposée être à nouveau
    indiquée dans le <literal>FROM</literal>.
    <productname>PostgreSQL</productname> n'interprète pas la clause <literal>FROM</literal>
    ainsi. Il est important d'en tenir compte lors du portage d'applications qui
    utilisent cette extension.
+  </para>
+
+  <para>
+   According to the standard, the source value for a parenthesized sub-list of
+   column names can be any row-valued expression yielding the correct number
+   of columns.  <productname>PostgreSQL</productname> only allows the source
+   value to be a parenthesized list of expressions (a row constructor) or a
+   sub-<literal>SELECT</literal>.  An individual column's updated value can be
+   specified as <literal>DEFAULT</literal> in the row-constructor case, but not
+   inside a sub-<literal>SELECT</literal>.
   </para>
  </refsect1>
 </refentry>

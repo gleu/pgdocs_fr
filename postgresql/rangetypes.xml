@@ -1,5 +1,4 @@
-<!-- doc/src/sgml/rangetypes.sgml -->
-
+<?xml version="1.0" encoding="UTF-8"?>
 <sect1 id="rangetypes">
  <title>Types intervalle de valeurs</title>
 
@@ -85,7 +84,7 @@ INSERT INTO reservation VALUES
   ( 1108, '[2010-01-01 14:30, 2010-01-01 15:30)' );
 
 -- Inclusion
-SELECT int4range(10, 20) @> 3;
+SELECT int4range(10, 20) @&gt; 3;
 
 -- Chevauchement
 SELECT numrange(11.1, 22.2) &amp;&amp; numrange(20.0, 30.0);
@@ -369,6 +368,12 @@ SELECT '[1.234, 5.678]'::floatrange;
   </para>
 
   <para>
+   Defining your own range type also allows you to specify a different
+   subtype B-tree operator class or collation to use, so as to change the sort
+   ordering that determines which values fall into a given range.
+  </para>
+
+  <para>
    Si l'on considère que le sous-type est discret plutôt que continu, la
    commande <command>CREATE TYPE</command> devrait spécifier une fonction
    <literal>canonique</literal>.
@@ -391,30 +396,39 @@ SELECT '[1.234, 5.678]'::floatrange;
   </para>
 
   <para>
-   Définir votre propre type intervalle de valeurs vous permet également de
-   spécifier une classe d'opérateur B-tree ou un collationnement différent à
-   utiliser, pour pouvoir changer l'ordre de tri qui détermine les valeurs qui
-   sont dans un intervalle donné.
+   In addition, any range type that is meant to be used with GiST or SP-GiST
+   indexes should define a subtype difference, or <literal>subtype_diff</literal>,
+   function.  (The index will still work without <literal>subtype_diff</literal>,
+   but it is likely to be considerably less efficient than if a difference
+   function is provided.)  The subtype difference function takes two input
+   values of the subtype, and returns their difference
+   (i.e., <replaceable>X</replaceable> minus <replaceable>Y</replaceable>) represented as
+   a <type>float8</type> value.  In our example above, the
+   function <function>float8mi</function> that underlies the regular <type>float8</type>
+   minus operator can be used; but for any other subtype, some type
+   conversion would be necessary.  Some creative thought about how to
+   represent differences as numbers might be needed, too.  To the greatest
+   extent possible, the <literal>subtype_diff</literal> function should agree with
+   the sort ordering implied by the selected operator class and collation;
+   that is, its result should be positive whenever its first argument is
+   greater than its second according to the sort ordering.
   </para>
 
   <para>
-   De plus, chaque type intervalle de valeurs destiné à être utilisé avec des index GiST
-   ou SP-GiST
-   devrait définir une fonction de différence de sous-type, ou <literal>subtype_diff
-   </literal>. (L'index continuera à fonctionner sans <literal>subtype_diff</literal>,
-   mais il est très probable qu'il sera vraiment moins efficace que si une fonction
-   de différence est fournie.) La fonction de différence de sous-type prend en entrée
-   deux valeurs du sous-type, et retourne leur différence (c'est-à-dire
-   <replaceable>X</replaceable> moins <replaceable>Y</replaceable>) représenté comme une valeur <type>float8</type>.
-   Dans notre exemple ci-dessus, la fonction sous-jacente à l'opérateur habituel de soustraction
-   du type <type>float8</type> peut être utilisée; mais pour n'importe quel autre
-   sous-type, des conversions seraient nécessaires. Des idées créatives sur comment
-   représenter des différences sous forme de nombres peuvent être également nécessaires.
-   Pour être le plus complet, la fonction <literal>subtype_diff</literal> devrait être
-   en accord avec l'ordre de tri impliqué par l'opérateur de classe et le collationnement
-   sélectionnés&nbsp;; pour le dire autrement, son résultat devrait être positif chaque
-   fois que son premier argument est plus grand que son second d'après le sens du tri.
+   A less-oversimplified example of a <literal>subtype_diff</literal> function is:
   </para>
+
+<programlisting>
+CREATE FUNCTION time_subtype_diff(x time, y time) RETURNS float8 AS
+'SELECT EXTRACT(EPOCH FROM (x - y))' LANGUAGE sql STRICT IMMUTABLE;
+
+CREATE TYPE timerange AS RANGE (
+    subtype = time,
+    subtype_diff = time_subtype_diff
+);
+
+SELECT '[11:10, 23:00]'::timerange;
+</programlisting>
 
   <para>
    Voir <xref linkend="sql-createtype"/> pour plus d'informations sur la façon
@@ -434,7 +448,7 @@ SELECT '[1.234, 5.678]'::floatrange;
    Des index GiST et SP-GiST peuvent être créés pour des colonnes de table de type
    intervalle de valeurs. Par exemple, pour créer un index GiST&nbsp;:
    <programlisting>
-CREATE INDEX reservation_idx ON reservation USING gist (during);
+CREATE INDEX reservation_idx ON reservation USING GIST (during);
    </programlisting>
    Un index GiST ou SP-GiST peut accélérer les requêtes impliquant ces opérateurs
    d'intervalle de valeurs&nbsp;:
@@ -484,7 +498,7 @@ CREATE INDEX reservation_idx ON reservation USING gist (during);
    <programlisting>
 CREATE TABLE reservation (
     during tsrange,
-    EXCLUDE USING gist (during WITH &amp;&amp;)
+    EXCLUDE USING GIST (during WITH &amp;&amp;)
 );
    </programlisting>
 
@@ -519,7 +533,7 @@ CREATE TABLE room_reservation
 (
   room TEXT,
   during TSRANGE,
-  EXCLUDE USING gist (room WITH =, during WITH &amp;&amp;)
+  EXCLUDE USING GIST (room WITH =, during WITH &amp;&amp;)
 );
 
 INSERT INTO room_reservation VALUES

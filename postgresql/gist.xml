@@ -112,6 +112,7 @@
        <literal>~=</literal>
       </entry>
       <entry>
+       <literal>&lt;-&gt;</literal>
       </entry>
      </row>
      <row>
@@ -170,6 +171,7 @@
        <literal>~=</literal>
       </entry>
       <entry>
+       <literal>&lt;-&gt;</literal>
       </entry>
      </row>
      <row>
@@ -219,7 +221,7 @@
    <type>cidr</type>. Pour l'utiliser, mentionnez le nom de la classe dans la
    commande <command>CREATE INDEX</command>, par exemple
    <programlisting>
-CREATE INDEX ON ma_table USING gist (ma_colonne_inet inet_ops);
+CREATE INDEX ON ma_table USING GIST (ma_colonne_inet inet_ops);
    </programlisting>
   </para>
 
@@ -282,7 +284,7 @@ CREATE INDEX ON ma_table USING gist (ma_colonne_inet inet_ops);
 
   <para>
    Une classe d'opérateur d'index <acronym>GiST</acronym> doit fournir sept
-   méthodes, et une huitième optionnelle. La précision de l'index est assurée par l'implantation des
+   méthodes, et deux supplémentaires optionnelles. La précision de l'index est assurée par l'implantation des
    méthodes <function>same</function>, <function>consistent</function>
    et <function>union</function> alors que l'efficacité (taille et rapidité)
    de l'index dépendra des méthodes <function>penalty</function> et
@@ -300,7 +302,9 @@ CREATE INDEX ON ma_table USING gist (ma_colonne_inet inet_ops);
    La huitième méthode, optionnelle, est <function>distance</function>, qui
    est nécessaire si la classe d'opérateur souhaite supporter les parcours
    ordonnées (intéressant dans le cadre des recherches du voisin-le-plus-proche,
-   <foreignphrase>nearest-neighbor</foreignphrase>).
+   <foreignphrase>nearest-neighbor</foreignphrase>). The optional ninth method
+   <function>fetch</function> is needed if the operator class wishes to
+   support index-only scans.
   </para>
 
   <variablelist>
@@ -347,7 +351,6 @@ LANGUAGE C STRICT;
       squelette&nbsp;:
 
       <programlisting>
-Datum       my_consistent(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(my_consistent);
 
 Datum
@@ -413,7 +416,6 @@ LANGUAGE C STRICT;
       squelette&nbsp;:
 
       <programlisting>
-Datum       my_union(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(my_union);
 
 Datum
@@ -490,7 +492,6 @@ LANGUAGE C STRICT;
       squelette&nbsp;:
 
       <programlisting>
-Datum       my_compress(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(my_compress);
 
 Datum
@@ -526,12 +527,6 @@ my_compress(PG_FUNCTION_ARGS)
       spécifique que vous essayez d'obtenir pour compresser les n&oelig;uds
       finaux.
      </para>
-
-     <para>
-      Vous pourriez aussi avoir besoin de faire attention à la compression des
-      valeurs <literal>NULL</literal>, en enregistrant par exemple
-      <literal>(Datum) 0</literal> comme le fait <literal>gist_circle_compress</literal>.
-     </para>
     </listitem>
    </varlistentry>
 
@@ -540,8 +535,8 @@ my_compress(PG_FUNCTION_ARGS)
     <listitem>
      <para>
       L'inverse de la fonction <function>compress</function>. Convertit la
-      représentation de l'élément de donnée en un format manipulable par la base
-      de données.
+      représentation de l'élément de donnée en un format manipulable par les
+      autre sméthodes GiST dans la classe d'opérateur.
      </para>
 
      <para>
@@ -559,7 +554,6 @@ LANGUAGE C STRICT;
       squelette&nbsp;:
 
       <programlisting>
-Datum       my_decompress(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(my_decompress);
 
 Datum
@@ -603,7 +597,6 @@ LANGUAGE C STRICT;  -- in some cases penalty functions need not be strict
       squelette&nbsp;:
 
       <programlisting>
-Datum       my_penalty(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(my_penalty);
 
 Datum
@@ -655,7 +648,6 @@ LANGUAGE C STRICT;
       squelette&nbsp;:
 
       <programlisting>
-Datum       my_picksplit(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(my_picksplit);
 
 Datum
@@ -764,7 +756,6 @@ LANGUAGE C STRICT;
       squelette&nbsp;:
 
       <programlisting>
-Datum       my_same(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(my_same);
 
 Datum
@@ -819,7 +810,6 @@ LANGUAGE C STRICT;
       squelette&nbsp;:
 
       <programlisting>
-Datum       my_distance(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(my_distance);
 
 Datum
@@ -829,6 +819,7 @@ my_distance(PG_FUNCTION_ARGS)
     data_type  *query = PG_GETARG_DATA_TYPE_P(1);
     StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
     /* Oid subtype = PG_GETARG_OID(3); */
+    /* bool *recheck = (bool *) PG_GETARG_POINTER(4); */
     data_type  *key = DatumGetDataType(entry-&gt;key);
     double      retval;
 
@@ -841,25 +832,104 @@ my_distance(PG_FUNCTION_ARGS)
       </programlisting>
 
       Les arguments de la fonction <function>distance</function> sont
-      identiques aux arguments de la fonction <function>consistent</function>,
-      sauf qu'il n'y a pas de drapeau <quote>recheck</quote>. La distance vers
-      une entrée d'index de type feuille doit toujours être déterminée
-      exactement car il n'existe pas de moyen pour ré-ordonner les lignes
-      une fois qu'elles ont été renvoyées. Une approximation est autorisée
-      lors de la détermination de la distance vers un nœud de l'arbre interne,
-      à partir du moment où le résultat n'est jamais plus grand que la
-      distance réelle vers les enfants. Du coup, la distance vers une boîte
-      englobante est habituellement suffisante dans les applications de
-      géométrie. La valeur du résultat peut être une valeur
-      <type>float8</type> finie. (l'infinité et sa valeur négative sont
-      utilisée en interne pour gérer des cas comme les valeurs NULL, donc il
-      n'est pas recommand que les fonctions <function>distance</function>
-      renvoient ces valeurs.)
+      identiques aux arguments de la fonction <function>consistent</function>.
+      </para>
+
+      <para>
+       Some approximation is allowed when determining the distance, so long
+       as the result is never greater than the entry's actual distance. Thus,
+       for example, distance to a bounding box is usually sufficient in
+       geometric applications.  For an internal tree node, the distance
+       returned must not be greater than the distance to any of the child
+       nodes. If the returned distance is not exact, the function must set
+       <literal>*recheck</literal> to true. (This is not necessary for internal tree
+       nodes; for them, the calculation is always assumed to be inexact.) In
+       this case the executor will calculate the accurate distance after
+       fetching the tuple from the heap, and reorder the tuples if necessary.
+      </para>
+
+      <para>
+       If the distance function returns <literal>*recheck = true</literal> for any
+       leaf node, the original ordering operator's return type must
+       be <type>float8</type> or <type>float4</type>, and the distance function's
+       result values must be comparable to those of the original ordering
+       operator, since the executor will sort using both distance function
+       results and recalculated ordering-operator results.  Otherwise, the
+       distance function's result values can be any finite <type>float8</type>
+       values, so long as the relative order of the result values matches the
+       order returned by the ordering operator.  (Infinity and minus infinity
+       are used internally to handle cases such as nulls, so it is not
+       recommended that <function>distance</function> functions return these values.)
      </para>
 
     </listitem>
    </varlistentry>
 
+    <varlistentry>
+     <term><function>fetch</function></term>
+     <listitem>
+      <para>
+       Converts the compressed index representation of the data item into the
+       original data type, for index-only scans. The returned data must be an
+       exact, non-lossy copy of the originally indexed value.
+      </para>
+
+      <para>
+        The <acronym>SQL</acronym> declaration of the function must look like this:
+
+<programlisting>
+CREATE OR REPLACE FUNCTION my_fetch(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+</programlisting>
+
+        The argument is a pointer to a <structname>GISTENTRY</structname> struct. On
+        entry, its 'key' field contains a non-NULL leaf datum in its
+        compressed form. The return value is another <structname>GISTENTRY</structname>
+        struct, whose 'key' field contains the same datum in the original,
+        uncompressed form. If the opclass' compress function does nothing for
+        leaf entries, the fetch method can return the argument as is.
+       </para>
+
+       <para>
+        The matching code in the C module could then follow this skeleton:
+
+<programlisting>
+PG_FUNCTION_INFO_V1(my_fetch);
+
+Datum
+my_fetch(PG_FUNCTION_ARGS)
+{
+    GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+    input_data_type *in = DatumGetP(entry->key);
+    fetched_data_type *fetched_data;
+    GISTENTRY  *retval;
+
+    retval = palloc(sizeof(GISTENTRY));
+    fetched_data = palloc(sizeof(fetched_data_type));
+
+    /*
+     * Convert 'fetched_data' into the a Datum of the original datatype.
+     */
+
+    /* fill *retval from fetch_data. */
+    gistentryinit(*retval, PointerGetDatum(converted_datum),
+                  entry->rel, entry->page, entry->offset, FALSE);
+
+    PG_RETURN_POINTER(retval);
+}
+</programlisting>
+      </para>
+
+      <para>
+       If the compress method is lossy for leaf entries, the operator class
+       cannot support index-only scans, and must not define a 'fetch'
+       function.
+      </para>
+
+     </listitem>
+    </varlistentry>
   </variablelist>
 
   <para>

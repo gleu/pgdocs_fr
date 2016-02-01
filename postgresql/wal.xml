@@ -538,10 +538,10 @@
   <para>
    Le processus checkpointer lance automatiquement un point de
    contrôle de temps en temps&nbsp;: tous les <xref
-   linkend="guc-checkpoint-segments"/> journaux de transaction ou dès que <xref
-   linkend="guc-checkpoint-timeout"/> secondes se sont
-   écoulées.  Les paramètres par défaut sont respectivement de trois journaux
-   et de 300 secondes (5 minutes).
+   linkend="guc-checkpoint-timeout"/> seconds, or if
+   <xref linkend="guc-max-wal-size"/> is about to be exceeded,
+   whichever comes first.
+   The default settings are 5 minutes and 1 GB, respectively.
    Si aucun enregistrement WAL n'a été écrit depuis le dernier checkpoint, les
    nouveaux checkpoint ne seront pas effectués même si la durée
    <varname>checkpoint_timeout</varname> est dépassée.
@@ -555,8 +555,8 @@
   </para>
 
   <para>
-   La réduction de <varname>checkpoint_segments</varname> et/ou
-   <varname>checkpoint_timeout</varname> implique
+   La réduction de <varname>checkpoint_timeout</varname> et/ou
+   <varname>max_wal_size</varname> implique
    des points de contrôle plus fréquents.  Cela permet une récupération
    plus rapide après défaillance puisqu'il y a moins d'écritures à
    synchroniser. Cependant, il faut équilibrer cela avec
@@ -585,13 +585,13 @@
    linkend="guc-checkpoint-warning"/>. Si les points de contrôle arrivent plus
    rapidement que <varname>checkpoint_warning</varname> secondes, un message
    est affiché dans les journaux applicatifs du serveur recommandant d'accroître
-   <varname>checkpoint_segments</varname>. Une apparition occasionnelle d'un
+   <varname>max_wal_size</varname>. Une apparition occasionnelle d'un
    message ne doit pas vous alarmer mais, s'il apparaît souvent, alors les
    paramètres de contrôle devraient être augmentés. Les opérations en masse,
    comme les transferts importants de données via <command>COPY</command>,
    pourraient être la cause
    de l'apparition d'un tel nombre de messages d'avertissements si
-   vous n'avez pas configuré <varname>checkpoint_segments</varname> avec une valeur
+   vous n'avez pas configuré <varname>max_wal_size</varname> avec une valeur
    suffisamment haute.
   </para>
 
@@ -603,9 +603,8 @@
    est donné comme une fraction de l'intervalle des points de vérification.
    Le taux d'entrées/sorties est ajusté pour que le point de vérification
    se termine quand la fraction donnée de
-   <varname>checkpoint_segments</varname> journaux de transaction a été
-   consommée ou quand la fraction donné de
-   <varname>checkpoint_timeout</varname> secondes s'est écoulée (la
+   <varname>checkpoint_timeout</varname> secondes s'est écoulée ou quand la
+   fraction donnée de <varname>max_wal_size</varname> a été consommée (la
    condition que se verra vérifiée la première). Avec une valeur par
    défaut de 0,5, <productname>PostgreSQL</productname> peut s'attendre à
    terminer chaque point de vérification en moitié moins de temps qu'il ne
@@ -627,20 +626,35 @@
   </para>
 
   <para>
-   Il y aura toujours au moins un journal de transaction et normalement
-   pas plus de fichiers que
-   (2 + <varname>checkpoint_completion_target</varname>) * <varname>checkpoint_segments</varname> + 1
-   ou <varname>checkpoint_segments</varname> + <xref linkend="guc-wal-keep-segments"/> + 1.
-   Chaque journal fait normalement 16&nbsp;Mo (bien
-   que cette taille puisse être modifiée lors de la compilation du serveur).
-   Vous pouvez utiliser cela pour estimer l'espace disque nécessaire au
-   stockage des journaux de transaction. D'habitude, quand les vieux journaux
-   ne sont plus nécessaires, ils sont recyclés
-   (renommés pour devenir les prochains segments dans une séquence
-   numérotée).  S'il y a plus de 3 * <varname>checkpoint_segments</varname> + 1
-   fichiers à cause d'un pic temporaire du taux d'écriture des journaux,
-   ceux inutilisés seront effacés au lieu d'être
-   recyclés jusqu'à ce que le système soit en-dessous de cette limite.
+   The number of WAL segment files in <filename>pg_xlog</filename> directory depends on
+   <varname>min_wal_size</varname>, <varname>max_wal_size</varname> and
+   the amount of WAL generated in previous checkpoint cycles. When old log
+   segment files are no longer needed, they are removed or recycled (that is,
+   renamed to become future segments in the numbered sequence). If, due to a
+   short-term peak of log output rate, <varname>max_wal_size</varname> is
+   exceeded, the unneeded segment files will be removed until the system
+   gets back under this limit. Below that limit, the system recycles enough
+   WAL files to cover the estimated need until the next checkpoint, and
+   removes the rest. The estimate is based on a moving average of the number
+   of WAL files used in previous checkpoint cycles. The moving average
+   is increased immediately if the actual usage exceeds the estimate, so it
+   accommodates peak usage rather average usage to some extent.
+   <varname>min_wal_size</varname> puts a minimum on the amount of WAL files
+   recycled for future usage; that much WAL is always recycled for future use,
+   even if the system is idle and the WAL usage estimate suggests that little
+   WAL is needed.
+  </para>
+
+  <para>
+   Independently of <varname>max_wal_size</varname>,
+   <xref linkend="guc-wal-keep-segments"/> + 1 most recent WAL files are
+   kept at all times. Also, if WAL archiving is used, old segments can not be
+   removed or recycled until they are archived. If WAL archiving cannot keep up
+   with the pace that WAL is generated, or if <varname>archive_command</varname>
+   fails repeatedly, old WAL files will accumulate in <filename>pg_xlog</filename>
+   until the situation is resolved. A slow or failed standby server that
+   uses a replication slot will have the same effect (see
+   <xref linkend="streaming-replication-slots"/>).
   </para>
 
   <para>
@@ -658,23 +672,25 @@
    checkpoint.
    Un restartpoint est déclenché lorsqu'un enregistement de checkpoint est
    atteint si un minimum de <varname>checkpoint_timeout</varname> secondes se
-   sont écoulées depuis le dernier restartpoint. En mode standby, un
-   restartpoint est aussi déclenché si un minimum de
-   <varname>checkpoint_segments</varname> de journaux de transactions ont été
-   rejoués depuis le dernier restartpoint.
+   sont écoulées depuis le dernier restartpoint, or if WAL size is about to exceed
+   <varname>max_wal_size</varname>. However, because of limitations on when a
+   restartpoint can be performed, <varname>max_wal_size</varname> is often exceeded
+   during recovery, by up to one checkpoint cycle's worth of WAL.
+   (<varname>max_wal_size</varname> is never a hard limit anyway, so you should
+   always leave plenty of headroom to avoid running out of disk space.)
   </para>
 
   <para>
    Il existe deux fonctions <acronym>WAL</acronym> internes couramment
    utilisées&nbsp;:
-   <function>XLogInsert</function> et <function>XLogFlush</function>.
-   <function>XLogInsert</function> est utilisée pour placer une
+   <function>XLogInsertRecord</function> et <function>XLogFlush</function>.
+   <function>XLogInsertRecord</function> est utilisée pour placer une
    nouvelle entrée à l'intérieur des tampons <acronym>WAL</acronym> en mémoire
    partagée. S'il n'y a plus
-   d'espace pour une nouvelle entrée, <function>XLogInsert</function>
+   d'espace pour une nouvelle entrée, <function>XLogInsertRecord</function>
    devra écrire (autrement dit, déplacer dans le cache du noyau) quelques
    tampons <acronym>WAL</acronym> remplis.  Ceci n'est pas désirable parce que
-   <function>XLogInsert</function> est utilisée lors de chaque
+   <function>XLogInsertRecord</function> est utilisée lors de chaque
    modification bas niveau de la base (par exemple, lors de l'insertion d'une
    ligne) quand un verrou exclusif est posé sur des pages de données
    affectées. À cause de ce verrou, l'opération doit être aussi rapide
@@ -780,7 +796,7 @@
    Activer le paramètre de configuration <xref linkend="guc-wal-debug"/> (à
    supposer que <productname>PostgreSQL</productname> ait été compilé avec le
    support de ce paramètre) permet d'enregistrer chaque appel
-   <acronym>WAL</acronym> à <function>XLogInsert</function> et
+   <acronym>WAL</acronym> à <function>XLogInsertRecord</function> et
    <function>XLogFlush</function> dans les journaux applicatifs du serveur.
    Cette option
    pourrait être remplacée par un mécanisme plus général dans le futur.
@@ -808,7 +824,7 @@
    (cette taille pouvant être modifiée en précisant une valeur pour l'option
    <option>--with-wal-blocksize</option> de configure). Les en-têtes de
    l'entrée du journal sont décrites dans
-   <filename>access/xlog.h</filename>&nbsp;; le contenu de l'entrée dépend
+   <filename>access/xlogrecord.h</filename>&nbsp;; le contenu de l'entrée dépend
    du type de l'événement qui est enregistré.  Les fichiers
    sont nommés suivant un nombre qui est toujours incrémenté et qui
    commence à <filename>000000010000000000000000</filename>.  Les nombres ne

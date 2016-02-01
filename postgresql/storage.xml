@@ -76,6 +76,11 @@
      </row>
 
      <row>
+      <entry><filename>pg_commit_ts</filename></entry>
+      <entry>Subdirectory containing transaction commit timestamp data</entry>
+    </row>
+
+    <row>
       <entry><filename>pg_clog</filename></entry>
       <entry>Sous-répertoire contenant les données d'état de validation des
        transactions</entry>
@@ -331,6 +336,8 @@
    impact sur le code du serveur. Cette technique est connu sous l'acronyme
    affectueux de <acronym>TOAST</acronym> (ou <quote>the best thing since sliced
     bread</quote>).
+The <acronym>TOAST</acronym> infrastructure is also used to improve handling of
+large data values in-memory.
   </para>
 
   <para>
@@ -338,14 +345,19 @@
    pas nécessaire d'imposer cette surcharge sur les types de données qui ne
    produisent pas de gros volumes. Pour supporter
    <acronym>TOAST</acronym>, un type de données doit avoir une représentation
-   (<firstterm>varlena</firstterm>) à longueur variable, dans laquelle les 32 premiers bits
-   contiennent la longueur totale de la valeur en octets (ceci incluant la
-   longueur elle-même). <acronym>TOAST</acronym> n'a aucune contrainte supplémentaire
-   sur la représentation. Toutes les fonctions niveau C qui gèrent un type données
-   supportant <acronym>TOAST</acronym> doivent faire attention à gérer les valeurs en
-   entrée <acronym>TOAST</acronym>ées. (Ceci se fait normalement en appelant
-   <function>PG_DETOAST_DATUM</function> avant de faire quoi que ce soit avec une valeur
-   en entrée; mais dans certains cas, des approches plus efficaces sont possibles.)
+   (<firstterm>varlena</firstterm>) à longueur variable, , in which, ordinarily, the first
+four-byte word of any stored value contains the total length of the value in
+bytes (including itself).  <acronym>TOAST</acronym> does not constrain the rest
+of the data type's representation.  The special representations collectively
+called <firstterm><acronym>TOAST</acronym>ed values</firstterm> work by modifying or
+reinterpreting this initial length word.  Therefore, the C-level functions
+supporting a <acronym>TOAST</acronym>-able data type must be careful about how they
+handle potentially <acronym>TOAST</acronym>ed input values: an input might not
+actually consist of a four-byte length word and contents until after it's
+been <firstterm>detoasted</firstterm>.  (This is normally done by invoking
+<function>PG_DETOAST_DATUM</function> before doing anything with an input value,
+but in some cases more efficient approaches are possible.
+See <xref linkend="xtypes-toast"/> for more detail.)
   </para>
 
   <para>
@@ -359,34 +371,62 @@
    la taille total du datum (incluant ce mot) en octets. Quand le bit de poids
    fort (ou de poids faible) est à un, la valeur a un en-tête de seulement
    un octet alors qu'un en-tête normal en fait quatre. Les bits restants
-   donnent la taille total du datum (incluant ce mot) en octets. Il reste un
-   cas spécial&nbsp;: si les bits restants sont tous à zéro (ce qui est
-   impossible étant donné que le mot indiquant la longueur est inclus dans
-   la taille), la valeur est un pointeur vers une donnée stockée dans une table
-   TOAST séparée (la taille d'un pointeur TOAST est indiquée dans le second
-   octet du datum). Les valeurs dont l'en-tête fait un seul octet ne sont pas
-   alignées sur une limite particulière. Enfin, quand le bit de poids fort
-   (ou de poids faible) est supprimé mais que le bit adjacent vaut un, le
-   contenu du datum est compressé et doit être décompressé avant utilisation.
-   Dans ce cas, les bits restants du mot contenant la longueur indiquent la
-   taille totale du datum compressé, pas celles des données au départ. Notez
-   que la compression est aussi possible pour les données de la table TOAST
-   mais l'en-tête varlena n'indique pas si c'est le cas &mdash; le contenu
-   du pointeur TOAST le précise.
+   donnent la taille total du datum (incluant ce mot) en octets. This
+   alternative supports space-efficient storage of values shorter than 127
+   bytes, while still allowing the data type to grow to 1 GB at need.  Values
+   with single-byte headers aren't aligned on any particular boundary, whereas
+   values with four-byte headers are aligned on at least a four-byte boundary;
+   this omission of alignment padding provides additional space savings that
+   is significant compared to short values. As a special case, if the
+   remaining bits of a single-byte header are all zero (which would be
+   impossible for a self-inclusive length), the value is a pointer to out-of-
+   line data, with several possible alternatives as described below.  The type
+   and size of such a <firstterm>TOAST pointer</firstterm> are determined by a
+   code stored in the second byte of the datum. Lastly, when the highest-order
+   or lowest-order bit is clear but the adjacent bit is set, the content of
+   the datum has been compressed and must be decompressed before use.  In this
+   case the remaining bits of the four-byte length word give the total size of
+   the compressed datum, pas celles des données au départ. Notez que la
+   compression est aussi possible pour les données de la table TOAST mais l
+   'en-tête varlena n'indique pas si c'est le cas &mdash; le contenu du
+   pointeur <acronym>TOAST</acronym> le précise.
   </para>
 
   <para>
-   Si une des colonnes d'une table est <acronym>TOAST</acronym>-able, la table disposera
-   d'une table <acronym>TOAST</acronym> associé, dont l'OID est stockée dans l'entrée
-   <structname>pg_class</structname>.<structfield>reltoastrelid</structfield> de la table. Les valeurs
-   <acronym>TOAST</acronym>ées hors-ligne sont conservées dans la table <acronym>TOAST</acronym>
-   comme décrit avec plus de détails ci-dessous.
+   As mentioned, there are multiple types of <acronym>TOAST</acronym> pointer
+   datums. The oldest and most common type is a pointer to out-of-line data
+   stored in a <firstterm><acronym>TOAST</acronym> table</firstterm> that is
+   separate from, but associated with, the table containing the
+   <acronym>TOAST</acronym> pointer datum itself.  These <firstterm>on-disk</firstterm>
+   pointer datums are created by the <acronym>TOAST</acronym> management code (in
+   <filename>access/heap/tuptoaster.c</filename>) when a tuple to be stored on disk is
+   too large to be stored as-is. Further details appear in <xref linkend
+   ="storage-toast-ondisk"/>. Alternatively, a <acronym>TOAST</acronym>
+   pointer datum can contain a pointer to out-of-line data that appears
+   elsewhere in memory.  Such datums are necessarily short-lived, and will
+   never appear on-disk, but they are very useful for avoiding copying and
+   redundant processing of large data values. Further details appear in <xref
+   linkend="storage-toast-inmemory"/>.
   </para>
 
   <para>
-   La technique de compression utilisée est un simple et rapide membre de la
-   famille des techniques de compression LZ. Voir <filename>src/backend/utils/adt/pg_lzcompress.c</filename> pour les
+   La technique de compression utilisée for either in-line or out-of-line
+   compressed data est un simple et rapide membre de la famille des techniques
+   de compression LZ. Voir
+   <filename>src/common/pg_lzcompress.c</filename> pour les
    détails.
+</para>
+
+<sect2 id="storage-toast-ondisk">
+ <title>Out-of-line, on-disk TOAST storage</title>
+
+  <para>
+   If any of the columns of a table are <acronym>TOAST</acronym>-able, the
+   table will have an associated <acronym>TOAST</acronym> table, whose OID is
+   stored in the table's
+   <structname>pg_class</structname>.<structfield>reltoastrelid</structfield>
+   entry.  On-disk <acronym>TOAST</acronym>ed values are kept in the
+   <acronym>TOAST</acronym> table, as described in more detail below.
   </para>
 
   <para>
@@ -493,6 +533,79 @@
    en comparaison avec une table non <acronym>TOAST</acronym>ée, dans laquelle toutes les
    pages HTLM avaient été coupées à 7&nbsp;Ko pour tenir.
   </para>
+
+</sect2>
+
+<sect2 id="storage-toast-inmemory">
+ <title>Out-of-line, in-memory TOAST storage</title>
+
+<para>
+<acronym>TOAST</acronym> pointers can point to data that is not on disk, but is
+elsewhere in the memory of the current server process.  Such pointers
+obviously cannot be long-lived, but they are nonetheless useful.  There
+are currently two sub-cases:
+pointers to <firstterm>indirect</firstterm> data and
+pointers to <firstterm>expanded</firstterm> data.
+</para>
+
+<para>
+Indirect <acronym>TOAST</acronym> pointers simply point at a non-indirect varlena
+value stored somewhere in memory.  This case was originally created merely
+as a proof of concept, but it is currently used during logical decoding to
+avoid possibly having to create physical tuples exceeding 1 GB (as pulling
+all out-of-line field values into the tuple might do).  The case is of
+limited use since the creator of the pointer datum is entirely responsible
+that the referenced data survives for as long as the pointer could exist,
+and there is no infrastructure to help with this.
+</para>
+
+<para>
+Expanded <acronym>TOAST</acronym> pointers are useful for complex data types
+whose on-disk representation is not especially suited for computational
+purposes.  As an example, the standard varlena representation of a
+<productname>PostgreSQL</productname> array includes dimensionality information, a
+nulls bitmap if there are any null elements, then the values of all the
+elements in order.  When the element type itself is variable-length, the
+only way to find the <replaceable>N</replaceable>'th element is to scan through all the
+preceding elements.  This representation is appropriate for on-disk storage
+because of its compactness, but for computations with the array it's much
+nicer to have an <quote>expanded</quote> or <quote>deconstructed</quote>
+representation in which all the element starting locations have been
+identified.  The <acronym>TOAST</acronym> pointer mechanism supports this need by
+allowing a pass-by-reference Datum to point to either a standard varlena
+value (the on-disk representation) or a <acronym>TOAST</acronym> pointer that
+points to an expanded representation somewhere in memory.  The details of
+this expanded representation are up to the data type, though it must have
+a standard header and meet the other API requirements given
+in <filename>src/include/utils/expandeddatum.h</filename>.  C-level functions
+working with the data type can choose to handle either representation.
+Functions that do not know about the expanded representation, but simply
+apply <function>PG_DETOAST_DATUM</function> to their inputs, will automatically
+receive the traditional varlena representation; so support for an expanded
+representation can be introduced incrementally, one function at a time.
+</para>
+
+<para>
+<acronym>TOAST</acronym> pointers to expanded values are further broken down
+into <firstterm>read-write</firstterm> and <firstterm>read-only</firstterm> pointers.
+The pointed-to representation is the same either way, but a function that
+receives a read-write pointer is allowed to modify the referenced value
+in-place, whereas one that receives a read-only pointer must not; it must
+first create a copy if it wants to make a modified version of the value.
+This distinction and some associated conventions make it possible to avoid
+unnecessary copying of expanded values during query execution.
+</para>
+
+<para>
+For all types of in-memory <acronym>TOAST</acronym> pointer, the <acronym>TOAST</acronym>
+management code ensures that no such pointer datum can accidentally get
+stored on disk.  In-memory <acronym>TOAST</acronym> pointers are automatically
+expanded to normal in-line varlena values before storage &mdash; and then
+possibly converted to on-disk <acronym>TOAST</acronym> pointers, if the containing
+tuple would otherwise be too big.
+</para>
+
+</sect2>
 
  </sect1>
 
