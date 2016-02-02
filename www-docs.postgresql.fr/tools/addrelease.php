@@ -103,8 +103,11 @@ for ($i = 1; $i < $_SERVER["argc"]; $i++) {
           case '9.4':
             $version_int = 904;
             break;
+          case '9.5':
+            $version_int = 905;
+            break;
           default:
-            echo "Il s'agit d'une version majeure : 8.1, 8.2, 8.3, 8.4, 9.0, 9.1, 9.2, 9.3 ou 9.4.\n";
+            echo "Il s'agit d'une version majeure : 8.1 à 8.4, 9.0 à 9.5.\n";
             exit;
             break;
         }
