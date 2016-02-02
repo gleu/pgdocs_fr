@@ -121,6 +121,38 @@ $version['902'] = '9.2';
     <div id="docs">
     <h1>Documentation des versions obsolètes</h1>
     <p>Ces versions ne sont plus mises à jour par le projet PostgreSQL.</p>
+    <div id="pg90">
+      <h2>Documentation PostgreSQL, version 9.0</h2>
+      <div class="listes">
+        <ul>
+            <li>Manuel au format HTML&nbsp;:
+                <a href="9.0/">Consultation en
+                ligne</a>,
+                t&eacute;l&eacute;chargement en
+                <a onclick="pageTracker._trackPageview('/pg90.zip');"
+                href="http://docs.postgresql.fr/9.0/pg90.zip">ZIP</a> ou
+                <a onclick="pageTracker._trackPageview('/pg90.tar.gz');"
+                href="http://docs.postgresql.fr/9.0/pg90.tar.gz">TAR.GZ</a>
+            </li>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg90.chm');"
+              href="http://docs.postgresql.fr/9.0/pg90.chm">CHM</a>
+              (syst&egrave;me d'aide Windows)
+            </li>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg90.pdf');"
+              href="http://docs.postgresql.fr/9.0/pg90.pdf">PDF</a>
+            </li>
+            <li>Document d'installation au format <a
+              onclick="pageTracker._trackPageview('/INSTALL90.html');"
+              href="http://docs.postgresql.fr/9.0/INSTALL.html">HTML</a> et
+              <a onclick="pageTracker._trackPageview('/INSTALL90.txt');"
+              href="http://docs.postgresql.fr/9.0/INSTALL.txt">texte</a>
+            </li>
+            <li><a onclick="pageTracker._trackPageview('/pg90.man.tar.gz');"
+              href="http://docs.postgresql.fr/9.0/pg90.man.tar.gz">Pages
+              man</a></li>
+        </ul>
+      </div>
+    </div>
     <div id="pg84">
       <h2>Documentation PostgreSQL, version 8.4</h2>
       <div class="listes">
