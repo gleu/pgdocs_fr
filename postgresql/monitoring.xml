@@ -324,6 +324,14 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_wal_receiver</structname><indexterm><primary>pg_stat_wal_receiver</primary></indexterm></entry>
+      <entry>Only one row, showing statistics about the WAL receiver from
+       that receiver's connected server.
+       See <xref linkend="pg-stat-wal-receiver-view"/> for details.
+      </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_ssl</structname><indexterm><primary>pg_stat_ssl</primary></indexterm></entry>
       <entry>Une ligne par connexion (régulière et de réplication),
        montrant des informations sur le chiffrement SSL utilisé pour
@@ -529,6 +537,12 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <structname>pg_stat_user_functions</structname>)</entry>
      </row>
 
+     <row>
+      <entry><structname>pg_stat_progress_vacuum</structname><indexterm><primary>pg_stat_progress_vacuum</primary></indexterm></entry>
+      <entry>One row for each backend (including autovacuum worker processes) running
+      <command>VACUUM</command>, showing current progress.
+      See <xref linkend='vacuum-progress-reporting'/>.</entry>
+     </row>
     </tgroup>
    </table>
   </sect2>
@@ -660,9 +674,55 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      <entry>Heure à laquelle l'état (<structfield>state</structfield>) a été modifié en dernier</entry>
     </row>
     <row>
-     <entry><structfield>waiting</structfield></entry>
-     <entry><type>boolean</type></entry>
-     <entry>Vrai si le processus serveur est actuellement en attente d'un verrou</entry>
+     <entry><structfield>wait_event_type</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>The type of event for which the backend is waiting, if any;
+      otherwise NULL. Possible values are:
+      <itemizedlist>
+       <listitem>
+        <para>
+         <literal>LWLockNamed</literal>: The backend is waiting for a specific named
+         lightweight lock.  Each such lock protects a particular data
+         structure in shared memory.  <literal>wait_event</literal> will contain
+         the name of the lightweight lock.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         <literal>LWLockTranche</literal>: The backend is waiting for one of a
+         group of related lightweight locks.  All locks in the group perform
+         a similar function; <literal>wait_event</literal> will identify the general
+         purpose of locks in that group.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         <literal>Lock</literal>: The backend is waiting for a heavyweight lock.
+         Heavyweight locks, also known as lock manager locks or simply locks,
+         primarily protect SQL-visible objects such as tables.  However,
+         they are also used to ensure mutual exclusion for certain internal
+         operations such as relation extension.  <literal>wait_event</literal> will
+         identify the type of lock awaited.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         <literal>BufferPin</literal>: The server process is waiting to access to
+         a data buffer during a period when no other process can be
+         examining that buffer.  Buffer pin waits can be protracted if
+         another process holds an open cursor which last read data from the
+         buffer in question.
+        </para>
+       </listitem>
+      </itemizedlist>
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>wait_event</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Wait event name if backend is currently waiting, otherwise NULL.
+     See <xref linkend="wait-event-table"/> for details.
+     </entry>
     </row>
     <row>
      <entry><structfield>state</structfield></entry>
@@ -742,13 +802,352 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
 
   <note>
    <para>
-    Les colonnes <structfield>waiting</structfield> et <structfield>state</structfield> sont
-    indépendantes. Si un processus serveur est dans l'état <literal>active</literal>, le champ
-    <literal>waiting</literal> peut être vrai ou faux. Si l'état vaut <literal>active</literal>
-    et que <structfield>waiting</structfield> est vrai, cela signifie que la requête est
-    exécutée, mais qu'elle est bloquée par un verrou quelque part sur le système.
+    Les colonnes <structfield>wait_event</structfield> et
+    <structfield>state</structfield> sont
+    indépendantes. Si un processus serveur est dans l'état
+    <literal>active</literal>, it may or may not be <literal>waiting</literal> on some
+    event.  If the state
+    is <literal>active</literal> and <structfield>wait_event</structfield> is non-null, it
+    means that a query is being executed, but is being blocked somewhere
+    in the system.
    </para>
   </note>
+ 
+  <table id="wait-event-table" xreflabel="wait_event">
+   <title><structname>wait_event</structname> Description</title>
+
+    <tgroup cols="3">
+      <thead>
+       <row>
+        <entry>Wait Event Type</entry>
+        <entry>Wait Event Name</entry>
+        <entry>Description</entry>
+       </row>
+      </thead>
+
+      <tbody>
+       <row>
+        <entry morerows="40"><literal>LWLockNamed</literal></entry>
+        <entry><literal>ShmemIndexLock</literal></entry>
+        <entry>Waiting to find or allocate space in shared memory.</entry>
+       </row>
+       <row>
+        <entry><literal>OidGenLock</literal></entry>
+        <entry>Waiting to allocate or assign an OID.</entry>
+       </row>
+        <row>
+         <entry><literal>XidGenLock</literal></entry>
+         <entry>Waiting to allocate or assign a transaction id.</entry>
+        </row>
+        <row>
+         <entry><literal>ProcArrayLock</literal></entry>
+         <entry>Waiting to get a snapshot or clearing a transaction id at
+         transaction end.</entry>
+        </row>
+        <row>
+         <entry><literal>SInvalReadLock</literal></entry>
+         <entry>Waiting to retrieve or remove messages from shared invalidation
+         queue.</entry>
+        </row>
+        <row>
+         <entry><literal>SInvalWriteLock</literal></entry>
+         <entry>Waiting to add a message in shared invalidation queue.</entry>
+        </row>
+        <row>
+         <entry><literal>WALBufMappingLock</literal></entry>
+         <entry>Waiting to replace a page in WAL buffers.</entry>
+        </row>
+        <row>
+         <entry><literal>WALWriteLock</literal></entry>
+         <entry>Waiting for WAL buffers to be written to disk.</entry>
+        </row>
+        <row>
+         <entry><literal>ControlFileLock</literal></entry>
+         <entry>Waiting to read or update the control file or creation of a
+         new WAL file.</entry>
+        </row>
+        <row>
+         <entry><literal>CheckpointLock</literal></entry>
+         <entry>Waiting to perform checkpoint.</entry>
+        </row>
+        <row>
+         <entry><literal>CLogControlLock</literal></entry>
+         <entry>Waiting to read or update transaction status.</entry>
+        </row>
+        <row>
+         <entry><literal>SubtransControlLock</literal></entry>
+         <entry>Waiting to read or update sub-transaction information.</entry>
+        </row>
+        <row>
+         <entry><literal>MultiXactGenLock</literal></entry>
+         <entry>Waiting to read or update shared multixact state.</entry>
+        </row>
+        <row>
+         <entry><literal>MultiXactOffsetControlLock</literal></entry>
+         <entry>Waiting to read or update multixact offset mappings.</entry>
+        </row>
+        <row>
+         <entry><literal>MultiXactMemberControlLock</literal></entry>
+         <entry>Waiting to read or update multixact member mappings.</entry>
+        </row>
+        <row>
+         <entry><literal>RelCacheInitLock</literal></entry>
+         <entry>Waiting to read or write relation cache initialization
+         file.</entry>
+        </row>
+        <row>
+         <entry><literal>CheckpointerCommLock</literal></entry>
+         <entry>Waiting to manage fsync requests.</entry>
+        </row>
+        <row>
+         <entry><literal>TwoPhaseStateLock</literal></entry>
+         <entry>Waiting to read or update the state of prepared transactions.</entry>
+        </row>
+        <row>
+         <entry><literal>TablespaceCreateLock</literal></entry>
+         <entry>Waiting to create or drop the tablespace.</entry>
+        </row>
+        <row>
+         <entry><literal>BtreeVacuumLock</literal></entry>
+          <entry>Waiting to read or update vacuum-related information for a
+          Btree index.</entry>
+        </row>
+        <row>
+         <entry><literal>AddinShmemInitLock</literal></entry>
+         <entry>Waiting to manage space allocation in shared memory.</entry>
+        </row>
+        <row>
+         <entry><literal>AutovacuumLock</literal></entry>
+         <entry>Autovacuum worker or launcher waiting to update or
+         read the current state of autovacuum workers.</entry>
+        </row>
+        <row>
+         <entry><literal>AutovacuumScheduleLock</literal></entry>
+         <entry>Waiting to ensure that the table it has selected for a vacuum
+         still needs vacuuming.
+         </entry>
+        </row>
+        <row>
+         <entry><literal>SyncScanLock</literal></entry>
+         <entry>Waiting to get the start location of a scan on a table for
+         synchronized scans.</entry>
+        </row>
+        <row>
+         <entry><literal>RelationMappingLock</literal></entry>
+         <entry>Waiting to update the relation map file used to store catalog
+         to filenode mapping.
+         </entry>
+        </row>
+        <row>
+         <entry><literal>AsyncCtlLock</literal></entry>
+         <entry>Waiting to read or update shared notification state.</entry>
+        </row>
+        <row>
+         <entry><literal>AsyncQueueLock</literal></entry>
+          <entry>Waiting to read or update notification messages.</entry>
+        </row>
+        <row>
+         <entry><literal>SerializableXactHashLock</literal></entry>
+         <entry>Waiting to retrieve or store information about serializable
+         transactions.</entry>
+        </row>
+        <row>
+         <entry><literal>SerializableFinishedListLock</literal></entry>
+         <entry>Waiting to access the list of finished serializable
+         transactions.</entry>
+        </row>
+        <row>
+         <entry><literal>SerializablePredicateLockListLock</literal></entry>
+         <entry>Waiting to perform an operation on a list of locks held by
+         serializable transactions.</entry>
+        </row>
+        <row>
+         <entry><literal>OldSerXidLock</literal></entry>
+         <entry>Waiting to read or record conflicting serializable
+         transactions.</entry>
+        </row>
+        <row>
+         <entry><literal>SyncRepLock</literal></entry>
+         <entry>Waiting to read or update information about synchronous
+         replicas.</entry>
+        </row>
+        <row>
+         <entry><literal>BackgroundWorkerLock</literal></entry>
+         <entry>Waiting to read or update background worker state.</entry>
+        </row>
+        <row>
+         <entry><literal>DynamicSharedMemoryControlLock</literal></entry>
+         <entry>Waiting to read or update dynamic shared memory state.</entry>
+        </row>
+        <row>
+         <entry><literal>AutoFileLock</literal></entry>
+         <entry>Waiting to update the <filename>postgresql.auto.conf</filename> file.</entry>
+        </row>
+        <row>
+         <entry><literal>ReplicationSlotAllocationLock</literal></entry>
+         <entry>Waiting to allocate or free a replication slot.</entry>
+        </row>
+        <row>
+         <entry><literal>ReplicationSlotControlLock</literal></entry>
+         <entry>Waiting to read or update replication slot state.</entry>
+        </row>
+        <row>
+         <entry><literal>CommitTsControlLock</literal></entry>
+         <entry>Waiting to read or update transaction commit timestamps.</entry>
+        </row>
+        <row>
+         <entry><literal>CommitTsLock</literal></entry>
+         <entry>Waiting to read or update the last value set for the
+         transaction timestamp.</entry>
+        </row>
+        <row>
+         <entry><literal>ReplicationOriginLock</literal></entry>
+         <entry>Waiting to setup, drop or use replication origin.</entry>
+        </row>
+        <row>
+         <entry><literal>MultiXactTruncationLock</literal></entry>
+         <entry>Waiting to read or truncate multixact information.</entry>
+        </row>
+        <row>
+         <entry morerows="15"><literal>LWLockTranche</literal></entry>
+         <entry><literal>clog</literal></entry>
+         <entry>Waiting for I/O on a clog (transaction status) buffer.</entry>
+        </row>
+        <row>
+         <entry><literal>commit_timestamp</literal></entry>
+         <entry>Waiting for I/O on commit timestamp buffer.</entry>
+        </row>
+        <row>
+         <entry><literal>subtrans</literal></entry>
+         <entry>Waiting for I/O a subtransaction buffer.</entry>
+        </row>
+        <row>
+         <entry><literal>multixact_offset</literal></entry>
+         <entry>Waiting for I/O on a multixact offset buffer.</entry>
+        </row>
+        <row>
+         <entry><literal>multixact_member</literal></entry>
+         <entry>Waiting for I/O on a multixact_member buffer.</entry>
+        </row>
+        <row>
+         <entry><literal>async</literal></entry>
+         <entry>Waiting for I/O on an async (notify) buffer.</entry>
+        </row>
+        <row>
+         <entry><literal>oldserxid</literal></entry>
+         <entry>Waiting to I/O on an oldserxid buffer.</entry>
+        </row>
+        <row>
+         <entry><literal>wal_insert</literal></entry>
+         <entry>Waiting to insert WAL into a memory buffer.</entry>
+        </row>
+        <row>
+         <entry><literal>buffer_content</literal></entry>
+         <entry>Waiting to read or write a data page in memory.</entry>
+        </row>
+        <row>
+         <entry><literal>buffer_io</literal></entry>
+         <entry>Waiting for I/O on a data page.</entry>
+        </row>
+        <row>
+         <entry><literal>replication_origin</literal></entry>
+         <entry>Waiting to read or update the replication progress.</entry>
+        </row>
+        <row>
+         <entry><literal>replication_slot_io</literal></entry>
+         <entry>Waiting for I/O on a replication slot.</entry>
+        </row>
+        <row>
+         <entry><literal>proc</literal></entry>
+         <entry>Waiting to read or update the fast-path lock information.</entry>
+        </row>
+        <row>
+         <entry><literal>buffer_mapping</literal></entry>
+         <entry>Waiting to associate a data block with a buffer in the buffer
+         pool.</entry>
+        </row>
+        <row>
+         <entry><literal>lock_manager</literal></entry>
+         <entry>Waiting to add or examine locks for backends, or waiting to
+         join or exit a locking group (used by parallel query).</entry>
+        </row>
+        <row>
+         <entry><literal>predicate_lock_manager</literal></entry>
+         <entry>Waiting to add or examine predicate lock information.</entry>
+        </row>
+        <row>
+         <entry morerows="9"><literal>Lock</literal></entry>
+         <entry><literal>relation</literal></entry>
+         <entry>Waiting to acquire a lock on a relation.</entry>
+        </row>
+        <row>
+         <entry><literal>extend</literal></entry>
+         <entry>Waiting to extend a relation.</entry>
+        </row>
+        <row>
+         <entry><literal>page</literal></entry>
+         <entry>Waiting to acquire a lock on page of a relation.</entry>
+        </row>
+        <row>
+         <entry><literal>tuple</literal></entry>
+         <entry>Waiting to acquire a lock on a tuple.</entry>
+        </row>
+        <row>
+         <entry><literal>transactionid</literal></entry>
+         <entry>Waiting for a transaction to finish.</entry>
+        </row>
+        <row>
+         <entry><literal>virtualxid</literal></entry>
+         <entry>Waiting to acquire a virtual xid lock.</entry>
+        </row>
+        <row>
+         <entry><literal>speculative token</literal></entry>
+         <entry>Waiting to acquire a speculative insertion lock.</entry>
+        </row>
+        <row>
+         <entry><literal>object</literal></entry>
+         <entry>Waiting to acquire a lock on a non-relation database object.</entry>
+        </row>
+        <row>
+         <entry><literal>userlock</literal></entry>
+         <entry>Waiting to acquire a userlock.</entry>
+        </row>
+        <row>
+         <entry><literal>advisory</literal></entry>
+         <entry>Waiting to acquire an advisory user lock.</entry>
+        </row>
+        <row>
+         <entry><literal>BufferPin</literal></entry>
+         <entry><literal>BufferPin</literal></entry>
+         <entry>Waiting to acquire a pin on a buffer.</entry>
+        </row>
+      </tbody>
+     </tgroup>
+    </table>
+
+   <note>
+    <para>
+     For tranches registered by extensions, the name is specified by extension
+     and this will be displayed as <structfield>wait_event</structfield>.  It is quite
+     possible that user has registered the tranche in one of the backends (by
+     having allocation in dynamic shared memory) in which case other backends
+     won't have that information, so we display <literal>extension</literal> for such
+     cases.
+    </para>
+   </note>
+
+   <para>
+     Here is an example of how wait events can be viewed
+
+<programlisting>
+SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event is NOT NULL;
+ pid  | wait_event_type |  wait_event
+------+-----------------+---------------
+ 2540 | Lock            | relation
+ 6644 | LWLockNamed     | ProcArrayLock
+(2 rows)
+</programlisting>
+   </para>
 
   <table id="pg-stat-replication-view" xreflabel="pg_stat_replication">
    <title>Vue <structname>pg_stat_replication</structname></title>
@@ -868,6 +1267,89 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
    la réplication avec le serveur standby connecté au processus. Seuls
    les serveurs standby directement connectés sont listés&nbsp;; aucune
    information n'est disponible concernant les serveurs standby en aval.
+  </para>
+ 
+  <table id="pg-stat-wal-receiver-view" xreflabel="pg_stat_wal_receiver">
+   <title><structname>pg_stat_wal_receiver</structname> View</title>
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>pid</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Process ID of the WAL receiver process</entry>
+    </row>
+    <row>
+     <entry><structfield>status</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Activity status of the WAL receiver process</entry>
+    </row>
+    <row>
+     <entry><structfield>receive_start_lsn</structfield></entry>
+     <entry><type>pg_lsn</type></entry>
+     <entry>First transaction log position used when WAL receiver is
+      started</entry>
+    </row>
+    <row>
+     <entry><structfield>receive_start_tli</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>First timeline number used when WAL receiver is started</entry>
+    </row>
+    <row>
+     <entry><structfield>received_lsn</structfield></entry>
+     <entry><type>pg_lsn</type></entry>
+     <entry>Last transaction log position already received and flushed to
+      disk, the initial value of this field being the first log position used
+      when WAL receiver is started</entry>
+    </row>
+    <row>
+     <entry><structfield>received_tli</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Timeline number of last transaction log position received and
+      flushed to disk, the initial value of this field being the timeline
+      number of the first log position used when WAL receiver is started
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>last_msg_send_time</structfield></entry>
+     <entry><type>timestamp with time zone</type></entry>
+     <entry>Send time of last message received from origin WAL sender</entry>
+    </row>
+    <row>
+     <entry><structfield>last_msg_receipt_time</structfield></entry>
+     <entry><type>timestamp with time zone</type></entry>
+     <entry>Receipt time of last message received from origin WAL sender</entry>
+    </row>
+    <row>
+     <entry><structfield>latest_end_lsn</structfield></entry>
+     <entry><type>pg_lsn</type></entry>
+     <entry>Last transaction log position reported to origin WAL sender</entry>
+    </row>
+    <row>
+     <entry><structfield>latest_end_time</structfield></entry>
+     <entry><type>timestamp with time zone</type></entry>
+     <entry>Time of last transaction log position reported to origin WAL sender</entry>
+    </row>
+    <row>
+     <entry><structfield>slot_name</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Replication slot name used by this WAL receiver</entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_wal_receiver</structname> view will contain only
+   one row, showing statistics about the WAL receiver from that receiver's
+   connected server.
   </para>
 
   <table id="pg-stat-ssl-view" xreflabel="pg_stat_ssl">
@@ -1861,7 +2343,8 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
    <entry><type>void</type></entry>
    <entry>
     Remet à zéro tous les compteurs de statistique pour la base de données
-    courante (nécessite les droits super-utilisateur).
+    courante (nécessite les droits super-utilisateur by default, but EXECUTE for this
+    function can be granted to others.).
    </entry>
   </row>
 
@@ -1870,7 +2353,8 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
    <entry><type>void</type></entry>
    <entry>
     Remet à zéro quelques statistiques globales de l'instance, en fonction de
-    l'argument (nécessite les droits super-utilisateur).
+    l'argument (nécessite les droits super-utilisateur by default, but EXECUTE
+    for this function can be granted to others).
     Appeler <literal>pg_stat_reset_shared('bgwriter')</literal>
     réinitialisera tous les compteurs montrés dans la vue
     <structname>pg_stat_bgwriter</structname>.
@@ -1885,7 +2369,8 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
    <entry><type>void</type></entry>
    <entry>
     Remet à zéro les statistiques pour une seule table ou index dans la base
-    de données courante (nécessite les droits super-utilisateur).
+    de données courante (nécessite les droits super-utilisateur by default,
+    but EXECUTE for this function can be granted to others).
    </entry>
   </row>
 
@@ -1894,7 +2379,8 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
    <entry><type>void</type></entry>
    <entry>
     Remet à zéro les statistiques pour une seule fonction dans la base
-    de données courante (nécessite les droits super-utilisateur).
+    de données courante (nécessite les droits super-utilisateur by default,
+    but EXECUTE for this function can be granted to others).
    </entry>
   </row>
  </tbody>
@@ -1994,9 +2480,19 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
   </row>
 
   <row>
-   <entry><literal><function>pg_stat_get_backend_waiting(integer)</function></literal></entry>
-   <entry><type>boolean</type></entry>
-   <entry>Vrai si ce processus serveur est actuellement en attente d'un verrou</entry>
+    <entry><literal><function>pg_stat_get_backend_wait_event_type(integer)</function></literal></entry>
+    <entry><type>text</type></entry>
+    <entry>Wait event type name if backend is currently waiting, otherwise NULL.
+    See <xref linkend="wait-event-table"/> for details.
+    </entry>
+  </row>
+
+  <row>
+    <entry><literal><function>pg_stat_get_backend_wait_event(integer)</function></literal></entry>
+    <entry><type>text</type></entry>
+    <entry>Wait event name if backend is currently waiting, otherwise NULL.
+       See <xref linkend="wait-event-table"/> for details.
+    </entry>
   </row>
 
   <row>
@@ -2059,6 +2555,208 @@ la gestion des concurrences avec <productname>PostgreSQL</productname>,
 référez-vous au <xref linkend="mvcc"/>.
 </para>
 </sect1>
+ 
+ <sect1 id="progress-reporting">
+  <title>Progress Reporting</title>
+
+  <para>
+   <productname>PostgreSQL</productname> has the ability to report the progress of
+   certain commands during command execution.  Currently, the only command
+   which supports progress reporting is <command>VACUUM</command>.  This may be
+   expanded in the future.
+  </para>
+
+ <sect2 id="vacuum-progress-reporting">
+  <title>VACUUM Progress Reporting</title>
+
+  <para>
+   Whenever <command>VACUUM</command> is running, the
+   <structname>pg_stat_progress_vacuum</structname> view will contain
+   one row for each backend (including autovacuum worker processes) that is
+   currently vacuuming.  The tables below describe the information
+   that will be reported and provide information about how to interpret it.
+   Progress reporting is not currently supported for <command>VACUUM FULL</command>
+   and backends running <command>VACUUM FULL</command> will not be listed in this
+   view.
+  </para>
+
+  <table id="pg-stat-progress-vacuum-view" xreflabel="pg_stat_progress_vacuum">
+   <title><structname>pg_stat_progress_vacuum</structname> View</title>
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>pid</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Process ID of backend.</entry>
+    </row>
+    <row>
+     <entry><structfield>datid</structfield></entry>
+     <entry><type>oid</type></entry>
+     <entry>OID of the database to which this backend is connected.</entry>
+    </row>
+    <row>
+     <entry><structfield>datname</structfield></entry>
+     <entry><type>name</type></entry>
+     <entry>Name of the database to which this backend is connected.</entry>
+    </row>
+    <row>
+     <entry><structfield>relid</structfield></entry>
+     <entry><type>oid</type></entry>
+     <entry>OID of the table being vacuumed.</entry>
+    </row>
+    <row>
+     <entry><structfield>phase</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>
+       Current processing phase of vacuum.  See <xref linkend='vacuum-phases'/>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>heap_blks_total</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+       Total number of heap blocks in the table.  This number is reported
+       as of the beginning of the scan; blocks added later will not be (and
+       need not be) visited by this <command>VACUUM</command>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>heap_blks_scanned</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+       Number of heap blocks scanned.  Because the
+       <link linkend="storage-vm">visibility map</link> is used to optimize scans,
+       some blocks will be skipped without inspection; skipped blocks are
+       included in this total, so that this number will eventually become
+       equal to <structfield>heap_blks_total</structfield> when the vacuum is complete.
+       This counter only advances when the phase is <literal>scanning heap</literal>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>heap_blks_vacuumed</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+       Number of heap blocks vacuumed.  Unless the table has no indexes, this
+       counter only advances when the phase is <literal>vacuuming heap</literal>.
+       Blocks that contain no dead tuples are skipped, so the counter may
+       sometimes skip forward in large increments.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>index_vacuum_count</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+       Number of completed index vacuum cycles.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>max_dead_tuples</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+      Number of dead tuples that we can store before needing to perform
+      an index vacuum cycle, based on
+      <xref linkend="guc-maintenance-work-mem"/>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>num_dead_tuples</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+       Number of dead tuples collected since the last index vacuum cycle.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <table id="vacuum-phases" xreflabel="VACUUM phases">
+   <title>VACUUM phases</title>
+   <tgroup cols="2">
+    <thead>
+    <row>
+      <entry>Phase</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><literal>initializing</literal></entry>
+     <entry>
+       <command>VACUUM</command> is preparing to begin scanning the heap.  This
+       phase is expected to be very brief.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>scanning heap</literal></entry>
+     <entry>
+       <command>VACUUM</command> is currently scanning the heap.  It will prune and
+       defragment each page if required, and possibly perform freezing
+       activity.  The <structfield>heap_blks_scanned</structfield> column can be used
+       to monitor the progress of the scan.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>vacuuming indexes</literal></entry>
+     <entry>
+       <command>VACUUM</command> is currently vacuuming the indexes.  If a table has
+       any indexes, this will happen at least once per vacuum, after the heap
+       has been completely scanned.  It may happen multiple times per vacuum
+       if <xref linkend="guc-maintenance-work-mem"/> is insufficient to
+       store the number of dead tuples found.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>vacuuming heap</literal></entry>
+     <entry>
+       <command>VACUUM</command> is currently vacuuming the heap.  Vacuuming the heap
+       is distinct from scanning the heap, and occurs after each instance of
+       vacuuming indexes.  If <structfield>heap_blks_scanned</structfield> is less than
+       <structfield>heap_blks_total</structfield>, the system will return to scanning
+       the heap after this phase is completed; otherwise, it will begin
+       cleaning up indexes after this phase is completed.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>cleaning up indexes</literal></entry>
+     <entry>
+       <command>VACUUM</command> is currently cleaning up indexes.  This occurs after
+       the heap has been completely scanned and all vacuuming of the indexes
+       and the heap has been completed.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>truncating heap</literal></entry>
+     <entry>
+       <command>VACUUM</command> is currently truncating the heap so as to return
+       empty pages at the end of the relation to the operating system.  This
+       occurs after cleaning up indexes.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>performing final cleanup</literal></entry>
+     <entry>
+       <command>VACUUM</command> is performing final cleanup.  During this phase,
+       <command>VACUUM</command> will vacuum the free space map, update statistics
+       in <literal>pg_class</literal>, and report statistics to the statistics
+       collector.  When this phase is completed, <command>VACUUM</command> will end.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+ </sect2>
+ </sect1>
+
 
 <sect1 id="dynamic-trace">
 <title>Traces dynamiques</title>
@@ -2129,90 +2827,90 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
 
  <tbody>
   <row>
-   <entry>transaction-start</entry>
-   <entry>(LocalTransactionId)</entry>
+   <entry><literal>transaction-start</literal></entry>
+   <entry><literal>(LocalTransactionId)</literal></entry>
    <entry>Sonde qui se déclenche au lancement d'une nouvelle transaction.
     arg0 est l'identifiant de transaction</entry>
   </row>
   <row>
-   <entry>transaction-commit</entry>
-   <entry>(LocalTransactionId)</entry>
+   <entry><literal>transaction-commit</literal></entry>
+   <entry><literal>(LocalTransactionId)</literal></entry>
    <entry>Sonde qui se déclenche quand une transaction se termine avec succès.
     arg0 est l'identifiant de transaction</entry>
   </row>
   <row>
-   <entry>transaction-abort</entry>
-   <entry>(LocalTransactionId)</entry>
+   <entry><literal>transaction-abort</literal></entry>
+   <entry><literal>(LocalTransactionId)</literal></entry>
    <entry>Sonde qui se déclenche quand une transaction échoue.
     arg0 est l'identifiant de transaction</entry>
   </row>
   <row>
-   <entry>query-start</entry>
-   <entry>(const char *)</entry>
+   <entry><literal>query-start</literal></entry>
+   <entry><literal>(const char *)</literal></entry>
    <entry>Sonde qui se déclenche lorsque le traitement d'une requête commence.
     arg0 est la requête</entry>
   </row>
   <row>
-   <entry>query-done</entry>
-   <entry>(const char *)</entry>
+   <entry><literal>query-done</literal></entry>
+   <entry><literal>(const char *)</literal></entry>
    <entry>Sonde qui se déclenche lorsque le traitement d'une requête se termine.
     arg0 est la requête</entry>
   </row>
   <row>
-   <entry>query-parse-start</entry>
-   <entry>(const char *)</entry>
+   <entry><literal>query-parse-start</literal></entry>
+   <entry><literal>(const char *)</literal></entry>
    <entry>Sonde qui se déclenche lorsque l'analyse d'une requête commence.
     arg0 est la requête</entry>
   </row>
   <row>
-   <entry>query-parse-done</entry>
-   <entry>(const char *)</entry>
+   <entry><literal>query-parse-done</literal></entry>
+   <entry><literal>(const char *)</literal></entry>
    <entry>Sonde qui se déclenche lorsque l'analyse d'une requête se termine.
     arg0 est la requête</entry>
   </row>
   <row>
-   <entry>query-rewrite-start</entry>
-   <entry>(const char *)</entry>
+   <entry><literal>query-rewrite-start</literal></entry>
+   <entry><literal>(const char *)</literal></entry>
    <entry>Sonde qui se déclenche lorsque la ré-écriture d'une requête commence.
     arg0 est la requête</entry>
   </row>
   <row>
-   <entry>query-rewrite-done</entry>
-   <entry>(const char *)</entry>
+   <entry><literal>query-rewrite-done</literal></entry>
+   <entry><literal>(const char *)</literal></entry>
    <entry>Sonde qui se déclenche lorsque la ré-écriture d'une requête se termine.
     arg0 est la requête</entry>
   </row>
   <row>
-   <entry>query-plan-start</entry>
-   <entry>()</entry>
+   <entry><literal>query-plan-start</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche lorsque la planification d'une requête commence</entry>
   </row>
   <row>
-   <entry>query-plan-done</entry>
-   <entry>()</entry>
+   <entry><literal>query-plan-done</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche lorsque la planification d'une requête se termine</entry>
   </row>
   <row>
-   <entry>query-execute-start</entry>
-   <entry>()</entry>
+   <entry><literal>query-execute-start</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche lorsque l'exécution d'une requête commence</entry>
   </row>
   <row>
-   <entry>query-execute-done</entry>
-   <entry>()</entry>
+   <entry><literal>query-execute-done</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche lorsque l'exécution d'une requête se termine</entry>
   </row>
   <row>
-   <entry>statement-status</entry>
-   <entry>(const char *)</entry>
+   <entry><literal>statement-status</literal></entry>
+   <entry><literal>(const char *)</literal></entry>
    <entry>Sonde qui se déclenche à chaque fois que le processus serveur met à
     jour son statut dans
     <structname>pg_stat_activity</structname>.<structfield>status</structfield>.
     arg0 est la nouvelle chaîne de statut</entry>
   </row>
   <row>
-   <entry>checkpoint-start</entry>
-   <entry>(int)</entry>
+   <entry><literal>checkpoint-start</literal></entry>
+   <entry><literal>(int)</literal></entry>
    <entry>Sonde qui se déclenche quand un point de retournement commence son
     exécution.
     arg0 détient les drapeaux bit à bit utilisés pour distingurer les
@@ -2220,8 +2918,8 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     arrêt, un point immédiat ou un point forcé</entry>
   </row>
   <row>
-   <entry>checkpoint-done</entry>
-   <entry>(int, int, int, int, int)</entry>
+   <entry><literal>checkpoint-done</literal></entry>
+   <entry><literal>(int, int, int, int, int)</literal></entry>
    <entry>Sonde qui se déclenche quand un point de retournement a terminé son
     exécution (les sondes listées après se déclenchent en séquence lors du
     traitement d'un point de retournement).
@@ -2230,53 +2928,53 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     nombre de journaux de transactions ajoutés, supprimés et recyclés</entry>
   </row>
   <row>
-   <entry>clog-checkpoint-start</entry>
-   <entry>(bool)</entry>
+   <entry><literal>clog-checkpoint-start</literal></entry>
+   <entry><literal>(bool)</literal></entry>
    <entry>Sonde qui se déclenche quand la portion CLOG d'un point de
     retournement commence.
     arg0 est true pour un point de retournement normal, false pour un point
     de retournement suite à un arrêt</entry>
   </row>
   <row>
-   <entry>clog-checkpoint-done</entry>
-   <entry>(bool)</entry>
+   <entry><literal>clog-checkpoint-done</literal></entry>
+   <entry><literal>(bool)</literal></entry>
    <entry>Sonde qui se déclenche quand la portion CLOG d'un point de
     retournement commence.
-    arg0 a la même signification que pour clog-checkpoint-start</entry>
+    arg0 a la même signification que pour <literal>clog-checkpoint-start</literal></entry>
   </row>
   <row>
-   <entry>subtrans-checkpoint-start</entry>
-   <entry>(bool)</entry>
+   <entry><literal>subtrans-checkpoint-start</literal></entry>
+   <entry><literal>(bool)</literal></entry>
    <entry>Sonde qui se déclenche quand la portion SUBTRANS d'un point de
     retournement commence.
     arg0 est true pour un point de retournement normal, false pour un point
     de retournement suite à un arrêt</entry>
   </row>
   <row>
-   <entry>subtrans-checkpoint-done</entry>
-   <entry>(bool)</entry>
+   <entry><literal>subtrans-checkpoint-done</literal></entry>
+   <entry><literal>(bool)</literal></entry>
    <entry>Sonde qui se déclenche quand la portion SUBTRANS d'un point de
     retournement se termine.
-    arg0 a la même signification que pour subtrans-checkpoint-start</entry>
+    arg0 a la même signification que pour <literal>subtrans-checkpoint-start</literal></entry>
   </row>
   <row>
-   <entry>multixact-checkpoint-start</entry>
-   <entry>(bool)</entry>
+   <entry><literal>multixact-checkpoint-start</literal></entry>
+   <entry><literal>(bool)</literal></entry>
    <entry>Sonde qui se déclenche quand la portion MultiXact d'un point de
     retournement commence.
     arg0 est true pour un point de retournement normal, false pour un point
     de retournement suite à un arrêt</entry>
   </row>
   <row>
-   <entry>multixact-checkpoint-done</entry>
-   <entry>(bool)</entry>
+   <entry><literal>multixact-checkpoint-done</literal></entry>
+   <entry><literal>(bool)</literal></entry>
    <entry>Sonde qui se déclenche quand la portion MultiXact d'un point de
     retournement se termine.
-    arg0 a la même signification que pour multixact-checkpoint-start</entry>
+    arg0 a la même signification que pour <literal>multixact-checkpoint-start</literal></entry>
   </row>
   <row>
-   <entry>buffer-checkpoint-start</entry>
-   <entry>(int)</entry>
+   <entry><literal>buffer-checkpoint-start</literal></entry>
+   <entry><literal>(int)</literal></entry>
    <entry>Sonde qui se déclenche quand la portion d'écriture de tampons d'un
     point de retournement commence.
     arg0 contient les drapeaux bit à bit pour distinguer différents types de
@@ -2284,8 +2982,8 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     point forcé</entry>
   </row>
   <row>
-   <entry>buffer-sync-start</entry>
-   <entry>(int, int)</entry>
+   <entry><literal>buffer-sync-start</literal></entry>
+   <entry><literal>(int, int)</literal></entry>
    <entry>Sonde qui se déclenche quand nous commençons d'écrire les tampons
     modifiés pendant un point de retournement (après identification des
     tampons qui doivent être écrits).
@@ -2294,51 +2992,51 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     d'être écrits</entry>
   </row>
   <row>
-   <entry>buffer-sync-written</entry>
-   <entry>(int)</entry>
+   <entry><literal>buffer-sync-written</literal></entry>
+   <entry><literal>(int)</literal></entry>
    <entry>Sonde qui se déclenche après chaque écriture d'un tampon lors d'un
     point de retournement.
     arg0 est le numéro d'identifiant du tampon</entry>
   </row>
   <row>
-   <entry>buffer-sync-done</entry>
-   <entry>(int, int, int)</entry>
+   <entry><literal>buffer-sync-done</literal></entry>
+   <entry><literal>(int, int, int)</literal></entry>
    <entry>Sonde qui se déclenche quand tous les tampons modifiés ont été
     écrits.
     arg0 est le nombre total de tampons.
     arg1 est le nombre de tampons réellement écrits par le processus de point
     de retournement.
     arg2 est le nombre attendu de tampons à écrire (arg1 de
-    buffer-sync-start)&nbsp;; toute différence reflète d'autres processus
+    <literal>buffer-sync-start</literal>)&nbsp;; toute différence reflète d'autres processus
     écrivant des tampons lors du point de retournement</entry>
   </row>
   <row>
-   <entry>buffer-checkpoint-sync-start</entry>
-   <entry>()</entry>
+   <entry><literal>buffer-checkpoint-sync-start</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche une fois les tampons modifiés écrits par le
     noyau et avant de commencer à lancer des requêtes fsync</entry>
   </row>
   <row>
-   <entry>buffer-checkpoint-done</entry>
-   <entry>()</entry>
+   <entry><literal>buffer-checkpoint-done</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche après la fin de la synchronisation des
     tampons sur le disque</entry>
   </row>
   <row>
-   <entry>twophase-checkpoint-start</entry>
-   <entry>()</entry>
+   <entry><literal>twophase-checkpoint-start</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche quand la portion deux-phases d'un point de
     retournement est commencée</entry>
   </row>
   <row>
-   <entry>twophase-checkpoint-done</entry>
-   <entry>()</entry>
+   <entry><literal>twophase-checkpoint-done</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche quand la portion deux-phases d'un point de
     retournement est terminée</entry>
   </row>
   <row>
-   <entry>buffer-read-start</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool)</entry>
+   <entry><literal>buffer-read-start</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool)</literal></entry>
    <entry>Sonde qui se déclenche quand la lecture d'un tampon commence.
     arg0 et arg1 contiennent les numéros de fork et de bloc de la page (arg1
     vaudra -1 s'il s'agit de demande d'extension de la relation).
@@ -2346,14 +3044,14 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     base de données et de la relation identifiant ainsi précisément la
     relation.
     arg5 est l'identifiant du processus moteur qui a créé la relation
-    temporaire pour un tampon local ou InvalidBackendId (-1) pour un
+    temporaire pour un tampon local ou <symbol>InvalidBackendId</symbol> (-1) pour un
     tampon partagé.
     arg6 est true pour une demande d'extension de la relation, false pour
     une lecture ordinaire</entry>
   </row>
   <row>
-   <entry>buffer-read-done</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool, bool)</entry>
+   <entry><literal>buffer-read-done</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool, bool)</literal></entry>
    <entry>Sonde qui se déclenche quand la lecture d'un tampon se termine.
     arg0 et arg1 contiennent les numéros de fork et de bloc de la page (arg1
     contient le numéro de bloc du nouveau bloc ajouté s'il s'agit de demande
@@ -2362,15 +3060,15 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     base de données et de la relation identifiant ainsi précisément la
     relation.
     arg5 est l'identifiant du processus moteur qui a créé la relation
-    temporaire pour un tampon local ou InvalidBackendId (-1) pour un
+    temporaire pour un tampon local ou <symbol>InvalidBackendId</symbol> (-1) pour un
     tampon partagé.
     arg6 est true pour une demande d'extension de la relation, false pour
     une lecture ordinaire.
     arg7 est true si la tampon était disponible en mémoire, false sinon</entry>
   </row>
   <row>
-   <entry>buffer-flush-start</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid)</entry>
+   <entry><literal>buffer-flush-start</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid)</literal></entry>
    <entry>Sonde qui se déclenche avant de lancer une demande d'écriture pour
     un bloc partagé.
     arg2, arg3 et arg4 contiennent respectivement l'OID du tablespace, de la
@@ -2378,16 +3076,16 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     relation</entry>
   </row>
   <row>
-   <entry>buffer-flush-done</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid)</entry>
+   <entry><literal>buffer-flush-done</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid)</literal></entry>
    <entry>Sonde qui se déclenche quand une demande d'écriture se termine.
     (Notez que ceci ne reflète que le temps passé pour fournir la donnée au
     noyau&nbsp;; ce n'est habituellement pas encore écrit sur le disque.)
-    Les arguments sont identiques à ceux de buffer-flush-start</entry>
+    Les arguments sont identiques à ceux de <literal>buffer-flush-start</literal></entry>
   </row>
   <row>
-   <entry>buffer-write-dirty-start</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid)</entry>
+   <entry><literal>buffer-write-dirty-start</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid)</literal></entry>
    <entry>Sonde qui se déclenche quand un processus serveur commence à écrire
     un tampon modifié sur disque. Si cela arrive souvent, cela implique que
     <xref linkend="guc-shared-buffers"/> est trop petit ou que les paramètres
@@ -2398,15 +3096,15 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     relation</entry>
   </row>
   <row>
-   <entry>buffer-write-dirty-done</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid)</entry>
+   <entry><literal>buffer-write-dirty-done</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid)</literal></entry>
    <entry>Sonde qui se déclenche quand l'écriture d'un tampon modifié est
     terminé.
-    Les arguments sont identiques à ceux de buffer-write-dirty-start</entry>
+    Les arguments sont identiques à ceux de <literal>buffer-write-dirty-start</literal></entry>
   </row>
   <row>
-   <entry>wal-buffer-write-dirty-start</entry>
-   <entry>()</entry>
+   <entry><literal>wal-buffer-write-dirty-start</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche quand un processus serveur commence à écrire
     un tampon modifié d'un journal de transactions parce qu'il n'y a plus
     d'espace disponible dans le cache des journaux de transactions. (Si cela
@@ -2414,28 +3112,28 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     trop petit.)</entry>
   </row>
   <row>
-   <entry>wal-buffer-write-dirty-done</entry>
-   <entry>()</entry>
+   <entry><literal>wal-buffer-write-dirty-done</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche quand l'écriture d'un tampon modifié d'un
     journal de transactions est terminé</entry>
   </row>
   <row>
-   <entry>xlog-insert</entry>
-   <entry>(unsigned char, unsigned char)</entry>
+   <entry><literal>xlog-insert</literal></entry>
+   <entry><literal>(unsigned char, unsigned char)</literal></entry>
    <entry>Sonde qui se déclenche quand un enregistrement est inséré dans un
     journal de transactions.
     arg0 est le gestionnaire de ressource (rmid) pour l'enregistrement.
     arg1 contient des informations supplémentaires</entry>
   </row>
   <row>
-   <entry>xlog-switch</entry>
-   <entry>()</entry>
+   <entry><literal>xlog-switch</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche quand une bascule du journal de transactions
     est demandée</entry>
   </row>
   <row>
-   <entry>smgr-md-read-start</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid, int)</entry>
+   <entry><literal>smgr-md-read-start</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int)</literal></entry>
    <entry>Sonde qui se déclenche au début de la lecture d'un bloc d'une
     relation.
     arg0 et arg1 contiennent les numéros de fork et de bloc de la page.
@@ -2443,26 +3141,26 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     base de données et de la relation identifiant ainsi précisément la
     relation.
     arg5 est l'identifiant du processus moteur qui a créé la relation
-    temporaire pour un tampon local ou InvalidBackendId (-1) pour un
+    temporaire pour un tampon local ou <symbol>InvalidBackendId</symbol> (-1) pour un
     tampon partagé</entry>
   </row>
   <row>
-   <entry>smgr-md-read-done</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int)</entry>
+   <entry><literal>smgr-md-read-done</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int)</literal></entry>
    <entry>Sonde qui se déclenche à la fin de la lecture d'un bloc.
     arg0 et arg1 contiennent les numéros de fork et de bloc de la page.
     arg2, arg3 et arg4 contiennent respectivement l'OID du tablespace, de la
     base de données et de la relation identifiant ainsi précisément la
     relation.
     arg5 est l'identifiant du processus moteur qui a créé la relation
-    temporaire pour un tampon local ou InvalidBackendId (-1) pour un
+    temporaire pour un tampon local ou <symbol>InvalidBackendId</symbol> (-1) pour un
     tampon partagé.
     arg6 est le nombre d'octets réellement lus alors que arg7 est le nombre
     d'octets demandés (s'il y a une différence, il y a un problème)</entry>
   </row>
   <row>
-   <entry>smgr-md-write-start</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid, int)</entry>
+   <entry><literal>smgr-md-write-start</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int)</literal></entry>
    <entry>Sonde qui se déclenche au début de l'écriture d'un bloc dans une
     relation.
     arg0 et arg1 contiennent les numéros de fork et de bloc de la page.
@@ -2470,27 +3168,27 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     base de données et de la relation identifiant ainsi précisément la
     relation.
     arg5 est l'identifiant du processus moteur qui a créé la relation
-    temporaire pour un tampon local ou InvalidBackendId (-1) pour un
+    temporaire pour un tampon local ou <symbol>InvalidBackendId</symbol> (-1) pour un
     tampon partagé</entry>
   </row>
   <row>
-   <entry>smgr-md-write-done</entry>
-   <entry>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int)</entry>
+   <entry><literal>smgr-md-write-done</literal></entry>
+   <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int)</literal></entry>
    <entry>Sonde qui se déclenche à la fin de l'écriture d'un bloc.
     arg0 et arg1 contiennent les numéros de fork et de bloc de la page.
     arg2, arg3 et arg4 contiennent respectivement l'OID du tablespace, de la
     base de données et de la relation identifiant ainsi précisément la
     relation.
     arg5 est l'identifiant du processus moteur qui a créé la relation
-    temporaire pour un tampon local ou InvalidBackendId (-1) pour un
+    temporaire pour un tampon local ou <symbol>InvalidBackendId</symbol> (-1) pour un
     tampon partagé.
     arg6 est le nombre d'octets réellement écrits alors que arg7 est le nombre
     d'octets demandés (si ces nombres sont différents, cela indique un
     problème)</entry>
   </row>
   <row>
-   <entry>sort-start</entry>
-   <entry>(int, bool, int, int, bool)</entry>
+   <entry><literal>sort-start</literal></entry>
+   <entry><literal>(int, bool, int, int, bool)</literal></entry>
    <entry>Sonde qui se déclenche quand une opération de tri est démarré.
     arg0 indique un tri de la table, de l'index ou d'un datum.
     arg1 est true si on force les valeurs uniques.
@@ -2499,32 +3197,32 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     arg4 est true si un accès aléatoire au résultat du tri est requis</entry>
   </row>
   <row>
-   <entry>sort-done</entry>
-   <entry>(bool, long)</entry>
+   <entry><literal>sort-done</literal></entry>
+   <entry><literal>(bool, long)</literal></entry>
    <entry>Sonde qui se déclenche quand un tri est terminé.
     arg0 est true pour un tri externe, false pour un tri interne.
     arg1 est le nombre de blocs disque utilisés pour un tri externe, ou le
     nombre de Ko de mémoire utilisés pour un tri interne</entry>
   </row>
   <row>
-   <entry>lwlock-acquire</entry>
-   <entry>(char *, int, LWLockMode)</entry>
+   <entry><literal>lwlock-acquire</literal></entry>
+   <entry><literal>(char *, int, LWLockMode)</literal></entry>
    <entry>Sonde qui se déclenche quand un LWLock a été acquis.
     arg0 est la tranche de LWLock.
     arg1 est le décalage de LWLock dans sa tranche.
     arg2 est le mode de verrou attendu, soit exclusif soit partagé.</entry>
   </row>
   <row>
-   <entry>lwlock-release</entry>
-   <entry>(char *, int)</entry>
+   <entry><literal>lwlock-release</literal></entry>
+   <entry><literal>(char *, int)</literal></entry>
    <entry>Sonde qui se déclenche quand un LWLock a été relâché (mais notez
     que tout processus en attente n'a pas encore été réveillé).
     arg0 est la tranche de LWLock.
     arg1 est le décalage de LWLock dans sa tranche.</entry>
   </row>
   <row>
-   <entry>lwlock-wait-start</entry>
-   <entry>(char *, int, LWLockMode)</entry>
+   <entry><literal>lwlock-wait-start</literal></entry>
+   <entry><literal>(char *, int, LWLockMode)</literal></entry>
    <entry>Sonde qui se déclenche quand un LWLock n'était pas immédiatement
     disponible et qu'un processus serveur a commencé à attendre la
     disponibilité du verrou.
@@ -2533,8 +3231,8 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     arg2 est le mode de verrou attendu, soit exclusif soit partagé.</entry>
   </row>
   <row>
-   <entry>lwlock-wait-done</entry>
-   <entry>(char *, int, LWLockMode)</entry>
+   <entry><literal>lwlock-wait-done</literal></entry>
+   <entry><literal>(char *, int, LWLockMode)</literal></entry>
    <entry>Sonde qui se déclenche quand un processus serveur n'est plus en
     attente d'un LWLock (il n'a pas encore le verrou).
     arg0 est la tranche de LWLock.
@@ -2542,8 +3240,8 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     arg2 est le mode de verrou attendu, soit exclusif soit partagé.</entry>
   </row>
   <row>
-   <entry>lwlock-condacquire</entry>
-   <entry>(char *, int, LWLockMode)</entry>
+   <entry><literal>lwlock-condacquire</literal></entry>
+   <entry><literal>(char *, int, LWLockMode)</literal></entry>
    <entry>Sonde qui se déclenche quand un LWLock a été acquis avec succès
     malgré le fait que l'appelant ait demandé de ne pas attendre.
     arg0 est la tranche de LWLock.
@@ -2551,8 +3249,8 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     arg2 est le mode de verrou attendu, soit exclusif soit partagé.</entry>
   </row>
   <row>
-   <entry>lwlock-condacquire-fail</entry>
-   <entry>(char *, int, LWLockMode)</entry>
+   <entry><literal>lwlock-condacquire-fail</literal></entry>
+   <entry><literal>(char *, int, LWLockMode)</literal></entry>
    <entry>Sonde qui se déclenche quand un LWLock, demandé sans attente, n'est
     pas accepté.
     arg0 est la tranche de LWLock.
@@ -2560,8 +3258,8 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     arg2 est le mode de verrou attendu, soit exclusif soit partagé.</entry>
   </row>
   <row>
-   <entry>lock-wait-start</entry>
-   <entry>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</entry>
+   <entry><literal>lock-wait-start</literal></entry>
+   <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</literal></entry>
    <entry>Sonde qui se déclenche quand une demande d'un gros verrou
     (<foreignphrase>lmgr lock</foreignphrase>) a commencé l'attente parce que
     le verrou n'était pas disponible.
@@ -2570,16 +3268,16 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
     arg5 indique le type du verrou demandé</entry>
   </row>
   <row>
-   <entry>lock-wait-done</entry>
-   <entry>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</entry>
+   <entry><literal>lock-wait-done</literal></entry>
+   <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</literal></entry>
    <entry>Sonde qui se déclenche quand une demande d'un gros verrou
     (<foreignphrase>lmgr lock</foreignphrase>) a fini d'attendre (c'est-à-dire
     que le verrou a été accepté).
     Les arguments sont identiques à ceux de lock-wait-start</entry>
   </row>
   <row>
-   <entry>deadlock-found</entry>
-   <entry>()</entry>
+   <entry><literal>deadlock-found</literal></entry>
+   <entry><literal>()</literal></entry>
    <entry>Sonde qui se déclenche quand un verrou mortel est trouvé par le
     détecteur</entry>
   </row>
@@ -2601,32 +3299,32 @@ D'autres peuvent être ajoutées pour améliorer la surveillance de
  <tbody>
 
   <row>
-   <entry>LocalTransactionId</entry>
-   <entry>unsigned int</entry>
+   <entry><type>LocalTransactionId</type></entry>
+   <entry><type>unsigned int</type></entry>
   </row>
   <row>
-   <entry>LWLockMode</entry>
-   <entry>int</entry>
+   <entry><type>LWLockMode</type></entry>
+   <entry><type>int</type></entry>
   </row>
   <row>
-   <entry>LOCKMODE</entry>
-   <entry>int</entry>
+   <entry><type>LOCKMODE</type></entry>
+   <entry><type>int</type></entry>
   </row>
   <row>
-   <entry>BlockNumber</entry>
-   <entry>unsigned int</entry>
+   <entry><type>BlockNumber</type></entry>
+   <entry><type>unsigned int</type></entry>
   </row>
   <row>
-   <entry>Oid</entry>
-   <entry>unsigned int</entry>
+   <entry><type>Oid</type></entry>
+   <entry><type>unsigned int</type></entry>
   </row>
   <row>
-   <entry>ForkNumber</entry>
-   <entry>int</entry>
+   <entry><type>ForkNumber</type></entry>
+   <entry><type>int</type></entry>
   </row>
   <row>
-   <entry>bool</entry>
-   <entry>char</entry>
+   <entry><type>bool</type></entry>
+   <entry><type>char</type></entry>
   </row>
 
  </tbody>
@@ -2745,7 +3443,7 @@ Voici les étapes nécessaires pour insérer de nouvelles sondes&nbsp;:
 <step>
  <para>
   La sonde sera nommée <literal>transaction-start</literal> et nécessite
-  un paramètre de type LocalTransactionId
+  un paramètre de type <type>LocalTransactionId</type>
  </para>
 </step>
 

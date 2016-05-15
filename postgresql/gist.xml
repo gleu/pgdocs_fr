@@ -384,9 +384,19 @@ my_consistent(PG_FUNCTION_ARGS)
       paramètre <literal>StrategyNumber</literal> indique l'opérateur
       appliqué de votre classe d'opérateur. Il correspond à un des nombres
       d'opérateurs dans la commande <command>CREATE OPERATOR CLASS</command>.
-      Suivant les opérateurs que vous avez inclus dans la classe, le type de
-      données de <varname>query</varname> pourrait varier avec l'opérateur,
-      mais le squelette ci-dessus suppose que ce n'est pas le cas.
+     </para>
+
+     <para>
+      Depending on which operators you have included in the class, the data
+      type of <varname>query</varname> could vary with the operator, since it will
+      be whatever type is on the righthand side of the operator, which might
+      be different from the indexed data type appearing on the lefthand side.
+      (The above code skeleton assumes that only one type is possible; if
+      not, fetching the <varname>query</varname> argument value would have to depend
+      on the operator.)  It is recommended that the SQL declaration of
+      the <function>consistent</function> function use the opclass's indexed data
+      type for the <varname>query</varname> argument, even though the actual type
+      might be something else depending on the operator.
      </para>
 
     </listitem>
@@ -407,7 +417,7 @@ my_consistent(PG_FUNCTION_ARGS)
 
       <programlisting>
 CREATE OR REPLACE FUNCTION my_union(internal, internal)
-RETURNS internal
+RETURNS storage_type
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
       </programlisting>
@@ -461,10 +471,21 @@ my_union(PG_FUNCTION_ARGS)
      </para>
 
      <para>
-      La fonction d'implantation de <function>union</function> doit renvoyer
-      un pointeur vers la mémoire qui vient d'être allouée via la fonction
-      <function>palloc()</function>. Vous ne pouvez pas tout simplement
-      renvoyer l'entrée.
+        The result of the <function>union</function> function must be a value of the
+        index's storage type, whatever that is (it might or might not be
+        different from the indexed column's type).  The <function>union</function>
+        function should return a pointer to newly <function>palloc()</function>ed
+        memory. You can't just return the input value as-is, even if there is
+        no type change.
+      </para>
+
+      <para>
+       As shown above, the <function>union</function> function's
+       first <type>internal</type> argument is actually
+       a <structname>GistEntryVector</structname> pointer.  The second argument is a
+       pointer to an integer variable, which can be ignored.  (It used to be
+       required that the <function>union</function> function store the size of its
+       result value into that variable, but this is no longer necessary.)
      </para>
     </listitem>
    </varlistentry>
@@ -612,6 +633,12 @@ my_penalty(PG_FUNCTION_ARGS)
     PG_RETURN_POINTER(penalty);
 }
       </programlisting>
+
+        For historical reasons, the <function>penalty</function> function doesn't
+        just return a <type>float</type> result; instead it has to store the value
+        at the location indicated by the third argument.  The return
+        value per se is ignored, though it's conventional to pass back the
+        address of that argument.
      </para>
 
      <para>
@@ -654,6 +681,7 @@ Datum
 my_picksplit(PG_FUNCTION_ARGS)
 {
     GistEntryVector *entryvec = (GistEntryVector *) PG_GETARG_POINTER(0);
+    GIST_SPLITVEC *v = (GIST_SPLITVEC *) PG_GETARG_POINTER(1);
     OffsetNumber maxoff = entryvec-&gt;n - 1;
     GISTENTRY  *ent = entryvec-&gt;vector;
     GIST_SPLITVEC *v = (GIST_SPLITVEC *) PG_GETARG_POINTER(1);
@@ -722,6 +750,11 @@ my_picksplit(PG_FUNCTION_ARGS)
     PG_RETURN_POINTER(v);
 }
       </programlisting>
+
+       Notice that the <function>picksplit</function> function's result is delivered
+       by modifying the passed-in <structname>v</structname> structure.  The return
+       value per se is ignored, though it's conventional to pass back the
+       address of <structname>v</structname>.
      </para>
 
      <para>
@@ -739,6 +772,8 @@ my_picksplit(PG_FUNCTION_ARGS)
     <listitem>
      <para>
       Renvoit true si les deux entrées de l'index sont identiques, faux sinon.
+       (An <quote>index entry</quote> is a value of the index's storage type,
+       not necessarily the original indexed column's type.)
      </para>
 
      <para>
@@ -746,7 +781,7 @@ my_picksplit(PG_FUNCTION_ARGS)
       ceci&nbsp;:
 
       <programlisting>
-CREATE OR REPLACE FUNCTION my_same(internal, internal, internal)
+CREATE OR REPLACE FUNCTION my_same(storage_type, storage_type, internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
@@ -773,6 +808,8 @@ my_same(PG_FUNCTION_ARGS)
       Pour des raisons historiques, la fonction <function>same</function> ne
       renvoie pas seulement un résultat booléen&nbsp;; à la place, il doit
       enregistrer le drapeau à l'emplacement indiqué par le troisième argument.
+      The return value per se is ignored, though it's conventional to pass back
+      the address of that argument.
      </para>
     </listitem>
    </varlistentry>
@@ -800,7 +837,7 @@ my_same(PG_FUNCTION_ARGS)
       à ceci&nbsp;:
 
       <programlisting>
-CREATE OR REPLACE FUNCTION my_distance(internal, data_type, smallint, oid)
+CREATE OR REPLACE FUNCTION my_distance(internal, data_type, smallint, oid, internal)
 RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
@@ -873,7 +910,7 @@ my_distance(PG_FUNCTION_ARGS)
      <term><function>fetch</function></term>
      <listitem>
       <para>
-       Convertit la représentation compressée de l'index pour l'élément de
+       Convertit la représentation compressée de l'index pour un élément de
        données vers le type de données original pour les parcours d'index
        seuls. Les données renvoyées doivent être une copie exacte, sans perte
        de la valeur indexée à l'origine.
@@ -891,12 +928,12 @@ LANGUAGE C STRICT;
 </programlisting>
 
         L'argument est un pointeur vers une structure
-        <structname>GISTENTRY</structname>. En entrée, son champ key contient
+        <structname>GISTENTRY</structname>. En entrée, son champ <structfield>key</structfield> contient
         une donnée non NULL compressée. La valeur de retour est une autre
-        structure <structname>GISTENTRY</structname> dont le champ key
+        structure <structname>GISTENTRY</structname> dont le champ <structfield>key</structfield>
         contient la même donnée que l'original, mais non compressée. Si la
         fonction de compression de la classe d'opérateur ne fait rien pour les
-        enregistrements feuilles, la méthode fetch peut renvoyer l'argument
+        enregistrements feuilles, la méthode <function>fetch</function> peut renvoyer l'argument
         tel quel.
        </para>
 
@@ -934,7 +971,7 @@ my_fetch(PG_FUNCTION_ARGS)
       <para>
        Si la méthode de compression est à perte pour les entrées feuilles, la
        classe d'opérateur ne supporte pas les parcours d'index seuls, et ne
-       doit pas définir une fonction fetch.
+       doit pas définir une fonction <function>fetch</function>.
       </para>
 
      </listitem>

@@ -286,9 +286,9 @@ SELECT 'fat &amp; cow'::tsquery @@ 'a fat cat sat on a mat and ate a fat rat'::t
     simple texte brut, pas plus qu'un <type>tsvector</type> ne l'est. Un
     <type>tsquery</type> contient des termes de recherche qui doivent déjà être
     des lexemes normalisés, et peut combiner plusieurs termes en utilisant les
-    opérateurs AND, OR et NOT. (Pour les détails, voir la <xref
-    linkend="datatype-textsearch"/>.)  Les fonctions <function>to_tsquery</function>
-    et <function>plainto_tsquery</function> sont utiles pour convertir un texte
+    opérateurs AND, OR, NOT et FOLLOWED BY. (Pour les détails, voir la <xref
+    linkend="datatype-textsearch"/>.)  Les fonctions <function>to_tsquery</function>,
+    <function>plainto_tsquery</function> et <function>phraseto_tsquery</function> sont utiles pour convertir un texte
     écrit par un utilisateur dans un <type>tsquery</type> correct, par exemple
     en normalisant les mots apparaissant dans le texte. De façon similaire,
     <function>to_tsvector</function> est utilisé pour analyser et normaliser un
@@ -316,6 +316,35 @@ SELECT 'fat cats ate fat rats'::tsvector @@ to_tsquery('fat &amp; rat');
     Les éléments d'un <type>tsvector</type> sont des lexemes, qui sont
     supposés déjà normalisés, donc <literal>rats</literal> ne correspond pas à
     <literal>rat</literal>.
+   </para>
+
+   <para>
+    Phrase search is made possible with the help of the <literal>&lt;-&gt;</literal>
+    (FOLLOWED BY) operator, which enforces lexeme order. This allows you
+    to discard strings not containing the desired phrase, for example:
+
+<programlisting>
+SELECT q @@ to_tsquery('fatal &lt;-&gt; error')
+FROM unnest(array[to_tsvector('fatal error'),
+                  to_tsvector('error is not fatal')]) AS q;
+ ?column?
+----------
+ t
+ f
+</programlisting>
+
+    A more generic version of the FOLLOWED BY operator takes form of
+    <literal>&lt;N&gt;</literal>, where N stands for the greatest allowed distance
+    between the specified lexemes. The <literal>phraseto_tsquery</literal>
+    function makes use of this behavior in order to construct a
+    <literal>tsquery</literal> capable of matching the provided phrase:
+
+<programlisting>
+SELECT phraseto_tsquery('cat ate some rats');
+       phraseto_tsquery
+-------------------------------
+ ( 'cat' &lt;-&gt; 'ate' ) &lt;2&gt; 'rat'
+</programlisting>
    </para>
 
    <para>
@@ -757,11 +786,12 @@ UPDATE tt SET ti =
 
    <para>
     <productname>PostgreSQL</productname> fournit les fonctions
-    <function>to_tsquery</function> et <function>plainto_tsquery</function> pour
+    <function>to_tsquery</function>, <function>plainto_tsquery</function> et
+    <function>phraseto_tsquery</function> pour
     convertir une requête dans le type de données <type>tsquery</type>.
     <function>to_tsquery</function> offre un accès à d'autres fonctionnalités
-    que <function>plainto_tsquery</function> mais est moins indulgent sur ses
-    arguments.
+    que <function>plainto_tsquery</function> et <function>phraseto_tsquery</function>
+    mais est moins indulgent sur ses arguments.
    </para>
 
    <indexterm>
@@ -775,9 +805,10 @@ UPDATE tt SET ti =
    <para>
     <function>to_tsquery</function> crée une valeur <type>tsquery</type> à
     partir de <replaceable>querytext</replaceable> qui doit contenir un
-    ensemble de jetons
-    individuels séparés par les opérateurs booléens <literal>&amp;</literal>
-    (AND), <literal>|</literal> (OR) et <literal>!</literal> (NOT). Ces
+    ensemble de jetons individuels séparés par les opérateurs booléens
+    <literal>&amp;</literal> (AND), <literal>|</literal> (OR) et
+    <literal>!</literal> (NOT), and also the <literal>&lt;-&gt;</literal>
+    (FOLLOWED BY) phrase search operator. Ces
     opérateurs peuvent être groupés en utilisant des parenthèses. En d'autres
     termes, les arguments de <function>to_tsquery</function> doivent déjà suivre
     les règles générales pour un <type>tsquery</type> comme décrit dans la <xref
@@ -866,8 +897,8 @@ SELECT to_tsquery('''supernovae stars'' &amp; !crab');
     </screen>
 
     Notez que <function>plainto_tsquery</function> ne peut pas reconnaître un
-    opérateur booléen, des labels de poids en entrée ou des labels de
-    correspondance de préfixe&nbsp;:
+    opérateur booléen ou de recherche de phrase, des labels de poids en entrée
+    ou des labels de correspondance de préfixe&nbsp;:
 
     <screen>
 SELECT plainto_tsquery('english', 'The Fat &amp; Rats:C');
@@ -878,6 +909,57 @@ SELECT plainto_tsquery('english', 'The Fat &amp; Rats:C');
 
     Ici, tous les symboles de ponctuation ont été annulés car ce sont des
     symboles espace.
+   </para>
+
+   <indexterm>
+    <primary>phraseto_tsquery</primary>
+   </indexterm>
+
+<synopsis>
+phraseto_tsquery(<optional> <replaceable class="PARAMETER">config</replaceable> <type>regconfig</type>, </optional> <replaceable class="PARAMETER">querytext</replaceable> <type>text</type>) returns <type>tsquery</type>
+</synopsis>
+
+   <para>
+    <function>phraseto_tsquery</function> behaves much like
+    <function>plainto_tsquery</function>, with the exception
+    that it utilizes the <literal>&lt;-&gt;</literal> (FOLLOWED BY) phrase search
+    operator instead of the <literal>&amp;</literal> (AND) Boolean operator.
+    This is particularly useful when searching for exact lexeme sequences,
+    since the phrase search operator helps to maintain lexeme order.
+   </para>
+
+   <para>
+    Example:
+
+<screen>
+SELECT phraseto_tsquery('english', 'The Fat Rats');
+ phraseto_tsquery
+------------------
+ 'fat' &lt;-&gt; 'rat'
+</screen>
+
+    Just like the <function>plainto_tsquery</function>, the
+    <function>phraseto_tsquery</function> function cannot
+    recognize Boolean and phrase search operators, weight labels,
+    or prefix-match labels in its input:
+
+<screen>
+SELECT phraseto_tsquery('english', 'The Fat &amp; Rats:C');
+      phraseto_tsquery
+-----------------------------
+ ( 'fat' &lt;-&gt; 'rat' ) &lt;-&gt; 'c'
+</screen>
+
+    It is possible to specify the configuration to be used to parse the document,
+    for example, we could create a new one using the hunspell dictionary
+    (namely 'eng_hunspell') in order to match phrases with different word forms:
+
+<screen>
+SELECT phraseto_tsquery('eng_hunspell', 'developer of the building which collapsed');
+                                      phraseto_tsquery
+--------------------------------------------------------------------------------------------
+ ( 'developer' &lt;3&gt; 'building' ) &lt;2&gt; 'collapse' | ( 'developer' &lt;3&gt; 'build' ) &lt;2&gt; 'collapse'
+</screen>
    </para>
 
   </sect2>
@@ -1395,6 +1477,11 @@ FROM (SELECT id, body, q, ts_rank_cd(ti, q) AS rank
 
    </variablelist>
 
+   <para>
+    A full list of <type>tsvector</type>-related functions is available
+    in <xref linkend="textsearch-functions-table"/>.
+   </para>
+
   </sect2>
 
   <sect2 id="textsearch-manipulate-tsquery">
@@ -1448,6 +1535,53 @@ FROM (SELECT id, body, q, ts_rank_cd(ti, q) AS rank
      <listitem>
       <para>
        Renvoie la négation (NOT) de la requête donnée.
+      </para>
+     </listitem>
+
+    </varlistentry>
+
+    <varlistentry>
+
+     <term>
+      <literal><type>tsquery</type> &lt;-&gt; <type>tsquery</type></literal>
+     </term>
+
+     <listitem>
+      <para>
+       Returns the phrase-concatenation of the two given queries.
+
+<screen>
+SELECT to_tsquery('fat') &lt;-&gt; to_tsquery('cat | rat');
+             ?column?
+-----------------------------------
+ 'fat' &lt;-&gt; 'cat' | 'fat' &lt;-&gt; 'rat'
+</screen>
+      </para>
+     </listitem>
+
+    </varlistentry>
+
+    <varlistentry>
+
+     <term>
+     <indexterm>
+      <primary>tsquery_phrase</primary>
+     </indexterm>
+
+      <literal>tsquery_phrase(<replaceable class="PARAMETER">query1</replaceable> <type>tsquery</type>, <replaceable class="PARAMETER">query2</replaceable> <type>tsquery</type> [, <replaceable class="PARAMETER">distance</replaceable> <type>integer</type> ]) returns <type>tsquery</type></literal>
+     </term>
+
+     <listitem>
+      <para>
+       Returns the distanced phrase-concatenation of the two given queries.
+       This function lies in the implementation of the <literal>&lt;-&gt;</literal> operator.
+
+<screen>
+SELECT tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), 10);
+  tsquery_phrase
+------------------
+ 'fat' &lt;10&gt; 'cat'
+</screen>
       </para>
      </listitem>
 
@@ -2732,19 +2866,42 @@ SELECT plainto_tsquery('supernova star');
    </para>
 
    <para>
-    Pour créer un dictionnaire <application>Ispell</application>, utilisez le
-    modèle interne <literal>Ispell</literal> et précisez plusieurs
-    paramètres&nbsp;:
+    Pour créer un dictionnaire <application>Ispell</application>, perform these steps&nbsp;:
    </para>
 
-   <programlisting>
-CREATE TEXT SEARCH DICTIONARY english_ispell (
-    TEMPLATE = ispell,
-    DictFile = english,
-    AffFile = english,
-    StopWords = english
-);
-   </programlisting>
+   <itemizedlist spacing="compact" mark="bullet">
+    <listitem>
+     <para>
+      download dictionary configuration files. <productname>OpenOffice</productname>
+      extension files have the <filename>.oxt</filename> extension. It is necessary
+      to extract <filename>.aff</filename> and <filename>.dic</filename> files, change
+      extensions to <filename>.affix</filename> and <filename>.dict</filename>. For some
+      dictionary files it is also needed to convert characters to the UTF-8
+      encoding with commands (for example, for norwegian language dictionary):
+ <programlisting>
+iconv -f ISO_8859-1 -t UTF-8 -o nn_no.affix nn_NO.aff
+iconv -f ISO_8859-1 -t UTF-8 -o nn_no.dict nn_NO.dic
+</programlisting>
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      copy files to the <filename>$SHAREDIR/tsearch_data</filename> directory
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      load files into PostgreSQL with the following command:
+<programlisting>
+CREATE TEXT SEARCH DICTIONARY english_hunspell (
+     TEMPLATE = ispell,
+    DictFile = en_us,
+    AffFile = en_us,
+    Stopwords = english);
+ </programlisting>
+     </para>
+    </listitem>
+   </itemizedlist>
 
    <para>
     Ici, <literal>DictFile</literal>, <literal>AffFile</literal> et
@@ -2759,6 +2916,56 @@ CREATE TEXT SEARCH DICTIONARY english_ispell (
     Les dictionnaires Ispell reconnaissent habituellement un ensemble limité de
     mots, pour qu'ils puissent être suivis par un dictionnaire encore plus
     généraliste&nbsp;; par exemple un dictionnaire Snowball qui reconnaît tout.
+   </para>
+
+   <para>
+    The <filename>.affix</filename> file of <application>Ispell</application> has the following
+    structure:
+<programlisting>
+prefixes
+flag *A:
+    .           >   RE      # As in enter > reenter
+suffixes
+flag T:
+    E           >   ST      # As in late > latest
+    [^AEIOU]Y   >   -Y,IEST # As in dirty > dirtiest
+    [AEIOU]Y    >   EST     # As in gray > grayest
+    [^EY]       >   EST     # As in small > smallest
+</programlisting>
+   </para>
+   <para>
+    And the <filename>.dict</filename> file has the following structure:
+<programlisting>
+lapse/ADGRS
+lard/DGRS
+large/PRTY
+lark/MRS
+</programlisting>
+   </para>
+
+   <para>
+    Format of the <filename>.dict</filename> file is:
+<programlisting>
+basic_form/affix_class_name
+</programlisting>
+   </para>
+
+   <para>
+    In the <filename>.affix</filename> file every affix flag is described in the
+    following format:
+<programlisting>
+condition > [-stripping_letters,] adding_affix
+</programlisting>
+   </para>
+
+   <para>
+    Here, condition has a format similar to the format of regular expressions.
+    It can use groupings <literal>[...]</literal> and <literal>[^...]</literal>.
+    For example, <literal>[AEIOU]Y</literal> means that the last letter of the word
+    is <literal>"y"</literal> and the penultimate letter is <literal>"a"</literal>,
+    <literal>"e"</literal>, <literal>"i"</literal>, <literal>"o"</literal> or <literal>"u"</literal>.
+    <literal>[^EY]</literal> means that the last letter is neither <literal>"e"</literal>
+    nor <literal>"y"</literal>.
    </para>
 
    <para>
@@ -2779,6 +2986,65 @@ SELECT ts_lexize('norwegian_ispell', 'overbuljongterningpakkmesterassistent');
 SELECT ts_lexize('norwegian_ispell', 'sjokoladefabrikk');
    {sjokoladefabrikk,sjokolade,fabrikk}
     </programlisting>
+   </para>
+
+   <para>
+    <application>MySpell</application> format is a subset of <application>Hunspell</application>.
+    The <filename>.affix</filename> file of <application>Hunspell</application> has the following
+    structure:
+<programlisting>
+PFX A Y 1
+PFX A   0     re         .
+SFX T N 4
+SFX T   0     st         e
+SFX T   y     iest       [^aeiou]y
+SFX T   0     est        [aeiou]y
+SFX T   0     est        [^ey]
+</programlisting>
+   </para>
+
+   <para>
+    The first line of an affix class is the header. Fields of an affix rules are
+    listed after the header:
+   </para>
+   <itemizedlist spacing="compact" mark="bullet">
+    <listitem>
+     <para>
+      parameter name (PFX or SFX)
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      flag (name of the affix class)
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      stripping characters from beginning (at prefix) or end (at suffix) of the
+      word
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      adding affix
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      condition that has a format similar to the format of regular expressions.
+     </para>
+    </listitem>
+   </itemizedlist>
+
+   <para>
+    The <filename>.dict</filename> file looks like the <filename>.dict</filename> file of
+    <application>Ispell</application>:
+<programlisting>
+larder/M
+lardy/RT
+large/RSPMYT
+largehearted
+</programlisting>
    </para>
 
    <note>

@@ -27,8 +27,8 @@
   taille standard de façon à utiliser le gestionnaire de stockage
   et le gestionnaire de tampon pour accéder au contenu de l'index. De plus,
   toutes les méthodes existantes d'accès aux index utilisent la disposition
-  de page standard décrite dans <xref linkend="storage-page-layout"/> et
-  le même format pour les en-têtes de ligne de
+  de page standard décrite dans <xref linkend="storage-page-layout"/> et la plupart
+  ont le même format pour les en-têtes de ligne de
   l'index&nbsp;; mais ces décisions ne sont pas contraintes sur une méthode
   d'index.
  </para>
@@ -51,23 +51,103 @@
   le VACUUM) lorsque les lignes mortes elles-même sont réclamées.
  </para>
 
- <sect1 id="index-catalog">
-  <title>Entrées du catalogue pour les index</title>
+ <sect1 id="index-api">
+  <title>Basic API Structure for Indexes</title>
 
   <para>
-   Chaque méthode d'accès à l'index est décrite par une ligne dans le catalogue
-   système <structname>pg_am</structname> (voir <xref linkend="catalog-pg-am"/>).
-   Le contenu principal d'une ligne de <structname>pg_am</structname> est
-   constitué de références à des entrées de
-   <link linkend="catalog-pg-proc"><structname>pg_proc</structname></link>
-   qui identifient les fonctions d'accès à l'index fournies par la méthode d'accès.
-   Les API de ces fonctions sont définies plus loin dans ce chapitre. De plus,
-   la ligne de <structname>pg_am</structname> spécifie quelques propriétés fixes
-   de la méthode d'accès, comme le support des index multi-colonnes. Il
+   Chaque méthode d'accès à l'index est décrite par une ligne dans le
+   <link linkend="catalog-pg-am"><structname>pg_am</structname></link>
+   system catalog.  The <structname>pg_am</structname> entry
+   specifies a name and a <firstterm>handler function</firstterm> for the access
+   method. Il
    n'existe pas de support spécial pour la création ou la suppression d'entrées
    dans <structname>pg_am</structname>&nbsp;; toute personne capable d'écrire
    une nouvelle méthode d'accès est supposée assez compétente pour insérer la
    ligne appropriée.
+  </para>
+
+  <para>
+   Index access methods can be defined and dropped using
+   <xref linkend="sql-create-access-method"/> and
+    <xref linkend="sql-drop-access-method"/> SQL commands respectively.
+  </para>
+
+  <para>
+   An index access method handler function must be declared to accept a
+   single argument of type <type>internal</type> and to return the
+   pseudo-type <type>index_am_handler</type>.  The argument is a dummy value that
+   simply serves to prevent handler functions from being called directly from
+   SQL commands.  The result of the function must be a palloc'd struct of
+   type <structname>IndexAmRoutine</structname>, which contains everything
+   that the core code needs to know to make use of the index access method.
+   The <structname>IndexAmRoutine</structname> struct, also called the access
+   method's <firstterm>API struct</firstterm>, includes fields specifying assorted
+   fixed properties of the access method, such as whether it can support
+   multicolumn indexes.  More importantly, it contains pointers to support
+   functions for the access method, which do all of the real work to access
+   indexes.  These support functions are plain C functions and are not
+   visible or callable at the SQL level.  The support functions are described
+   in <xref linkend="index-functions"/>.
+  </para>
+
+  <para>
+   The structure <structname>IndexAmRoutine</structname> is defined thus:
+<programlisting>
+typedef struct IndexAmRoutine
+{
+    NodeTag     type;
+
+    /*
+     * Total number of strategies (operators) by which we can traverse/search
+     * this AM.  Zero if AM does not have a fixed set of strategy assignments.
+     */
+    uint16      amstrategies;
+    /* total number of support functions that this AM uses */
+    uint16      amsupport;
+    /* does AM support ORDER BY indexed column's value? */
+    bool        amcanorder;
+    /* does AM support ORDER BY result of an operator on indexed column? */
+    bool        amcanorderbyop;
+    /* does AM support backward scanning? */
+    bool        amcanbackward;
+    /* does AM support UNIQUE indexes? */
+    bool        amcanunique;
+    /* does AM support multi-column indexes? */
+    bool        amcanmulticol;
+    /* does AM require scans to have a constraint on the first index column? */
+    bool        amoptionalkey;
+    /* does AM handle ScalarArrayOpExpr quals? */
+    bool        amsearcharray;
+    /* does AM handle IS NULL/IS NOT NULL quals? */
+    bool        amsearchnulls;
+    /* can index storage data type differ from column data type? */
+    bool        amstorage;
+    /* can an index of this type be clustered on? */
+    bool        amclusterable;
+    /* does AM handle predicate locks? */
+    bool        ampredlocks;
+    /* type of data stored in index, or InvalidOid if variable */
+    Oid         amkeytype;
+
+    /* interface functions */
+    ambuild_function ambuild;
+    ambuildempty_function ambuildempty;
+    aminsert_function aminsert;
+    ambulkdelete_function ambulkdelete;
+    amvacuumcleanup_function amvacuumcleanup;
+    amcanreturn_function amcanreturn;   /* can be NULL */
+    amcostestimate_function amcostestimate;
+    amoptions_function amoptions;
+    amvalidate_function amvalidate;
+    ambeginscan_function ambeginscan;
+    amrescan_function amrescan;
+    amgettuple_function amgettuple;     /* can be NULL */
+    amgetbitmap_function amgetbitmap;   /* can be NULL */
+    amendscan_function amendscan;
+    ammarkpos_function ammarkpos;       /* can be NULL */
+    amrestrpos_function amrestrpos;     /* can be NULL */
+} IndexAmRoutine;
+</programlisting>
   </para>
 
   <para>
@@ -103,7 +183,7 @@
   </para>
 
   <para>
-   Certaines colonnes d'options de <structname>pg_am</structname> ont des
+   Certains champs d'options de <structname>IndexAmRoutine</structname> ont des
    implications peu évidentes. Les besoins de <structfield>amcanunique</structfield>
    sont discutés dans  <xref linkend="index-unique-checks"/>.
    L'option <structfield>amcanmulticol</structfield> indique que la méthode
@@ -153,7 +233,8 @@
 
   <para>
    Les fonctions de construction et de maintenance d'index que doit fournir
-   une méthode d'accès aux index sont&nbsp;:
+   une méthode d'accès aux index dans <structname>IndexAmRoutine</structname>
+   sont&nbsp;:
   </para>
 
   <para>
@@ -179,7 +260,7 @@ ambuildempty (Relation indexRelation);
    </programlisting>
    Construire un index vide et l'inscrire dans le fichier d'initialisation
    (<symbol>INIT_FORKNUM</symbol>) de la relation. Cette méthode est seulement appelée pour les
-   tables non tracées. L'index vide inscrit dans le fichier d'initialisation
+   index non journalisés. L'index vide inscrit dans le fichier d'initialisation
    sera copié sur le fichier de la relation à chaque redémarrage du serveur.
   </para>
 
@@ -196,7 +277,7 @@ aminsert (Relation indexRelation,
    <literal>values</literal> et <literal>isnull</literal> donnent les valeurs
    de clés à indexer.
    <literal>heap_tid</literal> est le TID à indexer. Si la méthode d'accès supporte les
-   index uniques (son drapeau <structname>pg_am</structname>.<structfield>amcanunique</structfield>
+   index uniques (son drapeau <structfield>amcanunique</structfield>
    vaut true), alors <literal>checkUnique</literal> indique le type de
    vérification unique à réaliser. Cela varie si la contrainte unique est
    déferrable ou non&nbsp;; voir <xref linkend="index-unique-checks"/> pour
@@ -291,15 +372,14 @@ amvacuumcleanup (IndexVacuumInfo *info,
 bool
 amcanreturn (Relation indexRelation, int attno);
    </programlisting>
-   Vérifie si l'index supporte les <firstterm>parcours d'index
-   seul</firstterm> sur la colonne donnée, en renvoyant les valeurs indexées
-   de la colonne pour une entrée d'index sous la forme d'un
-   <structname>IndexTuple</structname>. La numérotation des colonnes commence
-   à 1, autrement dit le champ attno pour la première colonne est 1. Renvoie
-   TRUE si la fonctionnalité est supportée, et FALSE sinon. Si la méthode
-   d'accès ne supporte pas du tout les parcours d'index seul, le champ
-   <structfield>amcanreturn</structfield> dans l'enregistrement de
-   <structname>pg_am</structname> peut être configuré à zéro.
+   Check whether the index can support <link
+   linkend="indexes-index-only-scans"><firstterm>index-only scans</firstterm></link> on
+   the given column, by returning the indexed column values for an index entry
+   in the form of an <structname>IndexTuple</structname>.  The attribute number
+   is 1-based, i.e. the first column's attno is 1. Returns TRUE if supported,
+   else FALSE.  If the access method does not support index-only scans at all,
+   the <structfield>amcanreturn</structfield> field in its <structname>IndexAmRoutine</structname>
+   struct can be set to NULL.
   </para>
 
   <para>
@@ -343,6 +423,19 @@ amoptions (ArrayType *reloptions,
    les options et, dans ce cas, ignorer les entrées obsolètes est approprié.)
    Pour obtenir le comportement par défaut, il suffit de retourner NULL.
   </para>
+
+  <para>
+<programlisting>
+bool
+amvalidate (Oid opclassoid);
+</programlisting>
+   Validate the catalog entries for the specified operator class, so far as
+   the access method can reasonably do that.  For example, this might include
+   testing that all required support functions are provided.
+   The <function>amvalidate</function> function must return false if the opclass is
+   invalid.  Problems should be reported with <function>ereport</function> messages.
+  </para>
+
 
   <para>
    Le but d'un index est de supporter les parcours de lignes
@@ -423,7 +516,8 @@ amgettuple (IndexScanDesc scan,
   </para>
 
   <para>
-   Si l'index supporte les parcours d'index seul (c'est-à-dire que
+   Si l'index supporte les <link linkend="indexes-index-only-scans">parcours
+   d'index seul</link> (c'est-à-dire que
    <function>amcanreturn</function> renvoit TRUE), alors, en cas de succès,
    la méthode d'accès doit aussi vérifier
    <literal>scan-&gt;xs_want_itup</literal>, et si ce dernier est TRUE, elle
@@ -441,8 +535,8 @@ amgettuple (IndexScanDesc scan,
   <para>
    La fonction <function>amgettuple</function> a seulement besoin d'exister
    si la méthode d'accès supporte les parcours d'index standards. Si ce n'est
-   pas le cas, le champ <structfield>amgettuple</structfield> de la ligne de
-   <structname>pg_am</structname> doit valoir zéro.
+   pas le cas, le champ <structfield>amgettuple</structfield> de la structure
+   <structname>IndexAmRoutine</structname> doit être configuré à NULL.
   </para>
 
   <para>
@@ -474,8 +568,8 @@ amgetbitmap (IndexScanDesc scan,
   <para>
    La fonction <function>amgetbitmap</function> doit seulement exister si la
    méthode d'accès supporte les parcours d'index <quote>bitmap</quote>. Dans le
-   cas contraire, le champ <structfield>amgetbitmap</structfield> de la ligne
-   correspondante dans <structname>pg_am</structname> doit être à zéro.
+   cas contraire, le champ <structfield>amgetbitmap</structfield> de la structure
+   <structname>IndexAmRoutine</structname> doit être configuré à NULL.
   </para>
 
   <para>
@@ -503,17 +597,10 @@ amrestrpos (IndexScanDesc scan);
   </para>
 
   <para>
-   Par convention, l'entrée <literal>pg_proc</literal> de toute fonction de
-   méthode d'accès aux index affiche le bon nombre d'arguments, mais
-   les déclare tous du type <type>internal</type> (la plupart des
-   arguments ont des types qui ne sont pas connus en SQL, et il n'est pas
-   souhaitable que les utilisateurs appelent les fonctions directement). Le type
-   de retour est déclaré <type>void</type>, <type>internal</type> ou <type>boolean</type>
-   suivant le cas.
-   La seule exception est <function>amoptions</function>, qui doit être
-   correctement déclarée prenant <type>text[]</type> et <type>bool</type>
-   et retournant <type>bytea</type>. Cette protection autorise le code client à
-   exécuter <function>amoptions</function> pour tester la validité des paramètres.
+   The <function>ammarkpos</function> function need only be provided if the access
+   method supports ordered scans.  If it doesn't,
+   the <structfield>ammarkpos</structfield> field in its <structname>IndexAmRoutine</structname>
+   struct may be set to NULL.
   </para>
 
  </sect1>
@@ -582,7 +669,7 @@ supprime des données, mais dans le cas de l'index ? -->
      <para>
       Les méthodes d'accès qui renvoient toujours les entrées dans l'ordre
       naturel (comme les B-tree) doivent configurer
-      <structname>pg_am</structname>.<structfield>amcanorder</structfield> à
+      <structfield>amcanorder</structfield> à
       true. Actuellement, ces méthodes d'accès doivent utiliser des nombres
       de stratégie compatibles avec les B-tree pour les opérateurs d'égalité
       et de tri.
@@ -591,8 +678,7 @@ supprime des données, mais dans le cas de l'index ? -->
     <listitem>
      <para>
       Les méthodes d'accès qui supportent les opérateurs de tri doivent
-      configurer
-      <structname>pg_am</structname>.<structfield>amcanorderbyop</structfield>
+      configurer <structfield>amcanorderbyop</structfield>
       à true. Ceci indique que l'index est capable de renvoyer les entrées
       dans un ordre satisfaisant <literal>ORDER BY</literal>
       <replaceable>clé_index</replaceable> <replaceable>opérateur</replaceable>
@@ -619,7 +705,7 @@ supprime des données, mais dans le cas de l'index ? -->
    le premier appel, <function>amgettuple</function>
    doit être préparé pour continuer le parcours dans la direction adaptée à partir de
    l'entrée la plus récemment renvoyée. (Mais si
-   <structname>pg_am</structname>.<structfield>amcanbackward</structfield> vaut
+   <structfield>amcanbackward</structfield> vaut
    false, tous les appels suivants auront la même direction que le premier.)
   </para>
 
@@ -630,9 +716,10 @@ supprime des données, mais dans le cas de l'index ? -->
    plusieurs fois. Néanmoins, seule une position par parcours a besoin d'être
    conservée en mémoire&nbsp;; un nouvel appel à <function>ammarkpos</function>
    surcharge la position anciennement marquée. Une méthode d'accès qui ne
-   supporte pas les parcours ordonnés doit quand même fournir les fonctions de
-   marquage et de restauration dans <structname>pg_am</structname>, mais il est
-   suffisant de leur faire renvoyer des erreurs si les fonctions sont appelées.
+   supporte pas les parcours ordonnés need not provide
+   <function>ammarkpos</function> and <function>amrestrpos</function>
+   functions in <structname>IndexAmRoutine</structname>; set those pointers to NULL
+   instead.
   </para>
 
   <para>
@@ -651,9 +738,10 @@ supprime des données, mais dans le cas de l'index ? -->
 
   <para>
    Si l'index stocke les valeurs originales des données indexées (et pas une
-   représentation à perte des données), il est utile de supporter les parcours
-   d'index seul, pour lesquels l'index renvoie la donnée réelle et non pas
-   seulement le TID de la ligne dans la table. Ceci va seulement fonctionner
+   représentation à perte des données), il est utile de supporter les <link
+   linkend="indexes-index-only-scans">parcours d'index seul</link>, pour
+   lesquels l'index renvoie la donnée réelle et non pas
+   seulement le TID de la ligne dans la table. Ceci va seulement éviter des I/O
    si la carte de visibilité montre que le TID est sur une page dont toutes
    les lignes sont visibles par toutes les transactions en cours. Sinon, la
    ligne de la table doit être visitée de toute façon pour s'assurer de
@@ -825,7 +913,7 @@ supprime des données, mais dans le cas de l'index ? -->
    en utilisant des <firstterm>index d'unicité</firstterm>, qui sont des index qui refusent
    les entrées multiples à clés identiques. Une méthode d'accès qui
    supporte cette fonctionnalité initialise
-   <structname>pg_am</structname>.<structfield>amcanunique</structfield> à
+   <structfield>amcanunique</structfield> à
    true. (À ce jour, seul B-tree le supporte).
   </para>
 
@@ -1157,7 +1245,7 @@ amcostestimate (PlannerInfo *root,
      de l'optimiseur standard <function>clauselist_selectivity()</function>:
 
      <programlisting>+*indexSelectivity = clauselist_selectivity(root, path-&gt;indexquals,
-+                                           path-&gt;indexinfo-&gt;rel-&gt;relid,
+                                           path-&gt;indexinfo-&gt;rel-&gt;relid,
                                            JOIN_INNER, NULL);
      </programlisting>
     </para>
