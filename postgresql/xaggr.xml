@@ -22,7 +22,7 @@
   fonction de transition d'état. La fonction de transition d'état prend la
   valeur d'état précédente et les valeurs en entrée de l'agrégat pour la ligne
   courante, et renvoie une nouvelle valeur d'état. Une <firstterm>fonction
-   finale</firstterm> peut également être spécifiée pour le cas où le résultat
+  finale</firstterm> peut également être spécifiée pour le cas où le résultat
   désiré comme agrégat est différent des données conservées comme valeur d'état
   courant. La fonction finale prend la dernière valeur de l'état, et renvoie
   ce qui est voulu comme résultat de l'agrégat. En principe, les fonctions de
@@ -508,6 +508,110 @@ SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY revenu) FROM menages;
 
  </sect2>
 
+  <sect2 id="xaggr-partial-aggregates">
+  <title>Agrégation partielle</title>
+
+  <indexterm>
+   <primary>fonction d'agrégat</primary>
+   <secondary>agrégation partielle</secondary>
+  </indexterm>
+
+  <para>
+   En option, une fonction d'agrégat peut supporter une <firstterm>agrégation
+   partielle</firstterm>. L'idée d'agrégation partielle est d'exécuter la
+   fonction de transition d'état de l'agrégat sur différents sous-ensembles
+   des données en entrée de façon indépendante, puis de combiner les valeurs
+   d'état provenant de ces sous-ensembles pour produire la même valeur d'état
+   que ce qui aurait résultat du parcours de toutes les entrées en une seule
+   opération. Ce mode peut être utilisé pour l'agrégation parallèle en ayant
+   différents processus parallèles parcourant des portions différentes d'une
+   table. Chaque processus produit une valeur d'état partiel et, à la fin, ces
+   valeurs d'état sont combinées pour produire une valeur d'état finale. (Dans
+   le futur, ce mode pourrait aussi être utilisé dans d'autres cas comme
+   l'agrégation combinée sur des tables locales et externes&nbsp;; mais ce
+   n'est pas encore implémenté.)
+  </para>
+
+  <para>
+   Pour supporter une agrégation partielle, la définition de l'agrégat doit
+   fournir une <firstterm>fonction de combinaison</firstterm>, qui prend deux
+   valeurs du type de l'état d'agrégat (représentant les résultats de
+   l'agrégat sur deux sous-ensembles de lignes en entrée) et produit une
+   nouvelle valeur du type de l'état, représentant l'état qu'on aurait eu en
+   réalisant l'agrégat sur la combinaison de ces deux ensembles de données.
+   L'ordre relatif des lignes entrées n'est pas spécifié pour les deux
+   ensembles de données. Ceci signifie qu'il est habituellement impossible de
+   définir une fonction de combinaison utile pour les agrégats sensibles à
+   l'ordre des lignes en entrée.
+  </para>
+
+  <para>
+   Comme exemples simples, les agrégats <literal>MAX</literal> et
+   <literal>MIN</literal> peuvent supporter l'agrégation partielle en
+   indiquant la fonction de combinaison comme étant la même fonction plus-
+   grand-que ou plus-petit-que que celle utilisée comme fonction de transition
+   function. L'agrégat <literal>SUM</literal> a besoin d'une fonction
+   supplémentaire comme fonction de combinaison. (Encore une fois, c'est la
+   même que leur fonction de transition, sauf si la valeur d'état est plus
+   grand que le type de données en entrée.)
+  </para>
+
+  <para>
+   La fonction de combinaison est traitée un peu comme une fonction de
+   transition qui prend une valeur du type d'état, pas de celle du type
+   d'entrée sous-jacent, comme deuxième argument. En particulier, les règles
+   pour gérer les valeurs nulles et les fonctions strictes sont similaires. De
+   plus, si la définition de l'agrégat indique un <literal>initcond</literal>
+   non nul, gardez en tête que ce sera utilisé non seulement comme état
+   initial pour chaque exécution de l'agrégat partiel, mais aussi comme état
+   initiale de la fonction de combinaison, qui sera appelée pour combiner
+   chaque résultat partiel dans cet état.
+  </para>
+
+  <para>
+   Si le type d'état de l'agrégat est déclaré comme <type>internal</type>, il
+   est de la responsabilité de la fonction de combinaison que son résultat
+   soit alloué dans le contexte mémoire correct pour les valeurs d'état de
+   l'agrégat. Ceci signifie en particulier que, quand la première entrée est
+   <literal>NULL</literal>, il est invalide de renvoyer simplement la deuxième
+   entrée car cette valeur sera dans le mauvais contexte et n'aura pas une
+   durée de vie suffisante.
+  </para>
+
+  <para>
+   Quand le type d'état de l'agrégat est déclaré comme <type>internal</type>,
+   il est aussi habituellement approprié que la définition de l'agrégat
+   fournisse une <firstterm>fonction de sérialisation</firstterm> et une
+   <firstterm>fonction de désérialisation</firstterm>, qui permet qu'une telle
+   valeur d'état soit copiée d'un processus à un autre. Sans ces fonctions,
+   l'agrégation parallèle ne peut pas être réalisée, et les applications
+   futures telles que l'agrégation locale/distante ne fonctionnera
+   probablement pas non plus.
+  </para>
+
+  <para>
+   Une fonction de sérialisation doit prendre un seul argument de type
+   <type>internal</type> et renvoyer un résultat de type <type>bytea</type>,
+   qui représente la valeur d'état packagé en un paquet plat d'octets. De la
+   même façon, une fonction de désérialisation inverse cette conversion. Elle
+   doit prendre deux arguments de type <type>bytea</type> et
+   <type>internal</type>, et renvoyer un résultat de type
+   <type>internal</type>. (Le deuxième argument n'est pas utilisé et vaut
+   toujours zéro, mais il est requis pour des raisons de sécurité du type.) Le
+   résultat de la fonction de désérialisation doit simplement être alloué dans
+   le contexte mémoire courant car, contrairement au résultat de la fonction
+   de combinaison, il ne vit pas longtemps.
+  </para>
+
+  <para>
+   Il est bon de noter aussi que, pour qu'un agrégat soit exécuté en
+   parallèle, l'agrégat lui-même doit être marqué <literal>PARALLEL
+   SAFE</literal>. Les marques de parallélisation sur les fonctions de support
+   ne sont pas consultées.
+  </para>
+
+ </sect2>
+
  <sect2 id="xaggr-support-functions">
   <title>Fonctions de support pour les agrégats</title>
 
@@ -518,7 +622,7 @@ SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY revenu) FROM menages;
 
   <para>
    Une fonction écrite en C peut détecter si elle est appelée en tant que
-   fonction de transition ou en tant que fonction finale d'un agrégat en
+   fonction de support d'un agrégat en
    appelant <function>AggCheckCallContext</function>, par exemple&nbsp;:
    <programlisting>
         if (AggCheckCallContext(fcinfo, NULL))
