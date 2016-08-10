@@ -18,8 +18,7 @@ PostgreSQL documentation
  <refnamediv>
   <refname>pg_rewind</refname>
   <refpurpose>synchronise le répertoire des données de
-    <productname>PostgreSQL</productname> avec un répertoire de données dupliqué
-    depuis le premier
+    <productname>PostgreSQL</productname> avec un autre répertoire de données
   </refpurpose>
  </refnamediv>
 
@@ -54,16 +53,17 @@ PostgreSQL documentation
   </para>
 
   <para>
-   Le résultat est le même que lorsqu'on remplace le répertoire de données cible
-   avec celui de la source.
-   Tous les fichiers sont copiés, fichiers de configurations compris.
-   L'avantage de <application>pg_rewind</application> par rapport à la
-   réalisation d'une nouvelle sauvegarde de base, ou l'utilisation d'un
-   outil tel que <application>rsync</application>, est que
-   <application>pg_rewind</application> n'a pas besoin de lire tous les fichiers qui
-   n'ont pas été modifiés dans l'ancienne instance. Cela rend l'opération
-   éminement plus rapide lorsqu'on est face à une volumétrie conséquente
-   ou s'il a peu de différences entre les deux instances.
+   Le résultat est le même que lorsqu'on remplace le répertoire de données
+   cible avec celui de la source. Seuls les blocs modifiés des fichiers des
+   relations déjà existants sont copiés, tous les autres fichiers sont copiés
+   intégralement, fichiers de configurations compris. L'avantage de
+   <application>pg_rewind</application> par rapport à la réalisation d'une
+   nouvelle sauvegarde de base, ou l'utilisation d'un outil tel que
+   <application>rsync</application>, est que
+   <application>pg_rewind</application> n'a pas besoin de lire tous les blocs
+   non modifiés des fichiers de l'ancienne instance. Cela rend l'opération
+   éminement plus rapide lorsqu'on est face à une volumétrie conséquente et
+   qu'il a peu de différences entre les deux instances.
   </para>
 
   <para>
@@ -79,13 +79,12 @@ PostgreSQL documentation
    revanche, si l'instance cible a travaillé un certain temps après le
    changement, les anciens fichiers WAL peuvent ne plus être présents dans
    le répertoire <filename>pg_xlog</filename>.
-   Dans ce cas, ils peuvent être copiés à la main depuis les fichiers
-   WAL archivés vers le répertoire <filename>pg_xlog</filename>.
-   Récupérer les fichiers manquants en parcourant les fichiers WAL
-   archivés n'est pour l'instant pas supporté. De plus, les cas d'utilisation
-   de <application>pg_rewind</application> ne sont pas limités au failover.
-   Par exemple, le serveur standby peut être promu, réaliser quelques écritures,
-   puis retourner à son état de standby.
+   Dans ce cas, ils peuvent être copiés à la main depuis les fichiers WAL
+   archivés vers le répertoire <filename>pg_xlog</filename> ou récupérés au
+   démarrage en configurant le fichier <filename>recovery.conf</filename>.
+   L'utilisation de <application>pg_rewind</application> n'est pas limitée au
+   failover&nbsp;: un serveur standby peut être promu, écrire quelques
+   transactions, puis transformé de nouveau en standby avec cet outil.
   </para>
 
   <para>
@@ -155,7 +154,7 @@ PostgreSQL documentation
 		façon à pouvoir la synchroniser avec la cible.
 		Cette option requiert l'utilisation d'une connexion standard avec un utilisant
     disposant de l'attribut SUPERUSER.
-		L'instance doit être opérationnelle et ne doit pas être en mode
+		L'instance source doit être opérationnelle et ne doit pas être en mode
 		de restauration (recovery).
        </para>
       </listitem>
@@ -229,48 +228,47 @@ PostgreSQL documentation
    <title>Fonctionnement</title>
 
    <para>
-	L'idée de base est de copier de l'ancienne vers la nouvelle instance
-	l'ensemble des blocs de données à l'exception de ceux dont on sait
-	qu'ils n'ont pas été modifiés.
+    L'idée de base est de copier toutes les modifications de fichiers au
+    niveau système de fichiers de l'instance source vers l'instance
+    cible&nbsp;:
    </para>
 
    <procedure>
     <step>
      <para>
-      On parcourt les fichiers WAL de l'ancienne instance, à partir du
-      dernier checkpoint et avant le moment où la nouvelle instance à
-      bifurqué vers une nouvelle timeline par rapport à l'ancienne
-      instance.
-      Pour tous les enregistrements contenus dans les fichiers WAL de
-      l'ancienne instance, un tag est posé sur chaque bloc de données
-      associé. Cela compose une liste de tous les blocs de données
-      modifiés de l'ancienne instance, après que la nouvelle instance
-      ait basculé.
+      Parcourir les journaux de transactions de l'instance cible, en
+      commançant du dernier checkpoint avant le moment où l'historique de
+      timeline de l'instance source a dévié de celle de l'instance cible. Pour
+      chaque enregistrement dans les journaux de transactions, enregistrer
+      chaque bloc de données modifié. Ceci a pour résultat une liste de tous
+      les blocs de données modifiés dans l'instance cible, après la séparation
+      avec l'instance source.
      </para>
     </step>
     <step>
      <para>
-      On copie l'ensemble de ces blocs modifiés de la nouvelle instance
-      vers l'ancienne instance.
+      Copier tous les blocs modifiés de l'instance source vers l'instance
+      cible, soit en utilisant un accès direct au système de fichiers
+      (<option>--source-pgdata</option>) soit en SQL
+      (<option>--source-server</option>).
      </para>
     </step>
     <step>
      <para>
-	  On copie l'ensemble des autres fichiers tels que les fichiers
-	  <filename>clog</filename> et les fichiers de configuration depuis
-	  la nouvelle instance vers l'ancienne instance, excepté les fichiers
-	  des bases.
+      Copier tous les autres fichiers, tels que <filename>pg_clog</filename>
+      et les fichiers de configuration de l'instance source vers l'instance
+      cible (sauf les fichiers des relations).
      </para>
     </step>
     <step>
      <para>
-      On applique les fichiers WAL récupérés de la nouvelle instance, en
-      commencant à partir du checkpoint créé lors de la bascule.
-      (Au sens strict, <application>pg_rewind</application> n'applique
-      pas les fichiers WAL, il crée juste un fichier backup_label
-      qui stipule à quel moment la nouvelle instance a été démarrée.
-      Au démarrage de l'instance que l'on remet à jour, elle partira
-      de ce checkpoint et appliquera tous les fichiers WAL requis.)
+      Appliquer les enregistrements des journaux de transactions provenant de
+      l'instance source, en commençant à partir du checkpoint créé au moment
+      du failover. (En fait, <application>pg_rewind</application> n'applique
+      pas les journaux de transactions. Il crée simplement un fichier
+      backup_label qui fera en sorte que <productname>PostgreSQL</productname>
+      démarre en rejoutant les enregistrements des journaux de transactions à
+      partir de ce checkpoint.)
      </para>
     </step>
    </procedure>
@@ -278,4 +276,3 @@ PostgreSQL documentation
  </refsect1>
 
 </refentry>
-
