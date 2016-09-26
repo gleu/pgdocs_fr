@@ -118,7 +118,7 @@
      </row>
      <row>
       <entry><literal>box_ops</literal></entry>
-      <entry>box</entry>
+      <entry><type>box</type></entry>
       <entry>
        <literal>&lt;&lt;</literal>
        <literal>&amp;&lt;</literal>
@@ -195,8 +195,12 @@
    vers un autre n&oelig;ud de niveau inférieur, ou une petite liste de lignes de
    feuilles qui appartiennent toutes à la même page d'index.
    Chaque n&oelig;ud a un <firstterm>label</firstterm> qui le décrit. Par exemple,
-   dans un arbre <foreignphrase>radix</foreignphrase>, le label du n&oelig;ud peut être le caractère suivant de
-   la chaîne de caractère. En option, une ligne intermédiaire peut avoir une valeur
+   dans un arbre <foreignphrase>radix</foreignphrase>, le label du n&oelig;ud
+   peut être le caractère suivant de la chaîne de caractère. (Sinon, une
+   classe d'opérateur peut omettre les labels des n&oelig;uds si elle
+   fonctionne avec un ensemble fixe de n&oelig;uds pour les enregistrements
+   internes&nbsp;; voir <xref linkend ="spgist-null-labels"/>.) En option, une
+   ligne intermédiaire peut avoir une valeur
    de <firstterm>préfixe</firstterm> qui décrit tous ses membres. Dans un arbre
    <foreignphrase>radix</foreignphrase>, cela peut être le préfixe commun des chaînes représentant les données.
    La valeur du préfixe n'est pas nécessairement réellement un préfixe, mais peut
@@ -213,7 +217,9 @@
    <acronym>SP-GiST</acronym> fournit aux classes d'opérateur la possibilité
    de gérer le décompte des niveaux lors du parcours de l'arbre.
    Il fournit aussi le moyen de reconstruire de façon incrémentale la valeur
-   représentée lorsque cela est nécessaire.
+   représentée lorsque cela est nécessaire, et pour passer des données
+   supplémentaires (appelées <firstterm>valeurs traverses</firstterm>) lors de
+   la descente de l'arbre.
   </para>
 
   <note>
@@ -506,9 +512,8 @@ typedef struct spgPickSplitOut
       à la valeur de ce préfixe.
       Définir <structfield>nNodes</structfield> pour indiquer le nombre de n&oelig;uds que contiendra
       la nouvelle ligne intermédiaire, et
-      spécifier dans <structfield>nodeLabels</structfield> un tableau de leurs labels.
-      (si les n&oelig;uds ne nécessitent pas de label, définir <structfield>nodeLabels</structfield>
-      à NULL&nbsp;; voir <xref linkend="spgist-null-labels"/> pour plus de détails.)
+      spécifier dans <structfield>nodeLabels</structfield> un tableau de leurs labels,
+      ou NULL si les labels ne sont pas nécessaires.
       Attribuer à <structfield>mapTuplesToNodes</structfield> un tableau des index (à partir de zéro)
       des n&oelig;uds auquels seront assignés chaque ligne feuille.
       Attribuer à <structfield>leafTupleDatums</structfield> un tableau des valeurs à
@@ -572,7 +577,7 @@ typedef struct spgInnerConsistentIn
     int         nkeys;          /* taille du tableau */
 
     Datum       reconstructedValue;     /* valeur reconstruite au niveau parent */
-    MemoryContext traversalMemoryContext;
+    MemoryContext traversalMemoryContext;   /* placer les nouvelles valeurs ici */
     int         level;          /* niveau actuel (à partir de zéro) */
     bool        returnData;     /* retourner la valeur originale ? */
 
@@ -605,7 +610,13 @@ typedef struct spgInnerConsistentOut
       car le moteur de SP-GiST aura complété cette valeur.
       <structfield>reconstructedValue</structfield> est la valeur reconstruite pour la ligne parent.
       La valeur est <literal>(Datum) 0</literal> au niveau le plus haut ou si la fonction
-      <function>inner_consistent</function> ne fournit pas de valeur pour le niveau supérieur.
+      <function>inner_consistent</function> ne fournit pas de valeur pour le
+      niveau supérieur. <structfield>traversalValue</structfield> est un
+      pointer vers toute donnée traverse passée à l'appel précédent de
+      <function>inner_consistent</function> sur l'enregistrement parent de
+      l'index, ou NULL à la racine.
+      <structfield>traversalMemoryContext</structfield> est le contexte
+      mémoire de stockage des valeurs traverses en sortie (voir ci-dessous).
       <structfield>level</structfield> est le niveau actuel de la ligne intermédiaire, en commençant à 0 pour le niveau racine.
       <structfield>returnData</structfield> est <literal>true</literal> pour la valeur reconstruite pour cette requête.
       Ce n'est le cas que si la fonction <function>config</function> définit <structfield>canReturnData</structfield>.
@@ -617,10 +628,6 @@ typedef struct spgInnerConsistentOut
       <structfield>nNodes</structfield> est le nombre de n&oelig;uds enfants de la ligne intermédiaire, et
       <structfield>nodeLabels</structfield> est un tableau de leurs labels, ou NULL
       si les n&oelig;uds n'ont pas de labels.
-      <structfield>traversalValue</structfield> est un pointeur vers les données
-      que <function>inner_consistent</function> obtient lorsqu'il est appelé sur
-      les n&oelig;uds enfants à partir d'un appel externe de
-      <function>inner_consistent</function> sur les n&oelig;uds parents.
      </para>
 
      <para>
@@ -635,18 +642,22 @@ typedef struct spgInnerConsistentOut
       <structfield>reconstructedValues</structfield> comme le tableau des valeurs reconstruites
       pour chaque n&oelig;ud enfant à visiter. Sinon, laisser
       <structfield>reconstructedValues</structfield> à la valeur NULL.
+      S'il est souhaitable de passer les informations supplémentaires hors
+      bande (<quote>valeurs traverses</quote>) pour diminuer les niveaux de
+      l'arbre de recherche, initialiser
+      <structfield>traversalValues</structfield> en un tableau des valeurs
+      traverses appropriées, un pour chaque n&oelig;uds enfants à
+      visiter&nbsp;; sinon laisser <structfield>traversalValues</structfield>
+      à NULL.
       Notez que la fonction <function>inner_consistent</function> est
       responsable de l'allocation mémoire des tableaux <structfield>nodeNumbers</structfield>,
-      <structfield>levelAdds</structfield> et
-      <structfield>reconstructedValues</structfield>.
-      Parfois, accumuler quelques informations est nécessaire lors de
-      la descente du n&oelig;ud parent vers le n&oelig;ud enfant. Dans ce cas,
-      le tableau <structfield>traversalValues</structfield> conserve les pointeurs
-      vers les données spécifiques que vous avez besoin d'accumuler pour chaque
-      n&oelig;ud enfant. La mémoire nécessaire pour
-      <structfield>traversalValues</structfield> devrait être allouée pour le
-      contexte par défaut mais chaque élément du tableau doit être alloué
-      dans <structfield>traversalMemoryContext</structfield>.
+      <structfield>levelAdds</structfield>
+      <structfield>reconstructedValues</structfield> et
+      <structfield>traversalValues</structfield> dans le contexte mémoire
+      actuel. Néanmoins, toute valeur traverse en sortie pointée par le
+      tableau <structfield>traversalValues</structfield> devrait être allouée
+      dans <structfield>traversalMemoryContext</structfield>. Chaque valeur
+      traverse doit être un morceau simple alloué avec la fonction palloc.
      </para>
     </listitem>
    </varlistentry>
@@ -702,6 +713,10 @@ typedef struct spgLeafConsistentOut
       <structfield>reconstructedValue</structfield> est la valeur reconstruite pour la ligne parent&nbsp;;
       Il s'agit de <literal>(Datum) 0</literal> au niveau racine ou si la fonction
       <function>inner_consistent</function> ne fournit pas de valeur au niveau parent.
+      <structfield>traversalValue</structfield> est un pointeur vers toute
+      donnée traverse passée lors de l'appel précédent à
+      <function>inner_consistent</function> de l'enregistrement parent de
+      l'index ou NULL à la racine.
       <structfield>level</structfield> est le niveau actuel de la ligne de feuille, qui commence à zéro
       pour le niveau racine.
       <structfield>returnData</structfield> est <literal>true</literal> s'il est nécessaire de reconstruire
@@ -852,11 +867,11 @@ typedef struct spgLeafConsistentOut
   <title>Exemples</title>
 
   <para>
-   Les sources de <productname>PostgreSQL</productname> incluent
-   plusieurs exemples de classes d'opérateur d'index pour <acronym>SP-GiST</acronym>.
-   Le c&oelig;ur du système fournit actuellement des arbres <foreignphrase>radix</foreignphrase> pour les colonnes textuelles
-   et deux types d'arbre concernant les points&nbsp;: quad-tree et arbre k-d.
-   Voir <filename>src/backend/access/spgist/</filename> pour étudier leur code source.
+   Les sources de <productname>PostgreSQL</productname> incluent plusieurs
+   exemples de classes d'opérateur d'index pour <acronym>SP-GiST</acronym>
+   comme décrit dans <xref linkend="spgist-builtin-opclasses-table"/>. Lire le
+   code dans <filename>src/backend/access/spgist/</filename> et
+   <filename>src/backend/utils/adt/</filename>.
   </para>
 
  </sect1>
