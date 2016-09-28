@@ -407,7 +407,7 @@
    </indexterm>
 
    <para>
-    Le mécanisme de contrôle de concurrence multiversion (<acronym>MVCC</acronym>) de
+    Le mécanisme de contrôle de concurrence multiversion (<link linkend="mvcc-intro">MVCC</link>) de
     <productname>PostgreSQL</productname> s'appuie sur la possibilité de
     comparer des identifiants de transactions (<acronym>XID</acronym>)&nbsp;; c'est un
     nombre croissant&nbsp;: la version d'une ligne dont le XID d'insertion est
@@ -428,12 +428,8 @@
     <command>VACUUM</command> marquera les lignes comme <emphasis>gelées</emphasis>,
     indiquant qu'elles ont été insérées par une transaction qui les a validé
     suffisamment loin dans le passé pour que les effets de cette transaction
-    soient visibles à coup sûr, d'après MVCC, pour toutes les transactions
-    actuelles et futures. <productname>PostgreSQL</productname> réserve un
-    identifiant de transaction (XID) spécial, appelé
-    <literal>FrozenTransactionId</literal>, qui ne suit pas les règles standards de
-    comparaison des identifiants de transactions et est toujours considéré
-    comme plus âgé que les XID normaux. Les XID normaux sont comparés sur une
+    soient visibles à coup sûr pour toutes les transactions
+    actuelles et futures. Les XID normaux sont comparés sur une
     base modulo-2<superscript>32</superscript>. Cela signifie
     que pour chaque XID normal, il y en a deux milliards qui sont plus vieux et
     deux milliards qui sont plus récents. Une autre manière de le dire est que
@@ -442,6 +438,10 @@
     comme appartenant au passé pour les deux milliards de transactions qui
     suivront quelque soit le XID. Si la ligne existe encore après deux milliards
     de transactions, elle apparaîtra soudainement comme appartenant au futur.
+    Pour empêcher cela, <productname>PostgreSQL</productname> réserve un XID
+    spécial, <literal>FrozenTransactionId</literal>, qui ne suit pas les
+    règles normales de comparaison de XID et qui est toujours considéré comme
+    plus ancien que chaque XID normal.
     Les versions de lignes gelées sont traitées comme si la XID d'insertion
     était <literal>FrozenTransactionId</literal>, pour qu'elles apparaissent dans
     le passé pour les autres transactions normales, quelque soit les soucis de
@@ -449,9 +449,34 @@
     valides jusqu'à leur suppression, quelque soit la durée que cela représente.
    </para>
 
+   <note>
+    <para>
+     Dans les versions de <productname>PostgreSQL</productname> antérieures à
+     la 9.4, le gel était implémenté en remplaçant le XID d'insertion d'une
+     ligne avec <literal>FrozenTransactionId</literal>, qui était visible dans
+     la colonne système <structname>xmin</structname> de la ligne. Les
+     nouvelles versions ajoutent un drapeau, préservant le
+     <structname>xmin</structname> original de la ligne pour une utilisation
+     ultérieure (notamment pour du débugage). Néanmoins, il est toujours
+     possible d'avoir des lignes pour lesquelles <structname>xmin</structname>
+     vaut <literal>FrozenTransactionId</literal> (2) dans les bases de données
+     antérieures à la version 9.4 traitées par
+     <application>pg_upgrade</application>.
+    </para>
+
+    <para>
+     De plus, les catalogues systèmes pourraient contenir des lignes avec
+     <structname>xmin</structname> égale à
+     <literal>BootstrapTransactionId</literal> (1), indiquant qu'elles ont été
+     insérées lors de la première phase d'<application>initdb</application>.
+     Comme <literal>FrozenTransactionId</literal>, cet XID spécial est traité
+     comme étant plus ancien que tout autre XID normal.
+    </para>
+   </note>
+
    <para>
     <xref linkend="guc-vacuum-freeze-min-age"/> contrôle l'âge que doit avoir
-    une valeur XID avant qu'elle ne soit gelée. Augmenter ce paramètre peut
+    une valeur XID avant que des lignes comportant cet XID ne soient gelées. Augmenter ce paramètre peut
     permettre d'éviter un travail inutile si les lignes à geler vont bientôt
     être modifiées. Diminuer ce paramète augmente le nombre de transactions qui
     peuvent survenir avant un nouveau VACUUM de la table.
@@ -459,12 +484,13 @@
 
    <para>
     <command>VACUUM</command> utilise la <link linkend="storage-vm">carte de
-    visibilité</link> pour déterminer les pages d'une relation à parcourir.
+    visibilité</link> pour déterminer les pages d'une table à parcourir.
     Habituellement, il ignore les pages qui n'ont aucune ligne morte même si
     ces pages pourraient toujours avoir des versions de lignes avec des
-    identifiants très anciens de transactions. De ce fait, les parcours normaux
-    ne réussiront pas à geler la version de chaque ligne dans une table. De
-    temps en temps, <command>VACUUM</command> réalise un <firstterm>vacuum
+    identifiants très anciens de transactions. De ce fait, les
+    <command>VACUUM</command> normaux ne vont pas toujours geler chaque
+    ancienne version de ligne dans la table. De temps en temps,
+    <command>VACUUM</command> réalise un <firstterm>vacuum
     agressif</firstterm>, ignorant seulement les pages contenant aucune ligne
     morte et aucune valeur XID ou MXID non gelé.
     <xref linkend="guc-vacuum-freeze-table-age"/> contrôle quand
