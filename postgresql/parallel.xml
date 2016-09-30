@@ -2,34 +2,38 @@
 <!-- doc/src/sgml/parallel.sgml -->
 
  <chapter id="parallel-query">
-  <title>Parallel Query</title>
+  <title>Requêtes parallélisées</title>
 
   <indexterm zone="parallel-query">
-   <primary>parallel query</primary>
+   <primary>requête parallélisée</primary>
   </indexterm>
 
   <para>
-   <productname>PostgreSQL</productname> can devise query plans which can leverage
-   multiple CPUs in order to answer queries faster.  This feature is known
-   as parallel query.  Many queries cannot benefit from parallel query, either
-   due to limitations of the current implementation or because there is no
-   imaginable query plan which is any faster than the serial query plan.
-   However, for queries that can benefit, the speedup from parallel query
-   is often very significant.  Many queries can run more than twice as fast
-   when using parallel query, and some queries can run four times faster or
-   even more.  Queries that touch a large amount of data but return only a
-   few rows to the user will typically benefit most.  This chapter explains
-   some details of how parallel query works and in which situations it can be
-   used so that users who wish to make use of it can understand what to expect.
+   <productname>PostgreSQL</productname> peut préparer des plans de requêtes
+   utilisant plusieurs CPU pour répondre plus rapidement à certaines requêtes.
+   Cette fonctionnalité est connue sous le nom de requêtes parallélisées. Un
+   grand nombre de requêtes ne peuvent pas bénéficier de cette fonctionnalité,
+   soit à cause de la limitation de l'implémentation actuelle soit parce qu'il
+   n'existe pas de plans imaginables qui seraient plus rapides qu'un plan
+   sériel. Néanmoins, pour les requêtes pouvant en bénéficier, l'accélération
+   due à une requête parallélisée est souvent très significative. Beaucoup de
+   ces requêtes peuvent s'exécuter au moins deux fois plus rapidement grâce à
+   la parallélisation., et certaines requêtes voient une amélioration de 400%,
+   voire plus. Les requêtes touchant une grande quantité de données mais
+   renvoyant seulement quelques lignes à l'utilisateur ont généralement celles
+   qui bénéficient le plus de cette fonctionnalité. Ce chapitre explique
+   certains détails sur le fonctionnement des requêtes parallélisées et dans
+   quelles situations la parallélisation peut être utilisée pour que les
+   utilisateurs souhaitant en profiter puissent comprendre à quoi s'attendre.
   </para>
 
  <sect1 id="how-parallel-query-works">
-  <title>How Parallel Query Works</title>
+  <title>Comment fonctionne la parallélisation des requêtes</title>
 
    <para>
-    When the optimizer determines that parallel query is the fastest execution
-    strategy for a particular query, it will create a query plan which includes
-    a <firstterm>Gather node</firstterm>.  Here is a simple example:
+    Quand l'optimiseur détermine que la parallélisation permettra une exécution
+    plus rapide d'une requête particulière, il crée un plan de requête qui inclut
+    un <firstterm>n&oelig;ud Gather</firstterm>. En voici un exemple simple&nbsp;:
 
 <screen>
 EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
@@ -37,433 +41,490 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
 -------------------------------------------------------------------------------------
  Gather  (cost=1000.00..217018.43 rows=1 width=97)
    Workers Planned: 2
-   ->  Parallel Seq Scan on pgbench_accounts  (cost=0.00..216018.33 rows=1 width=97)
+   -&gt;  Parallel Seq Scan on pgbench_accounts  (cost=0.00..216018.33 rows=1 width=97)
          Filter: (filler ~~ '%x%'::text)
 (4 rows)
 </screen>
    </para>
 
    <para>
-    In all cases, the <literal>Gather</literal> node will have exactly one
-    child plan, which is the portion of the plan that will be executed in
-    parallel.  If the <literal>Gather</literal> node is at the very top of the plan
-    tree, then the entire query will execute in parallel.  If it is somewhere
-    else in the plan tree, then only that portion of the query will run in
-    parallel.  In the example above, the query accesses only one table, so
-    there is only one plan node other than the <literal>Gather</literal> node itself;
-    since that plan node is a child of the <literal>Gather</literal> node, it will
-    run in parallel.
+    Dans tous les cas, le n&oelig;ud <literal>Gather</literal> aura
+    extactement un no&oelig;ud enfant, qui est la portion du plan exécutée en
+    parallèle. Si le n&oelig;ud <literal>Gather</literal> est à la racine du
+    plan, alors la requête entière est parallélisée. S'il est placé ailleurs
+    dans le plan, alors seulement cette portion du plan s'exécutera en
+    parallélisé. Dans l'exemple ci-dessus, la requête accède seulement une
+    table, donc il n'existe qu'un seul autre n&oelig;ud de plan que le
+    n&oelig;ud <literal>Gather</literal> lui-même&nbsp;; comme le n&oelig;ud
+    du plan est un enfant du n&oelig;ud <literal>Gather</literal>, il
+    s'exécutera en parallèle.
    </para>
 
    <para>
-    <link linkend="using-explain">Using EXPLAIN</link>, you can see the number of
-    workers chosen by the planner.  When the <literal>Gather</literal> node is reached
-    during query execution, the process which is implementing the user's
-    session will request a number of <link linkend="bgworker">background
-    worker processes</link> equal to the number
-    of workers chosen by the planner.  The total number of background
-    workers that can exist at any one time is limited by
-    <xref linkend="guc-max-worker-processes"/>, so it is possible for a
-    parallel query to run with fewer workers than planned, or even with
-    no workers at all.  The optimal plan may depend on the number of workers
-    that are available, so this can result in poor query performance.  If this
-    occurrence is frequent, considering increasing
-    <varname>max_worker_processes</varname> so that more workers can be run
-    simultaneously or alternatively reducing
-    <xref linkend="guc-max-parallel-workers-per-gather"/> so that the planner
-    requests fewer workers.
+    En <link linkend="using-explain">utilisant EXPLAIN</link>, vous pouvez
+    voir le nombre de processus d'aide (appelés
+    <foreignphrase>workers</foreignphrase>) choisis par le planificateur.
+    Quand le n&oelig;ud <literal>Gather</literal> est atteint lors de
+    l'exécution de la requête, le processus en charge de la session de
+    l'utilisateur demandera un nombre de processus <link
+    linkend="bgworker">background worker</link> égal au nombre de workers
+    choisi par le planificateur. Le nombre total de <foreignphrase>background
+    workers</foreignphrase> pouvant exister à un moment est limité par le
+    paramètre <xref linkend="guc-max-worker-processes"/>, donc il est possible
+    qu'une requête parallélisée s'exécute avec moins de
+    <foreignphrase>workers</foreignphrase> que prévu, voire même sans
+    <foreignphrase>workers</foreignphrase> du tout. Le plan optimal pourrait
+    dépendre du nombre de <foreignphrase>workers</foreignphrase> disponibles,
+    ce qui pourrait résulter en de pauvres performances au niveau des
+    requêtes. Si cela survient fréquemment, considérez l'augmentation de
+    <varname>max_worker_processes</varname> pour qu'un plus grand nombre de
+    <foreignphrase>workers</foreignphrase> puissent travailler simultanément
+    ou diminuer <xref linkend="guc-max-parallel-workers-per-gather"/> pour que
+    le planificateur réclame moins de <foreignphrase>workers</foreignphrase>.
    </para>
 
    <para>
-    Every background worker process which is successfully started for a given
-    parallel query will execute the portion of the plan which is a descendent
-    of the <literal>Gather</literal> node.  The leader will also execute that portion
-    of the plan, but it has an additional responsibility: it must also read
-    all of the tuples generated by the workers.  When the parallel portion of
-    the plan generates only a small number of tuples, the leader will often
-    behave very much like an additional worker, speeding up query execution.
-    Conversely, when the parallel portion of the plan generates a large number
-    of tuples, the leader may be almost entirely occupied with reading the
-    tuples generated by the workers and performing any further processing
-    steps which are required by plan nodes above the level of the
-    <literal>Gather</literal> node.  In such cases, the leader will do very
-    little of the work of executing the parallel portion of the plan.
+    Chaque processus <foreignphrase>background worker</foreignphrase> démarré
+    avec succès pour une requête parallélisée particulière exécutera la
+    portion du plan qui est un descendant du n&oelig;ud
+    <literal>Gather</literal>. Le processus principal, appelé
+    <foreignphrase>leader</foreignphrase>, exécutera aussi cette portion du
+    plan bien qu'il ait des responsabilités supplémentaires&nbsp;: il doit
+    aussi lire toutes les lignes générées par les
+    <foreignphrase>workers</foreignphrase>. Quand la portion parallélisée du
+    plan génère seulement un petit nombre de lignes, le
+    <foreignphrase>leader</foreignphrase> se comportera souvent comme un
+    <foreignphrase>worker</foreignphrase> supplémentaire, accélérant
+    l'exécution de la requête. Par contre, quand la portion parallèle du plan
+    génère un grand nombre de lignes, le <foreignphrase>leader</foreignphrase>
+    pourrait être totalement occupée par la lecture des lignes générées par
+    les <foreignphrase>workers</foreignphrase> et par le traitement de toute
+    étape supplémntaire requis par les n&oelig;uds suivants du plan. Dans de
+    tels cas, le <foreignphrase>leader</foreignphrase> travaillera peu sur la
+    portion parallélisée du plan.
    </para>
  </sect1>
 
  <sect1 id="when-can-parallel-query-be-used">
-  <title>When Can Parallel Query Be Used?</title>
+  <title>Quand la parallélisation des requêtes peut-elle être utilisée&nbsp;?</title>
 
   <para>
-    There are several settings which can cause the query planner not to
-    generate a parallel query plan under any circumstances.  In order for
-    any parallel query plans whatsoever to be generated, the following
-    settings must be configured as indicated.
+    Il existe plusieurs paramètres pouvant faire en sorte que le planificateur
+    de la requête ne génère pas un plan parallélisé quelque soit les
+    circonstances. Pour faire en sorte que des plans parallélisés puissent
+    être générés, les paramètres suivants doivent être configurés comme
+    indiqués.
   </para>
 
   <itemizedlist>
     <listitem>
       <para>
-        <xref linkend="guc-max-parallel-workers-per-gather"/> must be set to a
-        value which is greater than zero. This is a special case of the more
-        general principle that no more workers should be used than the number
-        configured via <varname>max_parallel_workers_per_gather</varname>.
+        <xref linkend="guc-max-parallel-workers-per-gather"/> doit être
+        configuré à une valeur strictement positive. Ceci est un cas spécial
+        du principe plus général qu'il n'y aura pas plus de
+        <foreignphrase>workers</foreignphrase> que le nombre configuré via
+        <varname>max_parallel_workers_per_gather</varname>.
       </para>
     </listitem>
 
     <listitem>
       <para>
-        <xref linkend="guc-dynamic-shared-memory-type"/> must be set to a
-        value other than <literal>none</literal>.  Parallel query requires dynamic
-        shared memory in order to pass data between cooperating processes.
+        <xref linkend="guc-dynamic-shared-memory-type"/> doit être configuré à
+        une valeur autre que <literal>none</literal>. Les requêtes
+        parallélisées nécessitent de la mémoire partagée dynamique pour
+        fournir des données entre les processus participant à la
+        parallélisation.
       </para>
     </listitem>
   </itemizedlist>
 
   <para>
-    In addition, the system must not be running in single-user mode.  Since
-    the entire database system is running in single process in this situation,
-    no background workers will be available.
+    De plus, le système ne doit pas fonctionner en mode mono-utilisateur.
+    Comme le système de bases de données entier fonctionne avec un seul
+    processus dans cette situation, aucun <foreignphrase>background
+    worker</foreignphrase> ne sera disponible dans ce cas.
   </para>
 
   <para>
-    Even when it is in general possible for parallel query plans to be
-    generated, the planner will not generate them for a given query
-    if any of the following are true:
+    Même quand il est habituellement possible de générer des plans pour
+    des requêtes parallélisées, le planificateur pourrait ne pas en générer
+    pour une requête particulière si une des conditions suivantes est
+    vérifiée&nbsp;:
   </para>
 
   <itemizedlist>
     <listitem>
-      <para> 
-        The query writes any data or locks any database rows. If a query
-        contains a data-modifying operation either at the top level or within
-        a CTE, no parallel plans for that query will be generated. This is a
-        limitation of the current implementation which could be lifted in a
-        future release. 
+      <para>
+        La requête écrit des données ou verrouille des lignes de la base. Si
+        une requête contient une opération de modification de données, soit au
+        niveau supérieur, soit dans une CTE, aucun plan parallèle ne peut être
+        généré pour cette requête. Ceci est une limitation de l'implémentation
+        actuelle qui pourrait être supprimée dans une prochaine version.
       </para>
     </listitem>
 
     <listitem>
       <para>
-        The query might be suspended during execution. In any situation in
-        which the system thinks that partial or incremental execution might
-        occur, no parallel plan is generated. For example, a cursor created
-        using <link linkend="sql-declare">DECLARE CURSOR</link> will never use
-        a parallel plan. Similarly, a PL/pgsql loop of the form
-        <literal>FOR x IN query LOOP .. END LOOP</literal> will never use a
-        parallel plan, because the parallel query system is unable to verify
-        that the code in the loop is safe to execute while parallel query is
-        active. 
+        La requête pourrait être suspendue dans son exécution. Dans des
+        situations où le système pense qu'une exécution partielle ou
+        incrémentale pourrait survenir, aucun plan parallèle n'est proposé.
+        Par exemple, un curseur créé en utilisant <link
+        linkend="sql-declare">DECLARE CURSOR</link> n'utilisera jamais un plan
+        parallélisé. De façon similaire, une boucle PL/pgsql de la forme
+        <literal>FOR x IN query LOOP .. END LOOP</literal> n'utilisera jamais
+        un plan parallélisé car le système est incapable de vérifier que le
+        code dans la boucle peut s'exécuter en toute sécurité avec une requête
+        parallélisée.
       </para>
     </listitem>
 
     <listitem>
       <para>
-        The query uses any function marked <literal>PARALLEL UNSAFE</literal>.
-        Most system-defined functions are <literal>PARALLEL SAFE</literal>,
-        but user-defined functions are marked <literal>PARALLEL
-        UNSAFE</literal> by default. See the discussion of
+        La requête utilise une fonction marquée <literal>PARALLEL UNSAFE</literal>.
+        La plupart des fonctions systèmes sont <literal>PARALLEL SAFE</literal>,
+        mais les fonctions utilisateurs sont marquées <literal>PARALLEL
+        UNSAFE</literal> par défaut. Voir la discussion de
         <xref linkend="parallel-safety"/>.
       </para>
     </listitem>
 
     <listitem>
       <para>
-        The query is running inside of another query that is already parallel.
-        For example, if a function called by a parallel query issues an SQL
-        query itself, that query will never use a parallel plan. This is a
-        limitation of the current implementation, but it may not be desirable
-        to remove this limitation, since it could result in a single query
-        using a very large number of processes. 
+        La requête est exécutée à l'intérieur d'une autre requête qui est déjà
+        parallélisée. Par exemple, si une fonction appelée par une requête
+        parallélisée exécute elle-même une requête SQL, cette requête
+        n'utilisera jamais un plan parallélisé. Ceci est une limitation de
+        l'implémentation actuelle mais il n'est pas forcément souhaitable de
+        supprimer cette limitation car cela pourrait résulter en une requête
+        simple utilisant un très grand nombre de processus.
       </para>
     </listitem>
 
     <listitem>
       <para>
-        The transaction isolation level is serializable.  This is
-        a limitation of the current implementation.
+        Le niveau d'isolation de la transaction est le niveau
+        <foreignphrase>serializable</foreignphrase>. Ceci est une limitation
+        de l'implémentation actuelle.
       </para>
     </listitem>
   </itemizedlist>
 
   <para>
-    Even when parallel query plan is generated for a particular query, there
-    are several circumstances under which it will be impossible to execute
-    that plan in parallel at execution time.  If this occurs, the leader
-    will execute the portion of the plan between below the <literal>Gather</literal>
-    node entirely by itself, almost as if the <literal>Gather</literal> node were
-    not present.  This will happen if any of the following conditions are met:
+    Même quand un plan parallélisé est généré pour une requête particulière,
+    différentes circonstances font qu'il sera impossible d'exécuter ce plan en
+    parallèle au moment de l'exécution. Si cela survient, le
+    <foreignphrase>leader</foreignphrase> exécutera tout seul la portion du
+    plan sous le n&oelig;ud <literal>Gather</literal>, pratiquement comme si
+    ce n&oelig;ud <literal>Gather</literal> n'était pas présent. Ceci
+    surviendra si une des conditions suivantes est vérifiée&nbsp;:
   </para>
 
   <itemizedlist>
     <listitem>
       <para> 
-        No background workers can be obtained because of the limitation that
-        the total number of background workers cannot exceed
+        Aucun <foreignphrase>background worker</foreignphrase> ne peut être
+        obtenu à cause d'une limitation sur le nombre total de
+        <foreignphrase>background workers</foreignphrase>, due au paramètre
         <xref linkend="guc-max-worker-processes"/>.
       </para>
     </listitem>
 
     <listitem>
       <para> 
-        The client sends an Execute message with a non-zero fetch count.
-        See the discussion of the
-        <link linkend="protocol-flow-ext-query">extended query protocol</link>.
-        Since <link linkend="libpq">libpq</link> currently provides no way to
-        send such a message, this can only occur when using a client that
-        does not rely on libpq.  If this is a frequent
-        occurrence, it may be a good idea to set
-        <xref linkend="guc-max-parallel-workers-per-gather"/> in sessions
-        where it is likely, so as to avoid generating query plans that may
-        be suboptimal when run serially.
+        Le client envoie un message Execute avec un nombre à récupérer
+        différent de zéro. Voir la discussion sur le <link
+        linkend="protocol-flow-ext-query">protocole de requête étendu</link>.
+        Comme la bibliothèque <link linkend="libpq">libpq</link> ne fournit
+        actuellement aucun moyen pour envoyer ce type de message, cela peut
+        seulement survenir suite à l'utilisation d'un client qui ne se base
+        pas sur la libpq. Si cela arrive fréquemment, il pourrait être une
+        bonne idée de configurer <xref
+        linkend="guc-max-parallel-workers-per-gather"/> pour les sessions où
+        cela pourrait survenir, pour éviter de générer des plans de requêtes
+        non optimales s'ils sont exécutés de façon sérialisé.
       </para>
     </listitem>
 
     <listitem>
-      <para> 
-        The transaction isolation level is serializable.  This situation
-        does not normally arise, because parallel query plans are not
-        generated when the transaction isolation level is serializable.
-        However, it can happen if the transaction isolation level is changed to
-        serializable after the plan is generated and before it is executed.
+      <para>
+        Le niveau de transaction est
+        <foreignphrase>serializable</foreignphrase>. Cette situation ne doit
+        normalement pas survenir car les plans de requêtes parallélisées ne
+        sont pas générés quand le niveau d'isolation de la transaction est
+        <foreignphrase>serializable</foreignphrase>. Néanmoins, cela peut
+        arriver si le niveau d'isolation de la transaction est modifié après
+        la génération du plan et avant son exécution.
       </para>
     </listitem>
   </itemizedlist>
  </sect1>
 
  <sect1 id="parallel-plans">
-  <title>Parallel Plans</title>
+  <title>Plans parallélisés</title>
 
   <para>
-    Because each worker executes the parallel portion of the plan to
-    completion, it is not possible to simply take an ordinary query plan
-    and run it using multiple workers.  Each worker would produce a full
-    copy of the output result set, so the query would not run any faster
-    than normal but would produce incorrect results.  Instead, the parallel
-    portion of the plan must be what is known internally to the query
-    optimizer as a <firstterm>partial plan</firstterm>; that is, it must constructed
-    so that each process will which executes the plan will generate only a
-    subset of the output rows in such a way that each required output row
-    is guaranteed to be generated by exactly one of the cooperating processes.
+    Comme chaque <foreignphrase>worker</foreignphrase> exécute la portion
+    parallélisée du plan jusqu'à sa fin, il n'est pas possible de prendre un
+    plan de requête ordiniaire et de l'exécuter en utilisant plusieurs
+    <foreignphrase>workers</foreignphrase>. Chaque
+    <foreignphrase>worker</foreignphrase> produira une copie complète de
+    l'ensemble de résultats en sortie, donc la requête  ne s'exécuterait pas
+    plus rapidement que normalement, mais produirait des résultats incorrects.
+    À la place, la portion parallélisée du plan doit être ce qui est connu en
+    interne par l'optimiseur de requêtes comme un <firstterm>plan
+    partiel</firstterm>&nbsp;; c'est-à-dire qu'il doit être construit de façon
+    à ce que chaque processus qui exécute le plan génèrera seulement un sous-
+    ensemble des lignes en résultat d'une telle façon que chaque ligne
+    nécessaire en sortie est garantie d'être générée par exactement un des
+    processus coopérant.
   </para>
 
  <sect2 id="parallel-scans">
-  <title>Parallel Scans</title>
+  <title>Parcours parallélisées</title>
 
   <para>
-    Currently, the only type of scan which has been modified to work with
-    parallel query is a sequential scan.  Therefore, the driving table in
-    a parallel plan will always be scanned using a
-    <literal>Parallel Seq Scan</literal>.  The relation's blocks will be divided
-    among the cooperating processes.  Blocks are handed out one at a
-    time, so that access to the relation remains sequential.  Each process
-    will visit every tuple on the page assigned to it before requesting a new
-    page.
+    Actuellement, le seul type de parcours qui a été modifié pour fonctionner
+    avec les requêtes parallélisées est le parcours séquentiel. De ce fait, la
+    table en question dans un plan parallélisé sera toujours parcourue en
+    utilisant un <literal>Parallel Seq Scan</literal>.  Les blocs de la
+    relation seront divisés parmi les processus coopérant. Les blocs sont
+    gérés un par un, donc cet accès à la relation reste séquentiel. Chaque
+    processus visitera chaque ligne du bloc qui lui est assigné avant de
+    réclamer un nouveau bloc.
   </para>
  </sect2>
 
  <sect2 id="parallel-joins">
-  <title>Parallel Joins</title>
+  <title>Jointures parallélisées</title>
 
   <para>
-    The driving table may be joined to one or more other tables using nested
-    loops or hash joins.  The outer side of the join may be any kind of
-    non-parallel plan that is otherwise supported by the planner provided that
-    it is safe to run within a parallel worker.  For example, it may be an
-    index scan which looks up a value based on a column taken from the inner
-    table. Each worker will execute the outer side of the plan in full, which
-    is why merge joins are not supported here. The outer side of a merge join
-    will often involve sorting the entire inner table; even if it involves an
-    index, it is unlikely to be productive to have multiple processes each
-    conduct a full index scan of the inner table.
+    La table doit être jointe à une ou plusieurs autres tables en utilisant
+    une boucle imbriquée ou une jointure par hachage. Le côté externe de la
+    jointure pourrait être tout tupe de plan non parallélisé qui est autrement
+    supporté par le planificateur, en supposant qu'il est sain de l'exécuter
+    avec un <foreignphrase>worker</foreignphrase> parallélisé. Par exemple,
+    cela pourrait être un parcours d'index qui recherche une valeur basée sur
+    une colonne prise dans la table interne. Chaque
+    <foreignphrase>worker</foreignphrase> exécutera le côté externe du plan au
+    complet, ce qui explique pourquoi les jointures par tri ne sont pas
+    supportées ici. Le côté externe d'une jointure par tri impliquera souvent
+    le tri complet de la table interne. Même si cela implique un index, il y a
+    peu de chance que ce soit efficace d'avoir plusieurs processus réalisant
+    chacun un parcours d'index complet de la table interne.
   </para>
  </sect2>
 
  <sect2 id="parallel-aggregation">
-  <title>Parallel Aggregation</title>
-  <para>
-    It is not possible to perform the aggregation portion of a query entirely
-    in parallel.  For example, if a query involves selecting
-    <literal>COUNT(*)</literal>, each worker could compute a total, but those totals
-    would need to combined in order to produce a final answer.  If the query
-    involved a <literal>GROUP BY</literal> clause, a separate total would need to
-    be computed for each group.  Even though aggregation can't be done entirely
-    in parallel, queries involving aggregation are often excellent candidates
-    for parallel query, because they typically read many rows but return only
-    a few rows to the client.  Queries that return many rows to the client
-    are often limited by the speed at which the client can read the data,
-    in which case parallel query cannot help very much.
-  </para>
+  <title>Agrégations parallélisées</title>
+   <para>
+    Il n'est pas possible de réaliser la portion agrégée d'une requête
+    totalement en parallèle. Par exemple, si une requête implique la sélection
+    de <literal>COUNT(*)</literal>, chaque
+    <foreignphrase>worker</foreignphrase> peut calculer un total, mais ces
+    totaux doivent être combinés pour produire la réponse finale. Si la
+    requête implique une clause <literal>GROUP BY</literal>, un total séparé
+    doit être calculé pour chaque groupe. Même si l'agrégat ne peut pas être
+    entièrement fait en parallèle, les requêtes impliquant un agrégat sont
+    souvent des candidats excellents pour des requêtes parallélisées parce
+    qu'elles vont typiquement lire beaucoup de lignes tout en en renvoyant peu
+    au client. Les requêtes qui renvoient de nombreuses lignes au client sont
+    souvent limitées par la vitesse à laquelle le client peut lire les
+    données, auquel cas une requête parallélisée ne peut pas tellement aider.
+   </para>
 
-  <para>
-    <productname>PostgreSQL</productname> supports parallel aggregation by aggregating
-    twice.  First, each process participating in the parallel portion of the
-    query performs an aggregation step, producing a partial result for each
-    group of which that process is aware.  This is reflected in the plan as
-    a <literal>PartialAggregate</literal> node.  Second, the partial results are
-    transferred to the leader via the <literal>Gather</literal> node.  Finally, the
-    leader re-aggregates the results across all workers in order to produce
-    the final result.  This is reflected in the plan as a
-    <literal>FinalizeAggregate</literal> node.
-  </para>
+   <para>
+    <productname>PostgreSQL</productname> supporte les agrégats parallélisés
+    en agrégeant deux fois. Tout d'abord, chaque processus participant à la
+    portion parallélisée de la requête réalise une étape d'agrégation,
+    produisant un resultat partiel pour chaque group dont ce processus est
+    conscient. Ceci est reflété dans le plan avec le n&oelig;ud
+    <literal>PartialAggregate</literal>. Ensuite, les résultats partiels sont
+    transférés au <foreignphrase>leader</foreignphrase> via le n&oelig;ud
+    <literal>Gather</literal>. Enfin, le <foreignphrase>leader</foreignphrase>
+    ré-agrège les résultats partiels de tous les
+    <foreignphrase>workers</foreignphrase> pour produire le résultat final.
+    Ceci est reflété dans le plan sous la forme d'un n&oelig;ud
+    <literal>FinalizeAggregate</literal>.
+   </para>
 
-  <para>
-    Parallel aggregation is not supported in all situations.  Each aggregate
-    must be <link linkend="parallel-safety">safe</link> for parallelism and must
-    have a combine function.  If the aggregate has a transition state of type
-    <literal>internal</literal>, it must have serialization and deserialization
-    functions.  See <xref linkend="sql-createaggregate"/> for more details.
-    Parallel aggregation is not supported for ordered set aggregates or when
-    the query involves <literal>GROUPING SETS</literal>.  It can only be used when
-    all joins involved in the query are also part of the parallel portion
-    of the plan.
-  </para>
-
- </sect2>
+   <para>
+    L'agrégation parallélisée n'est pas supportée dans toutes les situations.
+    Chaque agrégat doit être <link linkend="parallel-safety">sûr</link> pour
+    une bonne parallélisation et doit avoir une fonction de combinaison. Si
+    l'agrégat a un état de transition de type <literal>internal</literal>, il
+    doit avoir des fonctions de sérialisation et de désérialisation. Voir
+    <xref linkend="sql-createaggregate"/> pour plus de détails. L'agrégation
+    parallélisée n'est pas supportée pour les agrégats d'ensemble ordonné ou
+    quand la requête implique la clause <literal>GROUPING SETS</literal>. Elle
+    peut seulement être utilisée quand toutes les jointures impliquées dans la
+    requêtes font partie de la portion parallélisée du plan.
+   </para>
+  </sect2>
 
  <sect2 id="parallel-plan-tips">
-  <title>Parallel Plan Tips</title>
+  <title>Conseils pour les plans parallélisés</title>
 
   <para>
-    If a query that is expected to do so does not produce a parallel plan,
-    you can try reducing <xref linkend="guc-parallel-setup-cost"/> or
-    <xref linkend="guc-parallel-tuple-cost"/>.  Of course, this plan may turn
-    out to be slower than the serial plan which the planner preferred, but
-    this will not always be the case.  If you don't get a parallel
-    plan even with very small values of these settings (e.g. after setting
-    them both to zero), there may be some reason why the query planner is
-    unable to generate a parallel plan for your query.  See
-    <xref linkend="when-can-parallel-query-be-used"/> and
-    <xref linkend="parallel-safety"/> for information on why this may be
-    the case.
+    Si une requête qui devrait logiquement utilisé un plan parallélisé ne le
+    fait pas, vous pouvez tenter de réduire <xref
+    linkend="guc-parallel-setup-cost"/> ou <xref linkend="guc-parallel-tuple-
+    cost"/>. Bien sûr, ce plan pourrait devenir plus lent que le plan sériel
+    que le planificateur préfère mais cela ne sera pas toujours le cas. Si
+    vous n'obtenez pas un plan parallélisé même après de très petites valeurs
+    pour ces paramètres (c'est-à-dire après les avoir configuré tous les deux
+    à zéro), il pourrait exister une bonne raison pour laquelle le
+    planificateur de requêtes est incapable de générer un plan parallélisé
+    pour votre requête. Voir <xref linkend="when-can-parallel-query-be-used"/>
+    et <xref linkend="parallel-safety"/> pour des informations pouvant
+    expliquer pourquoi cela serait le cas.
   </para>
 
   <para>
-    When executing a parallel plan, you can use <literal>EXPLAIN (ANALYZE,
-    VERBOSE)</literal> will display per-worker statistics for each plan node.
-    This may be useful in determining whether the work is being evenly
-    distributed between all plan nodes and more generally in understanding the
-    performance characteristics of the plan.
+    Lors de l'exécution d'un plan parallélisé, vous pouvez utiliser
+    <literal>EXPLAIN (ANALYZE, VERBOSE)</literal> qui affichera des
+    statistiques par <foreignphrase>worker</foreignphrase> pour chaque
+    n&oelig;ud du plan. Ceci pourrait être utile pour déterminer si le travail
+    est correctement distribué entre les n&oelig;uds du plan et plus
+    généralement pour comprendre les caractéristiques de performance du plan.
   </para>
 
  </sect2>
  </sect1>
 
  <sect1 id="parallel-safety">
-  <title>Parallel Safety</title>
+  <title>Sécurité sur la parallélisation</title>
 
   <para>
-    The planner classifies operations involved in a query as either
-    <firstterm>parallel safe</firstterm>, <firstterm>parallel restricted</firstterm>,
-    or <firstterm>parallel unsafe</firstterm>.  A parallel safe operation is one which
-    does not conflict with the use of parallel query.  A parallel restricted
-    operation is one which cannot be performed in a parallel worker, but which
-    can be performed in the leader while parallel query is in use.  Therefore,
-    parallel restricted operations can never occur below a <literal>Gather</literal>
-    node, but can occur elsewhere in a plan which contains a
-    <literal>Gather</literal> node.  A parallel unsafe operation is one which cannot
-    be performed while parallel query is in use, not even in the leader.
-    When a query contains anything which is parallel unsafe, parallel query
-    is completely disabled for that query.
+    Le planificateur classifie les opérations impliquées dans une requête
+    comme étant soit <firstterm>sûres à paralléliser</firstterm>,
+    <firstterm>restreint pour la parallélisation</firstterm>, ou <firstterm>à
+    ne pas paralléliser</firstterm>. Une opération sûre à la parallélisation
+    est une opération qui n'entre pas en conflit avec l'utilisation d'une
+    requête parallélisée. Une opération restreinte à la parallélisation est
+    une opération qui ne peut pas être exécutée par un
+    <foreignphrase>worker</foreignphrase> parallélisé, mais qui peut l'être
+    par le <foreignphrase>leader</foreignphrase> alors que la requête
+    parallélisée est en cours d'exéuction. De ce fait, les opérations
+    restreintes ne peuvent jamais survenir sous un n&oelig;ud
+    <literal>Gather</literal>. Une opération non sûre à la parallélisation est
+    une opération qui ne peut pas être réalisée quand une requête est
+    parallélisée, y compris au niveau du
+    <foreignphrase>leader</foreignphrase>. Quand une requête contient quoi que
+    ce soit qui n'est pas sûr à la parallélisation, la parallélisation est
+    globalement désactivée pour cette requête.
   </para>
 
   <para>
-    The following operations are always parallel restricted.
+    Les opérations suivantes sont toujours restreintes en terme de
+    parallélisation.
   </para>
 
   <itemizedlist>
     <listitem>
       <para>
-        Scans of common table expressions (CTEs).
+        Parcours de CTE (<foreignphrase>Common Table Expressions</foreignphrase>).
       </para>
     </listitem>
 
     <listitem>
       <para>
-        Scans of temporary tables.
+        Parcours de tables temporaires.
       </para>
     </listitem>
 
     <listitem>
       <para>
-        Scans of foreign tables, unless the foreign data wrapper has
-        an <literal>IsForeignScanParallelSafe</literal> API which indicates otherwise.
+        Parcours de tables externes, sauf si le wrapper de données distantes a
+        une API <literal>IsForeignScanParallelSafe</literal> qui indique le
+        contraire.
       </para>
     </listitem>
 
     <listitem>
       <para>
-        Access to an <literal>InitPlan</literal> or <literal>SubPlan</literal>.
+        Accès à un <literal>InitPlan</literal> ou à un
+        <literal>SubPlan</literal>.
       </para>
     </listitem>
   </itemizedlist>
 
  <sect2 id="parallel-labeling">
-  <title>Parallel Labeling for Functions and Aggregates</title>
+  <title>Marquage de parallélisation pour les fonctions et agrégats</title>
 
   <para>
-    The planner cannot automatically determine whether a user-defined
-    function or aggregate is parallel safe, parallel restricted, or parallel
-    unsafe, because this would require predicting every operation which the
-    function could possibly perform.  In general, this is equivalent to the
-    Halting Problem and therefore impossible.  Even for simple functions
-    where it conceivably be done, we do not try, since this would be expensive
-    and error-prone.  Instead, all user-defined functions are assumed to
-    be parallel unsafe unless otherwise marked.  When using
-    <xref linkend="sql-createfunction"/> or
-    <xref linkend="sql-alterfunction"/>, markings can be set by specifying
-    <literal>PARALLEL SAFE</literal>, <literal>PARALLEL RESTRICTED</literal>, or
-    <literal>PARALLEL UNSAFE</literal> as appropriate.  When using
-    <xref linkend="sql-createaggregate"/>, the
-    <literal>PARALLEL</literal> option can be specified with <literal>SAFE</literal>,
-    <literal>RESTRICTED</literal>, or <literal>UNSAFE</literal> as the corresponding value.
+    Le planificateur ne peut pas déterminer automatiquement si une fonction ou
+    un agrégat défini par un utilisateur est sûr, restreint ou non sûr pour la
+    parallélisation car cela nécessiterait de pouvoir prédire chaque opération
+    réalisée par la fonction. En général, c'est équivalent au
+    <foreignphrase>Halting Problem</foreignphrase> et de ce fait, impossible.
+    Même pour des fonctions simples où cela pourrait se faire, nous n'essayons
+    pas car cela serait coûteux et sujet à erreurs. À la place, toutes les
+    fonctions définies par des utilisateurs sont supposées non sûres à la
+    parallélisation sauf indication contraire. Lors de l'utilisation des
+    instructions <xref linkend="sql-createfunction"/> et <xref
+    linkend="sql-alterfunction"/>, un marquage est possible en spécifiant
+    <literal>PARALLEL SAFE</literal>, <literal>PARALLEL RESTRICTED</literal>
+    ou <literal>PARALLEL UNSAFE</literal> suivant ce qui est approprié. Lors
+    de l'utilisation de <xref linkend="sql-createaggregate"/>, l'option
+    <literal>PARALLEL</literal> peut être ajoutée avec
+    <literal>SAFE</literal>, <literal>RESTRICTED</literal> ou
+    <literal>UNSAFE</literal> comme valeur.
   </para>
 
   <para>
-    Functions and aggregates must be marked <literal>PARALLEL UNSAFE</literal> if
-    they write to the database, access sequences, change the transaction state
-    even temporarily (e.g. a PL/pgsql function which establishes an
-    <literal>EXCEPTION</literal> block to catch errors), or make persistent changes to
-    settings.  Similarly, functions must be marked <literal>PARALLEL
-    RESTRICTED</literal> if they access temporary tables, client connection state,
-    cursors, prepared statements, or miscellaneous backend-local state which
-    the system cannot synchronize across workers. For example,
-    <literal>setseed</literal> and <literal>random</literal> are parallel restricted for
-    this last reason.
+    Les fonctions et agrégats doivent être marquées <literal>PARALLEL
+    UNSAFE</literal> s'ils écrivent dans la base, accèdent à des séquences,
+    modifient l'état de la transaction même temporairement (par exemple, une
+    fonction PL/pgsql qui établit un bloc <literal>EXCEPTION</literal> pour
+    récuéprer des erreurs), ou font des modifications persistentes sur les
+    paramètres. De façon similaire, les fonctions doivent être marquées
+    <literal>PARALLEL RESTRICTED</literal> si elles accèdent à des tables
+    temporaires, à l'état de connexion du client, à des curseurs, à des
+    requêtes préparées ou à l'état local du processus serveur, que le système
+    ne peut pas synchroniser entre les différents
+    <foreignphrase>workers</foreignphrase>. Par exemple,
+    <literal>setseed</literal> et <literal>random</literal> sont restreints en
+    terme de parallélisation pour cette dernière raison.
   </para>
 
   <para>
-    In general, if a function is labeled as being safe when it is restricted or
-    unsafe, or if it is labeled as being restricted when it is in fact unsafe,
-    it may throw errors or produce wrong answers when used in a parallel query.
-    C-language functions could in theory exhibit totally undefined behavior if
-    mislabeled, since there is no way for the system to protect itself against
-    arbitrary C code, but in most likely cases the result will be no worse than
-    for any other function. If in doubt, it is probably best to label functions
-    as <literal>UNSAFE</literal>.
+    En général, si une fonction est marquée comme étant sûre alors qu'elle ne
+    l'est pas (et même si elle est seulement restreinte), ou si une fonction
+    est marquée restreinte alors que sa parallélisation n'est pas sûre, cela
+    pourrait être la cause de renvoi d'erreurs ou de mauvaises réponses lors
+    de son utilisation dans une requête parallélisée. Les fonctions en langage C
+    pourraient en théorie avoir des comportements indéfinis en cas de mauvais
+    marquage car le système n'a aucun moyen de se défendre contre du code C
+    arbitraire. Cela étant dit, dans la plupart des cas, le résultat ne sera pas
+    pire qu'avec toute autre fonction. En cas de doute, il est probablement mieux
+    de marquer les fonctions en tant que <literal>UNSAFE</literal>.
   </para>
 
   <para>
-    If a function executed within a parallel worker acquires locks which are
-    not held by the leader, for example by querying a table not referenced in
-    the query, those locks will be released at worker exit, not end of
-    transaction. If you write a function which does this, and this behavior
-    difference is important to you, mark such functions as
-    <literal>PARALLEL RESTRICTED</literal>
-    to ensure that they execute only in the leader. 
+    Si une fonction exécutée avec un <foreignphrase>worker</foreignphrase>
+    parallèle acquiert des verrous non détenus par le
+    <foreignphrase>leader</foreignphrase>, par exemple en exécutant une
+    requête sur une table non référencée dans la requête, ces verrous seront
+    relâchés à la sortie du <foreignphrase>worker</foreignphrase>, et non pas
+    à la fin de la transaction. Si vous écrivez une fonction qui le fait et
+    que cette différence de comportement est important pour vous, marquez ces
+    fonctions comme <literal>PARALLEL RESTRICTED</literal> pour vous assurer
+    qu'elles ne sont exécutées que par le
+    <foreignphrase>leader</foreignphrase>.
   </para>
 
   <para>
-    Note that the query planner does not consider deferring the evaluation of
-    parallel-restricted functions or aggregates involved in the query in
-    order to obtain a superior plan.  So, for example, if a <literal>WHERE</literal>
-    clause applied to a particular table is parallel restricted, the query
-    planner will not consider placing the scan of that table below a 
-    <literal>Gather</literal> node.  In some cases, it would be
-    possible (and perhaps even efficient) to include the scan of that table in
-    the parallel portion of the query and defer the evaluation of the
-    <literal>WHERE</literal> clause so that it happens above the <literal>Gather</literal>
-    node.  However, the planner does not do this.
+    Notez que le planificateur de requêtes ne considère pas de différer
+    l'évaluation des fonctions ou agrégats restreints en parallélisation
+    impliquées dans la requête pour obtenir un plan supérieur. Donc, par
+    exemple, si une clause <literal>WHERE</literal> appliquée à une table
+    particulière est restreinte à la parallélisation, le planificateur ne
+    considérera pas placer le parcours de cette table sous un n&oelig;ud
+    <literal>Gather</literal>. Dans certains cas, cela serait possible (et
+    peut-être même efficace) d'inclure le parcours de cette table dans la
+    clause <literal>WHERE</literal> pour que cela se passe au-dessus du
+    n&oelig;ud <literal>Gather</literal>. Néanmoins, le planificateur ne le
+    fait pas.
   </para>
 
  </sect2>
