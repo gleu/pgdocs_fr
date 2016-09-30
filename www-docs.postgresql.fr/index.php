@@ -25,6 +25,7 @@ $version['902'] = '9.2';
 $version['903'] = '9.3';
 $version['904'] = '9.4';
 $version['905'] = '9.5';
+$version['906'] = '9.6';
 ?>
 <!DOCTYPE html SYSTEM "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -128,8 +129,41 @@ $version['905'] = '9.5';
     Lelarge</a>.</p>
     <p>Certaines vieilles versions, non maintenues, sont disponibles sur
     l'<a href="index_obsoletes.php">index des version obsolètes</a>.</p>
+    <div id="pg96">
+      <h2>Documentation PostgreSQL, version 9.6</h2>
+      <div class="listes">
+        <ul>
+            <li>Manuel au format HTML&nbsp;:
+                <a href="9.6/">Consultation en ligne</a>,
+                t&eacute;l&eacute;chargement en
+                <a onclick="pageTracker._trackPageview('/pg96.zip');"
+                href="http://docs.postgresql.fr/9.6/pg96.zip">ZIP</a> ou
+                <a onclick="pageTracker._trackPageview('/pg96.tar.gz');"
+                href="http://docs.postgresql.fr/9.6/pg96.tar.gz">TAR.GZ</a>
+            </li>
+            <!--
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg96.chm');"
+              href="http://docs.postgresql.fr/9.6/pg96.chm">CHM</a>
+              (syst&egrave;me d'aide Windows)
+            </li>
+            -->
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg96.pdf');"
+              href="http://docs.postgresql.fr/9.6/pg96.pdf">PDF</a>
+            </li>
+            <li>Document d'installation au format <a
+              onclick="pageTracker._trackPageview('/INSTALL96.html');"
+              href="http://docs.postgresql.fr/9.6/INSTALL.html">HTML</a> et
+              <a onclick="pageTracker._trackPageview('/INSTALL96.txt');"
+              href="http://docs.postgresql.fr/9.6/INSTALL.txt">texte</a>
+            </li>
+            <li><a onclick="pageTracker._trackPageview('/pg96.man.tar.gz');"
+              href="http://docs.postgresql.fr/9.6/pg96.man.tar.gz">Pages
+              man</a></li>
+        </ul>
+      </div>
+    </div>
     <div id="pg95">
-      <h2>Documentation PostgreSQL, version 9.5 (en cours de traduction)</h2>
+      <h2>Documentation PostgreSQL, version 9.5</h2>
       <div class="listes">
         <ul>
             <li>Manuel au format HTML&nbsp;:
