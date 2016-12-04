@@ -179,7 +179,7 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
 
     <listitem>
       <para>
-        La requête utilise une fonction marquée <literal>PARALLEL UNSAFE</literal> (non sûre à la prallélisation) .
+        La requête utilise une fonction marquée <literal>PARALLEL UNSAFE</literal> (à parallélisation sûre).
         La plupart des fonctions systèmes sont <literal>PARALLEL SAFE</literal>,
         mais les fonctions utilisateurs sont marquées <literal>PARALLEL UNSAFE</literal> 
 	par défaut. Voir la discussion de <xref linkend="parallel-safety"/>.
@@ -268,11 +268,11 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     <foreignphrase>worker</foreignphrase> produirait une copie complète du
     jeu de résultats, donc la requête ne s'exécuterait pas
     plus rapidement qu'à la normale, et produirait des résultats incorrects.
-    À la place, la portion parallélisée du plan doit être ce qui est connu en
-    interne par l'optimiseur de requêtes comme un <firstterm>plan
-    partiel</firstterm>&nbsp;; c'est-à-dire qu'il doit être construit de façon
-    à ce que chaque processus exécutant le plan génère seulement un
-    sous-ensemble des lignes en sortie et que chacune
+    À la place, la portion parallélisée du plan est considéré en
+    interne par l'optimiseur comme un <firstterm>plan
+    partiel</firstterm>&nbsp;; c'est-à-dire construit de façon
+    à ce que chaque processus exécutant le plan ne génère qu'un
+    sous-ensemble des lignes en sortie, et que chacune
     ait la garantie d'être générée par exactement un des
     processus participants.
   </para>
@@ -317,47 +317,46 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
  <sect2 id="parallel-aggregation">
   <title>Agrégations parallélisées</title>
    <para>
-    Il n'est pas possible de réaliser la portion agrégée d'une requête
-    totalement en parallèle. Par exemple, si une requête implique la sélection
-    de <literal>COUNT(*)</literal>, chaque
-    <foreignphrase>worker</foreignphrase> peut calculer un total, mais ces
-    totaux doivent être combinés pour produire la réponse finale. Si la
+    Il n'est pas possible de paralléliser entièrement l'agrégation au sein d'une requête.
+    Par exemple, si une requête effectue un <literal>COUNT(*)</literal>, chaque
+    <foreignphrase>worker</foreignphrase> peut calculer un total, mais ils
+    devront être combinés pour produire la réponse finale. Si la
     requête implique une clause <literal>GROUP BY</literal>, un total séparé
-    doit être calculé pour chaque groupe. Même si l'agrégat ne peut pas être
-    entièrement fait en parallèle, les requêtes impliquant un agrégat sont
-    souvent d'excellents candidats pour des requêtes parallélisées parce
-    qu'elles vont typiquement lire beaucoup de lignes tout en en renvoyant peu
-    au client. Les requêtes qui renvoient de nombreuses lignes au client sont
+    doit être calculé pour chaque groupe. Même si elles ne peuvent être
+    entièrement parallélisées, les requêtes avec agrégation sont
+    souvent d'excellentes candidates pour la parallélisation :
+    elles lisent généralement beaucoup de lignes tout en en renvoyant peu
+    au client. Les requêtes qui renvoient de nombreuses lignes sont
     souvent limitées par la vitesse à laquelle le client peut lire les
-    données, auquel cas une requête parallélisée ne peut pas tellement aider.
+    données, cas où une requête parallélisée ne peut pas grand chose.
    </para>
 
    <para>
-    <productname>PostgreSQL</productname> supporte les agrégats parallélisés
-    en agrégeant deux fois. Tout d'abord, chaque processus participant à la
-    portion parallélisée de la requête réalise une étape d'agrégation,
-    produisant un resultat partiel pour chaque groupe que ce processus
-    connaît. Ceci est reflété dans le plan avec le n&oelig;ud
-    <literal>PartialAggregate</literal>. Ensuite, les résultats partiels sont
+    <productname>PostgreSQL</productname> procède à l'agrégation parallélisée
+    en agrégeant deux fois. Tout d'abord, chaque processus de la
+    partie parallélisée de la requête réalise une étape d'agrégation,
+    produisant un resultat partiel pour chaque groupe qu'il
+    connaît. Ceci se reflète dans le plan par le n&oelig;ud
+    <literal>PartialAggregate</literal>. Puis les résultats partiels sont
     transférés au <foreignphrase>leader</foreignphrase> via le n&oelig;ud
     <literal>Gather</literal>. Enfin, le <foreignphrase>leader</foreignphrase>
     ré-agrège les résultats partiels de tous les
     <foreignphrase>workers</foreignphrase> pour produire le résultat final.
-    Ceci est reflété dans le plan sous la forme d'un n&oelig;ud
+    Ceci apparaît dans le plan sous la forme d'un n&oelig;ud
     <literal>FinalizeAggregate</literal>.
    </para>
 
    <para>
     L'agrégation parallélisée n'est pas supportée dans toutes les situations.
-    Chaque agrégat doit être <link linkend="parallel-safety">sûr</link> pour
-    une bonne parallélisation et doit avoir une fonction de combinaison. Si
+    Chaque agrégat doit être <link linkend="parallel-safety">sûr à la parallélisation</link>
+    et doit avoir une fonction de combinaison. Si
     l'agrégat a un état de transition de type <literal>internal</literal>, il
     doit avoir des fonctions de sérialisation et de désérialisation. Voir
     <xref linkend="sql-createaggregate"/> pour plus de détails. L'agrégation
-    parallélisée n'est pas supportée pour les agrégats d'ensemble ordonné ou
+    parallélisée n'est pas supportée pour les agrégats d'ensembles ordonnés ou
     quand la requête implique la clause <literal>GROUPING SETS</literal>. Elle
-    peut seulement être utilisée quand toutes les jointures impliquées dans la
-    requêtes font partie de la portion parallélisée du plan.
+    ne peut être utilisée que si toutes les jointures impliquées dans la
+    requête sont dans la partie parallélisée du plan.
    </para>
   </sect2>
 
@@ -365,25 +364,24 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
   <title>Conseils pour les plans parallélisés</title>
 
   <para>
-    Si une requête qu'on s'attend à voir utiliser un plan parallélisé ne le
-    fait pas, vous pouvez tenter de réduire <xref
+    Si une requête ne produit pas un plan parallélisé comme attendu,
+    vous pouvez tenter de réduire <xref
     linkend="guc-parallel-setup-cost"/> ou <xref linkend="guc-parallel-tuple-cost"/>.
-    Bien sûr, ce plan pourrait devenir plus lent que le plan sériel
-    que le planificateur préfèrait mais ce ne sera pas toujours le cas. Si
+    Bien sûr, ce plan pourrait bien finir par être plus lent que le plan sériel
+    préféré par le planificateur mais ce ne sera pas toujours le cas. Si
     vous n'obtenez pas un plan parallélisé même pour de très petites valeurs
-    de ces paramètres (c'est-à-dire après les avoir définies tous les deux
-    à zéro), il pourrait exister une raison pour laquelle le
-    planificateur de requêtes est incapable de générer un plan parallélisé
+    de ces paramètres (par exemple après les avoir définies tous les deux
+    à zéro), le planificateur a peut-être une bonne raison pour ne pas le faire
     pour votre requête. Voir <xref linkend="when-can-parallel-query-be-used"/>
-    et <xref linkend="parallel-safety"/> pour des informations pouvant
-    expliquer pourquoi cela serait le cas.
+    et <xref linkend="parallel-safety"/> pour 
+    des explications sur les causes possibles.
   </para>
 
   <para>
     Lors de l'exécution d'un plan parallélisé, vous pouvez utiliser
     <literal>EXPLAIN (ANALYZE, VERBOSE)</literal> qui affichera des
     statistiques par <foreignphrase>worker</foreignphrase> pour chaque
-    n&oelig;ud du plan. Ce pourrait être utile pour déterminer si le travail
+    n&oelig;ud du plan. Ce peut être utile pour déterminer si le travail
     est correctement distribué entre les n&oelig;uds du plan et plus
     généralement pour comprendre les caractéristiques de performance du plan.
   </para>
@@ -396,28 +394,27 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
 
   <para>
     Le planificateur classifie les opérations impliquées dans une requête
-    comme étant soit <firstterm>sûres à paralléliser</firstterm>,
-    <firstterm>restreintes pour la parallélisation</firstterm>, ou
-	<firstterm>non sûres à la parallélisation</firstterm>. Une opération
-	sûre à la parallélisation
-    est une opération qui n'entre pas en conflit avec l'utilisation d'une
-    requête parallélisée. Une opération restreinte à la parallélisation est
-    une opération qui ne peut pas être exécutée par un
-    <foreignphrase>worker</foreignphrase> parallélisé, mais qui peut l'être
-    par le <foreignphrase>leader</foreignphrase> alors que la requête
-    parallélisée est en cours d'exéuction. De ce fait, les opérations
-    restreintes ne peuvent jamais survenir sous un n&oelig;ud
-    <literal>Gather</literal>. Une opération non sûre à la parallélisation est
-    une opération qui ne peut pas être réalisée quand une requête est
+    comme étant <firstterm>à parallélisation sûre</firstterm>,
+    <firstterm>restreintes</firstterm>, ou
+	<firstterm>non sûres</firstterm>. Une opération
+    à parallélisation sûre
+    est une opération n'entrant pas en conflit avec une
+    requête parallélisée. Une opération à parallélisation restreinte
+    ne peut pas être exécutée par un
+    <foreignphrase>worker</foreignphrase> parallélisé, mais peut l'être
+    par le <foreignphrase>leader</foreignphrase> pendant
+    l'exécution. De ce fait, les opérations à parallélisation
+    restreinte ne peuvent jamais survenir sous un n&oelig;ud
+    <literal>Gather</literal>. Une opération à parallélisation non sûre ne
+    peut être exécutée dans une requête
     parallélisée, y compris au niveau du
     <foreignphrase>leader</foreignphrase>. Quand une requête contient quoi que
-    ce soit qui n'est pas sûr à la parallélisation, la parallélisation est
-    globalement désactivée pour cette requête.
+    ce soit non sûr à paralléliser, la parallélisation y est
+    complètement désactivée.
   </para>
 
   <para>
-    Les opérations suivantes sont toujours restreintes en terme de
-    parallélisation.
+    Les opérations suivantes sont toujours à parallélisation restreinte.
   </para>
 
   <itemizedlist>
@@ -454,14 +451,14 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
 
   <para>
     Le planificateur ne peut pas déterminer automatiquement si une fonction ou
-    un agrégat défini par un utilisateur est sûr, restreint ou non sûr pour la
-    parallélisation car cela nécessiterait de pouvoir prédire chaque opération
+    un agrégat défini par un utilisateur est à parallélisation sûre, restreinte ou non sûre
+    car cela nécessiterait de pouvoir prédire chaque opération
     réalisée par la fonction. En général, c'est équivalent au
     problème de l'arrêt et de ce fait, impossible.
     Même pour des fonctions simples où cela pourrait se faire, nous n'essayons
     pas car cela serait coûteux et sujet à erreurs. À la place, toutes les
-    fonctions définies par des utilisateurs sont supposées non sûres à la
-    parallélisation sauf indication contraire. Lors de l'utilisation des
+    fonctions définies par des utilisateurs sont supposées à parallélisation non sûre
+    sauf indication contraire. Lors de l'utilisation des
     instructions <xref linkend="sql-createfunction"/> et <xref
     linkend="sql-alterfunction"/>, un marquage est possible en spécifiant
     <literal>PARALLEL SAFE</literal>, <literal>PARALLEL RESTRICTED</literal>
@@ -484,17 +481,17 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     requêtes préparées ou à un quelconque état local du processus serveur que le système
     ne peut pas synchroniser entre les différents
     <foreignphrase>workers</foreignphrase>. Par exemple,
-    <literal>setseed</literal> et <literal>random</literal> sont restreints en
-    terme de parallélisation pour cette dernière raison.
+    <literal>setseed</literal> et <literal>random</literal> sont à
+    parallélisation restreinte pour cette dernière raison.
   </para>
 
   <para>
     En général, si une fonction est marquée comme étant sûre alors qu'elle ne
     l'est pas (et même si elle est seulement restreinte), ou si une fonction
-    est marquée restreinte alors que sa parallélisation n'est pas sûre, elle
-    pourrait être la cause d'erreurs ou de réponses fausses à
+    est marquée restreinte alors que sa parallélisation en fait n'est pas sûre, elle
+    peut être cause d'erreurs ou de réponses fausses à
     l'utilisation dans une requête parallélisée. Les fonctions en langage C
-    pourraient en théorie avoir des comportements indéfinis en cas de mauvais
+    peuvent en théorie avoir des comportements indéfinis en cas de mauvais
     marquage car le système n'a aucun moyen de se défendre contre du code C
     arbitraire. Cela étant dit, dans la plupart des cas, le résultat ne sera pas
     pire qu'avec toute autre fonction. En cas de doute, le mieux est probablement
@@ -515,11 +512,11 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
   </para>
 
   <para>
-    Notez que le planificateur de requêtes ne considère pas de différer
-    l'évaluation des fonctions ou agrégats restreints en parallélisation
-    impliquées dans la requête pour obtenir un plan supérieur. Donc, par
+    Notez que le planificateur de requêtes ne cherche pas à différer
+    l'évaluation des fonctions ou agrégats à parallélisation restreinte
+    impliquées dans la requête pour obtenir un meilleur plan. Donc, par
     exemple, si une clause <literal>WHERE</literal> appliquée à une table
-    particulière est restreinte à la parallélisation, le planificateur ne
+    particulière est à parallélisation restreinte, le planificateur ne
     tentera pas de placer le parcours de cette table sous un n&oelig;ud
     <literal>Gather</literal>. Dans certains cas, il serait possible 
     (voire efficace) d'inclure le parcours de cette table dans la
