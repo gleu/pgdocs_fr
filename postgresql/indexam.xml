@@ -8,80 +8,78 @@
  <title>Définition de l'interface des méthodes d'accès aux index</title>
 
  <para>
-  Ce chapitre définit l'interface entre le système
+  Ce chapitre définit l'interface entre le cœur du système de
   <productname>PostgreSQL</productname> et les <firstterm>méthodes d'accès
-   aux index</firstterm>, qui gérent les types d'index individuels. Le système principal
+   aux index</firstterm>, qui gérent chaque type d'index. Le système principal
   ne sait rien des index en dehors de ce qui est spécifié ici. Il est donc
-  possible de développer de nouveaux types d'index en écrivant du code
+  possible de développer des types d'index entièrement nouveaux en écrivant du code
   supplémentaire.
  </para>
 
  <para>
-  Tous les index de <productname>PostgreSQL</productname> sont connus
-  techniquement en tant qu'<firstterm>index secondaires</firstterm>&nbsp;; c'est-à-dire
-  que l'index est séparé physiquement du fichier de table qu'il décrit. Chaque index
-  est stocké dans sa propre <firstterm>relation</firstterm> physique et donc décrit
+  Tous les index de <productname>PostgreSQL</productname> sont 
+  techniquement des <firstterm>index secondaires</firstterm>&nbsp;; c'est-à-dire
+  que l'index est séparé physiquement du fichier de la table qu'il décrit. Chaque index
+  est stocké dans sa propre <firstterm>relation</firstterm> physique et est donc décrit
   par une entrée dans le catalogue <structname>pg_class</structname>. Le contenu d'un
   index est entièrement contrôlé par la méthode d'accès à l'index. En
   pratique, toutes les méthodes d'accès aux index les divisent en pages de
   taille standard de façon à utiliser le gestionnaire de stockage
-  et le gestionnaire de tampon pour accéder au contenu de l'index. De plus,
+  et le gestionnaire de tampon pour accéder au contenu de l'index. (De plus,
   toutes les méthodes existantes d'accès aux index utilisent la disposition
   de page standard décrite dans <xref linkend="storage-page-layout"/> et la plupart
   ont le même format pour les en-têtes de ligne de
-  l'index&nbsp;; mais ces décisions ne sont pas contraintes sur une méthode
-  d'index.
+  l'index&nbsp;; mais ce ne sont pas des obligations pour toutes les méthodes d'accès.)
  </para>
 
  <para>
-  Dans les faits, un index est une correspondance entre les valeurs des clés
-  de données et les
-  identifiants de lignes (<firstterm>tuple identifiers</firstterm>, ou <acronym>TIDs</acronym>)
-  des versions de lignes dans la table parent de l'index. Un TID consiste en un
-  numéro de bloc et un numéro d'élément à l'intérieur de ce bloc (voir <xref
-  linkend="storage-page-layout"/>). C'est une information suffisante pour
-  récupérer une version de ligne particulière à partir de la table. Les index
-  n'ont pas directement la connaissance de l'existence éventuelle, sous MVCC,
+  Dans les faits, un index est une correspondance entre certaines valeurs de données clés
+  et les  identifiants des lignes (<firstterm>tuple identifiers</firstterm>, ou <acronym>TIDs</acronym>),
+  dans leurs différentes versions,  dans la table parent de l'index. Un TID consiste en un
+  numéro de bloc et un numéro d'élément dans ce bloc (voir <xref
+  linkend="storage-page-layout"/>). L'information est suffisante pour
+  récupérer une version d'une ligne particulière à partir de la table. Les index
+  n'ont pas directement connaissance de l'existence éventuelle, à cause du MVCC,
   de plusieurs versions de la même ligne logique&nbsp;; pour un index, chaque ligne
-  est un objet indépendant qui a besoin de sa propre entrée dans l'index. Du
-  coup, la mise à jour d'une ligne crée toujours toutes les nouvelles entrées
-  d'index pour la ligne, même si les valeurs de la clé ne changent pas.
-  (Les lignes HOT sont une exception&nbsp;; mais les index ne sont pas
-  concernés.) Les entrées d'index pour les lignes mortes sont réclamées (par
-  le VACUUM) lorsque les lignes mortes elles-même sont réclamées.
+  est un objet indépendant qui a besoin de sa propre entrée. En conséquence, 
+  la mise à jour d'une ligne crée toujours de nouvelles entrées
+  dans l'index pour cette ligne, même si les valeurs de la clé ne changent pas.
+  (Les lignes HOT sont une exception&nbsp;; mais les index ne s'en occupent pas).
+  Les entrées d'index pour les lignes mortes sont nettoyées (par
+  le VACUUM) lorsque les lignes mortes elles-même sont nettoyées.
  </para>
 
  <sect1 id="index-api">
   <title>Structure basique de l'API pour les index</title>
 
   <para>
-   Chaque méthode d'accès à l'index est décrite par une ligne dans le
+   Chaque méthode d'accès à un index est décrite par une ligne dans le
    catalogue système <link
-   linkend="catalog-pg-am"><structname>pg_am</structname></link>. L'entrée
-   <structname>pg_am</structname> indique un nom et une <firstterm>fonction
-   gestionnaire</firstterm> pour la méthode d'accès. Ces entrées peuvent être
+   linkend="catalog-pg-am"><structname>pg_am</structname></link>.Elle 
+   indique un nom et une <firstterm>fonction gestionnaire</firstterm> 
+   pour la méthode d'accès. Ces entrées peuvent être
    créées et supprimées en utilisant les commandes SQL <xref
    linkend="sql-create-access-method"/> et <xref
-   linkend="sql-drop-access-method"/>, respectivement.
+   linkend="sql-drop-access-method"/> respectivement.
   </para>
 
   <para>
    Une fonction gestionnaire de méthode d'accès aux index doit être déclarée
-   comme acceptant un seul argument de type <type>internal</type> et pour
-   renvoyer le pseudo-type <type>index_am_handler</type>. L'argument est une
-   valeur sans réelle utilité en dehors d'empêcher que les fonctions
-   gestionnaires soient appelées directement à parir d'une commande SQL. Le
+   avec un seul argument de type <type>internal</type> et en retour 
+   le pseudo-type <type>index_am_handler</type>. L'argument est une
+   valeur sans utilité sinon pour empêcher les fonctions
+   gestionnaires d'être appelées directement à partir d'une commande SQL. Le
    résultat de la fonction doit être une structure, allouée avec palloc, de
-   type <structname>IndexAmRoutine</structname>, contenant tout ce que le code
+   type <structname>IndexAmRoutine</structname>, et contenant tout ce que le code
    interne a besoin de savoir pour utiliser la méthode d'accès à l'index. La
    structure <structname>IndexAmRoutine</structname>, aussi appelée
-   <firstterm>API struct</firstterm> de la méthode, inclut les champs indiquant
-   les propriétés fixes de la méthode d'accès, par exemple s'il peut supporter
-   les index multi-colonnes. Plus important, elle contient les pointeurs pour
-   supporter les fonctions de la méthode d'accès, qui font tout le vrai travail
-   pour accéder aux index. Ces fonctions de support sont des fonctions simples
-   en C et ne sont pas visibles ou appelables au niveau SQL. Les fonctions de
-   support sont décrites dans <xref linkend="index-functions"/>.
+   <firstterm>API struct</firstterm> de la méthode, inclut les champs spécifiant
+   les propriétés fixes de la méthode d'accès, comme le support
+   des index multi-colonnes. Plus important, elle contient les pointeurs vers 
+   les fonctions de la méthode d'accès, qui se chargent de tout le travail 
+   d'accès aux index. Ces fonctions de support sont de simples fonctions
+   en C et ne sont ni visibles ni appelables au niveau SQL. Elles sont 
+   décrites dans <xref linkend="index-functions"/>.
   </para>
 
   <para>
@@ -147,14 +145,14 @@ typedef struct IndexAmRoutine
 
   <para>
    Pour être utile, une méthode d'accès à l'index doit aussi avoir une ou
-   plusieurs <firstterm>familles d'opérateur</firstterm> et <firstterm>classes
-    d'opérateur</firstterm> définies dans
+   plusieurs <firstterm>familles d'opérateurs</firstterm> et <firstterm>classes
+    d'opérateurs</firstterm> définies dans
    <link linkend="catalog-pg-opfamily"><structname>pg_opfamily</structname></link>,
    <link linkend="catalog-pg-opclass"><structname>pg_opclass</structname></link>,
    <link linkend="catalog-pg-amop"><structname>pg_amop</structname></link> et
    <link linkend="catalog-pg-amproc"><structname>pg_amproc</structname></link>.
-   Ces entrées permettent au planificateur de déterminer les types de qualification
-   des requêtes qui peuvent être utilisés avec les index de cette méthode d'accès.
+   Ces entrées permettent au planificateur de déterminer les types 
+   de requêtes qui peuvent être utilisés avec les index de cette méthode d'accès.
    Les familles et classes d'opérateurs sont décrites dans <xref
    linkend="xindex"/>, qui est un élément requis pour comprendre ce chapitre.
   </para>
@@ -162,61 +160,61 @@ typedef struct IndexAmRoutine
   <para>
    Un index individuel est défini par une entrée dans
    <link linkend="catalog-pg-class"><structname>pg_class</structname></link>
-   le définissant comme une relation physique, et une entrée dans
+   en tant que relation physique, et une entrée dans
    <link linkend="catalog-pg-index"><structname>pg_index</structname></link>
-   affichant le contenu logique de l'index &mdash; c'est-à-dire ses colonnes
-   d'index et la sémantique de ces colonnes, telles que
-   récupérées par les classes d'opérateur associées. Les colonnes de
-   l'index (valeurs clés) peuvent être des colonnes simples de la table
-   sous-jacente ou des expressions sur les lignes de la table. Habituellement,
-   la méthode d'accès à l'index ne s'intérese pas à la provenance
-   des valeurs clés de l'index (ce sont toujours des valeurs clés
-   pré-traitées), mais trouve beaucoup d'intérêt aux informations de la classe
-   d'opérateur dans <structname>pg_index</structname>. Les entrées de ces deux
-   catalogues peuvent être accédées comme partie de la structure de données de
+   affichant son contenu logique &mdash; c'est-à-dire ses colonnes
+   et leur sémantique, telles que
+   récupérées par les classes d'opérateurs associées. Les colonnes de
+   l'index (valeurs clés) peuvent être de simples colonnes de la table
+   sous-jacente ou des expressions des lignes de la table. Habituellement,
+   la méthode d'accès ne s'intéresse pas à la provenance
+   des valeurs clés (elles lui arrivent toujours
+   pré-calculées), mais bien aux informations de la classe
+   d'opérateurs dans <structname>pg_index</structname>. On peut accéder aux entrées de ces deux
+   catalogues via la structure de données
    <structname>Relation</structname> passée à toute opération sur l'index.
   </para>
 
   <para>
-   Certains champs d'options de <structname>IndexAmRoutine</structname> ont des
+   Certains champs de <structname>IndexAmRoutine</structname> ont des
    implications peu évidentes. Les besoins de <structfield>amcanunique</structfield>
-   sont discutés dans  <xref linkend="index-unique-checks"/>.
+   sont discutés dans <xref linkend="index-unique-checks"/>.
    L'option <structfield>amcanmulticol</structfield> indique que la méthode
    d'accès supporte les index multi-colonnes alors que
-   <structfield>amoptionalkey</structfield> indique que des parcours sont
-   autorisés lorsqu'aucune clause de restriction indexable n'est donnée pour la première colonne
+   <structfield>amoptionalkey</structfield> autorise des parcours 
+   lorsqu'aucune restriction indexable n'est fournie pour la première colonne
    de l'index. Quand <structfield>amcanmulticol</structfield> est faux,
-   <structfield>amoptionalkey</structfield> indique essentiellement si la méthode
+   <structfield>amoptionalkey</structfield> indique essentiellement que la méthode
    d'accès autorise les parcours complets de l'index sans clause de restriction.
-   Les méthodes d'accès qui supportent les colonnes d'index multiples
-   <emphasis>doivent</emphasis> supporter les parcours qui omettent des
-   restrictions sur une ou toutes les colonnes après la première&nbsp;;
-   néanmoins, elles peuvent imposées qu'une restriction apparaisse pour la
-   première colonne de l'index, ce qui est signalé par l'initialisation de
-   <structfield>amoptionalkey</structfield> à faux.
-   Une raison pour laquelle une méthode d'accès d'index initialiserait
-   <structfield>amoptionalkey</structfield> à false est qu'elle n'indexe pas
+   Les méthodes d'accès supportant les colonnes multiples
+   <emphasis>doivent</emphasis> supporter les parcours sans
+   restriction sur une ou toutes les colonnes après la première&nbsp;;
+   néanmoins, elles peuvent imposer une restriction sur la
+   première colonne de l'index, ce qui est signalé par 
+   <structfield>amoptionalkey</structfield> à false .
+   Une raison pour une méthode d'accès d'index d'initialiser
+   <structfield>amoptionalkey</structfield> à false est de ne pas indexer
    les valeurs NULL. Comme la plupart des opérateurs indexables
-   sont stricts et, du coup, ne peuvent pas renvoyer TRUE pour des entrées NULL,
-   il est à première vue attractif de ne pas stocker les entrées d'index pour les
-   valeurs NULL&nbsp;: un parcours d'index ne peut, de toute façon, pas les
+   sont stricts et ne peuvent donc pas renvoyer true pour des entrées NULL,
+   à première vue on ne voudra pas stocker d'entrées pour les
+   valeurs NULL&nbsp;: un parcours d'index ne peut de toute façon pas les
    retourner. Néanmoins, cet argument tombe lorsqu'un parcours d'index
-   n'a pas de clause de restriction pour une colonne d'index donnée. En pratique,
-   cela signifie que les index dont <structfield>amoptionalkey</structfield> vaut
+   n'a pas de restriction pour une colonne d'index donnée. En pratique,
+   cela signifie que les index avec <structfield>amoptionalkey</structfield> à
    true doivent indexer les valeurs NULL, car le planificateur peut décider
-   d'utiliser un tel index sans aucune clé de parcours. Une restriction en
-   découle&nbsp;: une méthode d'accès qui supporte des colonnes d'index
-   multiples <emphasis>doit</emphasis> supporter l'indexage des valeurs NULL dans les colonnes
-   qui suivent la première, car le planificateur suppose que l'index peut être
-   utilisé pour les requêtes qui ne restreignent pas ces colonnes. Par exemple,
-   si l'on considère un index sur (a,b) et une requête avec <literal>WHERE a =
-    4</literal>, le système suppose que l'index peut être utilisé pour
-   rechercher les lignes pour lesquelles <literal>a = 4</literal>, ce qui est
-   faux si l'index omet les lignes où <literal>b</literal> est null.
-   Néanmoins, il est correct d'omettre les lignes où la
+   de les utiliser sans aucune clé de parcours. Une limite 
+   liée&nbsp;: une méthode d'accès qui supporte des colonnes
+   multiples <emphasis>doit</emphasis> supporter l'indexation des NULL dans les colonnes
+   après la première, car le planificateur supposera l'index 
+   utilisable avec les requêtes ne restreignant pas ces colonnes. Par exemple,
+   considérons un index sur (a,b) et une requête avec <literal>WHERE a =
+    4</literal>. Le système supposera que l'index est utilisable pour
+   les lignes où <literal>a = 4</literal>, ce qui est
+   faux si l'index omet les lignes où <literal>b</literal> est NULL.
+   Néanmoins, on peut omettre les lignes où la
    première colonne indexée est NULL. Du coup, une méthode d'accès d'index
-   qui ne s'occupe pas des valeurs NULL pourrait aussi configurer
-   <structfield>amsearchnulls</structfield>, indiquant ainsi qu'elle supporte
+   ne s'occupant pas des valeurs NULL peut aussi affecter 
+   <structfield>amsearchnulls</structfield> à true, indiquant ainsi qu'elle supporte
    les clauses <literal>IS NULL</literal> et <literal>IS NOT NULL</literal> dans
    les conditions de recherche.
   </para>
@@ -224,10 +222,10 @@ typedef struct IndexAmRoutine
  </sect1>
 
  <sect1 id="index-functions">
-  <title>Fonctions de la méthode d'accès aux index</title>
+  <title>Fonctions des méthode d'accès aux index</title>
 
   <para>
-   Les fonctions de construction et de maintenance d'index que doit fournir
+   Les fonctions de construction et de maintenance que doit fournir
    une méthode d'accès aux index dans <structname>IndexAmRoutine</structname>
    sont&nbsp;:
   </para>
@@ -238,7 +236,7 @@ ambuild (Relation heapRelation,
          Relation indexRelation,
          IndexInfo *indexInfo);
    </programlisting>
-   Construire un nouvel index. La relation de l'index a été créée physiquement
+   Construit un nouvel index. La relation de l'index a été créée physiquement
    mais elle est vide. Elle doit être remplie avec toute donnée fixe nécessaire
    à la méthode d'accès, ainsi que les entrées pour toutes les lignes existant
    déjà dans la table. Habituellement, la fonction <function>ambuild</function> appelle
@@ -253,10 +251,10 @@ ambuild (Relation heapRelation,
 void
 ambuildempty (Relation indexRelation);
    </programlisting>
-   Construire un index vide et l'inscrire dans le fichier d'initialisation
-   (<symbol>INIT_FORKNUM</symbol>) de la relation. Cette méthode est seulement appelée pour les
-   index non journalisés. L'index vide inscrit dans le fichier d'initialisation
-   sera copié sur le fichier de la relation à chaque redémarrage du serveur.
+   Construit un index vide et l'écrit dans le fichier d'initialisation
+   (<symbol>INIT_FORKNUM</symbol>) de la relation. Cette méthode n'est appelée que pour les
+   index non journalisés. L'index vide écrit dans ce fichier
+   remplacera le fichier de la relation à chaque redémarrage du serveur.
   </para>
 
   <para>
@@ -268,33 +266,33 @@ aminsert (Relation indexRelation,
           Relation heapRelation,
           IndexUniqueCheck checkUnique);
    </programlisting>
-   Insérer une nouvelle ligne dans un index existant. Les tableaux
+   Insère une nouvelle ligne dans un index existant. Les tableaux
    <literal>values</literal> et <literal>isnull</literal> donnent les valeurs
-   de clés à indexer.
+   de clés à indexer et
    <literal>heap_tid</literal> est le TID à indexer. Si la méthode d'accès supporte les
    index uniques (son drapeau <structfield>amcanunique</structfield>
    vaut true), alors <literal>checkUnique</literal> indique le type de
-   vérification unique à réaliser. Cela varie si la contrainte unique est
+   vérification d'unicité nécessaire. Elle varie si la contrainte unique est
    déferrable ou non&nbsp;; voir <xref linkend="index-unique-checks"/> pour
-   les détails. Habituellement, la méthode d'accès a seulement besoin du
-   paramètre <literal>heapRelation</literal> lors de la vérification de
-   l'unicité (car après, elle doit regarder la table pour vérifier la
-   visibilité de la ligne).
+   les détails. Normalement, la méthode d'accès a seulement besoin du
+   paramètre <literal>heapRelation</literal> lors de la vérification
+   d'unicité (car elle doit vérifier la
+   visibilité de la ligne dans la table).
   </para>
 
   <para>
-   La valeur résultat, de type booléen, de la fonction est significative
-   seulement quand <literal>checkUnique</literal> vaut
+   La valeur booléenne résultante n'a de sens
+   que si <literal>checkUnique</literal> vaut
    <literal>UNIQUE_CHECK_PARTIAL</literal>. Dans ce cas, un résultat TRUE
    signifie que la nouvelle entrée est reconnue comme unique alors que FALSE
    indique qu'elle pourrait ne pas être unique (et une vérification d'unicité
-   déferrée doit être planifiée). Dans les autres cas, un résultat FALSE
-   constant est recommendé.
+   déferrée doit être planifiée). Dans les autres cas, renvoyer une constante FALSE
+   est recommendé.
   </para>
 
   <para>
-   Certains index pourraient ne pas indexer toutes les lignes. Si la ligne
-   ne doit pas être indexée, <function>aminsert</function> devrait terminer
+   Certains index peuvent ne pas indexer toutes les lignes. Si la ligne
+   ne doit pas être indexée, <function>aminsert</function> devrait s'achever
    sans rien faire.
   </para>
 
@@ -305,27 +303,27 @@ ambulkdelete (IndexVacuumInfo *info,
               IndexBulkDeleteCallback callback,
               void *callback_state);
    </programlisting>
-   Supprimer un(des) tuple(s) de l'index. Il s'agit d'une opération de
-   <quote>suppression massive</quote> à implanter par le parcours complet de
-   l'index et la vérification de chaque entrée pour déterminer si elle
+   Supprime un ou des tuple(s) de l'index. Il s'agit d'une opération de
+   <quote>suppression en masse</quote> à implémenter par un parcours complet de
+   l'index et la vérification de chaque entrée pour voir si elle
    doit être supprimée. La fonction <literal>callback</literal> en argument doit être
    appelée, sous la forme <literal>callback(<replaceable>TID</replaceable>, callback_state)
-    returns bool</literal>, pour déterminer si une entrée d'index particulière,
-   identifiée par son TID, est à supprimer. Cette fonction Doit renvoyer NULL
-   ou une structure issue d'un palloc qui contient des statistiques sur les
-   effets de l'opération de suppression.
-   La fonction peut retourner NULL si aucune information ne doit être envoyée à
+   returns bool</literal>, pour déterminer si une entrée d'index particulière,
+   identifiée par son TID, doit être supprimée. Elle doit retourner NULL
+   ou une structure issue d'un palloc contenant des statistiques sur les
+   effets de la suppression.
+   La fonction peut renvoyer NULL si aucune information ne doit être envoyée à
    <function>amvacuumcleanup</function>.
   </para>
 
   <para>
-   En cas de limitation de <varname>maintenance_work_mem</varname>, la
+   À cause d'un <varname>maintenance_work_mem</varname> limité, la
    suppression de nombreux tuples impose d'appeler
    <function>ambulkdelete</function> à plusieurs reprises.
    L'argument <literal>stats</literal> est le résultat du dernier appel pour cet index
    (il est NULL au premier appel dans une opération
-   <command>VACUUM</command>). Ceci permet à l'AM d'accumuler des statistiques
-   sur l'opération dans son intégralité. Typiquement, <function>ambulkdelete</function>
+   <command>VACUUM</command>). Ceci permet à la méthode d'accumuler des statistiques
+   sur toute l'opération. Typiquement, <function>ambulkdelete</function>
    modifie et renvoie la même structure si le <literal>stats</literal> fourni
    n'est pas NULL.
   </para>
@@ -335,15 +333,15 @@ ambulkdelete (IndexVacuumInfo *info,
 amvacuumcleanup (IndexVacuumInfo *info,
                  IndexBulkDeleteResult *stats);
    </programlisting>
-   Nettoyage après une opération <command>VACUUM</command> (zéro à plusieurs
+   Nettoyer après une opération <command>VACUUM</command> (zéro à plusieurs
    appels à <function>ambulkdelete</function>). La fonction n'a pas d'autre but
-   que de retourner des statistiques concernant les index, mais elle peut réaliser
+   que de retourner des statistiques sur les index, mais elle peut réaliser
    un nettoyage en masse (réclamer les pages d'index vides, par exemple).
    <literal>stats</literal> est le retour de l'appel à <function>ambulkdelete</function>,
    ou NULL si
    <function>ambulkdelete</function> n'a pas été appelée car aucune ligne n'avait
    besoin d'être supprimée. Si le résultat n'est pas NULL, il s'agit d'une structure
-   allouée par palloc. Les statistiques qu'elle contient sont utilisées pour
+   allouée par palloc. Les statistiques qu'elle contient seront utilisées pour
    mettre à jour <structname>pg_class</structname>, et sont rapportées par
    <command>VACUUM</command> si <literal>VERBOSE</literal> est indiqué. La
    fonction peut retourner NULL si l'index n'a pas été modifié lors de l'opération
@@ -354,9 +352,9 @@ amvacuumcleanup (IndexVacuumInfo *info,
   <para>
    À partir de <productname>PostgreSQL</productname> 8.4,
    <function>amvacuumcleanup</function> sera aussi appelé à la fin d'une
-   opération <command>ANALYZE</command> operation. Dans ce cas,
+   opération <command>ANALYZE</command>. Dans ce cas,
    <literal>stats</literal> vaut toujours NULL et toute valeur de retour sera
-   ignorée. Ce cas peut être distingué en vérifiant
+   ignorée. Ce cas peut être repéré en vérifiant
    <literal>info-&gt;analyze_only</literal>. Il est recommandé que la méthode
    d'accès ne fasse rien en dehors du nettoyage après insertion pour ce type
    d'appel, et cela seulement dans un processus de travail autovacuum.
@@ -369,14 +367,14 @@ amcanreturn (Relation indexRelation, int attno);
    </programlisting>
    Vérifie si l'index supporte les <link
    linkend="indexes-index-only-scans"><firstterm>parcours d'index
-   seul</firstterm></link> sur la colonne donnée, en renvoyant les valeurs
-   de la colonne indexée pour un enregistrement d'index sous la forme d'un
+   seul</firstterm></link> sur la colonne indiquée, en renvoyant les valeurs
+   des colonnes pour un enregistrement d'index sous forme d'un
    <structname>IndexTuple</structname>. Les numéros des attributs commencent
-   à 1 (la valeur de attno pour la première colonne est 1). Renvoie TRUE si
-   c'est supporté, et FALSE sinon. Si la méthode d'accès ne supporte pas du
+   à 1 (c'est-à-dire que la valeur de attno pour la première colonne est 1). Renvoie TRUE si
+   c'est supporté, sinon FALSE. Si la méthode d'accès ne supporte pas du
    tout les parcours d'index seul, le champ
-   <structfield>amcanreturn</structfield> dans sa structure
-   <structname>IndexAmRoutine</structname> peut être configuré à NULL.
+   <structfield>amcanreturn</structfield> de la structure
+   <structname>IndexAmRoutine</structname> peut être mis à NULL.
   </para>
 
   <para>
@@ -390,7 +388,7 @@ amcostestimate (PlannerInfo *root,
                 Selectivity *indexSelectivity,
                 double *indexCorrelation);
    </programlisting>
-   Estimer les coûts d'un parcours d'index. Cette fonction est décrite complètement
+   Estime les coûts d'un parcours d'index. Cette fonction est décrite complètement
    dans <xref linkend="index-cost-estimation"/>, ci-dessous.
   </para>
 
@@ -400,23 +398,23 @@ bytea *
 amoptions (ArrayType *reloptions,
            bool validate);
    </programlisting>
-   Analyser et valider le tableau reloptions pour un index. Cette fonction
+   Analyser et valider le tableau reloptions d'un index. Cette fonction
    n'est appelée que lorsqu'il existe un tableau reloptions non NULL pour l'index.
-   <parameter>reloptions</parameter> est un tableau de type <type>text</type>
-   contenant des entrées de la forme
+   <parameter>reloptions</parameter> est un tableau
+   contenant des entrées de type <type>text</type> et de la forme
    <replaceable>nom</replaceable><literal>=</literal><replaceable>valeur</replaceable>.
-   La fonction construit une valeur de type <type>bytea</type> à
-   copier dans le champ <structfield>rd_options</structfield> de l'entrée relcache
-   de l'index. Les données contenues dans la valeur <type>bytea</type> sont
+   La fonction doit construire une valeur de type <type>bytea</type> à
+   copier dans le <structfield>rd_options</structfield> de l'entrée relcache
+   de l'index. Les données contenues dans le <type>bytea</type> sont
    définies par la méthode d'accès. La plupart des méthodes d'accès standard utilisent
    la structure <structname>StdRdOptions</structname>.
-   Lorsque <parameter>validate</parameter> est true, la fonction remonte
-   un message d'erreur clair si une option n'est pas reconnue ou a des
+   Lorsque <parameter>validate</parameter> est true, la fonction doit remonter
+   un message d'erreur clair si une des options n'est pas reconnue ou a des
    valeurs invalides&nbsp;; quand <parameter>validate</parameter> est false, les
    entrées invalides sont ignorées silencieusement.
    (<parameter>validate</parameter> est faux lors du chargement d'options déjà
    stockées dans <structname>pg_catalog</structname>&nbsp;; une entrée invalide
-   ne peut être trouvée que si la méthode d'accès a modifié ses règles pour
+   ne peut se trouver que si la méthode d'accès a modifié ses règles pour
    les options et, dans ce cas, ignorer les entrées obsolètes est approprié.)
    Pour obtenir le comportement par défaut, il suffit de retourner NULL.
   </para>
@@ -428,10 +426,10 @@ amproperty (Oid index_oid, int attno,
             IndexAMProperty prop, const char *propname,
             bool *res, bool *isnull);
 </programlisting>
-   La méthode <function>amproperty</function> permet aux méthodes d'accès aux
+   Permet aux méthodes d'accès aux
    index de surcharger le comportement par défaut de
    <function>pg_index_column_has_property</function> et des fonctions
-   relatives. Si la méthode d'accès n'a pas de comportement spécial pour les
+   liées. Si la méthode d'accès n'a pas de comportement spécial pour les
    demandes des propriétés d'index, le champ
    <structfield>amproperty</structfield> dans sa structure
    <structname>IndexAmRoutine</structname> peut être configuré à NULL. Dans le
