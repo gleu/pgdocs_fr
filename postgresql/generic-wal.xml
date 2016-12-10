@@ -2,158 +2,175 @@
 <!-- doc/src/sgml/generic-wal.sgml -->
 
 <chapter id="generic-wal">
- <title>Generic WAL Records</title>
+ <title>Enregistrements génériques des journaux de transactions</title>
 
   <para>
-   Although all built-in WAL-logged modules have their own types of WAL
-   records, there is also a generic WAL record type, which describes changes
-   to pages in a generic way.  This is useful for extensions that provide
-   custom access methods, because they cannot register their own WAL redo
-   routines.
+   Bien que tous les modules internes traçant dans les journaux de
+   transactions ont leur propre type d'enregistrements WAL, il existe aussi un
+   type d'enregistrement générique. Ce type d'enregistrement décrit les
+   modifications de pages d'une façon générique. Ceci est utile pour les
+   extensions fournissant des méthodes d'accès personnalisés car elles ne
+   peuvent pas enregistrer leurs propres routines de rejeu des journaux de
+   transactions.
   </para>
 
   <para>
-   The API for constructing generic WAL records is defined in
-   <filename>access/generic_xlog.h</filename> and implemented
-   in <filename>access/transam/generic_xlog.c</filename>.
+   L'API de construction des enregistrements génériques pour les journaux de
+   transactions est définie dans <filename>access/generic_xlog.h</filename> et
+   implémentée dans <filename>access/transam/generic_xlog.c</filename>.
   </para>
 
   <para>
-   To perform a WAL-logged data update using the generic WAL record
-   facility, follow these steps:
+   Pour réaliser une mise à jour de données tracée dans les journaux de
+   transactions en utilisant le système d'enregistrement générique, suivez ces
+   étapes&nbsp;:
 
    <orderedlist>
     <listitem>
      <para>
-      <function>state = GenericXLogStart(relation)</function> &mdash; start
-      construction of a generic WAL record for the given relation.
+      <function>state = GenericXLogStart(relation)</function> &mdash; lance la
+      construction d'un enregistrement générique pour la relation spécifiée.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      <function>page = GenericXLogRegisterBuffer(state, buffer, flags)</function>
-      &mdash; register a buffer to be modified within the current generic WAL
-      record.  This function returns a pointer to a temporary copy of the
-      buffer's page, where modifications should be made.  (Do not modify the
-      buffer's contents directly.)  The third argument is a bitmask of flags
-      applicable to the operation.  Currently the only such flag is
-      <literal>GENERIC_XLOG_FULL_IMAGE</literal>, which indicates that a full-page
-      image rather than a delta update should be included in the WAL record.
-      Typically this flag would be set if the page is new or has been
-      rewritten completely.
-      <function>GenericXLogRegisterBuffer</function> can be repeated if the
-      WAL-logged action needs to modify multiple pages.
+      <function>page = GenericXLogRegisterBuffer(state, buffer,
+      flags)</function> &mdash; enregistre un tampon à modifier dans
+      l'enregistrement générique actuel du journal de transactions. Cette
+      fonction renvoie un pointeur vers une copie temporaire de la page du
+      tampon, où les modifications doivent survenir. (Ne modifiez pas le
+      contenu du tampon.) Le troisième argument est un masque de bits pour les
+      drapeaux applicables à l'opération. Actuellement, le seul drapeau
+      disponible est <literal>GENERIC_XLOG_FULL_IMAGE</literal>, qui indique
+      qu'une image d'une page complète doit être inclue dans l'enregistrement
+      WAL, plutôt qu'un delta. Typiquement, ce drapeau doit être configurée si
+      le bloc est nouveau ou s'il a été complètement réécrit.
+      <function>GenericXLogRegisterBuffer</function> peut être répété si
+      l'action tracée doit modifier plusieurs blocs.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      Apply modifications to the page images obtained in the previous step.
+      Réalisez des modifications à l'image des pages obtenue à l'étape
+      précédente.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      <function>GenericXLogFinish(state)</function> &mdash; apply the changes to
-      the buffers and emit the generic WAL record.
+      <function>GenericXLogFinish(state)</function> &mdash; applique les
+      modifications aux tampons et émet l'enregistrement générique.
      </para>
     </listitem>
    </orderedlist>
   </para>
 
   <para>
-   WAL record construction can be canceled between any of the above steps by
-   calling <function>GenericXLogAbort(state)</function>.  This will discard all
-   changes to the page image copies.
+   La construction d'enregistrements de journaux de transactions peut être
+   annulée entre n'importe laquelle des étapes ci-dessus en appelant la
+   fonction <function>GenericXLogAbort(state)</function>. Ceci annulera toutes
+   les modifications aux copies d'image de bloc.
   </para>
 
   <para>
-   Please note the following points when using the generic WAL record
-   facility:
+   Merci de noter les points suivants lors de l'utilisation de la
+   fonctionnalité d'enregistrements génériques pour les journaux de
+   transactions&nbsp;:
 
    <itemizedlist>
     <listitem>
      <para>
-      No direct modifications of buffers are allowed!  All modifications must
-      be done in copies acquired from <function>GenericXLogRegisterBuffer()</function>.
-      In other words, code that makes generic WAL records should never call
-      <function>BufferGetPage()</function> for itself.  However, it remains the
-      caller's responsibility to pin/unpin and lock/unlock the buffers at
-      appropriate times.  Exclusive lock must be held on each target buffer
-      from before <function>GenericXLogRegisterBuffer()</function> until after
+      Aucune modification directe des tampons n'est autorisée&nbsp;!  Toutes
+      les modifications doivent se faire dans les copies récupérées de
+      <function>GenericXLogRegisterBuffer()</function>. Autrement dit, le code
+      réalisant les enregistrements génériques ne doit jamais appeler lui-même
+      <function>BufferGetPage()</function>. Néanmoins, il est de la
+      responsabilité de l'appelant du bloquer/débloquer et de
+      verrouiller/déverrouiller les tampons au bon moment. Un verrou exclusif
+      doit être obtenu et conservé pour chaque tampon cible avant l'appel à
+      <function>GenericXLogRegisterBuffer()</function> et jusqu'à l'appel à
       <function>GenericXLogFinish()</function>.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      Registrations of buffers (step 2) and modifications of page images
-      (step 3) can be mixed freely, i.e., both steps may be repeated in any
-      sequence.  Keep in mind that buffers should be registered in the same
-      order in which locks are to be obtained on them during replay.
+      Les enregistrements de tampons (étape 2) et les modifications des images
+      de page (étape 3) peuvent être librement mélangés. Les deux étapes
+      peuvent donc être répétées dans n'importe quelle séquence. Gardez en
+      tête que les tampons doivent être enregistrés dans le même ordre que
+      l'obtention des verrous lors de leur rejeu.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      The maximum number of buffers that can be registered for a generic WAL
-      record is <literal>MAX_GENERIC_XLOG_PAGES</literal>.  An error will be thrown
-      if this limit is exceeded.
+      Le nombre maximum de tampons qui peut être enregistré pour un
+      enregistrement générique dépend de la constante
+      <literal>MAX_GENERIC_XLOG_PAGES</literal>. Une erreur est renvoyée si
+      cette limite est dépassée.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      Generic WAL assumes that the pages to be modified have standard
-      layout, and in particular that there is no useful data between
-      <structfield>pd_lower</structfield> and <structfield>pd_upper</structfield>.
+      Un enregistrement générique suppose que les blocs à modifier aient un
+      schéma standard et, en particulier, qu'il n'y ait pas de données utiles
+      entre <structfield>pd_lower</structfield> et
+      <structfield>pd_upper</structfield>.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      Since you are modifying copies of buffer
-      pages, <function>GenericXLogStart()</function> does not start a critical
-      section.  Thus, you can safely do memory allocation, error throwing,
-      etc. between <function>GenericXLogStart()</function> and
-      <function>GenericXLogFinish()</function>.  The only actual critical section is
-      present inside <function>GenericXLogFinish()</function>.  There is no need to
-      worry about calling  <function>GenericXLogAbort()</function> during an error
-      exit, either.
+      Comme vous modifiez des copies de pages de tampon,
+      <function>GenericXLogStart()</function> ne commence pas une section
+      critique. De ce fait, vous pouvez faire de l'allocation mémoire de façon
+      sûre, en renvoyant des erreurs le cas échéant, entre
+      <function>GenericXLogStart()</function> et
+      <function>GenericXLogFinish()</function>. La seule section réellement
+      critique se trouve dans <function>GenericXLogFinish()</function>. Il
+      n'est pas non plus nécessaire de s'inquiéter lors de l'appel de
+      <function>GenericXLogAbort()</function> pendant une sortie en erreur.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      <function>GenericXLogFinish()</function> takes care of marking buffers dirty
-      and setting their LSNs.  You do not need to do this explicitly.
+      <function>GenericXLogFinish()</function> fait attention à marquer les
+      tampons comme modifiés et à configurer leur LSN. Vous n'avez pas besoin
+      de le faire explicitement.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      For unlogged relations, everything works the same except that no
-      actual WAL record is emitted.  Thus, you typically do not need to do
-      any explicit checks for unlogged relations.
+      Pour les relations non journalisées, tout fonctionne de la même façon
+      sauf qu'aucun enregistrement n'est réellement émis. De ce fait, vous
+      n'avez pas besoin de faire une quelconque vérification explicite pour
+      les relations non journalisées.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      The generic WAL redo function will acquire exclusive locks to buffers
-      in the same order as they were registered.  After redoing all changes,
-      the locks will be released in the same order.
+      La fonction de rejeu des enregistrements génériques acquiert des verrous
+      exclusifs sur les tampons dans le même ordre qu'ils ont été enregistrés.
+      Après l'exécution du rejeu, les verrous sont relachés dans le même
+      ordre.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      If <literal>GENERIC_XLOG_FULL_IMAGE</literal> is not specified for a
-      registered buffer, the generic WAL record contains a delta between
-      the old and the new page images.  This delta is based on byte-by-byte
-      comparison.  This is not very compact for the case of moving data
-      within a page, and might be improved in the future.
+      Si <literal>GENERIC_XLOG_FULL_IMAGE</literal> n'est pas spécifié pour un
+      tampon enregistré, l'enregistrement générique contient un delta entre
+      les ancienne et nouvelle images. Ce delta est basé sur une comparaison
+      octet par octet. Ceci n'est pas spécialement compact dans le cas d'un
+      déplacement de données dans une page, et pourrait être amélioré dans le
+      futur.
      </para>
     </listitem>
    </itemizedlist>
