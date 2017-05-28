@@ -307,43 +307,24 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
 
   <para>
     La table peut être jointe à une ou plusieurs autres tables en utilisant
-    une boucle imbriquée (<foreignphrase>nested loop</foreignphrase>
-    ou une jointure par hachage (<foreignphrase>hash join</foreignphrase> ). 
-    Le côté externe de la
-    jointure peut être n'importe quel type de plan non parallélisé
-    supporté par le planificateur par ailleurs, pourvu qu'il soit sûr de l'exécuter
-    dans un <foreignphrase>worker</foreignphrase> parallélisé. Par exemple,
-    ce peut être un parcours d'index recherchant une valeur basée sur
-    une colonne prise dans la table interne. Chaque
-    <foreignphrase>worker</foreignphrase> exécutera le côté externe du plan en
-    totalité, ce qui explique pourquoi les jointures par tri (<foreignphrase>merge join</foreignphrase>) ne sont pas
-    supportées ici. Le côté externe d'une jointure par tri implique souvent
-    le tri complet de la table interne&nbsp;; même avec un index, 
-    plusieurs processus réalisant
-    chacun un parcours d'index complet de la table intérieure est rarement efficace.
+    une boucle imbriquée (<foreignphrase>nested loop</foreignphrase> ou une
+    jointure par hachage (<foreignphrase>hash join</foreignphrase> ). Le côté
+    interne de la jointure peut être n'importe quel type de plan non
+    parallélisé supporté par le planificateur par ailleurs, pourvu qu'il soit
+    sûr de l'exécuter dans un <foreignphrase>worker</foreignphrase>
+    parallélisé. Par exemple, ce peut être un parcours d'index recherchant une
+    valeur prise dans la table externe. Chaque
+    <foreignphrase>worker</foreignphrase> exécutera complètement le côté
+    interne de la jointure, ce qui explique que les workers d'une jointure par
+    hachage construisent chacun une table de hachage identique.
   </para>
  </sect2>
 
  <sect2 id="parallel-aggregation">
   <title>Agrégations parallélisées</title>
    <para>
-    Il n'est pas possible de paralléliser entièrement l'agrégation au sein d'une requête.
-    Par exemple, si une requête effectue un <literal>COUNT(*)</literal>, chaque
-    <foreignphrase>worker</foreignphrase> peut calculer un total, mais ils
-    devront être combinés pour produire la réponse finale. Si la
-    requête implique une clause <literal>GROUP BY</literal>, un total séparé
-    doit être calculé pour chaque groupe. Même si elles ne peuvent être
-    entièrement parallélisées, les requêtes avec agrégation sont
-    souvent d'excellentes candidates pour la parallélisation&nbsp;:
-    elles lisent généralement beaucoup de lignes tout en en renvoyant peu
-    au client. Les requêtes qui renvoient de nombreuses lignes sont
-    souvent limitées par la vitesse à laquelle le client peut lire les
-    données, cas où une requête parallélisée ne peut pas grand chose.
-   </para>
-
-   <para>
     <productname>PostgreSQL</productname> procède à l'agrégation parallélisée
-    en agrégeant deux fois. Tout d'abord, chaque processus de la
+    en deux étapes. Tout d'abord, chaque processus de la
     partie parallélisée de la requête réalise une étape d'agrégation,
     produisant un résultat partiel pour chaque groupe qu'il
     connaît. Ceci se reflète dans le plan par le n&oelig;ud
@@ -353,7 +334,22 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     ré-agrège les résultats partiels de tous les
     <foreignphrase>workers</foreignphrase> pour produire le résultat final.
     Ceci apparaît dans le plan sous la forme d'un n&oelig;ud
-    <literal>FinalizeAggregate</literal>.
+    <literal>Finalize Aggregate</literal>.
+   </para>
+  
+   <para>
+    Comme le n&oelig;ud <literal>Finalize Aggregate</literal> s'exécute sur le
+    processus leader, les requêtes produisant un nombre relativement important
+    de groupes en comparaison du nombre de lignes en entrée apparaîtront moins
+    favorable au planificateur de requêtes. Par exemple, dans le pire
+    scénario, le nombre de groupes vus par le n&oelig;ud <literal>Finalize
+    Aggregate</literal> pourrait être aussi grand que le nombre de lignes en
+    entrée qui ont été traitées par les processus worker à l'étape
+    <literal>Partial Aggregate</literal>. Dans de tels cas, il n'y aura
+    clairement aucun intérêt au niveau des performances à utiliser
+    l'agrégation parallélisée. Le planificateur de requêtes prend cela en
+    compte lors du processus de planification et a peu de chance de choisir un
+    agrégat parallélisé sur ce scénario.
    </para>
 
    <para>
@@ -363,10 +359,12 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     l'agrégat a un état de transition de type <literal>internal</literal>, il
     doit avoir des fonctions de sérialisation et de désérialisation. Voir
     <xref linkend="sql-createaggregate"/> pour plus de détails. L'agrégation
-    parallélisée n'est pas supportée pour les agrégats d'ensembles ordonnés ou
-    quand la requête implique la clause <literal>GROUPING SETS</literal>. Elle
-    ne peut être utilisée que si toutes les jointures impliquées dans la
-    requête sont dans la partie parallélisée du plan.
+    parallélisée n'est pas supportée si un appel à la fonction d'agrégat
+    contient une clause <literal>DISTINCT</literal> ou <literal>ORDER
+    BY</literal> ainsi que pour les agrégats d'ensembles triés ou quand la
+    requête contient une clause <literal>GROUPING SETS</literal>. Elle ne peut
+    être utilisée que si toutes les jointures impliquées dans la requête sont
+    dans la partie parallélisée du plan.
    </para>
   </sect2>
 
