@@ -398,6 +398,15 @@
    explicitement mentionnés dans les fichiers de script.
   </para>
 
+   <para>
+    If an extension's script creates any temporary objects (such as temp
+    tables), those objects are treated as extension members for the
+    remainder of the current session, but are automatically dropped at
+    session end, as any temporary object would be.  This is an exception
+    to the rule that extension member objects cannot be dropped without
+    dropping the whole extension.
+   </para>
+
   <sect2>
    <title>Fichiers des extensions</title>
 
@@ -633,7 +642,7 @@
       le schéma cible dans le fichier de script. Toutes les occurences de cette chaîne dans le
       fichier de script seront remplacées par le nom du schéma choisi avant son exécution.
       Le nom du schéma choisi peut être fixé par l'option <literal>SCHEMA</literal> de la
-      commande <command>CREATE EXTENSION></command>.
+      commande <command>CREATE EXTENSION</command>.
      </para>
     </listitem>
 
@@ -809,7 +818,8 @@ SELECT pg_catalog.pg_extension_config_dump('my_config', 'WHERE NOT standard_entr
     même environnement que celui que la commande <command>CREATE EXTENSION</command>
     fournit pour l'installation de scripts : en particulier, la variable <varname>search_path</varname>
     est définie de la même façon et tout nouvel objet créé par le script est automatiquement
-    ajouté à l'extension.
+    ajouté à l'extension. Also, if the script chooses to drop extension member
+    objects, they are automatically dissociated from the extension.
    </para>
 
    <para>
@@ -883,6 +893,47 @@ SELECT * FROM pg_extension_update_paths('<replaceable>extension_name</replaceabl
     si vous préférez le format tableau.
    </para>
   </sect2>
+
+   <sect2>
+    <title>Installing Extensions using Update Scripts</title>
+
+    <para>
+     An extension that has been around for awhile will probably exist in
+     several versions, for which the author will need to write update scripts.
+     For example, if you have released a <literal>foo</literal> extension in
+     versions <literal>1.0</literal>, <literal>1.1</literal>, and <literal>1.2</literal>, there
+     should be update scripts <filename>foo--1.0--1.1.sql</filename>
+     and <filename>foo--1.1--1.2.sql</filename>.
+     Before <productname>PostgreSQL</productname> 10, it was necessary to also create
+     new script files <filename>foo--1.1.sql</filename> and <filename>foo--1.2.sql</filename>
+     that directly build the newer extension versions, or else the newer
+     versions could not be installed directly, only by
+     installing <literal>1.0</literal> and then updating.  That was tedious and
+     duplicative, but now it's unnecessary, because <command>CREATE
+     EXTENSION</command> can follow update chains automatically.
+     For example, if only the script
+     files <filename>foo--1.0.sql</filename>, <filename>foo--1.0--1.1.sql</filename>,
+     and <filename>foo--1.1--1.2.sql</filename> are available then a request to
+     install version <literal>1.2</literal> is honored by running those three
+     scripts in sequence.  The processing is the same as if you'd first
+     installed <literal>1.0</literal> and then updated to <literal>1.2</literal>.
+     (As with <command>ALTER EXTENSION UPDATE</command>, if multiple pathways are
+     available then the shortest is preferred.)  Arranging an extension's
+     script files in this style can reduce the amount of maintenance effort
+     needed to produce small updates.
+    </para>
+
+    <para>
+     If you use secondary (version-specific) control files with an extension
+     maintained in this style, keep in mind that each version needs a control
+     file even if it has no stand-alone installation script, as that control
+     file will determine how the implicit update to that version is performed.
+     For example, if <filename>foo--1.0.control</filename> specifies <literal>requires
+     = 'bar'</literal> but <literal>foo</literal>'s other control files do not, the
+     extension's dependency on <literal>bar</literal> will be dropped when updating
+     from <literal>1.0</literal> to another version.
+    </para>
+   </sect2>
 
   <sect2 id="extend-extensions-example">
    <title>Exemples d'extensions</title>
@@ -1135,6 +1186,15 @@ include $(PGXS)
      <listitem>
       <para>
        Options supplémentaires à passer à <application>pg_regress</application>
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><varname>NO_INSTALLCHECK</varname></term>
+     <listitem>
+      <para>
+       don't define an installcheck target, useful e.g. if tests require special configuration, or don't use pg_regress
       </para>
      </listitem>
     </varlistentry>

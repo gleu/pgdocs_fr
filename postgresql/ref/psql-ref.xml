@@ -484,7 +484,7 @@ EOF
       un signe égal sur la ligne de commande. Pour désinitialiser une variable,
       enlevez le signe d'égalité. Pour simplement initialiser une variable sans
       valeur, utilisez le signe égal sans passer de valeur. Ces affectations
-      sont réalisées lors de la toute première étape du lancement, du coup les
+      sont réalisées lors du traitement de la ligne de commande, du coup les
       variables réservées à des buts internes peuvent être écrasées plus
       tard.
      </para>
@@ -808,17 +808,32 @@ basetest=&gt;
    </para>
 
    <para>
-    Dans un argument, le texte qui est à l'intérieur de guillemets inverses
-    (<literal>`</literal>) est pris sur une ligne de commande qui est passée au
-    shell. La sortie de la commande (dont tous les retours à la ligne sont
-    supprimés) replace le texte entre guillemets inverses.
-   </para>
-
-   <para>
     Si un deux-points sans guillemets (<literal>:</literal>) suivi d'un nom
     de variable <application>psql</application> apparaît dans un argument,
     il est remplacé par la valeur de la variable, comme décrit dans <xref
     linkend="app-psql-interpolation" endterm="app-psql-interpolation-title"/>.
+    The forms <literal>:'<replaceable>variable_name</replaceable>'</literal> and
+    <literal>:"<replaceable>variable_name</replaceable>"</literal> described there
+    work as well.
+    </para>
+
+    <para>
+    Within an argument, text that is enclosed in backquotes
+    (<literal>`</literal>) is taken as a command line that is passed to the
+    shell.  The output of the command (with any trailing newline removed)
+    replaces the backquoted text.  Within the text enclosed in backquotes,
+    no special quoting or other processing occurs, except that appearances
+    of <literal>:<replaceable>variable_name</replaceable></literal> where
+    <replaceable>variable_name</replaceable> is a <application>psql</application> variable name
+    are replaced by the variable's value.  Also, appearances of
+    <literal>:'<replaceable>variable_name</replaceable>'</literal> are replaced by the
+    variable's value suitably quoted to become a single shell command
+    argument.  (The latter form is almost always preferable, unless you are
+    very sure of what is in the variable.)  Because carriage return and line
+    feed characters cannot be safely quoted on all platforms, the
+    <literal>:'<replaceable>variable_name</replaceable>'</literal> form prints an
+    error message and does not substitute the variable value when such
+    characters appear in the value.
    </para>
 
    <para>
@@ -846,6 +861,14 @@ basetest=&gt;
    </para>
 
    <para>
+    Many of the meta-commands act on the <firstterm>current query buffer</firstterm>.
+    This is simply a buffer holding whatever SQL command text has been typed
+    but not yet sent to the server for execution.  This will include previous
+    input lines as well as any text appearing before the meta-command on the
+    same line.
+    </para>
+
+    <para>
     Les meta-commandes suivantes sont définies&nbsp;:
 
     <variablelist>
@@ -1011,9 +1034,11 @@ basetest=&gt;
         Toutes les options autre que la source et destination sont comme il
         est spécifié pour <xref linkend="sql-copy"/>.
         A cause de cela, des règles spéciales d'analyse sont appliquées à la
-        commande <command>\copy</command>.  En particulier, les règles de
-        variables de substitution et d'échappement des antislash de
-        <application>psql</application> ne s'appliquent pas.
+        méta-commande <command>\copy</command>.
+        meta-command.  Unlike most other meta-commands, the entire remainder
+        of the line is always taken to be the arguments of <command>\copy</command>,
+        and neither variable interpolation nor backquote expansion are
+        performed in the arguments.
        </para>
 
        <tip>
@@ -1662,6 +1687,34 @@ basetest=&gt;
      </varlistentry>
 
      <varlistentry>
+        <term><literal>\dRp[+] [ <link linkend="APP-PSQL-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
+        <listitem>
+        <para>
+        Lists replication publications.
+        If <replaceable class="parameter">pattern</replaceable> is
+        specified, only those publications whose names match the pattern are
+        listed.
+        If <literal>+</literal> is appended to the command name, the tables
+        associated with each publication are shown as well.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><literal>\dRs[+] [ <link linkend="APP-PSQL-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
+        <listitem>
+        <para>
+        Lists replication subscriptions.
+        If <replaceable class="parameter">pattern</replaceable> is
+        specified, only those subscriptions whose names match the pattern are
+        listed.
+        If <literal>+</literal> is appended to the command name, additional
+        properties of the subscriptions are shown.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
       <term><literal>\dT[S+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">motif</replaceable></link> ]</literal></term>
       <listitem>
        <para>
@@ -1732,22 +1785,26 @@ basetest=&gt;
       <listitem>
        <para>
         Si <replaceable class="parameter">nomfichier</replaceable> est
-        spécifié, le fichier est édité&nbsp;; en quittant l'éditeur, son contenu
-        est recopié dans le tampon de requête. Si aucun paramètre <replaceable class="parameter">nomfichier</replaceable>
+        spécifié, le fichier est édité&nbsp;; en quittant l'éditeur, le contenu
+        du fichier est recopié dans le tampon de requête. Si aucun paramètre <replaceable class="parameter">nomfichier</replaceable>
         n'est fourni, le tampon de requête courant est copié dans un fichier
-        temporaire et édité à l'identique.
+        temporaire et édité à l'identique.  Or, if the current query buffer is empty, the most recently
+        executed query is copied to a temporary file and edited in the same
        </para>
 
        <para>
-        Le nouveau tampon de requête est ensuite ré-analysé suivant les règles
-        habituelles de <application>psql</application>, où le tampon complet est
-        traité comme une seule ligne. (Du coup, vous ne pouvez pas faire de
-        scripts de cette façon. Utilisez <command>\i</command> pour cela.) Ceci
-        signifie que si la requête se termine avec (ou contient) un
-        point-virgule, elle est immédiatement exécutée. Dans les autres cas,
-        elle attend simplement dans le tampon de requête un point-virgule ou un
-        <literal>\g</literal> pour l'envoyer, ou encore un
-        <literal>\r</literal> pour annuler.
+        The new contents of the query buffer are then re-parsed according to
+        the normal rules of <application>psql</application>, treating the
+        whole buffer as a single line.  Any complete queries are immediately
+        executed; that is, if the query buffer contains or ends with a
+        semicolon, everything up to that point is executed.  Whatever remains
+        will wait in the query buffer; type semicolon or <literal>\g</literal> to
+        send it, or <literal>\r</literal> to cancel it by clearing the query buffer.
+        Treating the buffer as a single line primarily affects meta-commands:
+        whatever is in the buffer after a meta-command will be taken as
+        argument(s) to the meta-command, even if it spans multiple lines.
+        (Thus you cannot make meta-command-using scripts this way.
+        Use <command>\i</command> for that.)
        </para>
 
        <para>
@@ -1757,6 +1814,13 @@ basetest=&gt;
         numériques est fourni à la commande, <application>psql</application>
         considère qu'il s'agit d'un numéro de ligne, et non pas un nom de fichier.
        </para>
+
+        <para>
+        Unlike most other meta-commands, the entire remainder of the line is
+        always taken to be the argument(s) of <command>\ef</command>, and neither
+        variable interpolation nor backquote expansion are performed in the
+        arguments.
+        </para>
 
        <tip>
         <para>
@@ -1891,6 +1955,13 @@ Tue Oct 26 21:40:57 CEST 1999
         positionnera le curseur sur la ligne indiquée pour la définition de la
         vue.
        </para>
+
+        <para>
+        Unlike most other meta-commands, the entire remainder of the line is
+        always taken to be the argument(s) of <command>\ev</command>, and neither
+        variable interpolation nor backquote expansion are performed in the
+        arguments.
+        </para>
        </listitem>
       </varlistentry>
 
@@ -1916,21 +1987,40 @@ Tue Oct 26 21:40:57 CEST 1999
 
       <listitem>
        <para>
-        Envoie le tampon de requête en entrée vers le serveur et stocke en
-        option la sortie de la requête dans <replaceable
-        class="parameter">nomfichier</replaceable> ou envoie dans un tube la
-        sortie vers un autre shell exécutant <replaceable
-        class="parameter">commande</replaceable>. Le fichier ou la commande
-        est écrite seulement si la requête renvoit zéro ou plus d'enregistrements,
-        mais pas si la requête échoue ou s'il s'agit d'une commande SQL ne
-        renvoyant pas de données.
+        Sends the current query buffer to the server for execution.
+        If an argument is given, the query's output is written to the named
+        file or piped to the given shell command, instead of displaying it as
+        usual.  The file or command is written to only if the query
+        successfully returns zero or more tuples, not if the query fails or
+        is a non-data-returning SQL command.
        </para>
        <para>
-        Un simple
-        <literal>\g</literal> est virtuellement équivalent à un point-virgule.
+        If the current query buffer is empty, the most recently sent query is
+        re-executed instead.  Except for that behavior, <literal>\g</literal>
+        without an argument is essentially equivalent to a semicolon.
         Un <literal>\g</literal> avec argument est une alternative en <quote>un
          coup</quote> à la commande <command>\o</command>.
        </para>
+        <para>
+        If the argument begins with <literal>|</literal>, then the entire remainder
+        of the line is taken to be
+        the <replaceable class="parameter">command</replaceable> to execute,
+        and neither variable interpolation nor backquote expansion are
+        performed in it.  The rest of the line is simply passed literally to
+        the shell.
+        </para>
+        </listitem>
+      </varlistentry>
+
+
+      <varlistentry>
+        <term><literal>\gx [ <replaceable class="parameter">filename</replaceable> ]</literal></term>
+        <term><literal>\gx [ |<replaceable class="parameter">command</replaceable> ]</literal></term>
+        <listitem>
+        <para>
+        <literal>\gx</literal> is equivalent to <literal>\g</literal>, but
+        forces expanded output mode for this query.  See <literal>\x</literal>.
+        </para>
       </listitem>
      </varlistentry>
 
@@ -1974,6 +2064,10 @@ CREATE INDEX
         autres fonctionnalités d'exécution des requêtes s'appliquent aussi à
         chaque requête générée.
        </para>
+        <para>
+         If the current query buffer is empty, the most recently sent query
+         is re-executed instead.
+        </para>
       </listitem>
      </varlistentry>
 
@@ -2015,6 +2109,10 @@ bonjour 10
         Si la requête échoue ou ne renvoie pas une ligne, aucune variable
         n'est modifiée.
        </para>
+        <para>
+         If the current query buffer is empty, the most recently sent query
+         is re-executed instead.
+        </para>
       </listitem>
      </varlistentry>
 
@@ -2031,6 +2129,13 @@ bonjour 10
         (<literal>*</literal>), alors l'aide en ligne de toutes les commandes
         <acronym>SQL</acronym> est affichée.
        </para>
+
+        <para>
+        Unlike most other meta-commands, the entire remainder of the line is
+        always taken to be the argument(s) of <command>\help</command>, and neither
+        variable interpolation nor backquote expansion are performed in the
+        arguments.
+        </para>
 
        <note>
         <para>
@@ -2101,6 +2206,95 @@ bonjour 10
 
 
      <varlistentry>
+        <term><literal>\if</literal> <replaceable class="parameter">expression</replaceable></term>
+        <term><literal>\elif</literal> <replaceable class="parameter">expression</replaceable></term>
+        <term><literal>\else</literal></term>
+        <term><literal>\endif</literal></term>
+        <listitem>
+        <para>
+        This group of commands implements nestable conditional blocks.
+        A conditional block must begin with an <command>\if</command> and end
+        with an <command>\endif</command>.  In between there may be any number
+        of <command>\elif</command> clauses, which may optionally be followed
+        by a single <command>\else</command> clause.  Ordinary queries and
+        other types of backslash commands may (and usually do) appear between
+        the commands forming a conditional block.
+        </para>
+        <para>
+        The <command>\if</command> and <command>\elif</command> commands read
+        their argument(s) and evaluate them as a boolean expression.  If the
+        expression yields <literal>true</literal> then processing continues
+        normally; otherwise, lines are skipped until a
+        matching <command>\elif</command>, <command>\else</command>,
+        or <command>\endif</command> is reached.  Once
+        an <command>\if</command> or <command>\elif</command> test has
+        succeeded, the arguments of later <command>\elif</command> commands in
+        the same block are not evaluated but are treated as false.  Lines
+        following an <command>\else</command> are processed only if no earlier
+        matching <command>\if</command> or <command>\elif</command> succeeded.
+        </para>
+        <para>
+        The <replaceable class="parameter">expression</replaceable> argument
+        of an <command>\if</command> or <command>\elif</command> command
+        is subject to variable interpolation and backquote expansion, just
+        like any other backslash command argument.  After that it is evaluated
+        like the value of an on/off option variable.  So a valid value
+        is any unambiguous case-insensitive match for one of:
+        <literal>true</literal>, <literal>false</literal>, <literal>1</literal>,
+        <literal>0</literal>, <literal>on</literal>, <literal>off</literal>,
+        <literal>yes</literal>, <literal>no</literal>.  For example,
+        <literal>t</literal>, <literal>T</literal>, and <literal>tR</literal>
+        will all be considered to be <literal>true</literal>.
+        </para>
+        <para>
+        Expressions that do not properly evaluate to true or false will
+        generate a warning and be treated as false.
+        </para>
+        <para>
+        Lines being skipped are parsed normally to identify queries and
+        backslash commands, but queries are not sent to the server, and
+        backslash commands other than conditionals
+        (<command>\if</command>, <command>\elif</command>,
+        <command>\else</command>, <command>\endif</command>) are
+        ignored.  Conditional commands are checked only for valid nesting.
+        Variable references in skipped lines are not expanded, and backquote
+        expansion is not performed either.
+        </para>
+        <para>
+        All the backslash commands of a given conditional block must appear in
+        the same source file. If EOF is reached on the main input file or an
+        <command>\include</command>-ed file before all local
+        <command>\if</command>-blocks have been closed,
+        then <application>psql</application> will raise an error.
+        </para>
+        <para>
+         Here is an example:
+        </para>
+<programlisting>
+-- check for the existence of two separate records in the database and store
+-- the results in separate psql variables
+SELECT
+    EXISTS(SELECT 1 FROM customer WHERE customer_id = 123) as is_customer,
+    EXISTS(SELECT 1 FROM employee WHERE employee_id = 456) as is_employee
+\gset
+\if :is_customer
+    SELECT * FROM customer WHERE customer_id = 123;
+\elif :is_employee
+    \echo 'is not a customer but is an employee'
+    SELECT * FROM employee WHERE employee_id = 456;
+\else
+    \if yes
+        \echo 'not a customer or employee'
+    \else
+        \echo 'this will never print'
+    \endif
+\endif
+</programlisting>
+        </listitem>
+      </varlistentry>
+
+
+      <varlistentry>
       <term><literal>\l[+]</literal> ou <literal>\list[+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">motif</replaceable></link> ]</literal></term>
       <listitem>
        <para>
@@ -2217,6 +2411,15 @@ lo_import 152801
         fourni, le résultat de la requête va sur la sortie standard.
        </para>
 
+        <para>
+        If the argument begins with <literal>|</literal>, then the entire remainder
+        of the line is taken to be
+        the <replaceable class="parameter">command</replaceable> to execute,
+        and neither variable interpolation nor backquote expansion are
+        performed in it.  The rest of the line is simply passed literally to
+        the shell.
+        </para>
+
        <para>
         Les <quote>résultats de requête</quote> incluent toutes les tables,
         réponses de commande et messages d'avertissement obtenus du serveur de
@@ -2240,6 +2443,8 @@ lo_import 152801
       <listitem>
        <para>
         Affiche le tampon de requête actuel sur la sortie standard.
+        If the current query buffer is empty, the most recently executed query
+        is printed instead.
        </para>
       </listitem>
      </varlistentry>
@@ -2778,10 +2983,11 @@ lo_import 152801
        </para>
 
        <para>
-        Bien que vous puissiez configurer toute variable comme vous le
-        souhaitez, <application>psql</application> traite certaines variables de
-        façon spéciale. Elles sont documentées dans la section sur les
-        variables.
+        Certain variables are special, in that they
+        control <application>psql</application>'s behavior or are
+        automatically set to reflect connection state.  These variables are
+        documented in <xref linkend="APP-PSQL-variables"
+        endterm="APP-PSQL-variables-title"/>, below.
        </para>
 
        <note>
@@ -2832,6 +3038,13 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
         Si <literal>+</literal> est ajouté à la commande, les numéros de lignes
         sont affichés, la ligne 1 débutant à partir du corps de la fonction.
        </para>
+
+        <para>
+        Unlike most other meta-commands, the entire remainder of the line is
+        always taken to be the argument(s) of <command>\sf</command>, and neither
+        variable interpolation nor backquote expansion are performed in the
+        arguments.
+        </para>
       </listitem>
      </varlistentry>
 
@@ -2851,6 +3064,13 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
           Si <literal>+</literal> est ajouté au nom de commande, les lignes de
           sorties sont numérotées à partir de 1.
          </para>
+
+        <para>
+        Unlike most other meta-commands, the entire remainder of the line is
+        always taken to be the argument(s) of <command>\sv</command>, and neither
+        variable interpolation nor backquote expansion are performed in the
+        arguments.
+        </para>
         </listitem>
       </varlistentry>
 
@@ -2887,9 +3107,11 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
       <term><literal>\timing [ <replaceable class="parameter">on</replaceable> | <replaceable class="parameter">off</replaceable> ]</literal></term>
       <listitem>
        <para>
-        Sans paramètre, affiche le temps pris par chaque instruction SQL, en
-        millisecondes, ou arrête cet affichage. Avec paramètre, force la valeur
-        au paramètre.
+         With a parameter, turns displaying of how long each SQL statement
+         takes on or off.  Without a parameter, toggles the display between
+         on and off.  The display is in milliseconds; intervals longer than
+         1 second are also shown in minutes:seconds format, with hours and
+         days fields added if needed.
        </para>
       </listitem>
      </varlistentry>
@@ -2903,6 +3125,14 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
         Désinitialise (supprime) la variable <application>psql</application>
         <replaceable class="parameter">nom</replaceable>.
        </para>
+
+        <para>
+        Most variables that control <application>psql</application>'s behavior
+        cannot be unset; instead, an <literal>\unset</literal> command is interpreted
+        as setting them to their default values.
+        See <xref linkend="APP-PSQL-variables"
+        endterm="APP-PSQL-variables-title"/>, below.
+        </para>
       </listitem>
      </varlistentry>
 
@@ -2915,6 +3145,17 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
         Place le tampon de requête en cours dans le fichier <replaceable
         class="parameter">nomfichier</replaceable> ou l'envoie via un tube à la
         commande shell <replaceable class="parameter">commande</replaceable>.
+        If the current query buffer is empty, the most recently executed query
+        is written instead.
+        </para>
+
+        <para>
+        If the argument begins with <literal>|</literal>, then the entire remainder
+        of the line is taken to be
+        the <replaceable class="parameter">command</replaceable> to execute,
+        and neither variable interpolation nor backquote expansion are
+        performed in it.  The rest of the line is simply passed literally to
+        the shell.
        </para>
       </listitem>
      </varlistentry>
@@ -2931,6 +3172,10 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
         entête qui inclut la chaîne <literal>\pset title</literal> (si c'est
         activé), l'heure du début de la requête, et l'intervalle.
        </para>
+        <para>
+        If the current query buffer is empty, the most recently sent query
+        is re-executed instead.
+        </para>
       </listitem>
      </varlistentry>
 
@@ -2970,11 +3215,17 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
         class="parameter">commande</replaceable> ]</literal></term>
       <listitem>
        <para>
-        Lance un shell séparé ou exécute la commande shell
-        <replaceable class="parameter">commande</replaceable>. Les
-        arguments ne sont pas interprétés, le shell les voit tel quel.
-        En particulier, les règles de substitution de variables et les
-        échappements d'antislash ne s'appliquent pas.
+        With no argument, escapes to a sub-shell; <application>psql</application>
+        resumes when the sub-shell exits.  With an argument, executes the
+        shell command <replaceable class="parameter">command</replaceable>.
+        </para>
+
+        <para>
+        Unlike most other meta-commands, the entire remainder of the line is
+        always taken to be the argument(s) of <command>\!</command>, and neither
+        variable interpolation nor backquote expansion are performed in the
+        arguments.  The rest of the line is simply passed literally to the
+        shell.
        </para>
       </listitem>
      </varlistentry>
@@ -3151,14 +3402,28 @@ bar
      par <application>psql</application>. Elles représentent certaines
      configurations d'options pouvant être changées à l'exécution en modifiant
      la valeur de la variable ou, dans certains cas, représentent un état
-     modifiable de <application>psql</application>. Bien que vous pouvez
-     utiliser ces variables dans d'autres buts, cela n'est pas recommandé, car
-     le comportement du programme pourrait devenir vraiment étrange très
-     rapidement. La convention veut que tous les noms de variables traités
+     modifiable de <application>psql</application>. La convention veut que
+     tous les noms de variables traités
      spécialement utilisent des lettres ASCII en majuscule (avec en option
      des chiffres et des tirets bas). Pour s'assurer une compatibilité maximum
      dans le futur, éviter d'utiliser de tels noms de variables pour votre
-     propre besoin. Voici une liste des variables spéciales&nbsp;:
+     propre besoin.
+   </para>
+
+   <para>
+    Variables that control <application>psql</application>'s behavior
+    generally cannot be unset or set to invalid values.  An <literal>\unset</literal>
+    command is allowed but is interpreted as setting the variable to its
+    default value.  A <literal>\set</literal> command without a second argument is
+    interpreted as setting the variable to <literal>on</literal>, for control
+    variables that accept that value, and is rejected for others.  Also,
+    control variables that accept the values <literal>on</literal>
+    and <literal>off</literal> will also accept other common spellings of Boolean
+    values, such as <literal>true</literal> and <literal>false</literal>.
+   </para>
+
+   <para>
+     Voici une liste des variables spéciales&nbsp;:
     </para>
 
     <variablelist>
@@ -3230,7 +3495,7 @@ bar
         Le nom de la base de données à laquelle vous êtes actuellement connecté.
         Ceci est configuré à chaque fois que vous vous connectez à une base de
         données (ainsi qu'au lancement du programme) mais peut être
-        désinitialisé.
+        changé ou désinitialisé.
        </para>
       </listitem>
      </varlistentry>
@@ -3246,13 +3511,12 @@ bar
         programme, utilisez l'option <option>-a</option>. Si
         <varname>ECHO</varname> vaut <literal>queries</literal>,
         <application>psql</application> affiche chaque requête sur la sortie
-        standard comme elle est envoyée au serveur. L'option pour ceci est
+        standard comme elle est envoyée au serveur. L'option to select this behavior est
         <option>-e</option>. Si elle est configurée à
         <literal>errors</literal>, seules les requêtes échouées seront
         affichées sur la sortie standard des erreurs. L'option en ligne de
-        commande pour ceci est <option>-b</option>. Si elle n'est pas
-        configurée ou si elle est configurée à <literal>none</literal> (ou
-        toute autre valeur que celles ci-dessus), alors aucune requête n'est
+        commande pour ce comportement est <option>-b</option>. Si elle est
+        configurée à <literal>none</literal> (valeur par défaut), alors aucune requête n'est
         affichée.
        </para>
       </listitem>
@@ -3272,6 +3536,7 @@ bar
         <option>-E</option>.) Si vous configurez la variable avec la valeur
         <literal>noexec</literal>, les requêtes sont juste affichées mais ne
         sont pas réellement envoyées au serveur ni exécutées.
+        The default value is <literal>off</literal>.
        </para>
       </listitem>
      </varlistentry>
@@ -3281,6 +3546,9 @@ bar
       <listitem>
        <para>
         Le codage courant du jeu de caractères du client.
+        This is set every time you connect to a database (including
+        program start-up), and when you change the encoding
+        with <literal>\encoding</literal>, but it can be changed or unset.
        </para>
       </listitem>
      </varlistentry>
@@ -3322,10 +3590,8 @@ bar
         l'historique. Si elle est initialisée avec la valeur
         <literal>ignoredups</literal>, les lignes correspondant aux précédentes
         lignes de l'historique n'entrent pas dans la liste. Une valeur de
-        <literal>ignoreboth</literal> combine les deux options. Si elle n'est
-        pas initialisée ou si elle est configurée avec <literal>none</literal> (ou
-        toute autre valeur que
-        celles-ci, toutes les lignes lues dans le mode interactif sont
+        <literal>ignoreboth</literal> combine les deux options. Si elle est
+        configurée avec <literal>none</literal>), toutes les lignes lues dans le mode interactif sont
         sauvegardées dans la liste de l'historique.
        </para>
        <note>
@@ -3341,14 +3607,12 @@ bar
       <term><varname>HISTFILE</varname></term>
       <listitem>
        <para>
-        Le nom du fichier utilisé pour stocker l'historique. La valeur par
-        défaut est <filename>~/.psql_history</filename>. Par exemple,
-        utiliser&nbsp;:
-        <programlisting>\set HISTFILE ~/.psql_history- :DBNAME
-        </programlisting>
-        dans <filename>~/.psqlrc</filename> fera que
-        <application>psql</application> maintiendra un historique séparé pour
-        chaque base de données.
+        The file name that will be used to store the history list.  If unset,
+        the file name is taken from the <envar>PSQL_HISTORY</envar>
+        environment variable.  If that is not set either, the default
+        is <filename>~/.psql_history</filename>,
+        or <filename>%APPDATA%\postgresql\psql_history</filename> on Windows.
+        For example, putting:
        </para>
        <note>
         <para>
@@ -3363,8 +3627,8 @@ bar
       <term><varname>HISTSIZE</varname></term>
       <listitem>
        <para>
-        Le nombre de commandes à stocker dans l'historique des commandes. La
-        valeur par défaut est 500.
+        Le nombre maximum de commandes à stocker dans l'historique des commandes
+        (default 500).  If set to a negative value, no limit is applied.
        </para>
        <note>
         <para>
@@ -3382,7 +3646,7 @@ bar
         L'hôte du serveur de la base de données où vous êtes actuellement
         connecté. Ceci est configuré à chaque fois que vous vous connectez à une
         base de données (ainsi qu'au lancement du programme) mais peut être
-        désinitialisé.
+        changé ou désinitialisé.
        </para>
       </listitem>
      </varlistentry>
@@ -3391,13 +3655,13 @@ bar
       <term><varname>IGNOREEOF</varname></term>
       <listitem>
        <para>
-        Si non initialisé, envoyer un caractère <acronym>EOF</acronym> (habituellement
+        Si configuré à 1 ou inférieur, envoyer un caractère <acronym>EOF</acronym> (habituellement
         <keycombo action="simul"><keycap>Ctrl</keycap><keycap>D</keycap></keycombo>) dans une
         session interactive de <application>psql</application> ferme
-        l'application. Si elle est configurée avec une valeur numérique, ce
-        nombre de caractères <acronym>EOF</acronym> est ignoré avant la fin de
-        l'application. Si la variable est configurée mais n'a pas de valeur
-        numérique, la valeur par défaut est de 10.
+        l'application. If set to a larger numeric value,
+         that many consecutive <acronym>EOF</acronym> characters must be typed to
+         make an interactive session terminate.  If the variable is set to a
+         non-numeric value, it is interpreted as 10.
        </para>
        <note>
         <para>
@@ -3434,8 +3698,8 @@ bar
         transaction génère une erreur, cette dernière est ignorée et la
         transaction continue. Lorsqu'il vaut <literal>interactive</literal>, ces
         erreurs sont seulement ignorées lors des sessions interactives, mais
-        ne le sont pas lors de la lecture de scripts. Lorsqu'il n'est pas configuré
-        ou quand il vaut <literal>off</literal>, une instruction générant une
+        ne le sont pas lors de la lecture de scripts. Lorsqu'il est configuré
+        à <literal>off</literal> (valeur par défaut), une instruction générant une
         erreur dans un bloc de transaction annule la transaction complète. Le
         mode on_error_rollback-on fonctionne en exécutant un
         <command>SAVEPOINT</command> implicite pour vous, juste avant chaque commande
@@ -3473,7 +3737,7 @@ bar
         Le port du serveur de la base de données sur lequel vous êtes
         actuellement connecté. Ceci est configuré à chaque fois que vous vous
         connectez à une base de données (ainsi qu'au lancement du programme)
-        mais peut être désinitialisé.
+        mais peut être changé ou désinitialisé.
        </para>
       </listitem>
      </varlistentry>
@@ -3549,7 +3813,7 @@ bar
         L'utilisateur de la base de données où vous êtes actuellement
         connecté. Ceci est configuré à chaque fois que vous vous connectez à une
         base de données (ainsi qu'au lancement du programme) mais peut être
-        désinitialisé.
+        changé ou désinitialisé.
        </para>
       </listitem>
      </varlistentry>
@@ -3568,6 +3832,16 @@ bar
        </para>
       </listitem>
      </varlistentry>
+
+      <varlistentry>
+        <term><varname>VERSION</varname></term>
+        <listitem>
+        <para>
+        This variable is set at program start-up to
+        reflect <application>psql</application>'s version.  It can be changed or unset.
+        </para>
+        </listitem>
+      </varlistentry>
 
     </variablelist>
 
@@ -3753,8 +4027,8 @@ basetest=&gt; <userinput>INSERT INTO ma_table VALUES (:'contenu');</userinput>
        <listitem>
         <para>
         In prompt 1 normally <literal>=</literal>,
-        but <literal>^</literal> if in single-line mode,
-        or <literal>!</literal> if the session is disconnected from the
+        but <literal>@</literal> if the session is in an inactive branch of a
+        conditional block, or <literal>^</literal> if in single-line mode,
         database (which can happen if <command>\connect</command> fails).
         In prompt 2 <literal>%R</literal> is replaced by a character that
         depends on why <application>psql</application> expects more input:
@@ -4103,6 +4377,7 @@ PSQL_EDITOR_LINENUMBER_ARG='--line '
      </para>
      <para>
       L'emplacement du fichier historique peut aussi être configuré explicitement
+      avec the <varname>HISTFILE</varname> <application>psql</application> variable or
       avec la variable d'environnement <envar>PSQL_HISTORY</envar>.
      </para>
     </listitem>
@@ -4210,12 +4485,11 @@ CREATE TABLE
    </programlisting>
    Maintenant, regardons la définition de la table&nbsp;:
    <programlisting>basetest=&gt; <userinput>\d ma_table</userinput>
-             Table "ma_table"
- Attribute |  Type   |      Modifier
------------+---------+--------------------
- premier   | integer | not null default 0
- second    | text    |
-
+              Table "public.my_table"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ first  | integer |           | not null | 0
+ second | text    |           |          |
    </programlisting>
    Maintenant, changeons l'invite par quelque chose de plus intéressant&nbsp;:
    <programlisting>basetest=&gt; <userinput>\set PROMPT1 '%n@%m %~%R%# '</userinput>

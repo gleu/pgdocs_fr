@@ -56,7 +56,7 @@
    explicitement permettre la connexion de réplication. Le
    serveur doit aussi être configuré avec un <xref
    linkend="guc-max-wal-senders"/> suffisamment élevé pour laisser au
-   moins une connexion disponible pour la sauvegarde.
+   moins une connexion disponible pour la sauvegarde and one for WAL streaming (if used).
   </para>
 
   <para>
@@ -91,11 +91,8 @@
     </listitem>
     <listitem>
      <para>
-      Il n'y a aucune garantie qu'à la fin de la sauvegarde l'ensemble des
-      fichiers WAL nécessaires à la sauvegarde soient archivés. Si vous voulez
-      utiliser la sauvegarde pour une restauration d'archive et être sûr que
-      tous les fichiers soient disponibles à ce moment, vous devez les inclure
-      à la sauvegarde au moyen de l'option <literal>-x</literal>.
+      If you are using <literal>-X none</literal>, there is no guarantee that all
+      WAL files required for the backup are archived at the end of backup.
      </para>
     </listitem>
     <listitem>
@@ -191,7 +188,8 @@
            répertoire cible, le contenu du tar sera écrit sur la sortie
            standard, ce qui est intéressant pour une compression directe
            via un tube. Ceci est seulement possible si l'instance n'a
-           pas de tablespace supplémentaire.
+           pas de tablespace supplémentaire and WAL
+           streaming is not used.
           </para>
          </listitem>
         </varlistentry>
@@ -257,6 +255,31 @@
        nécessaires entre la fin de la sauvegarde et le début de lancement de
        la réplication en flux.
       </para>
+      <para>
+       If this option is not specified and the server supports temporary
+       replication slots (version 10 and later), then a temporary replication
+       slot is automatically used for WAL streaming.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><option>--no-slot</option></term>
+     <listitem>
+      <para>
+       This option prevents the creation of a temporary replication slot
+       during the backup even if it's supported by the server.
+      </para>
+      <para>
+       Temporary replication slots are created by default if no slot name
+       is given with the option <option>-S</option> when using log streaming.
+      </para>
+      <para>
+       The main purpose of this option is to allow taking a base backup when
+       the server is out of free replication slots.  Using replication slots
+       is almost always preferred, because it prevents needed WAL from being
+       removed by the server during the backup.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -290,11 +313,11 @@
     </varlistentry>
 
     <varlistentry>
-     <term><option>--xlogdir=<replaceable class="parameter">rep_xlog</replaceable></option></term>
+     <term><option>--waldir=<replaceable class="parameter">rep_wal</replaceable></option></term>
      <listitem>
       <para>
        Indique l'emplacement du répertoire des journaux de transactions.
-       <replaceable>rep_xlog</replaceable> doit être un chemin absolu. Le
+       <replaceable>rep_wal</replaceable> doit être un chemin absolu. Le
        répertoire des journaux de transactions peut seulement être
        spécifié quand la sauvegarde est en mode plain.
       </para>
@@ -302,24 +325,13 @@
     </varlistentry>
 
     <varlistentry>
-     <term><option>-x</option></term>
-     <term><option>--xlog</option></term>
-     <listitem>
-      <para>
-       Utiliser cette option est équivalent à utiliser <literal>-X</literal>
-       avec la méthode <literal>fetch</literal>.
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
      <term><option>-X <replaceable class="parameter">method</replaceable></option></term>
-     <term><option>--xlog-method=<replaceable class="parameter">method</replaceable></option></term>
+     <term><option>--wal-method=<replaceable class="parameter">method</replaceable></option></term>
      <listitem>
       <para>
        Inclut les journaux de transactions requis (fichiers WAL) dans
        la sauvegarde. Cela incluera toutes les transactions intervenues
-       pendant la sauvegarde. Si cette option est précisée, il est
+       pendant la sauvegarde. Unless the method <literal>none</literal> is specified, il est
        possible de lancer un postmaster directement sur le répertoire
        extrait sans avoir besoin de consulter les archives des journaux,
        ce qui rend la sauvegarde complètement autonome.
@@ -329,6 +341,16 @@
        transactions&nbsp;:
 
        <variablelist>
+        <varlistentry>
+         <term><literal>n</literal></term>
+         <term><literal>none</literal></term>
+         <listitem>
+          <para>
+           Don't include write-ahead log in the backup.
+          </para>
+         </listitem>
+        </varlistentry>
+
         <varlistentry>
          <term><literal>f</literal></term>
          <term><literal>fetch</literal></term>
@@ -340,6 +362,10 @@
            élevée pour que le journal ne soit pas supprimé avant la fin de la
            sauvegarde. Si le journal est l'objet d'une rotation au moment où
            il doit être transféré, la sauvegarde échouera et sera inutilisable.
+          </para>
+          <para>
+           The write-ahead log files will be written to
+           the <filename>base.tar</filename> file.
           </para>
          </listitem>
         </varlistentry>
@@ -359,6 +385,14 @@
            maître, aussi longtemps que le client pourra suivre le flux du
            journal de transactions.
           </para>
+          <para>
+           The write-ahead log files are written to a separate file
+           named <filename>pg_wal.tar</filename> (if the server is a version
+           earlier than 10, the file will be named <filename>pg_xlog.tar</filename>).
+          </para>
+          <para>
+           This value is the default.
+          </para>
          </listitem>
         </varlistentry>
        </variablelist>
@@ -373,7 +407,9 @@
       <para>
        Active la compression gzip de l'archive tar en sortie, avec le
        niveau de compression par défaut. La compression est disponible
-       seulement lors de l'utilisation du format tar.
+       seulement lors de l'utilisation du format tar, and the suffix
+       <filename>.gz</filename> will
+       automatically be added to all tar filenames.
       </para>
      </listitem>
     </varlistentry>
@@ -386,7 +422,9 @@
        Active la compression gzip du fichier tar en sortie, et précise le
        niveau de compression (de 0 à 9, 0 pour sans compression, 9
        correspondant à la meilleure compression). La compression est
-       seulement disponible lors de l'utilisation du format tar.
+       seulement disponible lors de l'utilisation du format tar, and the
+       suffix <filename>.gz</filename> will automatically be added to all tar
+       filenames.
       </para>
      </listitem>
     </varlistentry>
@@ -422,6 +460,24 @@
     </varlistentry>
 
     <varlistentry>
+      <term><option>-n</option></term>
+      <term><option>--no-clean</option></term>
+      <listitem>
+       <para>
+        By default, when <command>pg_basebackup</command> aborts with an
+        error, it removes any directories it might have created before
+        discovering that it cannot finish the job (for example, data directory
+        and write-ahead log directory). This option inhibits tidying-up and is
+        thus useful for debugging.
+       </para>
+
+       <para>
+        Note that tablespace directories are not cleaned up either way.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
      <term><option>-P</option></term>
      <term><option>--progress</option></term>
      <listitem>
@@ -447,6 +503,21 @@
     </varlistentry>
 
     <varlistentry>
+      <term><option>-N</option></term>
+      <term><option>--no-sync</option></term>
+      <listitem>
+       <para>
+        By default, <command>pg_basebackup</command> will wait for all files
+        to be written safely to disk.  This option causes
+        <command>pg_basebackup</command> to return without waiting, which is
+        faster, but means that a subsequent operating system crash can leave
+        the base backup corrupt.  Generally, this option is useful for testing
+        but should not be used when creating a production installation.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
      <term><option>-v</option></term>
      <term><option>--verbose</option></term>
      <listitem>
@@ -636,11 +707,13 @@
   <para>
    La sauvegarde incluera tous les fichiers du répertoire de données et des
    tablespaces, ceci incluant les fichiers de configuration et tout fichier
-   supplémentaire placé dans le répertoire par d'autres personnes. Seuls les
-   fichiers réguliers et les répertoires sont copiés. Les liens symboliques
-   (autres que ceux utilisés pour les tablespaces) et les fichiers spéciaux de
-   périphériques sont ignorés. (Voir <xref linkend="protocol-replication"/>
-   pour des détails précis.)
+   supplémentaire placé dans le répertoire par d'autres personnes, except
+   certain temporary files managed by PostgreSQL. Seuls les fichiers réguliers
+   et les répertoires sont copiés, except that symbolic links used for
+   tablespaces are preserved.  Symbolic links pointing to certain directories
+   known to PostgreSQL are copied as empty directories. Other symbolic links
+   and special device files are skipped. Voir <xref
+   linkend="protocol-replication"/> pour des détails précis.
   </para>
 
   <para>
@@ -699,7 +772,7 @@
    Pour créer une sauvegarde d'une base de données locale avec un seul
    tablespace et la compresser avec <productname>bzip2</productname>&nbsp;:
    <screen>
-<prompt>$</prompt> <userinput>pg_basebackup -D - -Ft | bzip2 &gt; backup.tar.bz2</userinput>
+<prompt>$</prompt> <userinput>pg_basebackup -D - -Ft -X fetch | bzip2 &gt; backup.tar.bz2</userinput>
    </screen>
    (cette commande échouera s'il existe plusieurs tablespaces pour cette
    instance)

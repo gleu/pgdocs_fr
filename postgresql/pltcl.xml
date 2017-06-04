@@ -72,10 +72,9 @@
    support de Tcl est spécifié dans l'étape de configuration de la procédure
    d'installation. Pour installer <application>PL/Tcl</application> et/ou
    <application>PL/TclU</application> dans une base de données particulière,
-   utilisez la commande <command>CREATE EXTENSION</command> ou le
-   programme <command>createlang</command>, par exemple <literal>createlang
-    pltcl <replaceable>nom_base</replaceable></literal> ou <literal>createlang pltclu
-    <replaceable>nom_base</replaceable></literal>.
+   utilisez la commande <command>CREATE EXTENSION</command>, par exemple
+   <literal>CREATE EXTENSION pltcl</literal> ou
+   <literal>CREATE EXTENSION pltclu</literal>.
   </para>
  </sect1>
 
@@ -99,12 +98,12 @@ $$ LANGUAGE pltcl;
   </para>
 
   <para>
-   Le corps de la fonction est simplement un bout de script Tcl. Quand la
-   fonction est appelée, les valeurs des arguments sont passées en tant que
-   variables <literal>$1</literal> ...
-   <literal>$<replaceable>n</replaceable></literal> au script Tcl. Le résultat
-   est renvoyé à partir du code Tcl de la façon habituelle avec une
-   instruction <literal>return</literal>.
+   Le corps de la fonction est simplement un bout de script Tcl.
+   When the function is called, the argument values are passed to the
+   Tcl script as variables named <literal>1</literal>
+   ... <literal><replaceable>n</replaceable></literal>.  The result is
+   returned from the Tcl code in the usual way, with
+   a <literal>return</literal> statement.
   </para>
 
   <para>
@@ -175,17 +174,57 @@ $$ LANGUAGE pltcl;
   </para>
 
   <para>
-   Il n'y a actuellement aucun support pour le retour d'une valeur
-   résultat de type composé et pour le retour d'ensembles.
-  </para>
+     PL/Tcl functions can return composite-type results, too.  To do this,
+     the Tcl code must return a list of column name/value pairs matching
+     the expected result type.  Any column names omitted from the list
+     are returned as nulls, and an error is raised if there are unexpected
+     column names.  Here is an example:
+
+<programlisting>
+CREATE FUNCTION square_cube(in int, out squared int, out cubed int) AS $$
+    return [list squared [expr {$1 * $1}] cubed [expr {$1 * $1 * $1}]]
+$$ LANGUAGE pltcl;
+</programlisting>
+     </para>
+ 
+    <tip>
+     <para>
+      The result list can be made from an array representation of the
+      desired tuple with the <literal>array get</literal> Tcl command.  For example:
+
+<programlisting>
+CREATE FUNCTION raise_pay(employee, delta int) RETURNS employee AS $$
+    set 1(salary) [expr {$1(salary) + $2}]
+    return [array get 1]
+$$ LANGUAGE pltcl;
+</programlisting>
+     </para>
+    </tip>
 
   <para>
-   <application>PL/Tcl</application> n'a pas actuellement du support complet pour les
-   types de domaine&nbsp;: il traite un domaine de la même façon que le type
-   scalaire sous-jacent. Cela signifie que les contraintes associées avec le
-   domaine ne seront pas forcées. Ce n'est pas un problème pour les arguments
-   de la fonction mais c'est hasardeux de déclarer une fonction
-   <application>PL/Tcl</application> renvoyant un type domaine.
+     PL/Tcl functions can return sets.  To do this, the Tcl code should
+     call <function>return_next</function> once per row to be returned,
+     passing either the appropriate value when returning a scalar type,
+     or a list of column name/value pairs when returning a composite type.
+     Here is an example returning a scalar type:
+
+<programlisting>
+CREATE FUNCTION sequence(int, int) RETURNS SETOF int AS $$
+    for {set i $1} {$i &lt; $2} {incr i} {
+        return_next $i
+    }
+$$ LANGUAGE pltcl;
+</programlisting>
+
+     and here is one returning a composite type:
+
+<programlisting>
+CREATE FUNCTION table_of_squares(int, int) RETURNS TABLE (x int, x2 int) AS $$
+    for {set i $1} {$i &lt; $2} {incr i} {
+        return_next [list x $i x2 [expr {$i * $i}]]
+    }
+$$ LANGUAGE pltcl;
+</programlisting>
   </para>
  </sect1>
 
@@ -195,11 +234,10 @@ $$ LANGUAGE pltcl;
   <para>
    Les valeurs des arguments fournies au code d'une fonction PL/Tcl sont
    simplement les arguments en entrée convertis au format texte (comme s'ils
-   avaient été affichés par une instruction <command>SELECT</command>). De même, la
-   commande <literal>return</literal> acceptera toute chaîne acceptable dans le
-   format d'entrée du type de retour déclaré pour la fonction. Donc, à
-   l'intérieur de la fonction PL/Tcl, toutes les valeurs de données sont
-   simplement des chaînes de texte.
+   avaient été affichés par une instruction <command>SELECT</command>).
+   <literal>return</literal> and <literal>return_next</literal> commands will accept
+   any string that is acceptable input format for the function's declared
+   result type, or for the specified column of a composite result type.
   </para>
 
  </sect1>
@@ -455,6 +493,20 @@ $$ LANGUAGE pltcl;
     </varlistentry>
 
     <varlistentry>
+      <term><function>subtransaction</function> <replaceable>command</replaceable></term>
+      <listitem>
+       <para>
+        The Tcl script contained in <replaceable>command</replaceable> is
+        executed within a SQL subtransaction.  If the script returns an
+        error, that entire subtransaction is rolled back before returning the
+        error out to the surrounding Tcl code.
+        See <xref linkend="pltcl-subtransactions"/> for more details and an
+        example.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
      <term><function>quote</function> <replaceable>string</replaceable></term>
      <listitem>
       <para>
@@ -826,21 +878,22 @@ CREATE EVENT TRIGGER tcl_a_snitch ON ddl_command_start EXECUTE PROCEDURE tclsnit
      Le code Tcl contenu ou appelé à partir d'une fonction PL/Tcl peut lever
      une erreur, soit en exécutant des opérations invalides ou en générant
      une erreur en utilisant la commande Tcl <function>error</function> ou la
-     commande PL/Tcl <function>elog</function>. De tels erreurs sont
-     récupérables dans Tcl en utilisant la commande Tcl
-     <function>catch</function>. Si elles ne sont pas récupérées et si elles
-     sont autorisées à se propager au niveau supérieur d'exécution de la
-     fonction PL/Tcl, elles se transforment en erreur au niveau du serveur de
-     bases de données.
+     commande PL/Tcl <function>elog</function>. If an
+     error is not caught but is allowed to propagate out to the top level of
+     execution of the PL/Tcl function, it is reported as a SQL error in the
+     function's calling query.
     </para>
 
     <para>
-     Les erreurs au niveau base survenant dans les commandes PL/Tcl
+     Les erreurs SQL survenant dans les commandes PL/Tcl
      <function>spi_exec</function>, <function>spi_prepare</function>
      et <function>spi_execp</function> sont rapportées comme des erreurs Tcl,
      donc elles sont récupérables par la commande Tcl <function>catch</function>.
-     De nouveau, si elles se propagent au niveau supérieur sans être récupérées,
-     elles se transforment en erreurs au niveau base.
+     (Each of these PL/Tcl commands runs its SQL operation in a
+     subtransaction, which is rolled back on error, so that any
+     partially-completed operation is automatically cleaned up.)
+     Again, if an error propagates out to the top level without being caught,
+     it turns back into a SQL error.
     </para>
 
     <para>
@@ -889,50 +942,157 @@ if {[catch { spi_exec $sql_command }]} {
     </para>
    </sect1>
 
- <sect1 id="pltcl-unknown">
-  <title>Les modules et la commande <function>unknown</function></title>
+   <sect1 id="pltcl-subtransactions">
+    <title>Explicit Subtransactions in PL/Tcl</title>
+
+    <indexterm>
+     <primary>subtransactions</primary>
+     <secondary>in PL/Tcl</secondary>
+    </indexterm>
+
+    <para>
+     Recovering from errors caused by database access as described in
+     <xref linkend="pltcl-error-handling"/> can lead to an undesirable
+     situation where some operations succeed before one of them fails,
+     and after recovering from that error the data is left in an
+     inconsistent state.  PL/Tcl offers a solution to this problem in
+     the form of explicit subtransactions.
+    </para>
+
+    <para>
+     Consider a function that implements a transfer between two accounts:
+<programlisting>
+CREATE FUNCTION transfer_funds() RETURNS void AS $$
+    if [catch {
+        spi_exec "UPDATE accounts SET balance = balance - 100 WHERE account_name = 'joe'"
+        spi_exec "UPDATE accounts SET balance = balance + 100 WHERE account_name = 'mary'"
+    } errormsg] {
+        set result [format "error transferring funds: %s" $errormsg]
+    } else {
+        set result "funds transferred successfully"
+    }
+    spi_exec "INSERT INTO operations (result) VALUES ('[quote $result]')"
+$$ LANGUAGE pltcl;
+</programlisting>
+     If the second <command>UPDATE</command> statement results in an
+     exception being raised, this function will log the failure, but
+     the result of the first <command>UPDATE</command> will
+     nevertheless be committed.  In other words, the funds will be
+     withdrawn from Joe's account, but will not be transferred to
+     Mary's account.  This happens because each <function>spi_exec</function>
+     is a separate subtransaction, and only one of those subtransactions
+     got rolled back.
+    </para>
+
+    <para>
+     To handle such cases, you can wrap multiple database operations in an
+     explicit subtransaction, which will succeed or roll back as a whole.
+     PL/Tcl provides a <function>subtransaction</function> command to manage
+     this.  We can rewrite our function as:
+<programlisting>
+CREATE FUNCTION transfer_funds2() RETURNS void AS $$
+    if [catch {
+        subtransaction {
+            spi_exec "UPDATE accounts SET balance = balance - 100 WHERE account_name = 'joe'"
+            spi_exec "UPDATE accounts SET balance = balance + 100 WHERE account_name = 'mary'"
+        }
+    } errormsg] {
+        set result [format "error transferring funds: %s" $errormsg]
+    } else {
+        set result "funds transferred successfully"
+    }
+    spi_exec "INSERT INTO operations (result) VALUES ('[quote $result]')"
+$$ LANGUAGE pltcl;
+</programlisting>
+     Note that use of <function>catch</function> is still required for this
+     purpose.  Otherwise the error would propagate to the top level of the
+     function, preventing the desired insertion into
+     the <structname>operations</structname> table.
+     The <function>subtransaction</function> command does not trap errors, it
+     only assures that all database operations executed inside its scope will
+     be rolled back together when an error is reported.
+    </para>
+
+    <para>
+     A rollback of an explicit subtransaction occurs on any error reported
+     by the contained Tcl code, not only errors originating from database
+     access.  Thus a regular Tcl exception raised inside
+     a <function>subtransaction</function> command will also cause the
+     subtransaction to be rolled back.  However, non-error exits out of the
+     contained Tcl code (for instance, due to <function>return</function>) do
+     not cause a rollback.
+    </para>
+   </sect1>
+
+   <sect1 id="pltcl-config">
+    <title>PL/Tcl Configuration</title>
+
+    <para>
+     This section lists configuration parameters that
+     affect <application>PL/Tcl</application>.
+    </para>
+
+    <variablelist>
+
+     <varlistentry id="guc-pltcl-start-proc" xreflabel="pltcl.start_proc">
+      <term>
+       <varname>pltcl.start_proc</varname> (<type>string</type>)
+       <indexterm>
+        <primary><varname>pltcl.start_proc</varname> configuration parameter</primary>
+       </indexterm>
+      </term>
+      <listitem>
   <para>
-   PL/Tcl dispose du support de chargement automatique de code Tcl
-   lorsqu'il est utilisé. Il reconnaît une table spéciale,
-   <literal>pltcl_modules</literal>, qui est présumée contenir les modules de code
-   Tcl. Si cette table existe, le module <literal>unknown</literal> est récupéré
-   de la table et chargé immédiatement dans l'interpréteur Tcl avant la
-   première exécution d'une fonction PL/Tcl dans une session. (Ceci
-   survient séparément pour chaque interpréteur Tcl, si plus d'un est
-   utilisé dans une session&nbsp;; voir <xref linkend="pltcl-global"/>.)
+        This parameter, if set to a nonempty string, specifies the name
+        (possibly schema-qualified) of a parameterless PL/Tcl function that
+        is to be executed whenever a new Tcl interpreter is created for
+        PL/Tcl.  Such a function can perform per-session initialization, such
+        as loading additional Tcl code.  A new Tcl interpreter is created
+        when a PL/Tcl function is first executed in a database session, or
+        when an additional interpreter has to be created because a PL/Tcl
+        function is called by a new SQL role.
   </para>
   <para>
-   Alors que le module <literal>unknown</literal> pourrait réellement contenir
-   tout script d'initialisation dont vous avez besoin, il définit
-   normalement une procédure Tcl <function>unknown</function> qui est appelée
-   lorsque Tcl ne reconnaît pas le nom de la procédure appelée. La version
-   standard de <application>PL/Tcl</application> essaie de trouver un module dans
-   <literal>pltcl_modules</literal> qui définira la procédure requis. Si une procédure
-   est trouvée, elle est chargée dans l'interpréteur, puis l'exécution est
-   permise avec l'appel original de la procédure. Une deuxième table
-   <literal>pltcl_modfuncs</literal> fournit un index des fonctions et des modules
-   qui les définissent, de façon à ce que la recherche soit rapide.
+        The referenced function must be written in the <literal>pltcl</literal>
+        language, and must not be marked <literal>SECURITY DEFINER</literal>.
+        (These restrictions ensure that it runs in the interpreter it's
+        supposed to initialize.)  The current user must have permission to
+        call it, too.
   </para>
   <para>
-   La distribution <productname>PostgreSQL</productname> inclut les
-   scripts de support pour maintenir ces tables&nbsp;:
-   <command>pltcl_loadmod</command>, <command>pltcl_listmod</command>,
-   <command>pltcl_delmod</command> ainsi que le source pour le module standard
-   <literal>unknown</literal> dans <filename>share/unknown.pltcl</filename>. Ce module
-   doit être chargeable dans chaque base de données initialement pour
-   supporter le mécanisme de chargement automatique.
+        If the function fails with an error it will abort the function call
+        that caused the new interpreter to be created and propagate out to
+        the calling query, causing the current transaction or subtransaction
+        to be aborted.  Any actions already done within Tcl won't be undone;
+        however, that interpreter won't be used again.  If the language is
+        used again the initialization will be attempted again within a fresh
+        Tcl interpreter.
   </para>
   <para>
-   Les tables <literal>pltcl_modules</literal> et <literal>pltcl_modfuncs</literal>
-   doivent être lisibles par tous mais il est conseillé de les laisser
-   modifiables uniquement par le propriétaire, administrateur de la base de
-   données. Pour des raisons de sécurité, PL/Tcl ignorera
-   <literal>pltcl_modules</literal> (et donc n'essaiera pas de charger le
-   module <literal>unknown</literal>) sauf s'il appartient à un
-   superutilisateur. Cependant, les droits de modification sur cette table
-   peuvent être données à d'autres utilisateurs si vous avez suffisamment
-   confiance en eux.
+        Only superusers can change this setting.  Although this setting
+        can be changed within a session, such changes will not affect Tcl
+        interpreters that have already been created.
   </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-pltclu-start-proc" xreflabel="pltclu.start_proc">
+      <term>
+       <varname>pltclu.start_proc</varname> (<type>string</type>)
+       <indexterm>
+        <primary><varname>pltclu.start_proc</varname> configuration parameter</primary>
+       </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter is exactly like <varname>pltcl.start_proc</varname>,
+        except that it applies to PL/TclU.  The referenced function must
+        be written in the <literal>pltclu</literal> language.
+       </para>
+      </listitem>
+     </varlistentry>
+
+    </variablelist>
  </sect1>
 
  <sect1 id="pltcl-procnames">

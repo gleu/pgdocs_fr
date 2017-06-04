@@ -119,6 +119,8 @@ typedef struct IndexAmRoutine
     bool        amclusterable;
     /* la méthode gère-t-elle les verrous sur prédicat ? */
     bool        ampredlocks;
+    /* does AM support parallel scan? */
+    bool        amcanparallel;
     /* type de données stocké dans l'index, ou InvalidOid si variable */
     Oid         amkeytype;
 
@@ -140,6 +142,11 @@ typedef struct IndexAmRoutine
     amendscan_function amendscan;
     ammarkpos_function ammarkpos;       /* peut être NULL */
     amrestrpos_function amrestrpos;     /* peut être NULL */
+
+    /* interface functions to support parallel index scans */
+    amestimateparallelscan_function amestimateparallelscan;    /* can be NULL */
+    aminitparallelscan_function aminitparallelscan;    /* can be NULL */
+    amparallelrescan_function amparallelrescan;    /* can be NULL */
 } IndexAmRoutine;
 </programlisting>
   </para>
@@ -266,7 +273,8 @@ aminsert (Relation indexRelation,
           bool *isnull,
           ItemPointer heap_tid,
           Relation heapRelation,
-          IndexUniqueCheck checkUnique);
+          IndexUniqueCheck checkUnique,
+          IndexInfo *indexInfo);
    </programlisting>
    Insère une nouvelle ligne dans un index existant. Les tableaux
    <literal>values</literal> et <literal>isnull</literal> donnent les valeurs
@@ -295,6 +303,14 @@ aminsert (Relation indexRelation,
    Certains index peuvent ne pas indexer toutes les lignes. Si la ligne
    ne doit pas être indexée, <function>aminsert</function> devrait s'achever
    sans rien faire.
+  </para>
+
+  <para>
+   If the index AM wishes to cache data across successive index insertions
+   within a SQL statement, it can allocate space
+   in <literal>indexInfo-&gt;ii_Context</literal> and store a pointer to the
+   data in <literal>indexInfo-&gt;ii_AmCache</literal> (which will be NULL
+   initially).
   </para>
 
   <para>
@@ -577,15 +593,19 @@ amgettuple (IndexScanDesc scan,
    <function>amcanreturn</function> renvoit true), alors, en cas de succès,
    la méthode d'accès doit aussi vérifier
    <literal>scan-&gt;xs_want_itup</literal>, et si ce dernier est true, elle
-   doit renvoyer les données indexées originales de cette entrée d'index, sous
+   doit renvoyer les données indexées originales de cette entrée d'index. The data can be returned sous
    la forme d'un pointeur d'<structname>IndexTuple</structname> stocké
    dans <literal>scan-&gt;xs_itup</literal>, avec un descripteur de lignes
-   dans <literal>scan-&gt;xs_itupdesc</literal>.
+   dans <literal>scan-&gt;xs_itupdesc</literal>; or in the form of
+   a <structname>HeapTuple</structname> pointer stored at <literal>scan-&gt;xs_hitup</literal>,
+   with tuple descriptor <literal>scan-&gt;xs_hitupdesc</literal>.  (The latter
+   format should be used when reconstructing data that might possibly not fit
+   into an IndexTuple.)  In either case,
    (La gestion de la donnée référencée par le pointeur est de la responsabilité
    de la méthode d'accès. Les données doivent rester bonnes au moins jusqu'au
    prochain appel à <function>amgettuple</function>,
    <function>amrescan</function> ou <function>amendscan</function> pour le
-   parcours.)
+   parcours.
   </para>
 
   <para>
@@ -619,6 +639,68 @@ amgetbitmap (IndexScanDesc scan,
    parcours d'index&nbsp;; il existe d'autres restrictions lors de l'utilisation
    de <function>amgetbitmap</function>, comme expliqué dans <xref
    linkend="index-scanning"/>.
+  </para>
+
+
+  <para>
+   In addition to supporting ordinary index scans, some types of index
+   may wish to support <firstterm>parallel index scans</firstterm>, which allow
+   multiple backends to cooperate in performing an index scan.  The
+   index access method should arrange things so that each cooperating
+   process returns a subset of the tuples that would be performed by
+   an ordinary, non-parallel index scan, but in such a way that the
+   union of those subsets is equal to the set of tuples that would be
+   returned by an ordinary, non-parallel index scan.  Furthermore, while
+   there need not be any global ordering of tuples returned by a parallel
+   scan, the ordering of that subset of tuples returned within each
+   cooperating backend must match the requested ordering.  The following
+   functions may be implemented to support parallel index scans:
+  </para>
+
+  <para>
+<programlisting>
+Size
+amestimateparallelscan (void);
+</programlisting>
+   Estimate and return the number of bytes of dynamic shared memory which
+   the access method will be needed to perform a parallel scan.  (This number
+   is in addition to, not in lieu of, the amount of space needed for
+   AM-independent data in <structname>ParallelIndexScanDescData</structname>.)
+  </para>
+
+  <para>
+   It is not necessary to implement this function for access methods which
+   do not support parallel scans or for which the number of additional bytes
+   of storage required is zero.
+  </para>
+
+  <para>
+<programlisting>
+void
+aminitparallelscan (void *target);
+</programlisting>
+   This function will be called to initialize dynamic shared memory at the
+   beginning of a parallel scan.  <parameter>target</parameter> will point to at least
+   the number of bytes previously returned by
+   <function>amestimateparallelscan</function>, and this function may use that
+   amount of space to store whatever data it wishes.
+  </para>
+
+  <para>
+   It is not necessary to implement this function for access methods which
+   do not support parallel scans or in cases where the shared memory space
+   required needs no initialization.
+  </para>
+
+  <para>
+<programlisting>
+void
+amparallelrescan (IndexScanDesc scan);
+</programlisting>
+   This function, if implemented, will be called when a parallel index scan
+   must be restarted.  It should reset any shared state set up by
+   <function>aminitparallelscan</function> such that the scan will be restarted from
+   the beginning.
   </para>
 
   <para>

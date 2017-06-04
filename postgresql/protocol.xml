@@ -233,10 +233,10 @@
     Le serveur envoie ensuite le message de demande d'authentification
     approprié, auquel le client doit répondre avec le message de réponse
     d'authentification adapté (tel un mot de passe). Pour toutes les méthodes
-    d'authentification, sauf GSSAPI et SSPI, il y a au maximum une requête et
+    d'authentification, sauf GSSAPI, SSPI et SASL, il y a au maximum une requête et
     une réponse. Avec certaines méthodes, aucune réponse du client n'est
     nécessaire&nbsp; aucune demande d'authentification n'est alors effectuée.
-    Pour GSSAPI et SSPI, plusieurs échanges de paquets peuvent être
+    Pour GSSAPI, SSPI et SASL, plusieurs échanges de paquets peuvent être
     nécessaire pour terminer l'authentification.
    </para>
 
@@ -333,7 +333,7 @@
       <listitem>
        <para>
         L'interface doit maintenant initier une négociation GSSAPI. L'interface
-        doit envoyer un PasswordMessage avec la première partie du flux de
+        doit envoyer un GSSResponse avec la première partie du flux de
         données GSSAPI en réponse à ceci. Si plus de messages sont nécessaires,
         le serveur répondra avec AuthenticationGSSContinue.
        </para>
@@ -345,7 +345,7 @@
       <listitem>
        <para>
         L'interface doit maintenant initier une négociation SSPI. L'interface
-        doit envoyer un PasswordMessage avec la première partie du flux de
+        doit envoyer un GSSResponse avec la première partie du flux de
         données SSPI en réponse à ceci. Si plus de messages sont nécessaires,
         le serveur répondra avec AuthenticationGSSContinue.
        </para>
@@ -362,10 +362,50 @@
         AuthenticationGSSContinue). Si les données GSSAPI dans ce message
         indique que plus de données sont nécessaire pour terminer
         l'authentification, l'interface doit envoyer cette donnée dans un
-        autre PasswordMessage. Si l'authentification GSSAPI ou SSPI est
+        autre GSSResponse. Si l'authentification GSSAPI ou SSPI est
         terminée par ce
         message, le serveur enverra ensuite AuthenticationOk pour indiquer une
         authentification réussie ou ErrorResponse pour indiquer l'échec.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>AuthenticationSASL</term>
+      <listitem>
+       <para>
+        The frontend must now initiate a SASL negotiation, using one of the
+        SASL mechanisms listed in the message. The frontend will send a
+        SASLInitialResponse with the name of the selected mechanism, and the
+        first part of the SASL data stream in response to this. If further
+        messages are needed, the server will respond with
+        AuthenticationSASLContinue. See <xref linkend="sasl-authentication"/>
+        for details.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>AuthenticationSASLContinue</term>
+      <listitem>
+       <para>
+        This message contains challenge data from the previous step of SASL
+        negotiation (AuthenticationSASL, or a previous
+        AuthenticationSASLContinue). The frontend must respond with a
+        SASLResponse message.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>AuthenticationSASLFinal</term>
+      <listitem>
+       <para>
+        SASL authentication has completed with additional mechanism-specific
+        data for the client. The server will next send AuthenticationOk to
+        indicate successful authentication, or an ErrorResponse to indicate
+        failure. This message is sent only if the SASL mechanism specifies
+        additional data to be sent from server to client at completion.
        </para>
       </listitem>
      </varlistentry>
@@ -1335,6 +1375,119 @@
   </sect2>
  </sect1>
 
+<sect1 id="protocol-logical-replication">
+ <title>Logical Streaming Replication Protocol</title>
+
+ <para>
+  This section describes the logical replication protocol, which is the message
+  flow started by the <literal>START_REPLICATION</literal>
+  <literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable>
+  <literal>LOGICAL</literal> replication command.
+ </para>
+
+ <para>
+  The logical streaming replication protocol builds on the primitives of
+  the physical streaming replication protocol.
+ </para>
+
+ <sect2 id="protocol-logical-replication-params">
+  <title>Logical Streaming Replication Parameters</title>
+
+  <para>
+   The logical replication <literal>START_REPLICATION</literal> command
+   accepts following parameters:
+
+   <variablelist>
+    <varlistentry>
+     <term>
+      proto_version
+     </term>
+     <listitem>
+      <para>
+       Protocol version. Currently only version <literal>1</literal> is
+       supported.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      publication_names
+     </term>
+     <listitem>
+      <para>
+       Comma separated list of publication names for which to subscribe
+       (receive changes). The individual publication names are treated
+       as standard objects names and can be quoted the same as needed.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+
+  </para>
+ </sect2>
+
+ <sect2 id="protocol-logical-messages">
+  <title>Logical Replication Protocol Messages</title>
+
+  <para>
+   The individual protocol messages are discussed in the following
+   subsections. Individual messages are described in
+   <xref linkend="protocol-logicalrep-message-formats"/>.
+  </para>
+
+  <para>
+   All top-level protocol messages begin with a message type byte.
+   While represented in code as a character, this is a signed byte with no
+   associated encoding.
+  </para>
+
+  <para>
+   Since the streaming replication protocol supplies a message length there
+   is no need for top-level protocol messages to embed a length in their
+   header.
+  </para>
+
+ </sect2>
+
+ <sect2 id="protocol-logical-messages-flow">
+  <title>Logical Replication Protocol Message Flow</title>
+
+  <para>
+   With the exception of the <literal>START_REPLICATION</literal> command and
+   the replay progress messages, all information flows only from the backend
+   to the frontend.
+  </para>
+
+  <para>
+   The logical replication protocol sends individual transactions one by one.
+   This means that all messages between a pair of Begin and Commit messages
+   belong to the same transaction.
+  </para>
+
+  <para>
+   Every sent transaction contains zero or more DML messages (Insert,
+   Update, Delete). In case of a cascaded setup it can also contain Origin
+   messages. The origin message indicated that the transaction originated on
+   different replication node. Since a replication node in the scope of logical
+   replication protocol can be pretty much anything, the only identifier
+   is the origin name. It's downstream's responsibility to handle this as
+   needed (if needed). The Origin message is always sent before any DML
+   messages in the transaction.
+  </para>
+
+  <para>
+   Every DML message contains an arbitrary relation ID, which can be mapped to
+   an ID in the Relation messages. The Relation messages describe the schema of the
+   given relation. The Relation message is sent for a given relation either
+   because it is the first time we send a DML message for given relation in the
+   current session or because the relation definition has changed since the
+   last Relation message was sent for it. The protocol assumes that the client
+   is capable of caching the metadata for as many relations as needed.
+  </para>
+ </sect2>
+</sect1>
+
  <sect1 id="protocol-message-types">
   <title>Types de données des message</title>
 
@@ -1418,6 +1571,141 @@
   </para>
  </sect1>
 
+<sect1 id="sasl-authentication">
+<title>SASL Authentication</title>
+
+<para>
+<firstterm>SASL</firstterm> is a framework for authentication in connection-oriented
+protocols. At the moment, <productname>PostgreSQL</productname> implements only one SASL
+authentication mechanism, SCRAM-SHA-256, but more might be added in the
+future. The below steps illustrate how SASL authentication is performed in
+general, while the next subsection gives more details on SCRAM-SHA-256.
+</para>
+
+<procedure>
+<title>SASL Authentication Message Flow</title>
+
+<step id="sasl-auth-begin">
+<para>  
+  To begin a SASL authentication exchange, the server sends an
+  AuthenticationSASL message. It includes a list of SASL authentication
+  mechanisms that the server can accept, in the server's preferred order.
+</para>
+</step>
+
+<step id="sasl-auth-initial-response">
+<para>
+  The client selects one of the supported mechanisms from the list, and sends
+  a SASLInitialResponse message to the server. The message includes the name
+  of the selected mechanism, and an optional Initial Client Response, if the
+  selected mechanism uses that.
+</para>
+</step>
+
+<step id="sasl-auth-continue">
+<para>
+  One or more server-challenge and client-response message will follow. Each
+  server-challenge is sent in an AuthenticationSASLContinue message, followed
+  by a response from client in an SASLResponse message. The particulars of
+  the messages are mechanism specific.
+</para>
+</step>
+
+<step id="sasl-auth-end">
+<para>
+  Finally, when the authentication exchange is completed successfully, the
+  server sends an AuthenticationSASLFinal message, followed
+  immediately by an AuthenticationOk message. The AuthenticationSASLFinal
+  contains additional server-to-client data, whose content is particular to the
+  selected authentication mechanism. If the authentication mechanism doesn't
+  use additional data that's sent at completion, the AuthenticationSASLFinal
+  message is not sent.
+</para>
+</step>
+</procedure>
+
+<para>
+On error, the server can abort the authentication at any stage, and send an
+ErrorMessage.
+</para>
+
+ <sect2 id="sasl-scram-sha256">
+  <title>SCRAM-SHA-256 authentication</title>
+
+  <para>
+    <firstterm>SCRAM-SHA-256</firstterm> (called just <firstterm>SCRAM</firstterm> from now on) is
+    the only implemented SASL mechanism, at the moment. It is described in detail
+    in RFC 7677 and RFC 5741. 
+  </para>
+
+  <para>
+When SCRAM-SHA-256 is used in PostgreSQL, the server will ignore the username
+that the client sends in the <structname>client-first-message</structname>. The username
+that was already sent in the startup message is used instead.
+<productname>PostgreSQL</productname> supports multiple character encodings, while SCRAM
+dictates UTF-8 to be used for the username, so it might be impossible to
+represent the PostgreSQL username in UTF-8. To avoid confusion, the client
+should use <literal>pg_same_as_startup_message</literal> as the username in the
+<structname>client-first-message</structname>.
+  </para>
+
+  <para>
+The SCRAM specification dictates that the password is also in UTF-8, and is
+processed with the <firstterm>SASLprep</firstterm> algorithm.
+<productname>PostgreSQL</productname>, however, does not require UTF-8 to be used for
+the password. When a user's password is set, it is processed with SASLprep
+as if it was in UTF-8, regardless of the actual encoding used. However, if
+it is not a legal UTF-8 byte sequence, or it contains UTF-8 byte sequences
+that are prohibited by the SASLprep algorithm, the raw password will be used
+without SASLprep processing, instead of throwing an error. This allows the
+password to be normalized when it is in UTF-8, but still allows a non-UTF-8
+password to be used, and doesn't require the system to know which encoding
+the password is in.
+  </para>
+
+  <para>
+<firstterm>Channel binding</firstterm> has not been implemented yet.
+  </para>
+
+<procedure>
+<title>Example</title>
+  <step id="scram-begin">
+<para>
+  The server sends an AuthenticationSASL message. It includes a list of
+  SASL authentication mechanisms that the server can accept.
+</para>
+</step>
+<step id="scram-client-first">
+<para>
+  The client responds by sending a SASLInitialResponse message, which
+  indicates the chosen mechanism, <literal>SCRAM-SHA-256</literal>. In the Initial
+  Client response field, the message contains the SCRAM
+  <structname>client-first-message</structname>.
+</para>
+</step>
+<step id="scram-server-first">
+<para>
+  Server sends an AuthenticationSASLContinue message, with a SCRAM
+  <structname>server-first message</structname> as the content.
+</para>
+</step>
+<step id="scram-client-final">
+<para>
+  Client sends a SASLResponse message, with SCRAM
+  <structname>client-final-message</structname> as the content.
+</para>
+</step>
+<step id="scram-server-final">
+<para>
+  Server sends an AuthenticationSASLFinal message, with the SCRAM
+  <structname>server-final-message</structname>, followed immediately by
+  an AuthenticationOk message.
+</para>
+</step>
+</procedure>
+</sect2>
+</sect1>
+
  <sect1 id="protocol-replication">
   <title>Protocole de réplication en continu</title>
 
@@ -1443,7 +1731,7 @@
 psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
    </programlisting>
    Néanmoins, il est souvent plus utile d'utiliser
-   <xref linkend="app-pgreceivexlog"/> (pour la réplication physique) ou
+   <xref linkend="app-pgreceivewal"/> (pour la réplication physique) ou
    <xref linkend="app-pgrecvlogical"/> (pour la réplication logique).
   </para>
 
@@ -1518,6 +1806,30 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
     </varlistentry>
 
     <varlistentry>
+    <term><literal>SHOW</literal> <replaceable class="parameter">name</replaceable>
+     <indexterm><primary>SHOW</primary></indexterm>
+    </term>
+    <listitem>
+     <para>
+      Requests the server to send the current setting of a run-time parameter.
+      This is similar to the SQL command <xref linkend="sql-show"/>.
+     </para>
+
+     <variablelist>
+      <varlistentry>
+       <term><replaceable class="parameter">name</replaceable></term>
+       <listitem>
+         <para>
+          The name of a run-time parameter. Available parameters are documented
+          in <xref linkend="runtime-config"/>.
+         </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
      <term><literal>TIMELINE_HISTORY</literal> <replaceable class="parameter">tli</replaceable>
       <indexterm><primary>TIMELINE_HISTORY</primary></indexterm>
      </term>
@@ -1558,8 +1870,8 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
      </listitem>
     </varlistentry>
 
-    <varlistentry>
-     <term><literal>CREATE_REPLICATION_SLOT</literal> <replaceable class="parameter">slot_name</replaceable> { <literal>PHYSICAL</literal> [ <literal>RESERVE_WAL</literal> ] | <literal>LOGICAL</literal> <replaceable class="parameter">output_plugin</replaceable> }
+  <varlistentry id="protocol-replication-create-slot" xreflabel="CREATE_REPLICATION_SLOT">
+   <term><literal>CREATE_REPLICATION_SLOT</literal> <replaceable class="parameter">slot_name</replaceable> [ <literal>TEMPORARY</literal> ] { <literal>PHYSICAL</literal> [ <literal>RESERVE_WAL</literal> ] | <literal>LOGICAL</literal> <replaceable class="parameter">output_plugin</replaceable> [ <literal>EXPORT_SNAPSHOT</literal> | <literal>NOEXPORT_SNAPSHOT</literal> | <literal>USE_SNAPSHOT</literal> ] }
       <indexterm><primary>CREATE_REPLICATION_SLOT</primary></indexterm>
      </term>
      <listitem>
@@ -1590,6 +1902,17 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        </varlistentry>
 
        <varlistentry>
+       <term><literal>TEMPORARY</literal></term>
+       <listitem>
+        <para>
+         Specify that this replication slot is a temporary one. Temporary
+         slots are not saved to disk and are automatically dropped on error
+         or when the session has finished.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><literal>RESERVE_WAL</literal></term>
         <listitem>
          <para>
@@ -1600,7 +1923,76 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          </para>
         </listitem>
        </varlistentry>
+
+      <varlistentry>
+       <term><literal>EXPORT_SNAPSHOT</literal></term>
+       <term><literal>NOEXPORT_SNAPSHOT</literal></term>
+       <term><literal>USE_SNAPSHOT</literal></term>
+       <listitem>
+        <para>
+         Decides what to do with the snapshot created during logical slot
+         initialization. <literal>EXPORT_SNAPSHOT</literal>, which is the default,
+         will export the snapshot for use in other sessions. This option can't
+         be used inside a transaction.  <literal>USE_SNAPSHOT</literal> will use the
+         snapshot for the current transaction executing the command. This
+         option must be used in a transaction, and
+         <literal>CREATE_REPLICATION_SLOT</literal> must be the first command
+         run in that transaction.  Finally, <literal>NOEXPORT_SNAPSHOT</literal> will
+         just use the snapshot for logical decoding as normal but won't do
+         anything else with it.
+        </para>
+       </listitem>
+      </varlistentry>
       </variablelist>
+
+     <para>
+      In response to this command, the server will send a one-row result set
+      containing the following fields:
+
+      <variablelist>
+       <varlistentry>
+        <term><literal>slot_name</literal> (<type>text</type>)</term>
+        <listitem>
+         <para>
+          The name of the newly-created replication slot.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>consistent_point</literal> (<type>text</type>)</term>
+        <listitem>
+         <para>
+          The WAL location at which the slot became consistent.  This is the
+          earliest location from which streaming can start on this replication
+          slot.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>snapshot_name</literal> (<type>text</type>)</term>
+        <listitem>
+         <para>
+          The identifier of the snapshot exported by the command.  The
+          snapshot is valid until a new command is executed on this connection
+          or the replication connection is closed.  Null if the created slot
+          is physical.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>output_plugin</literal> (<type>text</type>)</term>
+        <listitem>
+         <para>
+          The name of the output plugin used by the newly-created replication
+          slot.  Null if the created slot is physical.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
      </listitem>
     </varlistentry>
 
@@ -1919,10 +2311,33 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
              </term>
              <listitem>
               <para>
-               Le xmin courant du serveur standby. Il peut valoir 0 si le standby
-               envoie des notifications pour indiquer que le retour Hot Standby
-               ne sera plus nécessaire pour cette connexion. Les messages suivants
-               différents de zéro peuvent reinitialiser le mécanisme de retour.
+          The standby's current global xmin, excluding the catalog_xmin from any
+          replication slots. If both this value and the following
+          catalog_xmin are 0 this is treated as a notification that Hot Standby
+          feedback will no longer be sent on this connection. Later non-zero
+          messages may reinitiate the feedback mechanism.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Int32
+      </term>
+      <listitem>
+      <para>
+          The epoch of the global xmin xid on the standby.
+      </para>
+      </listitem>
+      </varlistentry>
+      <varlistentry>
+      <term>
+          Int32
+      </term>
+      <listitem>
+      <para>
+          The lowest catalog_xmin of any replication slots on the standby. Set to 0
+          if no catalog_xmin exists on the standby or if hot standby feedback is being
+          disabled.
               </para>
              </listitem>
             </varlistentry>
@@ -1932,7 +2347,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
              </term>
              <listitem>
               <para>
-               Le epoch courant du serveur en standby.
+               The epoch of the catalog_xmin xid on the standby.
               </para>
              </listitem>
             </varlistentry>
@@ -2017,6 +2432,8 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        Supprime un slot de réplication, libérant toute ressource réservée du côté
        serveur. Si le slot est en cours d'utilisation par une connexion active,
        cette commande échoue.
+      If the slot is a logical slot that was created in a database other than
+      the database the walsender is connected to, this command fails.
       </para>
       <variablelist>
        <varlistentry>
@@ -2091,7 +2508,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
            Inclut les journaux de transactions nécessaires dans la
            sauvegarde. Cela inclue tous les fichiers entre le début et
            la fin de la sauvegarde de base dans le répertoire
-           <filename>pg_xlog</filename> dans l'archive tar.
+           <filename>pg_wal</filename> dans l'archive tar.
           </para>
          </listitem>
         </varlistentry>
@@ -2217,15 +2634,16 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
         </listitem>
         <listitem>
          <para>
-          différents fichiers temporaires créés pendant l'opération du serveur
-          PostgreSQL
+          Différents fichiers et répertoires temporaires créés pendant
+          l'opération du serveur PostgreSQL, such as any file or directory
+          beginning with <filename>pgsql_tmp</filename>.
          </para>
         </listitem>
         <listitem>
          <para>
-          <filename>pg_xlog</filename>, ainsi que les sous-répertoires.
+          <filename>pg_wal</filename>, ainsi que les sous-répertoires.
           Si la sauvegarde est lancée avec ajout des journaux de
-          transactions, une version synthéthisée de <filename>pg_xlog</filename> sera inclus
+          transactions, une version synthéthisée de <filename>pg_wal</filename> sera inclus
           mais elle ne contiendra que les fichiers nécessaires au bon
           fonctionnement de la sauvegarde, et pas le reste de son
           contenu.
@@ -2233,14 +2651,17 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
         </listitem>
         <listitem>
          <para>
-          <filename>pg_replslot</filename> est copiée sous la forme d'un
-          répertoire vide.
+         <filename>pg_dynshmem</filename>, <filename>pg_notify</filename>,
+         <filename>pg_replslot</filename>, <filename>pg_serial</filename>,
+         <filename>pg_snapshots</filename>, <filename>pg_stat_tmp</filename>, and
+         <filename>pg_subtrans</filename> are copied as empty directories (even if
+         they are symbolic links).
          </para>
         </listitem>
         <listitem>
          <para>
           Les fichiers autres que les fichiers standards et les répertoires (par
-          exemple les liens symboliques et les fichiers périphériques) sont
+          exemple les liens symboliques (other than for the directories listed above) et les fichiers périphériques) sont
           ignorés. (Les liens symboliques dans <filename>pg_tblspc</filename>
           sont maintenus.)
          </para>
@@ -2652,7 +3073,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
 
    <varlistentry>
     <term>
-     BackendKeyData (B)
+     AuthenticationSASL (B)
     </term>
     <listitem>
      <para>
@@ -2660,19 +3081,17 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
       <variablelist>
        <varlistentry>
         <term>
-         Byte1('K')
+         Byte1('R')
         </term>
         <listitem>
          <para>
-          Marqueur de clé d'annulation. Le
-          client doit sauvegarder ces valeurs s'il souhaite initier des
-          messages CancelRequest par la suite.
+          Identifies the message as an authentication request.
          </para>
         </listitem>
        </varlistentry>
        <varlistentry>
         <term>
-         Int32(12)
+         Int32
         </term>
         <listitem>
          <para>
@@ -2682,21 +3101,27 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        </varlistentry>
        <varlistentry>
         <term>
-         Int32
+         Int32(10)
         </term>
         <listitem>
          <para>
-          ID du processus du serveur concerné.
+          Specifies that SASL authentication is required.
          </para>
         </listitem>
        </varlistentry>
+</variablelist>
+The message body is a list of SASL authentication mechanisms, in the
+server's order of preference. A zero byte is required as terminator after
+the last authentication mechanism name. For each mechanism, there is the
+following:
+<variablelist>
        <varlistentry>
         <term>
-         Int32
+         String
         </term>
         <listitem>
          <para>
-          Clé secrète du serveur concerné.
+          Name of a SASL authentication mechanism.
          </para>
         </listitem>
        </varlistentry>
@@ -2737,49 +3162,54 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        </varlistentry>
        <varlistentry>
         <term>
-         String
+         Int32(11)
         </term>
         <listitem>
          <para>
-          Nom du portail de destination
-          (une chaîne vide sélectionne le portail non-nommé).
+          Specifies that this message contains a SASL challenge.
          </para>
         </listitem>
        </varlistentry>
        <varlistentry>
         <term>
-         String
+         Byte<replaceable>n</replaceable>
         </term>
         <listitem>
          <para>
-          Nom de l'instruction source préparée
-          (une chaîne vide sélectionne l'instruction préparée non-nommée).
+                SASL data, specific to the SASL mechanism being used.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
          </para>
         </listitem>
        </varlistentry>
        <varlistentry>
         <term>
-         Int16
+         AuthenticationSASLFinal (B)
         </term>
         <listitem>
          <para>
-          Nombre de codes de format de paramètres qui suivent (notés
-          <replaceable>c</replaceable> ci-dessous). peut valoir zéro pour indiquer
-          qu'il n'y a aucun paramètre ou que tous les paramètres utilisent
-          le format par défaut (texte)&nbsp;; ou un, auquel cas le code de
-          format spécifié est appliqué à tous les paramètres&nbsp;; il
-          peut aussi être égal au nombre courant de paramètres.
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('R')
+</term>
+<listitem>
+<para>
+                Identifies the message as an authentication request.
          </para>
         </listitem>
        </varlistentry>
        <varlistentry>
         <term>
-         Int16[<replaceable>c</replaceable>]
+         Int32
         </term>
         <listitem>
          <para>
-          Codes de format des paramètres. Tous doivent valoir zéro
-          (texte) ou un (binaire).
+          Specifies that SASL authentication has completed.
          </para>
         </listitem>
        </varlistentry>
@@ -2795,7 +3225,170 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          </para>
         </listitem>
        </varlistentry>
-      </variablelist>
+<varlistentry>
+<term>
+        Byte<replaceable>n</replaceable>
+</term>
+<listitem>
+<para>
+                SASL outcome "additional data", specific to the SASL mechanism
+                being used.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
+</para>
+</listitem>
+</varlistentry>
+
+
+<varlistentry>
+<term>
+BackendKeyData (B)
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('K')
+</term>
+<listitem>
+<para>
+                Identifies the message as cancellation key data.
+                The frontend must save these values if it wishes to be
+                able to issue CancelRequest messages later.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32(12)
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                The process ID of this backend.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                The secret key of this backend.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
+</para>
+</listitem>
+</varlistentry>
+
+
+<varlistentry>
+<term>
+Bind (F)
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('B')
+</term>
+<listitem>
+<para>
+                Identifies the message as a Bind command.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                The name of the destination portal
+                (an empty string selects the unnamed portal).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                The name of the source prepared statement
+                (an empty string selects the unnamed prepared statement).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int16
+</term>
+<listitem>
+<para>
+                The number of parameter format codes that follow
+                (denoted <replaceable>C</replaceable> below).
+                This can be zero to indicate that there are no parameters
+                or that the parameters all use the default format (text);
+                or one, in which case the specified format code is applied
+                to all parameters; or it can equal the actual number of
+                parameters.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int16[<replaceable>C</replaceable>]
+</term>
+<listitem>
+<para>
+                The parameter format codes.  Each must presently be
+                zero (text) or one (binary).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int16
+</term>
+<listitem>
+<para>
+                The number of parameter values that follow (possibly zero).
+                This must match the number of parameters needed by the query.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
       Puis, le couple de champs suivant apparaît pour chaque paramètre&nbsp;:
       paramètre&nbsp;:
       <variablelist>
@@ -3994,6 +4587,52 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
 
    <varlistentry>
     <term>
+GSSResponse (F)
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('p')
+</term>
+<listitem>
+<para>
+                Identifies the message as a GSSAPI or SSPI response. Note that
+                this is also used for SASL and password response messages.
+                The exact message type can be deduced from the context.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte<replaceable>n</replaceable>
+</term>
+<listitem>
+<para>
+                GSSAPI/SSPI specific message data.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+
+<varlistentry>
+<term>
      NoData (B)
     </term>
     <listitem>
@@ -4404,10 +5043,8 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          <para>
           Identifie le message comme une réponse à un mot de passe.
           Notez que c'est aussi utilisé par les messages de réponse
-          GSSAPI et SSPI (qui est vraiment une erreur de conception
-          car les données contenues ne sont pas une chaîne terminée
-          par un octet nul dans ce cas, mais peut être une donnée
-          binaire arbitraire).
+          GSSAPI, SSPI et SASL.
+          The exact message type can be deduced from the context.
          </para>
         </listitem>
        </varlistentry>
@@ -4697,7 +5334,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
 
    <varlistentry>
     <term>
-     SSLRequest (F)
+     SASLInitialresponse (F)
     </term>
     <listitem>
      <para>
@@ -4705,29 +5342,23 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
       <variablelist>
        <varlistentry>
         <term>
-         Int32(8)
+         Byte1('p')
         </term>
         <listitem>
          <para>
-          Taille du message en octets, y compris la taille elle-même.
+                Identifies the message as an initial SASL response. Note that
+                this is also used for GSSAPI, SSPI and password response messages.
+                The exact message type is deduced from the context.
          </para>
         </listitem>
        </varlistentry>
        <varlistentry>
         <term>
-         Int32(80877103)
+         Int32
         </term>
         <listitem>
          <para>
-          Code de requête <acronym>ssl</acronym>. la valeur est choisie pour contenir
-          <literal>1234</literal> dans les 16 bits les plus significatifs, et
-          <literal>5679</literal> dans les 16 bits les moins significatifs
-          (pour éviter toute confusion, ce code ne doit pas être le même
-          que celui d'un numéro de version de protocole).
-         </para>
-        </listitem>
-       </varlistentry>
-      </variablelist>
+          Length of message contents in bytes, including self.
 
      </para>
     </listitem>
@@ -4736,69 +5367,192 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
 
    <varlistentry>
     <term>
-     StartupMessage (F)
+             String
     </term>
     <listitem>
      <para>
 
-      <variablelist>
+                Name of the SASL authentication mechanism that the client
+                selected.
+</para>
+</listitem>
+</varlistentry>
        <varlistentry>
         <term>
          Int32
         </term>
         <listitem>
          <para>
-          Taille du message en octets, y compris la taille elle-même.
+                Length of SASL mechanism specific "Initial Client Response" that
+                follows, or -1 if there is no Initial Response.
          </para>
         </listitem>
        </varlistentry>
        <varlistentry>
         <term>
-         Int32(196608)
+        Byte<replaceable>n</replaceable>
         </term>
         <listitem>
          <para>
-          Numéro de version du protocole. Les 16 bits les plus
-          significatifs représentent le numéro de version majeure (3 pour le
-          protocole décrit ici). Les 16 bits les moins significatifs représentent
-          le numéro de version mineure (0 pour le protocole décrit ici).
+                SASL mechanism specific "Initial Response".
          </para>
         </listitem>
        </varlistentry>
       </variablelist>
-      Le numéro de version du protocole est suivi par un ou plusieurs
-      couple(s) nom de paramètre et chaîne de valeur. Un octet zéro est requis
-      comme délimiteur de fin après le dernier couple nom/valeur. L'ordre des
-      paramètres n'est pas fixé. Le paramètre <literal>user</literal> est requis,
-      les autres sont optionnels. Chaque paramètre est spécifié de la façon
-      suivante&nbsp;:
-      <variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+
        <varlistentry>
         <term>
-         String
+SASLResponse (F)
         </term>
         <listitem>
          <para>
-          Nom du paramètre. Les noms actuellement reconnus sont&nbsp;:
 
           <variablelist>
            <varlistentry>
             <term>
-             <literal>user</literal>
+        Byte1('p')
             </term>
             <listitem>
              <para>
-              Nom de l'utilisateur de base de données sous lequel se
-              connecter. Requis&nbsp;; il n'y a pas de valeur par défaut.
+                Identifies the message as a SASL response. Note that
+                this is also used for GSSAPI, SSPI and password response messages.
+                The exact message type can be deduced from the context.
              </para>
             </listitem>
            </varlistentry>
            <varlistentry>
             <term>
-             <literal>database</literal>
+        Int32
             </term>
             <listitem>
              <para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte<replaceable>n</replaceable>
+</term>
+<listitem>
+<para>
+                SASL mechanism specific message data.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+
+<varlistentry>
+<term>
+SSLRequest (F)
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Int32(8)
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32(80877103)
+</term>
+<listitem>
+<para>
+                The <acronym>SSL</acronym> request code.  The value is chosen to contain
+                <literal>1234</literal> in the most significant 16 bits, and <literal>5679</literal> in the
+                least significant 16 bits.  (To avoid confusion, this code
+                must not be the same as any protocol version number.)
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
+</para>
+</listitem>
+</varlistentry>
+
+
+<varlistentry>
+<term>
+StartupMessage (F)
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32(196608)
+</term>
+<listitem>
+<para>
+                The protocol version number.  The most significant 16 bits are
+                the major version number (3 for the protocol described here).
+                The least significant 16 bits are the minor version number
+                (0 for the protocol described here).
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        The protocol version number is followed by one or more pairs of
+        parameter name and value strings.  A zero byte is required as a
+        terminator after the last name/value pair.
+        Parameters can appear in any
+        order.  <literal>user</literal> is required, others are optional.
+        Each parameter is specified as:
+<variablelist>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                The parameter name.  Currently recognized names are:
+
+<variablelist>
+<varlistentry>
+<term>
+                <literal>user</literal>
+</term>
+<listitem>
+<para>
+                        The database user name to connect as.  Required;
+                        there is no default.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+                <literal>database</literal>
+</term>
+<listitem>
+<para>
               Base de données à laquelle se connecter.
               Par défaut le nom de l'utilisateur.
              </para>
@@ -4819,6 +5573,22 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
              </para>
             </listitem>
            </varlistentry>
+<varlistentry>
+<term>
+                <literal>replication</literal>
+</term>
+<listitem>
+<para>
+                        Used to connect in streaming replication mode, where
+                        a small set of replication commands can be issued
+                        instead of SQL statements. Value can be
+                        <literal>true</literal>, <literal>false</literal>, or
+                        <literal>database</literal>, and the default is
+                        <literal>false</literal>. See
+                        <xref linkend="protocol-replication"/> for details.
+</para>
+</listitem>
+</varlistentry>
           </variablelist>
 
           En plus de ce qui précède, tout paramètre d'exécution
@@ -5199,6 +5969,617 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
   </para>
 
  </sect1>
+
+<sect1 id="protocol-logicalrep-message-formats">
+<title>Logical Replication Message Formats</title>
+
+<para>
+This section describes the detailed format of each logical replication message.
+These messages are returned either by the replication slot SQL interface or are
+sent by a walsender. In case of a walsender they are encapsulated inside the replication
+protocol WAL messages as described in <xref linkend="protocol-replication"/>
+and generally obey same message flow as physical replication.
+</para>
+
+<variablelist>
+
+<varlistentry>
+<term>
+Begin
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('B')
+</term>
+<listitem>
+<para>
+                Identifies the message as a begin message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                The final LSN of the transaction.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                Commit timestamp of the transaction. The value is in number
+                of microseconds since PostgreSQL epoch (2000-01-01).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Xid of the transaction.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Commit
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('C')
+</term>
+<listitem>
+<para>
+                Identifies the message as a commit message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                The LSN of the commit.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                The end LSN of the transaction.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                Commit timestamp of the transaction. The value is in number
+                of microseconds since PostgreSQL epoch (2000-01-01).
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Origin
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('O')
+</term>
+<listitem>
+<para>
+                Identifies the message as an origin message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                The LSN of the commit on the origin server.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                Name of the origin.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+
+<para>
+  Note that there can be multiple Origin messages inside a single transaction.
+</para>
+
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Relation
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('R')
+</term>
+<listitem>
+<para>
+                Identifies the message as a relation message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                ID of the relation.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                Namespace (empty string for <literal>pg_catalog</literal>).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                Relation name.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        Int8
+</term>
+<listitem>
+<para>
+                Replica identity setting for the relation (same as
+                <structfield>relreplident</structfield> in <structname>pg_class</structname>).
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        Int16
+</term>
+<listitem>
+<para>
+                Number of columns.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        Next, the following message part appears for each column:
+<variablelist>
+<varlistentry>
+<term>
+        Int8
+</term>
+<listitem>
+<para>
+                Flags for the column. Currently can be either 0 for no flags
+                or 1 which marks the column as part of the key.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                Name of the column.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Insert
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('I')
+</term>
+<listitem>
+<para>
+                Identifies the message as an insert message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                ID of the relation corresponding to the ID in the relation
+                message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte1('N')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData message as a new tuple.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        TupleData
+</term>
+<listitem>
+<para>
+                TupleData message part representing the contents of new tuple.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Update
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('U')
+</term>
+<listitem>
+<para>
+                Identifies the message as an update message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                ID of the relation corresponding to the ID in the relation
+                message.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        Byte1('K')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData submessage as a key.
+                This field is optional and is only present if
+                the update changed data in any of the column(s) that are
+                part of the REPLICA IDENTITY index.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        Byte1('O')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData submessage as an old tuple.
+                This field is optional and is only present if table in which
+                the update happened has REPLICA IDENTITY set to FULL.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        TupleData
+</term>
+<listitem>
+<para>
+                TupleData message part representing the contents of the old tuple
+                or primary key. Only present if the previous 'O' or 'K' part
+                is present.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        Byte1('N')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData message as a new tuple.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        TupleData
+</term>
+<listitem>
+<para>
+                TupleData message part representing the contents of a new tuple.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+
+<para>
+    The Update message may contain either a 'K' message part or an 'O' message part
+    or neither of them, but never both of them.
+</para>
+
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Delete
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('D')
+</term>
+<listitem>
+<para>
+                Identifies the message as a delete message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                ID of the relation corresponding to the ID in the relation
+                message.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        Byte1('K')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData submessage as a key.
+                This field is present if the table in which the delete has
+                happened uses an index as REPLICA IDENTITY.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        Byte1('O')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData message as a old tuple.
+                This field is is present if the table in which the delete has
+                happened has REPLICA IDENTITY set to FULL.
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+        TupleData
+</term>
+<listitem>
+<para>
+                TupleData message part representing the contents of the old tuple
+                or primary key, depending on the previous field.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+</para>
+
+<para>
+    The Delete message may contain either a 'K' message part or an 'O' message part,
+    but never both of them.
+</para>
+
+</listitem>
+</varlistentry>
+
+</variablelist>
+
+<para>
+
+Following message parts that are shared by above messages.
+
+</para>
+
+<variablelist>
+
+<varlistentry>
+<term>
+TupleData
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Int16
+</term>
+<listitem>
+<para>
+                Number of columns.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        Next, one of the following submessages appears for each column:
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('n')
+</term>
+<listitem>
+<para>
+                Identifies the data as NULL value.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        Or
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('u')
+</term>
+<listitem>
+<para>
+                Identifies unchanged TOASTed value (the actual value is not
+                sent).
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        Or
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('t')
+</term>
+<listitem>
+<para>
+                Identifies the data as text formatted value.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Length of the column value.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte<replaceable>n</replaceable>
+</term>
+<listitem>
+<para>
+                The value of the column, in text format.  (A future release
+                might support additional formats.)
+                <replaceable>n</replaceable> is the above length.
+
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+
+</sect1>
 
  <sect1 id="protocol-changes">
   <title>Résumé des modifications depuis le protocole 2.0</title>

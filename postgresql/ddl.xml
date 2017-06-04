@@ -10,7 +10,7 @@
   et aux fonctionnalités disponibles pour contrôler les données stockées dans les tables.
   L'organisation des tables dans des schémas et l'attribution de privilèges
   sur les tables sont ensuite décrits. Pour finir, d'autres fonctionnalités,
-  telles que l'héritage, les vues, les fonctions et les déclencheurs sont
+  telles que l'héritage, le partitionnement de tables, les vues, les fonctions et les déclencheurs sont
   passées en revue.
  </para>
 
@@ -1592,10 +1592,11 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
 
   <para>
    Lorque plusieurs politiques sont applicables pour une même requête,
-   elles sont combinées en utilisant <literal>OR</literal>, c'est-à-dire
-   qu'une ligne est accessible si une des politiques le permet. Ceci
-   est similaire à la règle qui veut qu'un rôle donné possède les
-   droits de tous les rôles dont il est membre.
+   elles sont combinées en utilisant either <literal>OR</literal> (for permissive policies, which are the
+   default) or using <literal>AND</literal> (for restrictive policies).
+   This is similar to the rule that a given role has the privileges
+   of all roles that they are a member of.  Permissive vs. restrictive
+   policies are discussed further below.
   </para>
 
   <para>
@@ -1762,6 +1763,56 @@ ERROR:  permission denied for relation passwd
 -- Alice peut modifier son propre mot de passe; RLS empêche silencieusement la mise à jour d'autres lignes
 postgres=&gt; update passwd set pwhash = 'abc';
 UPDATE 1
+</programlisting>
+
+  <para>
+   All of the policies constructed thus far have been permissive policies,
+   meaning that when multiple policies are applied they are combined using
+   the "OR" boolean operator.  While permissive policies can be constructed
+   to only allow access to rows in the intended cases, it can be simpler to
+   combine permissive policies with restrictive policies (which the records
+   must pass and which are combined using the "AND" boolean operator).
+   Building on the example above, we add a restrictive policy to require
+   the administrator to be connected over a local unix socket to access the
+   records of the passwd table:
+  </para>
+
+<programlisting>
+CREATE POLICY admin_local_only ON passwd AS RESTRICTIVE TO admin
+    USING (pg_catalog.inet_client_addr() IS NULL);
+</programlisting>
+
+  <para>
+   We can then see that an administrator connecting over a network will not
+   see any records, due to the restrictive policy:
+  </para>
+
+<programlisting>
+=&gt; SELECT current_user;
+ current_user 
+--------------
+ admin
+(1 row)
+
+=&gt; select inet_client_addr();
+ inet_client_addr 
+------------------
+ 127.0.0.1
+(1 row)
+
+=&gt; SELECT current_user;
+ current_user 
+--------------
+ admin
+(1 row)
+
+=&gt; TABLE passwd;
+ user_name | pwhash | uid | gid | real_name | home_phone | extra_info | home_dir | shell
+-----------+--------+-----+-----+-----------+------------+------------+----------+-------
+(0 rows)
+
+=&gt; UPDATE passwd set pwhash = NULL;
+UPDATE 0
 </programlisting>
 
   <para>
@@ -2472,11 +2523,9 @@ CREATE TABLE capitales (
     FROM cities*
     WHERE altitude &gt; 500;</programlisting>
 
-   Indiquer <literal>*</literal> n'est pas nécessaire car ce comportement est
-   le comportement par défaut (sauf si vous avez modifié la configuration du
-   paramètre <xref linkend="guc-sql-inheritance"/>). Néanmoins, écrire
-   <literal>*</literal> pourrait être utile pour insister sur le fait que des
-   tables supplémentaires seront parcourues.
+   Writing <literal>*</literal> is not necessary, since this behavior is always
+   the default.  However, this syntax is still supported for
+   compatibility with older releases where the default could be changed.
   </para>
 
   <para>
@@ -2726,7 +2775,7 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
   </sect1>
 
   <sect1 id="ddl-partitioning">
-   <title>Partitionnement</title>
+   <title>Partitionnement de tables</title>
 
    <indexterm>
     <primary>partitionnement</primary>
@@ -2735,6 +2784,10 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
    <indexterm>
     <primary>table</primary>
     <secondary>partitionnement</secondary>
+   </indexterm>
+
+   <indexterm>
+    <primary>partitioned table</primary>
    </indexterm>
 
    <para>
@@ -2779,9 +2832,9 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
      les chargements et suppressions importants de données peuvent être
      obtenus par l'ajout ou la suppression de partitions, sous réserve que ce
      besoin ait été pris en compte lors de la conception du partitionnement.
-     <command>ALTER TABLE NO INHERIT</command> et <command>DROP
-      TABLE</command> sont bien plus rapides qu'une opération de
-     masse. Cela supprime également la surcharge dû au
+     Doing <command>ALTER TABLE DETACH PARTITION</command> or dropping an individual
+     partition using <command>DROP TABLE</command> is far faster than a bulk
+     operation. Cela supprime également la surcharge dû au
      <command>VACUUM</command>
      causé par un <command>DELETE</command> massif&nbsp;;
     </para>
@@ -2804,18 +2857,8 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
  </para>
 
  <para>
-  Actuellement, <productname>PostgreSQL</productname> supporte le
-  partitionnement à travers l'héritage de tables. Chaque partition doit être
-  créée comme une table enfant d'une unique table parent. La table parent
-  est, elle, habituellement vide&nbsp;; elle n'existe que pour
-  représenter l'ensemble complet des données. Il est impératif de maîtriser
-  les concepts de l'héritage (voir <xref linkend="ddl-inherit"/>) avant de tenter
-  d'implanter le partitionnement.
- </para>
-
- <para>
-  Les formes suivantes de partitionnement peuvent être implantées dans
-  <productname>PostgreSQL</productname>&nbsp;:
+  <productname>PostgreSQL</productname> offers built-in support for the
+  following forms of partitioning:
 
   <variablelist>
    <varlistentry>
@@ -2847,104 +2890,128 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
    </varlistentry>
   </variablelist>
 
+     If your application needs to use other forms of partitioning not listed
+     above, alternative methods such as inheritance and
+     <literal>UNION ALL</literal> views can be used instead.  Such methods
+     offer flexibility but do not have some of the performance benefits
+     of built-in declarative partitioning.
  </para>
 </sect2>
 
-<sect2 id="ddl-partitioning-implementation">
- <title>Partitionner</title>
+  <sect2 id="ddl-partitioning-declarative">
+   <title>Declarative Partitioning</title>
 
- <para>
-  Pour partionner une table, la procédure est la suivante&nbsp;:
-  <orderedlist spacing="compact">
-   <listitem>
-    <para>
-     Créer la table <quote>maître</quote>. C'est de celle-ci qu'héritent toutes
-     les partitions.
-    </para>
-    <para>
-     Cette table ne contient pas de données. Les contraintes
-     de vérification ne doivent être définies sur cette table que si elles
-     sont appliquées à toutes les partitions. Il n'y a de plus aucune raison de
-     définir des index ou des contraintes d'unicité sur cette table.
-    </para>
-   </listitem>
+   <para>
+    <productname>PostgreSQL</productname> offers a way to specify how to
+    divide a table into pieces called partitions.  The table that is divided
+    is referred to as a <firstterm>partitioned table</firstterm>.  The
+    specification consists of the <firstterm>partitioning method</firstterm>
+    and a list of columns or expressions to be used as the 
+    <firstterm>partition key</firstterm>.
+   </para>
 
-   <listitem>
-    <para>
-     Créer plusieurs tables <quote>filles</quote> (ou enfants) qui héritent chacune de la
-     table maître. Normalement, ces tables n'ajoutent pas de colonnes
-     à l'ensemble hérité du maître.
-    </para>
+   <para>
+    All rows inserted into a partitioned table will be routed to one of the
+    <firstterm>partitions</firstterm> based on the value of the partition
+    key.  Each partition has a subset of the data defined by its
+    <firstterm>partition bounds</firstterm>.  Currently supported
+    partitioning methods include range and list, where each partition is
+    assigned a range of keys and a list of keys, respectively.
+   </para>
 
-    <para>
-     Par la suite, les tables enfants sont appelées partitions, bien
-     qu'elles soient, en tout point, des tables (ou tables externes)
-     <productname>PostgreSQL</productname> normales.
-    </para>
-   </listitem>
+   <para>
+    Partitions may themselves be defined as partitioned tables, using what is
+    called <firstterm>sub-partitioning</firstterm>.  Partitions may have their
+    own indexes, constraints and default values, distinct from those of other
+    partitions.  Indexes must be created separately for each partition.  See
+    <xref linkend="sql-createtable"/> for more details on creating partitioned
+    tables and partitions.
+   </para>
 
-   <listitem>
-    <para>
-     Ajouter les contraintes de tables aux tables de partitions pour définir
-     les valeurs des clés autorisées dans chacune.
-    </para>
+   <para>
+    It is not possible to turn a regular table into a partitioned table or
+    vice versa.  However, it is possible to add a regular or partitioned table
+    containing data as a partition of a partitioned table, or remove a
+    partition from a partitioned table turning it into a standalone table;
+    see <xref linkend="sql-altertable"/> to learn more about the
+    <command>ATTACH PARTITION</command> and <command>DETACH PARTITION</command>
+    sub-commands.
+   </para>
 
-    <para>
-     Quelques exemples typiques&nbsp;:
-     <programlisting>CHECK ( x = 1 )
-CHECK ( comté IN ( 'Oxfordshire', 'Buckinghamshire', 'Warwickshire' ))
-CHECK ( ID &gt;= 100 AND ID &lt; 200 )</programlisting>
-        Les contraintes doivent garantir qu'il n'y a pas
-	de recouvrement entre les valeurs clés autorisées dans les différentes
-	partitions. Une erreur commune est de configurer des contraintes
-	d'échelle de cette façon&nbsp;:
-<programlisting>CHECK ( comté BETWEEN 100 AND 200 )
-CHECK ( comté BETWEEN 200 AND 300 )</programlisting>
-        Il est dans ce cas difficile de savoir à quelle partition
-	appartient la clé 200.
-       </para>
+   <para>
+    Individual partitions are linked to the partitioned table with inheritance
+    behind-the-scenes; however, it is not possible to use some of the
+    inheritance features discussed in the previous section with partitioned
+    tables and partitions.  For example, a partition cannot have any parents
+    other than the partitioned table it is a partition of, nor can a regular
+    table inherit from a partitioned table making the latter its parent.
+    That means partitioned tables and partitions do not participate in
+    inheritance with regular tables.  Since a partition hierarchy consisting
+    of the partitioned table and its partitions is still an inheritance
+    hierarchy, all the normal rules of inheritance apply as described in
+    <xref linkend="ddl-inherit"/> with some exceptions, most notably:
 
-       <para>
-        Il n'y a aucune différence entre les syntaxes de partitionnement
-	par échelon et de partitionnement par liste&nbsp;; ces termes ne sont
-	que descriptifs.
-       </para>
-      </listitem>
+    <itemizedlist>
+     <listitem>
+      <para>
+       Both <literal>CHECK</literal> and <literal>NOT NULL</literal>
+       constraints of a partitioned table are always inherited by all its
+       partitions.  <literal>CHECK</literal> constraints that are marked
+       <literal>NO INHERIT</literal> are not allowed to be created on
+       partitioned tables.
+      </para>
+     </listitem>
 
-      <listitem>
-       <para>
-        Pour chaque partition, créer un index sur la (ou les) colonne(s) clé(s),
-        ainsi que tout autre index nécessaire. (L'index clé n'est pas vraiment
-	nécessaire mais, dans la plupart des scénarios, il est utile. Si
-	les valeurs clés doivent être uniques, alors il faut
-	toujours créer une contrainte d'unicité ou de clé primaire pour chaque
-	partition.)
-       </para>
-      </listitem>
+     <listitem>
+      <para>
+       Using <literal>ONLY</literal> to add or drop a constraint on only the
+       partitioned table is supported when there are no partitions.  Once
+       partitions exist, using <literal>ONLY</literal> will result in an error
+       as adding or dropping constraints on only the partitioned table, when
+       partitions exist, is not supported.  Instead, constraints can be added
+       or dropped, when they are not present in the parent table, directly on
+       the partitions.  As a partitioned table does not have any data
+       directly, attempts to use <command>TRUNCATE</command>
+       <literal>ONLY</literal> on a partitioned table will always return an
+       error.
+      </para>
+     </listitem>
 
-      <listitem>
-       <para>
-        Optionnellement, définir un déclencheur ou une règle pour rediriger les
-        données insérées dans la table maître vers la partition appropriée.
-       </para>
-      </listitem>
+     <listitem>
+      <para>
+       Partitions cannot have columns that are not present in the parent.  It
+       is neither possible to specify columns when creating partitions with
+       <command>CREATE TABLE</command> nor is it possible to add columns to
+       partitions after-the-fact using <command>ALTER TABLE</command>.  Tables may be
+       added as a partition with <command>ALTER TABLE ... ATTACH PARTITION</command>
+       only if their columns exactly match the parent, including oids.
+      </para>
+     </listitem>
 
-      <listitem>
-       <para>
-        S'assurer que le paramètre de configuration <xref
-	linkend="guc-constraint-exclusion"/> n'est pas désactivé dans
-	<filename>postgresql.conf</filename>. S'il l'est, les requêtes ne sont
-	pas optimisées.
-       </para>
-      </listitem>
+     <listitem>
+      <para>
+       You cannot drop the <literal>NOT NULL</literal> constraint on a
+       partition's column if the constraint is present in the parent table.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
 
-     </orderedlist>
-    </para>
+   <para>
+    Partitions can also be foreign tables
+    (see <xref linkend="sql-createforeigntable"/>),
+    although these have some limitations that normal tables do not.  For
+    example, data inserted into the partitioned table is not routed to
+    foreign table partitions.
+   </para>
 
-    <para>
-     Soit la base de données d'une grande fabrique de glaces. La compagnie
-     mesure le pic de température journalier ainsi que les ventes de glaces
-     dans chaque région. Conceptuellement, la table ressemble à&nbsp;:
+   <sect3 id="ddl-partitioning-declarative-example">
+    <title>Example</title>
+
+   <para>
+    Suppose we are constructing a database for a large ice cream company.
+    The company measures peak temperatures every day as well as ice cream
+    sales in each region. Conceptually, we want a table like:
 
 <programlisting>CREATE TABLE mesure (
     id_ville        int not null,
@@ -2959,108 +3026,465 @@ CHECK ( comté BETWEEN 200 AND 300 )</programlisting>
      direction. Pour réduire le nombre de données anciennes à stocker,
      seules les trois dernières années sont conservées. Au début
      de chaque mois, les données du mois le plus ancien sont supprimées.
-    </para>
-
-    <para>
      Dans cette situation, le partitionnement permet de répondre aux
-     différents besoins identifiés sur la table des mesures. En suivant les
-     étapes indiquées ci-dessus, le partitionnement peut être configuré de la
-     façon suivante&nbsp;:
+     différents besoins identifiés sur la table des mesures.
     </para>
 
-    <para>
-     <orderedlist spacing="compact">
-      <listitem>
-       <para>
-        la table maître est la table <structname>mesure</structname>, déclarée exactement
-	comme ci-dessus&nbsp;;
-       </para>
-      </listitem>
+   <para>
+    To use declarative partitioning in this case, use the following steps:
 
-      <listitem>
-       <para>
-        une partition est ensuite créée pour chaque mois actif&nbsp;:
-
-<programlisting>CREATE TABLE mesure_a2006m02 ( ) INHERITS (mesure);
-CREATE TABLE mesure_a2006m03 ( ) INHERIT (mesure);
-...
-CREATE TABLE mesure_a2007m11 ( ) INHERITS (mesure);
-CREATE TABLE mesure_a2007m12 ( ) INHERITS (mesure);
-CREATE TABLE mesure_a2008m01 ( ) INHERITS (mesure);</programlisting>
-
-        Chaque partition est une table à part entière mais
-	sa définition est héritée de la table <structname>mesure</structname>.
+    <orderedlist spacing="compact">
+     <listitem>
+      <para>
+       Create <structname>measurement</structname> table as a partitioned
+       table by specifying the <literal>PARTITION BY</literal> clause, which
+       includes the partitioning method (<literal>RANGE</literal> in this
+       case) and the list of column(s) to use as the partition key.
+<programlisting>+CREATE TABLE measurement (
+    city_id         int not null,
+    logdate         date not null,
+    peaktemp        int,
+    unitsales       int
+) PARTITION BY RANGE (logdate);
+</programlisting>
        </para>
 
-       <para>
-	Ceci résoud un des problèmes&nbsp;: la suppression d'anciennes données.
-	Chaque mois, il suffit d'effectuer un <command>DROP TABLE</command> sur
-	la table enfant la plus ancienne et de créer une nouvelle table
-	enfant pour les données du nouveau mois.
-       </para>
-      </listitem>
+      <para>
+       You may decide to use multiple columns in the partition key for range
+       partitioning, if desired.  Of course, this will often result in a larger
+       number of partitions, each of which is individually smaller.  On the
+       other hand, using fewer columns may lead to a coarser-grained
+       partitioning criteria with smaller number of partitions.  A query
+       accessing the partitioned table will have to scan fewer partitions if
+       the conditions involve some or all of these columns.
+       For example, consider a table range partitioned using columns
+       <structfield>lastname</structfield> and <structfield>firstname</structfield> (in that order)
+       as the partition key.
+      </para>
+     </listitem>
 
-      <listitem>
-       <para>
-	Il est nécessaire de fournir des contraintes de table qui interdisent les
-	recouvrements. Plutôt que de simplement créer les tables de la
-	partition comme ci-dessus, le script de création de tables ressemble
-	à&nbsp;;
+     <listitem>
+      <para>
+       Create partitions.  Each partition's definition must specify the bounds
+       that correspond to the partitioning method and partition key of the
+       parent.  Note that specifying bounds such that the new partition's
+       values will overlap with those in one or more existing partitions will
+       cause an error.  Inserting data into the parent table that does not map
+       to one of the existing partitions will cause an error; appropriate
+       partition must be added manually.
+      </para>
 
-<programlisting>CREATE TABLE mesure_a2006m02 (
-    CHECK ( date_trace &gt;= DATE '2006-02-01' AND date_trace &lt; DATE '2006-03-01' )
-) INHERITS (mesure);
-CREATE TABLE mesure_a2006m03 (
-    CHECK ( date_trace &gt;= DATE '2006-03-01' AND date_trace &lt; DATE '2006-04-01' )
-) INHERITS (mesure);
-...
-CREATE TABLE mesure_a2007m11 (
-    CHECK ( date_trace &gt;= DATE '2007-11-01' AND date_trace &lt; DATE '2007-12-01' )
-) INHERITS (mesure);
-CREATE TABLE mesure_a2007m12 (
-    CHECK ( date_trace &gt;= DATE '2007-12-01' AND date_trace &lt; DATE '2007-01-01' )
-) INHERITS (mesure);
-CREATE TABLE mesure_a2008m01 (
-    CHECK ( date_trace &gt;= DATE '2008-01-01' AND date_trace &lt; DATE '2008-02-01' )
-) INHERITS (mesure);</programlisting>
-       </para>
-      </listitem>
+      <para>
+       Partitions thus created are in every way normal
+       <productname>PostgreSQL</productname>
+       tables (or, possibly, foreign tables).  It is possible to specify a
+       tablespace and storage parameters for each partition separately.
+      </para>
 
-      <listitem>
-       <para>
-        Des index sur les colonnes clés sont probablement nécessaires&nbsp;:
+      <para>
+       It is not necessary to create table constraints describing partition
+       boundary condition for partitions.  Instead, partition constraints are
+       generated implicitly from the partition bound specification whenever
+       there is need to refer to them.
 
-<programlisting>CREATE INDEX mesure_a2006m02_date_trace ON mesure_a2006m02 (date_trace);
-CREATE INDEX mesure_a2006m03_date_trace ON mesure_a2006m03 (date_trace);
-...
-CREATE INDEX mesure_a2007m11_date_trace ON mesure_a2007m11 (date_trace);
-CREATE INDEX mesure_a2007m12_date_trace ON mesure_a2007m12 (date_trace);
-CREATE INDEX mesure_a2008m01_date_trace ON mesure_a2008m01 (date_trace);</programlisting>
+ <programlisting>
+CREATE TABLE measurement_y2006m02 PARTITION OF measurement
+    FOR VALUES FROM ('2006-02-01') TO ('2006-03-01')
 
-        À ce stade, c'est suffisant.
-       </para>
-      </listitem>
+CREATE TABLE measurement_y2006m03 PARTITION OF measurement
+    FOR VALUES FROM ('2006-03-01') TO ('2006-04-01')
 
-      <listitem>
-       <para>
-        L'application doit dire <literal>INSERT INTO mesure...</literal> et les
-	données être redirigées dans la table de partition appropriée. Pour
-	cela une fonction déclencheur est attachée à la table maître.
-        Si les données ne sont ajoutées que dans la dernière partition,
-	la fonction est très simple.
+ ...
+CREATE TABLE measurement_y2007m11 PARTITION OF measurement
+    FOR VALUES FROM ('2007-11-01') TO ('2007-12-01')
+
+CREATE TABLE measurement_y2007m12 PARTITION OF measurement
+    FOR VALUES FROM ('2007-12-01') TO ('2008-01-01')
+    TABLESPACE fasttablespace;
+
+CREATE TABLE measurement_y2008m01 PARTITION OF measurement
+    FOR VALUES FROM ('2008-01-01') TO ('2008-02-01')
+    TABLESPACE fasttablespace
+    WITH (parallel_workers = 4);
+ </programlisting>
+      </para>
+
+      <para>
+       To implement sub-partitioning, specify the
+       <literal>PARTITION BY</literal> clause in the commands used to create
+       individual partitions, for example:
 
 <programlisting>
-CREATE OR REPLACE FUNCTION mesure_insert_trigger()
+CREATE TABLE measurement_y2006m02 PARTITION OF measurement
+    FOR VALUES FROM ('2006-02-01') TO ('2006-03-01')
+    PARTITION BY RANGE (peaktemp);
+</programlisting>
+
+       After creating partitions of <structname>measurement_y2006m02</structname>,
+       any data inserted into <structname>measurement</structname> that is mapped to
+       <structname>measurement_y2006m02</structname> (or data that is directly inserted
+       into <structname>measurement_y2006m02</structname>, provided it satisfies its
+       partition constraint) will be further redirected to one of its
+       partitions based on the <structfield>peaktemp</structfield> column.  The partition
+       key specified may overlap with the parent's partition key, although
+       care should be taken when specifying the bounds of a sub-partition
+       such that the set of data it accepts constitutes a subset of what
+       the partition's own bounds allows; the system does not try to check
+       whether that's really the case.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Create an index on the key column(s), as well as any other indexes you
+       might want for every partition.  (The key index is not strictly
+       necessary, but in most scenarios it is helpful.  If you intend the key
+       values to be unique then you should always create a unique or
+       primary-key constraint for each partition.)
+     </para>
+
+<programlisting>CREATE INDEX ON measurement_y2006m02 (logdate);
+CREATE INDEX ON measurement_y2006m03 (logdate);
+...
+CREATE INDEX ON measurement_y2007m11 (logdate);
+CREATE INDEX ON measurement_y2007m12 (logdate);
+CREATE INDEX ON measurement_y2008m01 (logdate);</programlisting>
+       <para>
+        Ensure that the <xref linkend="guc-constraint-exclusion"/>
+        configuration parameter is not disabled in <filename>postgresql.conf</filename>.
+        If it is, queries will not be optimized as desired.
+        </para>
+       </listitem>
+    </orderedlist>
+   </para>
+
+   <para>
+    In the above example we would be creating a new partition each month, so
+    it might be wise to write a script that generates the required DDL
+    automatically.
+   </para>
+   </sect3>
+
+   <sect3 id="ddl-partitioning-declarative-maintenance">
+    <title>Partition Maintenance</title>
+
+    <para>
+      Normally the set of partitions established when initially defining the
+      the table are not intended to remain static.  It is common to want to
+      remove old partitions of data and periodically add new partitions for
+      new data. One of the most important advantages of partitioning is
+      precisely that it allows this otherwise painful task to be executed
+      nearly instantaneously by manipulating the partition structure, rather
+      than physically moving large amounts of data around.
+    </para>
+
+    <para>
+     The simplest option for removing old data is to drop the partition that
+     is no longer necessary:
+<programlisting>
+DROP TABLE measurement_y2006m02;
+</programlisting>
+     This can very quickly delete millions of records because it doesn't have
+     to individually delete every record.  Note however that the above command
+     requires taking an <literal>ACCESS EXCLUSIVE</literal> lock on the parent
+     table.
+    </para>
+
+   <para>
+     Another option that is often preferable is to remove the partition from
+     the partitioned table but retain access to it as a table in its own
+     right:
+
+<programlisting>
+ALTER TABLE measurement DETACH PARTITION measurement_y2006m02;
+</programlisting>
+
+     This allows further operations to be performed on the data before
+     it is dropped. For example, this is often a useful time to back up
+     the data using <command>COPY</command>, <application>pg_dump</application>, or
+     similar tools. It might also be a useful time to aggregate data
+     into smaller formats, perform other data manipulations, or run
+     reports.
+   </para>
+
+   <para>
+     Similarly we can add a new partition to handle new data. We can create an
+     empty partition in the partitioned table just as the original partitions
+     were created above:
+
+<programlisting>
+CREATE TABLE measurement_y2008m02 PARTITION OF measurement
+    FOR VALUES FROM ('2008-02-01') TO ('2008-03-01')
+    TABLESPACE fasttablespace;
+</programlisting>
+
+     As an alternative, it is sometimes more convenient to create the
+     new table outside the partition structure, and make it a proper
+     partition later. This allows the data to be loaded, checked, and
+     transformed prior to it appearing in the partitioned table:
+
+<programlisting>
+CREATE TABLE measurement_y2008m02
+  (LIKE measurement INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
+  TABLESPACE fasttablespace;
+
+ALTER TABLE measurement_y2008m02 ADD CONSTRAINT y2008m02
+   CHECK ( logdate &gt;= DATE '2008-02-01' AND logdate &lt; DATE '2008-03-01' );
+
+\copy measurement_y2008m02 from 'measurement_y2008m02'
+-- possibly some other data preparation work
+
+ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
+    FOR VALUES FROM ('2008-02-01') TO ('2008-03-01' );
+</programlisting>
+    </para>
+
+    <para>
+     Before running the <command>ATTACH PARTITION</command> command, it is
+     recommended to create a <literal>CHECK</literal> constraint on the table to
+     be attached describing the desired partition constraint.  That way,
+     the system will be able to skip the scan to validate the implicit
+     partition constraint. Without such a constraint, the table will be
+     scanned to validate the partition constraint while holding an
+     <literal>ACCESS EXCLUSIVE</literal> lock on the parent table.
+     One may then drop the constraint after <command>ATTACH PARTITION</command>
+     is finished, because it is no longer necessary.
+    </para>
+   </sect3>
+
+   <sect3 id="ddl-partitioning-declarative-limitations">
+    <title>Limitations</title>
+
+   <para>
+    The following limitations apply to partitioned tables:
+    <itemizedlist>
+     <listitem>
+      <para>
+       There is no facility available to create the matching indexes on all
+       partitions automatically.  Indexes must be added to each partition with
+       separate commands.  This also means that there is no way to create a
+       primary key, unique constraint, or exclusion constraint spanning all
+       partitions; it is only possible to constrain each leaf partition
+       individually.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Since primary keys are not supported on partitioned tables, foreign
+       keys referencing partitioned tables are not supported, nor are foreign
+       key references from a partitioned table to some other table.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Using the <literal>ON CONFLICT</literal> clause with partitioned tables
+       will cause an error, because unique or exclusion constraints can only be
+       created on individual partitions.  There is no support for enforcing
+       uniqueness (or an exclusion constraint) across an entire partitioning
+       hierarchy.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       An <command>UPDATE</command> that causes a row to move from one partition to
+       another fails, because the new value of the row fails to satisfy the
+       implicit partition constraint of the original partition.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Row triggers, if necessary, must be defined on individual partitions,
+       not the partitioned table.
+      </para>
+     </listitem>
+    </itemizedlist>
+    </para>
+    </sect3>
+   </sect2>
+
+   <sect2 id="ddl-partitioning-implementation-inheritance">
+    <title>Implementation Using Inheritance</title>
+    <para>
+     While the built-in declarative partitioning is suitable for most
+     common use cases, there are some circumstances where a more flexible
+     approach may be useful.  Partitioning can be implemented using table
+     inheritance, which allows for several features which are not supported
+     by declarative partitioning, such as:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+        Partitioning enforces a rule that all partitions must have exactly
+        the same set of columns as the parent, but table inheritance allows
+        children to have extra columns not present in the parent.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Table inheritance allows for multiple inheritance.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Declarative partitioning only supports list and range partitioning,
+        whereas table inheritance allows data to be divided in a manner of
+        the user's choosing.  (Note, however, that if constraint exclusion is
+        unable to prune partitions effectively, query performance will be very
+        poor.)
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Some operations require a stronger lock when using declarative
+        partitioning than when using table inheritance.  For example, adding
+        or removing a partition to or from a partitioned table requires taking
+        an <literal>ACCESS EXCLUSIVE</literal> lock on the parent table,
+        whereas a <literal>SHARE UPDATE EXCLUSIVE</literal> lock is enough
+        in the case of regular inheritance.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+
+    <sect3 id="ddl-partitioning-inheritance-example">
+     <title>Example</title>
+
+     <para>
+      We use the same <structname>measurement</structname> table we used
+      above.  To implement it as a partitioned table using inheritance, use
+      the following steps:
+
+      <orderedlist spacing="compact">
+       <listitem>
+        <para>
+         Create the <quote>master</quote> table, from which all of the
+         partitions will inherit.  This table will contain no data.  Do not
+         define any check constraints on this table, unless you intend them
+         to be applied equally to all partitions.  There is no point in
+         defining any indexes or unique constraints on it, either.  For our
+         example, master table is the <structname>measurement</structname>
+         table as originally defined.
+        </para>
+       </listitem>
+
+       <listitem>
+        <para>
+         Create several <quote>child</quote> tables that each inherit from
+         the master table.  Normally, these tables will not add any columns
+         to the set inherited from the master.  Just as with declarative
+         partitioning, these partitions are in every way normal
+         <productname>PostgreSQL</productname> tables (or foreign tables).
+        </para>
+
+        <para>
+<programlisting>
+CREATE TABLE measurement_y2006m02 () INHERITS (measurement);
+CREATE TABLE measurement_y2006m03 () INHERITS (measurement);
+...
+CREATE TABLE measurement_y2007m11 () INHERITS (measurement);
+CREATE TABLE measurement_y2007m12 () INHERITS (measurement);
+CREATE TABLE measurement_y2008m01 () INHERITS (measurement);
+</programlisting>
+        </para>
+       </listitem>
+
+       <listitem>
+        <para>
+         Add non-overlapping table constraints to the partition tables to
+         define the allowed key values in each partition.
+        </para>
+
+        <para>
+         Typical examples would be:
+<programlisting>
+CHECK ( x = 1 )
+CHECK ( county IN ( 'Oxfordshire', 'Buckinghamshire', 'Warwickshire' ))
+CHECK ( outletID &gt;= 100 AND outletID &lt; 200 )
+</programlisting>
+         Ensure that the constraints guarantee that there is no overlap
+         between the key values permitted in different partitions.  A common
+         mistake is to set up range constraints like:
+<programlisting>
+CHECK ( outletID BETWEEN 100 AND 200 )
+CHECK ( outletID BETWEEN 200 AND 300 )
+</programlisting>
+         This is wrong since it is not clear which partition the key value
+         200 belongs in.
+        </para>
+
+        <para>
+         It would be better to instead create partitions as follows:
+
+<programlisting>
+CREATE TABLE measurement_y2006m02 (
+    CHECK ( logdate &gt;= DATE '2006-02-01' AND logdate &lt; DATE '2006-03-01' )
+) INHERITS (measurement);
+
+CREATE TABLE measurement_y2006m03 (
+    CHECK ( logdate &gt;= DATE '2006-03-01' AND logdate &lt; DATE '2006-04-01' )
+) INHERITS (measurement);
+
+...
+CREATE TABLE measurement_y2007m11 (
+    CHECK ( logdate &gt;= DATE '2007-11-01' AND logdate &lt; DATE '2007-12-01' )
+) INHERITS (measurement);
+
+CREATE TABLE measurement_y2007m12 (
+    CHECK ( logdate &gt;= DATE '2007-12-01' AND logdate &lt; DATE '2008-01-01' )
+) INHERITS (measurement);
+
+CREATE TABLE measurement_y2008m01 (
+    CHECK ( logdate &gt;= DATE '2008-01-01' AND logdate &lt; DATE '2008-02-01' )
+) INHERITS (measurement);
+</programlisting>
+        </para>
+       </listitem>
+
+       <listitem>
+        <para>
+         For each partition, create an index on the key column(s),
+         as well as any other indexes you might want.
+<programlisting>
+CREATE INDEX measurement_y2006m02_logdate ON measurement_y2006m02 (logdate);
+CREATE INDEX measurement_y2006m03_logdate ON measurement_y2006m03 (logdate);
+CREATE INDEX measurement_y2007m11_logdate ON measurement_y2007m11 (logdate);
+CREATE INDEX measurement_y2007m12_logdate ON measurement_y2007m12 (logdate);
+CREATE INDEX measurement_y2008m01_logdate ON measurement_y2008m01 (logdate);
+</programlisting>
+        </para>
+       </listitem>
+
+       <listitem>
+        <para>
+         We want our application to be able to say <literal>INSERT INTO
+         measurement ...</literal> and have the data be redirected into the
+         appropriate partition table.  We can arrange that by attaching
+         a suitable trigger function to the master table.
+         If data will be added only to the latest partition, we can
+         use a very simple trigger function:
+
+<programlisting>
+CREATE OR REPLACE FUNCTION measurement_insert_trigger()
 RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO mesure_a2008m01 VALUES (NEW.*);
+    INSERT INTO measurement_y2008m01 VALUES (NEW.*);
     RETURN NULL;
 END;
 $$
 LANGUAGE plpgsql;
-     </programlisting>
+</programlisting>
+        </para>
 
-     Le déclencheur qui appelle la fonction est créé à sa suite&nbsp;:
+        <para>
+         After creating the function, we create a trigger which
+         calls the trigger function:
 
      <programlisting>
 CREATE TRIGGER insert_mesure_trigger
@@ -3120,60 +3544,85 @@ LANGUAGE plpgsql;
       sont présentés dans le même ordre que les autres parties de l'exemple.
      </para>
     </note>
-   </listitem>
-  </orderedlist>
- </para>
 
- <para>
-  Un schéma complexe de partitionnement peut amener à écrire une grande
-  quantité de DDL. Dans l'exemple ci-dessus, une
-  nouvelle partition est écrite chaque mois. Il est donc conseillé d'écrire un script qui
-  engendre automatiquement la DDL requise.
- </para>
+    <para>
+         A different approach to redirecting inserts into the appropriate
+         partition table is to set up rules, instead of a trigger, on the
+         master table.  For example:
 
-</sect2>
+<programlisting>
+CREATE RULE measurement_insert_y2006m02 AS
+ON INSERT TO measurement WHERE
+    ( logdate &gt;= DATE '2006-02-01' AND logdate &lt; DATE '2006-03-01' )
+DO INSTEAD
+    INSERT INTO measurement_y2006m02 VALUES (NEW.*);
+...
+CREATE RULE measurement_insert_y2008m01 AS
+ON INSERT TO measurement WHERE
+    ( logdate &gt;= DATE '2008-01-01' AND logdate &lt; DATE '2008-02-01' )
+DO INSTEAD
+    INSERT INTO measurement_y2008m01 VALUES (NEW.*);
+</programlisting>
 
-<sect2 id="ddl-partitioning-managing-partitions">
- <title>Gérer les partitions</title>
+         A rule has significantly more overhead than a trigger, but the
+         overhead is paid once per query rather than once per row, so this
+         method might be advantageous for bulk-insert situations.  In most
+         cases, however, the trigger method will offer better performance.
+    </para>
 
- <para>
-  Généralement, l'ensemble des partitions établies lors de la définition
-  initiale de la table n'a pas pour but de rester statique. Il n'est pas
-  inhabituel de supprimer d'anciennes partitions de données et
-  d'en ajouter périodiquement de nouvelles pour de nouvelles données.
-  Un des principaux avantages du partitionnement est précisément qu'il
-  autorise une exécution quasi-instantanée de cette tâche, bien
-  plus difficile autrement, en permettant la manipulation de la structure de la
-  partition, plutôt que de déplacer physiquement de grands volumes de données.
- </para>
+        <para>
+         Be aware that <command>COPY</command> ignores rules.  If you want to
+         use <command>COPY</command> to insert data, you'll need to copy into the
+         correct partition table rather than into the master. <command>COPY</command>
+         does fire triggers, so you can use it normally if you use the trigger
+         approach.
+        </para>
 
- <para>
-  L'option la plus simple pour supprimer d'anciennes données consiste à
-  supprimer la partition qui n'est plus nécessaire&nbsp;:
+        <para>
+         Another disadvantage of the rule approach is that there is no simple
+         way to force an error if the set of rules doesn't cover the insertion
+         date; the data will silently go into the master table instead.
+        </para>
+       </listitem>
+
+       <listitem>
+        <para>
+         Ensure that the <xref linkend="guc-constraint-exclusion"/>
+         configuration parameter is not disabled in
+         <filename>postgresql.conf</filename>.
+         If it is, queries will not be optimized as desired.
+        </para>
+       </listitem>
+      </orderedlist>
+     </para>
+
+     <para>
+      As we can see, a complex partitioning scheme could require a
+      substantial amount of DDL.  In the above example we would be creating
+      a new partition each month, so it might be wise to write a script that
+      generates the required DDL automatically.
+     </para>
+    </sect3>
+
+    <sect3 id="ddl-partitioning-inheritance-maintenance">
+     <title>Partition Maintenance</title>
+     <para>
+      To remove old data quickly, simply drop the partition that is no longer
+      necessary:
   <programlisting>DROP TABLE mesure_a2006m02;
   </programlisting>
-  Cela permet de supprimer très rapidement des millions d'enregistrements
-  car il n'est nul besoin de supprimer séparément chaque enregistrement.
- </para>
+     </para>
 
- <para>
-  Une autre option, souvent préférable, consiste à supprimer la partition de la
-  table partitionnée mais de conserver l'accès à la table en tant que telle&nbsp;:
+    <para>
+     To remove the partition from the partitioned table but retain access to
+     it as a table in its own right:
   <programlisting>ALTER TABLE mesure_a2006m02 NO INHERIT mesure;
   </programlisting>
-  Ceci permet la réalisation d'opérations ultérieures sur les données
-  avant qu'elles ne soient supprimées. Par exemple, c'est souvent le bon moment
-  pour sauvegarder les données en utilisant <command>COPY</command>,
-  <application>pg_dump</application> ou tout autres outil. C'est aussi le
-  moment d'agréger des données en des formats plus denses, de réaliser d'autres
-  opérations sur les données ou de créer des rapports.
  </para>
 
- <para>
-  De façon similaire, une nouvelle partition peut être ajoutée pour
-  gérer les nouvelles données. Une partition vide peut être créée dans la
-  table partitionnée de la même façon que les partitions individuelles
-  créées plus haut&nbsp;:
+    <para>
+     To add a new partition to handle new data, create an empty partition
+     just as the original partitions were created above:
 
   <programlisting>
 CREATE TABLE mesure_a2008m02 (
@@ -3181,11 +3630,9 @@ CREATE TABLE mesure_a2008m02 (
     ) INHERITS (mesure);
   </programlisting>
 
-  Alternativement, il est parfois plus intéressant de créer la
-  nouvelle table en dehors de la structure de partitionnement et de
-  la transformer en une partition adéquate plus tard. Cela permet de
-  charger les données, les vérifier et les transformer avant leur apparition
-  dans la table partitionnée&nbsp;:
+     Alternatively, one may want to create the new table outside the partition
+     structure, and make it a partition after the data is loaded, checked,
+     and transformed.
 
   <programlisting>
 CREATE TABLE mesure_a2008m02
@@ -3198,10 +3645,73 @@ ALTER TABLE mesure_a2008m02 INHERIT mesure;
   </programlisting>
 
  </para>
-</sect2>
+   </sect3>
 
-<sect2 id="ddl-partitioning-constraint-exclusion">
- <title>Partitionnement et exclusion de contrainte</title>
+   <sect3 id="ddl-partitioning-inheritance-caveats">
+    <title>Caveats</title>
+    <para>
+     The following caveats apply to partitioned tables implemented using
+     inheritance:
+     <itemizedlist>
+      <listitem>
+       <para>
+        There is no automatic way to verify that all of the
+        <literal>CHECK</literal> constraints are mutually
+        exclusive.  It is safer to create code that generates
+        partitions and creates and/or modifies associated objects than
+        to write each by hand.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        The schemes shown here assume that the partition key column(s)
+        of a row never change, or at least do not change enough to require
+        it to move to another partition.  An <command>UPDATE</command> that attempts
+        to do that will fail because of the <literal>CHECK</literal> constraints.
+        If you need to handle such cases, you can put suitable update triggers
+        on the partition tables, but it makes management of the structure
+        much more complicated.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        If you are using manual <command>VACUUM</command> or
+        <command>ANALYZE</command> commands, don't forget that
+        you need to run them on each partition individually. A command like:
+<programlisting>
+ANALYZE measurement;
+</programlisting>
+        will only process the master table.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        <command>INSERT</command> statements with <literal>ON CONFLICT</literal>
+        clauses are unlikely to work as expected, as the <literal>ON CONFLICT</literal>
+        action is only taken in case of unique violations on the specified
+        target relation, not its child relations.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Triggers or rules will be needed to route rows to the desired
+        partition, unless the application is explicitly aware of the
+        partitioning scheme.  Triggers may be complicated to write, and will
+        be much slower than the tuple routing performed internally by
+        declarative partitioning.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+   </sect3>
+  </sect2>
+
+  <sect2 id="ddl-partitioning-constraint-exclusion">
+    <title>Partitioning and Constraint Exclusion</title>
 
  <indexterm>
   <primary>exclusion de contrainte</primary>
@@ -3210,7 +3720,8 @@ ALTER TABLE mesure_a2008m02 INHERIT mesure;
  <para>
   L'<firstterm>exclusion de contrainte</firstterm> est une technique d'optimisation des
   requêtes pour améliorer les performances sur les tables partitionnées
-  telles que décrites plus haut. Par exemple&nbsp;:
+  telles que décrites plus haut (both declaratively partitioned tables and those
+    implemented using inheritance). Par exemple&nbsp;:
 
   <programlisting>SET constraint_exclusion = on;
 SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';</programlisting>
@@ -3289,131 +3800,10 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
     examine les contraintes <literal>CHECK</literal> dans chaque requête, y
     compris les requêtes simples qui ont peu de chance d'en profiter.
    </para>
-   </sect2>
-
-   <sect2 id="ddl-partitioning-alternatives">
-   <title>Autre méthode de partitionnement</title>
-
-    <para>
-     Une approche différente pour la redirection des insertions dans la
-     table fille appropriée est de configurer des règles, à la place d'un
-     déclencheur, sur la table maître. Par exemple&nbsp;:
-
-<programlisting>
-CREATE RULE mesure_insert_a2006m02 AS
-ON INSERT TO mesure WHERE
-    ( date_trace &gt;= DATE '2006-02-01' AND date_trace &lt; DATE '2006-03-01' )
-DO INSTEAD
-    INSERT INTO mesure_a2006m02 VALUES (NEW.*);
-...
-CREATE RULE mesure_insert_a2008m01 AS
-ON INSERT TO mesure WHERE
-    ( date_trace &gt;= DATE '2008-01-01' AND date_trace &lt; DATE '2008-02-01' )
-DO INSTEAD
-    INSERT INTO mesure_a2008m01 VALUES (NEW.*);
-  </programlisting>
-
-  Une règle est plus coûteuse qu'un déclencheur mais ce coût est payé une fois
-  par requête au lieu d'une fois par ligne, cette méthode peut donc s'avérer
-  avantageuse lors de grosses insertions. Néanmoins, dans la majorité des
-  cas, la méthode du trigger offre de meilleures performances.
- </para>
 
  <para>
-  La commande <command>COPY</command> ignore les règles. Si
-  <command>COPY</command> est utilisé pour insérer des données,
-  la copie doit être effectuée sur la partition adéquate plutôt que dans
-  la table maître. <command>COPY</command> active les déclencheurs. Elle
-  peut donc être utilisée normalement lorsque cette approche est choisie.
- </para>
-
- <para>
-  Un autre inconvénient de la méthode des règles est qu'il n'existe pas
-  de moyens simples de forcer une erreur si l'ensemble des règles
-  ne couvre pas la date d'insertion. La donnée est alors silencieusement
-  insérée dans la table maître.
- </para>
-
- <para>
-  Le partitionnement peut aussi être arrangé à l'aide d'une vue
-  <literal>UNION ALL</literal>, en lieu et place de l'héritage.  Par
-  exemple&nbsp;:
-
-  <programlisting>
-CREATE VIEW mesure AS
-          SELECT * FROM mesure_a2006m02
-UNION ALL SELECT * FROM mesure_a2006m03
-...
-UNION ALL SELECT * FROM mesure_a2007m11
-UNION ALL SELECT * FROM mesure_a2007m12
-UNION ALL SELECT * FROM mesure_a2008m01;
-  </programlisting>
-
-  Néanmoins, le besoin de recréer la vue ajoute une étape
-  supplémentaire à l'ajout et à la suppression de partitions individuelles
-  de l'ensemble des données. En pratique, cette méthode a peu d'intérêt
-  au regard de l'héritage.
- </para>
-
-</sect2>
-
-<sect2 id="ddl-partitioning-caveats">
- <title>Restrictions</title>
-
- <para>
-  Les restrictions suivantes s'appliquent aux tables partitionnées&nbsp;:
-  <itemizedlist>
-   <listitem>
-    <para>
-     il n'existe pas de moyen automatique de vérifier que toutes les
-     contraintes de vérification (<literal>CHECK</literal>) sont mutuellement
-     exclusives. Il est plus sûr de créer un code qui fabrique les
-     partitions et crée et/ou modifie les objets associés plutôt que de les
-     créer manuellement&nbsp;;
-    </para>
-   </listitem>
-
-   <listitem>
-    <para>
-     les schémas montrés ici supposent que les colonnes clés du
-     partitionnement d'une ligne ne changent jamais ou, tout du moins, ne
-     changent pas suffisamment pour nécessiter un déplacement vers une
-     autre partition. Une commande  <command>UPDATE</command> qui
-     tente de le faire échoue à cause des contraintes
-     <literal>CHECK</literal>. Pour gérer ce type de cas,
-     des déclencheurs peuvent être convenablement positionnés pour la mise à jour sur
-     les tables de partition mais cela rend la gestion de la structure
-     beaucoup plus complexe.
-    </para>
-   </listitem>
-
-   <listitem>
-    <para>
-     si <command>VACUUM</command> ou
-     <command>ANALYZE</command> sont lancés manuellement, il est obligatoire
-     de les utiliser sur chaque partition. Une commande comme&nbsp;:
-     <programlisting>
-ANALYZE mesure;
-     </programlisting>
-     ne traite que la table maître.
-    </para>
-   </listitem>
-
-   <listitem>
-    <para>
-     Les commandes <command>INSERT</command> avec des clauses
-     <literal>ON CONFLICT</literal> ont probablement peu de chances
-     de fonctionner comme attendu, dans la mesure où l'action du
-     <literal>ON CONFLICT</literal> est uniquement effectuée dans le
-     cas de violations qui sont uniques à la table cible, pas à ses
-     tables enfants.
-    </para>
-   </listitem>
-  </itemizedlist>
- </para>
-
- <para>
-  Les restrictions suivantes s'appliquent à l'exclusion de contraintes&nbsp;:
+  Les restrictions suivantes s'appliquent à l'exclusion de contraintes, which is used by
+    both inheritance and partitioned tables&nbsp;:
 
   <itemizedlist>
    <listitem>
@@ -3438,7 +3828,11 @@ ANALYZE mesure;
      précédents. Une bonne règle consiste à s'assurer que les comparaisons
      entre colonnes de partitionnement et constantes utilisées par les
      contraintes de partitionnement se fassent uniquement à l'aide d'opérateurs
-     utilisables par les index B-tree.
+     utilisables par les index B-tree, which applies even to partitioned
+      tables, because only B-tree-indexable column(s) are allowed in the
+      partition key.  (This is not a problem when using declarative
+      partitioning, since the automatically generated constraints are simple
+      enough to be understood by the planner.).
     </para>
    </listitem>
 

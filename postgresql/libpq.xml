@@ -431,6 +431,24 @@ PGconn *PQconnectdbParams(const char * const *keywords,
           </para>
          </listitem>
         </varlistentry>
+
+        <varlistentry id="libpq-connection-check-writable">
+         <term><symbol>CONNECTION_CHECK_WRITABLE</symbol></term>
+         <listitem>
+          <para>
+           Checking if connection is able to handle write transactions.
+          </para>
+         </listitem>
+        </varlistentry>
+
+        <varlistentry id="libpq-connection-consume">
+         <term><symbol>CONNECTION_CONSUME</symbol></term>
+         <listitem>
+          <para>
+           Consuming any remaining response messages on connection.
+          </para>
+         </listitem>
+        </varlistentry>
        </variablelist>
 
        <para>
@@ -792,7 +810,10 @@ typedef struct
     analysent une chaîne donnée par l'utilisateur pour obtenir les paramètres
     de connexion. Deux formats sont acceptés pour ces chaînes&nbsp;:
     le format régulier <literal>keyword = value</literal> et le format des
-    URI <ulink url="http://www.ietf.org/rfc/rfc3986.txt">RFC 3986</ulink>.
+    URI. URIs generally follow
+    <ulink url="http://www.ietf.org/rfc/rfc3986.txt">RFC
+    3986</ulink>, except that multi-host connection strings are allowed
+    as further described below.
    </para>
 
    <sect3>
@@ -827,7 +848,7 @@ typedef struct
     <para>
      La forme générale pour une <acronym>URI</acronym> de connexion est&nbsp;:
      <synopsis>
-      postgresql://[utilisateur[:mot_de_passe]@][alias_ou_ip][:port][/nom_base][?param1=valeur1&amp;...]
+      postgresql://[utilisateur[:mot_de_passe]@][alias_ou_ip][:port][,...][/nom_base][?param1=valeur1&amp;...]
      </synopsis>
     </para>
 
@@ -845,6 +866,7 @@ typedef struct
  postgresql://utilisateur@localhost
  postgresql://utilisateur:secret@localhost
  postgresql://autre@localhost/autre_base?connect_timeout=10&amp;application_name=mon_appli
+ postgresql://host1:123,host2:456/somedb?target_session_attrs=any&amp;application_name=myapp
      </programlisting>
      Les composants de la partie hiérarchique de l'<acronym>URI</acronym> peuvent
      aussi être donnés comme paramètres. Par exemple&nbsp;:
@@ -895,6 +917,15 @@ typedef struct
  postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
      </programlisting>
     </para>
+
+   <para>
+    It is possible to specify multiple host components, each with an optional
+    port component, in a single URI.  A URI of the form
+    <literal>postgresql://host1:port1,host2:port2,host3:port3/</literal>
+    is equivalent to a connection string of the form
+    <literal>host=host1,host2,host3 port=port1,port2,port3</literal>.  Each
+    host will be tried in turn until a connection is successfully established.
+   </para>
    </sect3>
   </sect2>
 
@@ -909,10 +940,12 @@ typedef struct
       <term><literal>host</literal></term>
       <listitem>
        <para>
-        Nom de l'hôte sur lequel se connecter.<indexterm><primary>host name</primary></indexterm>
-        S'il commence avec un slash, il spécifie une communication par domaine
+        Comma-separated list of host names.<indexterm><primary>host name</primary></indexterm>
+        Si a host name commence avec un slash, il spécifie une communication par domaine
         Unix plutôt qu'une communication TCP/IP&nbsp;; la valeur est le nom du
-        répertoire où le fichier socket est stocké. Par défaut, quand
+        répertoire où le fichier socket est stocké. If
+        multiple host names are specified, each will be tried in turn in
+        the order given.  Par défaut, quand
         <literal>host</literal> n'est pas spécifié, il s'agit d'une communication par
         socket de domaine Unix<indexterm><primary>socket de domaine Unix</primary></indexterm>
         dans <filename>/tmp</filename> (ou tout autre répertoire de socket spécifié
@@ -974,7 +1007,7 @@ typedef struct
         pour l'adresse réseau <literal>hostaddr</literal>.
         De même, <literal>host</literal> plutôt
         que <literal>hostaddr</literal> est utilisé pour identifier la connexion
-        dans <filename>~/.pgpass</filename> (voir la <xref
+        dans un fichier de mots de passe (voir la <xref
         linkend="libpq-pgpass"/>).
        </para>
        <para>
@@ -992,6 +1025,9 @@ typedef struct
        <para>
         Numéro de port pour la connexion au serveur ou extension du nom de
         fichier pour des connexions de domaine Unix.<indexterm><primary>port</primary></indexterm>
+        If the <literal>host</literal> parameter included multiple, comma-separated
+        hosts, this parameter may specify a list of ports of equal length,
+        or it may specify a single port number to be used for all hosts.
        </para>
       </listitem>
      </varlistentry>
@@ -1029,6 +1065,19 @@ typedef struct
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-connect-passfile" xreflabel="passfile">
+      <term><literal>passfile</literal></term>
+      <listitem>
+      <para>
+       Specifies the name of the file used to store passwords
+       (see <xref linkend="libpq-pgpass"/>).
+       Defaults to <filename>~/.pgpass</filename>, or
+       <filename>%APPDATA%\postgresql\pgpass.conf</filename> on Microsoft Windows.
+       (No error is reported if this file does not exist.)
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-connect-timeout" xreflabel="connect_timeout">
       <term><literal>connect_timeout</literal></term>
       <listitem>
@@ -1037,6 +1086,10 @@ typedef struct
         chaîne d'entier décimaux). Zéro ou non spécifié signifie une attente
         indéfinie. Utiliser un décompte de moins de deux secondes n'est pas
         recommandé.
+        This timeout applies separately to each connection attempt.
+        For example, if you specify two hosts and both of them are unreachable,
+        and <literal>connect_timeout</literal> is 5, the total time spent waiting for a
+        connection might be up to 10 seconds.
        </para>
       </listitem>
      </varlistentry>
@@ -1293,8 +1346,7 @@ typedef struct
       <listitem>
        <para>
         Si initialisé à 1 (la valeur par défaut), les données envoyées sur une
-        connexion SSL seront compressées (ceci nécessite
-        <productname>OpenSSL</productname> version 0.9.8 ou ultérieur).
+        connexion SSL seront compressées.
         Si initialisé à 0, la compression sera désactivée (ceci requiert
         <productname>OpenSSL</productname> 1.0.0 ou ultérieur).
         Ce paramètre est ignoré si un connexion est tentée sans SSL ou si
@@ -1431,6 +1483,23 @@ typedef struct
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="libpq-connect-target-session-attrs" xreflabel="target_session_attrs">
+      <term><literal>target_session_attrs</literal></term>
+      <listitem>
+       <para>
+        If this parameter is set to <literal>read-write</literal>, only a
+        connection in which read-write transactions are accepted by default
+        is considered acceptable.  The query
+        <literal>show transaction_read_only</literal> will be sent upon any
+        successful connection; if it returns <literal>on</literal>, the connection
+        will be closed.  If multiple hosts were specified in the connection
+        string, any remaining servers will be tried just as if the connection
+        attempt had failed.  The default value of this parameter,
+        <literal>any</literal>, regards all connections as acceptable.
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
 
    </para>
@@ -1462,7 +1531,13 @@ typedef struct
 
   <para>
    Les fonctions suivantes renvoient les valeurs des paramètres utilisés
-   pour la connexion. Ces valeurs sont fixes pour la durée de vie de l'objet
+   pour la connexion. Ces valeurs sont fixes pour la durée de vie de la connexion.
+   If a multi-host connection string is used, the values of
+   <function>PQhost</function>, <function>PQport</function>, and
+   <function>PQpass</function> can change if a new connection is established
+   using the same <structname>PGconn</structname> object.  Other values are
+   fixed for the lifetime of the <structname>PGconn</structname> object.
+
    <structname>PGconn</structname>.
 
    <variablelist>
@@ -5349,13 +5424,13 @@ PGContextVisibility PQsetErrorContextVisibility(PGconn *conn, PGContextVisibilit
    </listitem>
   </varlistentry>
 
-  <varlistentry id="libpq-pqencryptpassword">
-   <term><function>PQencryptPassword</function><indexterm><primary>PQencryptPassword</primary></indexterm></term>
+  <varlistentry id="libpq-pqencryptpasswordconn">
+   <term><function>PQencryptPasswordConn</function><indexterm><primary>PQencryptPasswordConn</primary></indexterm></term>
    <listitem>
     <para>
      Prépare la forme chiffrée du mot de passe <productname>PostgreSQL</productname>.
      <synopsis>
-      char * PQencryptPassword(const char *passwd, const char *user);
+      char *PQencryptPasswordConn(PGconn *conn, const char *passwd, const char *user, const char *algorithm);
      </synopsis>
      Cette fonction est utilisée par les applications clientes qui souhaitent envoyées
      des commandes comme <literal>ALTER USER joe PASSWORD 'passe'</literal>.
@@ -5369,6 +5444,59 @@ PGContextVisibility PQsetErrorContextVisibility(PGconn *conn, PGContextVisibilit
      L'appelant assume que la chaîne ne contient aucun caractère spécial qui
      nécessiterait un échappement. Utilisez <function>PQfreemem</function> pour libérer
      le résultat une fois terminé.
+     </para>
+
+     <para>
+      The <parameter>passwd</parameter> and <parameter>user</parameter> arguments
+      are the cleartext password, and the SQL name of the user it is for.
+      <parameter>algorithm</parameter> specifies the encryption algorithm
+      to use to encrypt the password. Currently supported algorithms are
+      <literal>md5</literal> and <literal>scram-sha-256</literal> (<literal>on</literal> and
+      <literal>off</literal> are also accepted as aliases for <literal>md5</literal>, for
+      compatibility with older server versions). Note that support for
+      <literal>scram-sha-256</literal> was introduced in <productname>PostgreSQL</productname>
+      version 10, and will not work correctly with older server versions. If
+      <parameter>algorithm</parameter> is <symbol>NULL</symbol>, this function will query
+      the server for the current value of the
+      <xref linkend="guc-password-encryption"/> setting. That can block, and
+      will fail if the current transaction is aborted, or if the connection
+      is busy executing another query. If you wish to use the default
+      algorithm for the server but want to avoid blocking, query
+      <varname>password_encryption</varname> yourself before calling
+      <function>PQencryptPasswordConn</function>, and pass that value as the
+      <parameter>algorithm</parameter>.
+     </para>
+
+     <para>
+      The return value is a string allocated by <function>malloc</function>.
+      The caller can assume the string doesn't contain any special characters
+      that would require escaping.  Use <function>PQfreemem</function> to free the
+      result when done with it. On error, returns <symbol>NULL</symbol>, and
+      a suitable message is stored in the connection object.
+     </para>
+
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="libpq-pqencryptpassword">
+    <term>
+     <function>PQencryptPassword</function>
+     <indexterm>
+      <primary>PQencryptPassword</primary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      Prepares the md5-encrypted form of a <productname>PostgreSQL</productname> password.
+ <synopsis>
+char *PQencryptPassword(const char *passwd, const char *user);
+ </synopsis>
+      <function>PQencryptPassword</function> is an older, deprecated version of 
+      <function>PQencryptPasswodConn</function>. The difference is that
+      <function>PQencryptPassword</function> does not 
+      require a connection object, and <literal>md5</literal> is always used as the
+      encryption algorithm.
     </para>
    </listitem>
   </varlistentry>
@@ -6403,7 +6531,7 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
      d'environnement n'est pas recommandée pour des raisons de sécurité (certains
      systèmes d'exploitation autorisent les utilisateurs autres que root à voir les
      variables d'environnement du processus via <application>ps</application>)&nbsp;; à la
-     place, considérez l'utilisation du fichier <filename>~/.pgpass</filename> (voir la <xref
+     place, considérez l'utilisation d'un fichier de mots de passe  (voir la <xref
      linkend="libpq-pgpass"/>).
     </para>
    </listitem>
@@ -6413,9 +6541,8 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
       <primary><envar>PGPASSFILE</envar></primary>
      </indexterm>
      <envar>PGPASSFILE</envar>
-     spécifie le nom du fichier de mot de passe à utiliser pour les recherches.
-     Sa valeur par défaut est <filename>~/.pgpass</filename> (voir la <xref
-     linkend="libpq-pgpass"/>).
+     behaves the same as the <xref
+      linkend="libpq-connect-passfile"/> connection parameter.
     </para>
    </listitem>
    <listitem>
@@ -6609,6 +6736,16 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
      linkend="libpq-connect-client-encoding"/>.
     </para>
    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGTARGETSESSIONATTRS</envar></primary>
+      </indexterm>
+      <envar>PGTARGETSESSIONATTRS</envar> behaves the same as the <xref
+      linkend="libpq-connect-target-session-attrs"/> connection parameter.
+     </para>
+    </listitem>
   </itemizedlist>
  </para>
 
@@ -6704,12 +6841,15 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
 
  <para>
   Le fichier <filename>.pgpass</filename>, situé dans le répertoire personnel de
-  l'utilisateur, ou le fichier référencé par <envar>PGPASSFILE</envar> est un
+  l'utilisateur est un
   fichier contenant les mots de passe à utiliser si la
   connexion requiert un mot de passe (et si aucun mot de passe n'a été spécifié).
   Sur Microsoft Windows, le fichier est nommé
   <filename>%APPDATA%\postgresql\pgpass.conf</filename> (où <filename>%APPDATA%</filename>
   fait référence au sous-répertoire Application Data du profile de l'utilisateur).
+  Alternatively, a password file can be specified
+  using the connection parameter <xref linkend="libpq-connect-passfile"/>
+  or the environment variable <envar>PGPASSFILE</envar>.
  </para>
 
  <para>
@@ -6736,7 +6876,7 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
   </para>
 
   <para>
-   Sur les systèmes Unix, les droits sur <filename>.pgpass</filename> doivent
+   Sur les systèmes Unix, les droits sur un fichier de mots de passe doivent
    interdire l'accès au groupe et au reste du monde&nbsp;; faites-le par cette
    commande&nbsp;: <command>chmod 0600 ~/.pgpass</command>. Si les droits sont
    moins stricts que cela, le fichier sera ignoré. Sur Microsoft Windows, il est

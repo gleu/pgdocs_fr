@@ -949,12 +949,11 @@ SELECT nom, enfant FROM noeuds, LATERAL listeenfant(nom) AS enfant;
      </para>
 
      <para>
-      Actuellement, les fonctions retournant des ensembles peuvent aussi être
+      Les fonctions retournant des ensembles peuvent aussi être
       appelées dans la clause select d'une requête. Pour chaque ligne que cette
       requête génère par elle-même, la fonction retournant un ensemble est
       appelée, et une ligne résultat est générée pour chaque élément de l'ensemble
-      retourné par la fonction. Cependant, il est à noter que cette fonctionnalité
-      est dépréciée et devrait être supprimée dans les prochaines versions.
+      retourné par la fonction.
       L'exemple précédent peut aussi être implémenté avec des requêtes telles
       que&nbsp;:
 
@@ -988,6 +987,65 @@ SELECT nom, listeenfant(nom) FROM noeuds;
       <literal>LATERAL</literal>.
      </para>
 
+    <para>
+     If there is more than one set-returning function in the query's select
+     list, the behavior is similar to what you get from putting the functions
+     into a single <literal>LATERAL ROWS FROM( ... )</literal> <literal>FROM</literal>-clause
+     item.  For each row from the underlying query, there is an output row
+     using the first result from each function, then an output row using the
+     second result, and so on.  If some of the set-returning functions
+     produce fewer outputs than others, null values are substituted for the
+     missing data, so that the total number of rows emitted for one
+     underlying row is the same as for the set-returning function that
+     produced the most outputs.  Thus the set-returning functions
+     run <quote>in lockstep</quote> until they are all exhausted, and then
+     execution continues with the next underlying row.
+    </para>
+
+    <para>
+     Set-returning functions can be nested in a select list, although that is
+     not allowed in <literal>FROM</literal>-clause items.  In such cases, each level
+     of nesting is treated separately, as though it were
+     a separate <literal>LATERAL ROWS FROM( ... )</literal> item.  For example, in
+<programlisting>
+SELECT srf1(srf2(x), srf3(y)), srf4(srf5(z)) FROM tab;
+</programlisting>
+     the set-returning functions <function>srf2</function>, <function>srf3</function>,
+     and <function>srf5</function> would be run in lockstep for each row
+     of <structname>tab</structname>, and then <function>srf1</function> and <function>srf4</function>
+     would be applied in lockstep to each row produced by the lower
+     functions.
+    </para>
+
+    <para>
+     This behavior also means that set-returning functions will be evaluated
+     even when it might appear that they should be skipped because of a
+     conditional-evaluation construct, such as <literal>CASE</literal>
+     or <literal>COALESCE</literal>.  For example, consider
+<programlisting>
+SELECT x, CASE WHEN x &gt; 0 THEN generate_series(1, 5) ELSE 0 END FROM tab;
+</programlisting>
+     It might seem that this should produce five repetitions of input
+     rows that have <literal>x &gt; 0</literal>, and a single repetition of those
+     that do not; but actually it will produce five repetitions of every
+     input row.  This is because <function>generate_series()</function> is run first,
+     and then the <literal>CASE</literal> expression is applied to its result rows.
+     The behavior is thus comparable to
+<programlisting>
+SELECT x, CASE WHEN x &gt; 0 THEN g ELSE 0 END
+  FROM tab, LATERAL generate_series(1,5) AS g;
+</programlisting>
+     It would be exactly the same, except that in this specific example,
+     the planner could choose to put <structname>g</structname> on the outside of the
+     nestloop join, since <structname>g</structname> has no actual lateral dependency
+     on <structname>tab</structname>.  That would result in a different output row
+     order.  Set-returning functions in the select list are always evaluated
+     as though they are on the inside of a nestloop join with the rest of
+     the <literal>FROM</literal> clause, so that the function(s) are run to
+     completion before the next row from the <literal>FROM</literal> clause is
+     considered.
+    </para>
+
      <note>
       <para>
        Si la dernière commande d'une fonction est <command>INSERT</command>,
@@ -1004,15 +1062,19 @@ SELECT nom, listeenfant(nom) FROM noeuds;
 
      <note>
       <para>
-       Le problème principal lors de l'utilisation d'une fonction renvoyant une
-       liste dans la clause <literal>SELECT</literal> plutôt que dans la clause
-       <literal>FROM</literal> est que l'ajout de plus d'une fonction retournant
-       un ensemble dans la même clause <literal>SELECT</literal> ne se comporte
-       pas correctement (ce que nous obtenons actuellement est une liste dont la
-       taille est le plus petit commun multiple du nombre de lignes produites par
-       chaque fonction renvoyant un ensemble). La syntaxe
-       <literal>LATERAL</literal> génère un résultat moins surprenant avec de
-       multiples fonctions renvoyant des ensembles, et devrait être préférée.
+      Before <productname>PostgreSQL</productname> 10, putting more than one
+      set-returning function in the same select list did not behave very
+      sensibly unless they always produced equal numbers of rows.  Otherwise,
+      what you got was a number of output rows equal to the least common
+      multiple of the numbers of rows produced by the set-returning
+      functions.  Also, nested set-returning functions did not work as
+      described above; instead, a set-returning function could have at most
+      one set-returning argument, and each nest of set-returning functions
+      was run independently.  The behavior for conditional execution
+      (set-returning functions inside <literal>CASE</literal> etc) was different too.
+      Use of the <literal>LATERAL</literal> syntax is recommended when writing
+      queries that need to work in older <productname>PostgreSQL</productname> versions,
+      because that will give consistent results across different versions.
       </para>
      </note>
     </sect2>
@@ -1575,16 +1637,10 @@ LANGUAGE internal    STRICT;
     </para>
 
     <para>
-     Deux différentes conventions d'appel sont actuellement en usage pour les
-     fonctions C. La plus récente, <quote>version 1</quote>,
-     est indiquée en écrivant une macro d'appel
-     <literal>PG_FUNCTION_INFO_V1()</literal> comme illustré ci-après. L'absence
-     d'une telle macro indique une fonction écrite selon l'ancien style
-     (<quote>version 0</quote>). Le nom de langage spécifié dans la commande
-     <command>CREATE FUNCTION</command> est <literal>C</literal> dans les deux
-     cas. Les fonctions suivant l'ancien style sont maintenant déconseillées en
-     raison de problèmes de portabilité et d'un manque de fonctionnalité mais
-     elles sont encore supportées pour des raisons de compatibilité.
+    Currently only one calling convention is used for C functions
+    (<quote>version 1</quote>). Support for that calling convention is
+    indicated by writing a <literal>PG_FUNCTION_INFO_V1()</literal> macro
+    call for the function, as illustrated below.
     </para>
 
     <sect2 id="xfunc-c-dynload">
@@ -2110,157 +2166,6 @@ memcpy(destination->data, buffer, 40);
  </para>
    </sect2>
 
-   <sect2>
-    <title>Conventions d'appel de la version 0</title>
-
-    <para>
-     Nous présentons l'<quote>ancien style</quote> de convention d'appel en
-     premier &mdash; bien que cette approche soit maintenant déconseillée, elle est
-     plus facile à maîtriser au début. Dans la méthode version-0, les arguments
-     et résultats de la fonction C sont simplement déclarés dans le style C
-     normal mais en faisant attention à utiliser la représentation C de chaque
-     type de données SQL comme montré ci-dessus.
-    </para>
-
-    <para>
-     Voici quelques exemples&nbsp;:
-
-<programlisting><![CDATA[#include "postgres.h"
-#include <string.h>
-#include "utils/geo_decls.h"
-
-#ifdef PG_MODULE_MAGIC
-PG_MODULE_MAGIC;
-#endif
-
-/* par valeur */
-
-int
-add_one(int arg)
-{
-    return arg + 1;
-}
-
-/* par référence, taille fixe */
-
-float8 *
-add_one_float8(float8 *arg)
-{
-    float8    *result = (float8 *) palloc(sizeof(float8));
-
-    *result = *arg + 1.0;
-
-    return result;
-}
-
-Point *
-makepoint(Point *pointx, Point *pointy)
-{
-    Point     *new_point = (Point *) palloc(sizeof(Point));
-
-    new_point->x = pointx->x;
-    new_point->y = pointy->y;
-
-    return new_point;
-}
-
-/* par référence, taille variable */
-
-text *
-copytext(text *t)
-{
-    /*
-     * VARSIZE est la taille totale de la structure en octets.
-     */
-    text *new_t = (text *) palloc(VARSIZE(t));
-    SET_VARSIZE(new_t, VARSIZE(t));
-    /*
-     * VARDATA est un pointeur sur la région de données de la structure.
-     */
-    memcpy((void *) VARDATA(new_t), /* destination */
-           (void *) VARDATA(t),     /* source */
-           VARSIZE(t) - VARHDRSZ);  /* nombre d'octets */
-    return new_t;
-}
-
-text *
-concat_text(text *arg1, text *arg2)
-{
-    int32 new_text_size = VARSIZE(arg1) + VARSIZE(arg2) - VARHDRSZ;
-    text *new_text = (text *) palloc(new_text_size);
-
-    SET_VARSIZE(new_text, new_text_size);
-    memcpy(VARDATA(new_text), VARDATA(arg1), VARSIZE(arg1) - VARHDRSZ);
-    memcpy(VARDATA(new_text) + (VARSIZE(arg1) - VARHDRSZ),
-           VARDATA(arg2), VARSIZE(arg2) - VARHDRSZ);
-    return new_text;
-}
-]]></programlisting>
-    </para>
-
-    <para>
-     En supposant que le code ci-dessus ait été écrit dans le fichier
-     <filename>funcs.c</filename> et compilé en objet partagé, nous pourrions
-     définir les fonctions pour <productname>PostgreSQL</productname> avec des
-     commandes comme ceci&nbsp;:
-
-<programlisting>CREATE FUNCTION add_one(integer) RETURNS integer
-     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'add_one'
-     LANGUAGE C STRICT;
-
--- notez la surcharge du nom de la fonction SQL "add_one"
-CREATE FUNCTION add_one(double precision) RETURNS double precision
-     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'add_one_float8'
-     LANGUAGE C STRICT;
-
-CREATE FUNCTION makepoint(point, point) RETURNS point
-     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'makepoint'
-     LANGUAGE C STRICT;
-
-CREATE FUNCTION copytext(text) RETURNS text
-     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'copytext'
-     LANGUAGE C STRICT;
-
-CREATE FUNCTION concat_text(text, text) RETURNS text
-     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'concat_text'
-     LANGUAGE C STRICT;
-      </programlisting>
-     </para>
-
-     <para>
-      Ici, <replaceable>DIRECTORY</replaceable> représente le répertoire
-      contenant le fichier de la bibliothèque partagée (par exemple le répertoire
-      du tutoriel de <productname>PostgreSQL</productname>, qui contient le code
-      des exemples utilisés dans cette section). (Un meilleur style aurait été
-      d'écrire seulement <literal>'funcs'</literal> dans la clause <literal>AS</literal>, après
-      avoir ajouté <replaceable>DIRECTORY</replaceable> au chemin de recherche.
-      Dans tous les cas, nous pouvons omettre l'extension spécifique au système
-      pour les bibliothèques partagées, communément <literal>.so</literal> ou
-      <literal>.sl</literal>.)
-     </para>
-
-     <para>
-      Remarquez que nous avons spécifié la fonction comme <quote>STRICT</quote>,
-      ce qui signifie que le système devra automatiquement supposer un résultat
-      NULL si n'importe quelle valeur d'entrée est NULL. Ainsi, nous évitons
-      d'avoir à vérifier l'existence d'entrées NULL dans le code de la fonction.
-      Sinon, nous aurions dû contrôler explicitement les valeurs NULL en testant
-      un pointeur NULL pour chaque argument passé par référence (pour les
-      arguments passés par valeur, nous n'aurions même aucun moyen de contrôle&nbsp;!).
-     </para>
-
-     <para>
-      Bien que cette convention d'appel soit simple à utiliser, elle n'est pas
-      très portable&nbsp;; sur certaines architectures,  il y a des problèmes
-      pour passer de cette manière des types de données plus petits
-      que <type>int</type>. De plus, il n'y a pas de moyen simple de renvoyer un
-      résultat NULL, ni de traiter des arguments NULL autrement qu'en rendant la
-      fonction strict. La convention version-1, présentée ci-après, permet de
-      surmonter ces objections.
-     </para>
-
-    </sect2>
-
     <sect2>
      <title>Conventions d'appel de la version 1</title>
 
@@ -2285,8 +2190,10 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
      <para>
       Dans une fonction version-1, chaque argument existant est traité par une
       macro <function>PG_GETARG_<replaceable>xxx</replaceable>()</function>
-      correspondant au type de donnée de l'argument et le résultat est renvoyé
-      par une macro
+      correspondant au type de donnée de l'argument. In non-strict
+     functions there needs to be a previous check about argument null-ness
+     using <function>PG_ARGNULL_<replaceable>xxx</replaceable>()</function>.
+      Le résultat est renvoyé par une macro
       <function>PG_RETURN_<replaceable>xxx</replaceable>()</function>
       correspondant au type renvoyé.
       <function>PG_GETARG_<replaceable>xxx</replaceable>()</function>
@@ -2297,7 +2204,8 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
      </para>
 
      <para>
-      Voici la même fonction que précédemment, codée en style version-1
+     Here are some examples using the version-1 calling convention:
+    </para>
 
       <programlisting><![CDATA[#include "postgres.h"
 #include <string.h>
@@ -2356,18 +2264,22 @@ PG_FUNCTION_INFO_V1(copytext);
 Datum
 copytext(PG_FUNCTION_ARGS)
 {
-    text     *t = PG_GETARG_TEXT_P(0);
+    text     *t = PG_GETARG_TEXT_PP(0);
     /*
-     * VARSIZE est la longueur totale de la structure en octets.
+     * VARSIZE_ANY_EXHDR is the size of the struct in bytes, minus the
+     * VARHDRSZ or VARHDRSZ_SHORT of its header.  Construct the copy with a
+     * full-length header.
      */
-    text     *new_t = (text *) palloc(VARSIZE(t));
-    SET_VARSIZE(new_t, VARSIZE(t));
+    text     *new_t = (text *) palloc(VARSIZE_ANY_EXHDR(t) + VARHDRSZ);
+    SET_VARSIZE(new_t, VARSIZE_ANY_EXHDR(t) + VARHDRSZ);
+
     /*
-     * VARDATA est un pointeur vers la région de données de la structure.
+     * VARDATA is a pointer to the data region of the new struct.  The source
+     * could be a short datum, so retrieve its data through VARDATA_ANY.
      */
     memcpy((void *) VARDATA(new_t), /* destination */
-           (void *) VARDATA(t),     /* source */
-           VARSIZE(t) - VARHDRSZ);    /* nombre d'octets */
+           (void *) VARDATA_ANY(t), /* source */
+           VARSIZE_ANY_EXHDR(t));   /* how many bytes */
     PG_RETURN_TEXT_P(new_t);
 }
 
@@ -2376,40 +2288,81 @@ PG_FUNCTION_INFO_V1(concat_text);
 Datum
 concat_text(PG_FUNCTION_ARGS)
 {
-    text  *arg1 = PG_GETARG_TEXT_P(0);
-    text  *arg2 = PG_GETARG_TEXT_P(1);
-    int32 new_text_size = VARSIZE(arg1) + VARSIZE(arg2) - VARHDRSZ;
+    text  *arg1 = PG_GETARG_TEXT_PP(0);
+    text  *arg2 = PG_GETARG_TEXT_PP(1);
+    int32 arg1_size = VARSIZE_ANY_EXHDR(arg1);
+    int32 arg2_size = VARSIZE_ANY_EXHDR(arg2);
+    int32 new_text_size = arg1_size + arg2_size + VARHDRSZ;
     text *new_text = (text *) palloc(new_text_size);
 
     SET_VARSIZE(new_text, new_text_size);
-    memcpy(VARDATA(new_text), VARDATA(arg1), VARSIZE(arg1) - VARHDRSZ);
-    memcpy(VARDATA(new_text) + (VARSIZE(arg1) - VARHDRSZ),
-           VARDATA(arg2), VARSIZE(arg2) - VARHDRSZ);
+    memcpy(VARDATA(new_text), VARDATA_ANY(arg1), arg1_size);
+    memcpy(VARDATA(new_text) + arg1_size, VARDATA_ANY(arg2), arg2_size);
     PG_RETURN_TEXT_P(new_text);
 }
 ]]></programlisting>
+
+    <para>
+     Supposing that the above code has been prepared in file
+     <filename>funcs.c</filename> and compiled into a shared object,
+     we could define the functions to <productname>PostgreSQL</productname>
+     with commands like this:
+    </para>
+
+<programlisting>
+CREATE FUNCTION add_one(integer) RETURNS integer
+     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'add_one'
+     LANGUAGE C STRICT;
+
+-- note overloading of SQL function name "add_one"
+CREATE FUNCTION add_one(double precision) RETURNS double precision
+     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'add_one_float8'
+     LANGUAGE C STRICT;
+
+CREATE FUNCTION makepoint(point, point) RETURNS point
+     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'makepoint'
+     LANGUAGE C STRICT;
+
+CREATE FUNCTION copytext(text) RETURNS text
+     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'copytext'
+     LANGUAGE C STRICT;
+
+CREATE FUNCTION concat_text(text, text) RETURNS text
+     AS '<replaceable>DIRECTORY</replaceable>/funcs', 'concat_text'
+     LANGUAGE C STRICT;
+</programlisting>
+
+    <para>
+     Here, <replaceable>DIRECTORY</replaceable> stands for the
+     directory of the shared library file (for instance the
+     <productname>PostgreSQL</productname> tutorial directory, which
+     contains the code for the examples used in this section).
+     (Better style would be to use just <literal>'funcs'</literal> in the
+     <literal>AS</literal> clause, after having added
+     <replaceable>DIRECTORY</replaceable> to the search path.  In any
+     case, we can omit the system-specific extension for a shared
+     library, commonly <literal>.so</literal>.)
     </para>
 
     <para>
-     Les commandes <command>CREATE FUNCTION</command> sont les mêmes que pour
-     leurs équivalents dans la version-0.
+     Notice that we have specified the functions as <quote>strict</quote>,
+     meaning that
+     the system should automatically assume a null result if any input
+     value is null.  By doing this, we avoid having to check for null inputs
+     in the function code.  Without this, we'd have to check for null values
+     explicitly, using PG_ARGISNULL().
     </para>
 
     <para>
-     Au premier coup d'&oelig;il, les conventions de codage de la version-1 peuvent
-     sembler inutilement obscures. Pourtant, elles offrent nombre
-     d'améliorations car les macros peuvent cacher les détails superflus. Un
-     exemple est donné par la fonction  <function>add_one_float8</function> où nous
-     n'avons plus besoin de prêter attention au fait que le type
-     <type>float8</type> est passé par référence. Un autre exemple de
-     simplification est donné par les macros pour les types à longueur variable
-     <literal>GETARG</literal> qui permettent un traitement plus efficace des valeurs
-     <quote>toasted</quote> (compressées ou hors-ligne).
+     At first glance, the version-1 coding conventions might appear to be just
+     pointless obscurantism, over using plain <literal>C</literal> calling
+     conventions.  They do however allow to deal with <literal>NULL</literal>able
+     arguments/return values, and <quote>toasted</quote> (compressed or
+      out-of-line) values.
     </para>
 
     <para>
-     Une des grandes améliorations dans les fonctions version-1 est le meilleur
-     traitement des entrées et des résultats NULL. La macro
+     La macro
      <function>PG_ARGISNULL(<replaceable>n</replaceable>)</function> permet à une fonction
      de tester si chaque entrée est NULL (évidemment, ceci n'est nécessaire que
      pour les fonctions déclarées non <quote>STRICT</quote>). Comme avec les macros
@@ -2424,7 +2377,7 @@ concat_text(PG_FUNCTION_ARGS)
     </para>
 
     <para>
-     Les autres options proposées dans l'interface de nouveau style sont deux
+     Les autres options proposées dans l'interface version 1 sont deux
      variantes des macros
      <function>PG_GETARG_<replaceable>xxx</replaceable>()</function>. La
      première d'entre elles,
@@ -2457,9 +2410,7 @@ concat_text(PG_FUNCTION_ARGS)
      de résultats d'ensemble (<xref linkend="xfunc-c-return-set"/>),
      l'implémentation de fonctions déclencheurs (<xref
      linkend="triggers"/>) et d'opérateurs d'appel de langage procédural (<xref
-     linkend="plhandler"/>). Le code version-1 est aussi plus portable que celui
-     de version-0 car il ne contrevient pas aux restrictions du protocole
-     d'appel de fonction en C standard. Pour plus de détails, voir
+     linkend="plhandler"/>). Pour plus de détails, voir
      <filename>src/backend/utils/fmgr/README</filename> dans les fichiers
      sources de la distribution.
     </para>
@@ -2594,33 +2545,10 @@ concat_text(PG_FUNCTION_ARGS)
     WHERE nom = 'Bill' OR nom = 'Sam';
       </programlisting>
 
-      En utilisant les conventions d'appel de la version 0, nous pouvons définir
+      En utilisant les conventions d'appel de la version 1, nous pouvons définir
       <function>c_surpaye</function> comme&nbsp;:
 
       <programlisting><![CDATA[#include "postgres.h"
-#include "executor/executor.h"  /* pour GetAttributeByName() */
-
-#ifdef PG_MODULE_MAGIC
-PG_MODULE_MAGIC;
-#endif
-
-bool
-c_surpaye(HeapTupleHeader *t, /* la ligne courante d'emp */
-           int32 limite)
-{
-    bool isNULL;
-    int32 salaire;
-
-    salaire = DatumGetInt32(GetAttributeByName(t, "salaire", &isNULL));
-    if (isNULL)
-        return false;
-    return salaire > limite;
-}
-]]></programlisting>
-
-     Dans le codage version-1, le code ci-dessus devient&nbsp;:
-
-<programlisting><![CDATA[#include "postgres.h"
 #include "executor/executor.h"  /* pour GetAttributeByName() */
 
 #ifdef PG_MODULE_MAGIC

@@ -456,9 +456,9 @@ WantedBy=multi-user.target
     </para>
 
     <para>
-<screen>LOG:  could not bind IPv4 socket: Address already in use
+<screen>LOG:  could not bind IPv4 address "127.0.0.1": Address already in use
 HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
-FATAL:  could not create TCP/IP listen socket</screen>
+FATAL:  could not create any TCP/IP sockets</screen>
      Ceci signifie seulement ce que cela suggère&nbsp;: vous avez essayé de lancer
      un autre serveur sur le même port où un autre est en
      cours d'exécution. Néanmoins, si le message d'erreur du noyau
@@ -467,9 +467,9 @@ FATAL:  could not create TCP/IP listen socket</screen>
      exemple, essayer de lancer un serveur sur un numéro
      de port réservé pourrait avoir ce résultat&nbsp;:
 <screen>$ <userinput>postgres -p 666</userinput>
-LOG:  could not bind IPv4 socket: Permission denied
+LOG:  could not bind IPv4 address "127.0.0.1": Permission denied
 HINT:  Is another postmaster already running on port 666? If not, wait a few seconds and retry.
-FATAL:  could not create TCP/IP listen socket</screen>
+FATAL:  could not create any TCP/IP sockets</screen>
     </para>
 
     <para>
@@ -586,25 +586,46 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
    </indexterm>
 
    <para>
-    La mémoire partagée et les sémaphores sont nommés collectivement
-    <quote><acronym>ipc</acronym> <systemitem class="osname">system
-    V</systemitem></quote> (ensemble avec les queues de messages, qui n'ont pas
-    d'importance pour <productname>PostgreSQL</productname>). Sauf sur
-    <systemitem class="osname">Windows</systemitem>, où
-    <productname>PostgreSQL</productname> fournit sa propre implémentation
-    de remplacement de ces possibilités, elles sont requises pour que
-    <productname>PostgreSQL</productname> puisse fonctionner.
+    <productname>PostgreSQL</productname> requires the operating system to provide
+    inter-process communication (<acronym>IPC</acronym>) features, specifically
+    shared memory and semaphores.  Unix-derived systems typically provide
+    <quote><systemitem class="osname">System V</systemitem></quote> <acronym>IPC</acronym>,
+    <quote><systemitem class="osname">POSIX</systemitem></quote> <acronym>IPC</acronym>, or both.
+    <systemitem class="osname">Windows</systemitem> has its own implementation of
+    these features and is not discussed here.
    </para>
 
    <para>
     Le manque complet de fonctionnalités est généralement manifesté par
-    une erreur <errorname>illegal system call</errorname> au lancement du serveur. Dans
+    une erreur <quote><errorname>illegal system call</errorname></quote> au
+    lancement du serveur. Dans
     ce cas, il n'y a rien à faire à part reconfigurer votre noyau.
     <productname>PostgreSQL</productname> ne fonctionnera pas sans. Néanmoins,
     cette situation est rare parmi les systèmes d'exploitation modernes.
    </para>
 
    <para>
+    Upon starting the server, <productname>PostgreSQL</productname> normally allocates
+    a very small amount of System V shared memory, as well as a much larger
+    amount of POSIX (<function>mmap</function>) shared memory.
+    In addition a significant number of semaphores, which can be either
+    System V or POSIX style, are created at server startup.  Currently,
+    POSIX semaphores are used on Linux and FreeBSD systems while other
+    platforms use System V semaphores.
+   </para>
+
+   <note>
+    <para>
+     Prior to <productname>PostgreSQL</productname> 9.3, only System V shared memory
+     was used, so the amount of System V shared memory required to start the
+     server was much larger.  If you are running an older version of the
+     server, please consult the documentation for your server version.
+    </para>
+   </note>
+
+   <para>
+    System V <acronym>IPC</acronym> features are typically constrained by
+    system-wide allocation limits.
     Quand <productname>PostgreSQL</productname> dépasse une des nombreuses limites
     <acronym>ipc</acronym>, le serveur refusera de s'exécuter et lèvera un
     message d'erreur instructif décrivant le problème rencontré et que faire
@@ -614,16 +635,6 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
     aperçu. Néanmoins, les méthodes pour les obtenir varient. Les suggestions
     pour quelques plateformes sont données ci-dessous.
    </para>
-
-   <note>
-     <para>
-       Avant <productname>PostgreSQL</productname>, la quantité de mémoire
-       partagée System V requise pour démarrer le serveur était bien plus
-       importante. Si vous utilisez une ancienne version du serveur, merci
-       de consulter la documentation correspondant à la version de votre
-       serveur.
-     </para>
-   </note>
 
    <table id="sysvipc-parameters">
     <title>Paramètres <systemitem class="osname">system v</systemitem> <acronym>ipc</acronym></title>
@@ -636,7 +647,7 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
       <row>
        <entry>Nom</entry>
        <entry>Description</entry>
-       <entry>Valeurs raisonnables</entry>
+       <entry>Values needed to run one <productname>PostgreSQL</productname> instance</entry>
       </row>
      </thead>
 
@@ -644,7 +655,7 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
       <row>
        <entry><varname>shmmax</varname></entry>
        <entry>taille maximum du segment de mémoire partagée (octets)</entry>
-       <entry>au moins 1 Ko (plus si vous exécutez plusieurs copies du serveur)
+       <entry>au moins 1 Ko, but the default is usually much higher
          </entry>
       </row>
 
@@ -657,8 +668,9 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
       <row>
        <entry><varname>shmall</varname></entry>
        <entry>total de la mémoire partagée disponible (octets ou pages)</entry>
-       <entry>si octets, identique à <varname>shmmax</varname>&nbsp;; si pages,
-        <literal>ceil(shmmax/page_size)</literal></entry>
+       <entry>same as <varname>SHMMAX</varname> if bytes,
+        or <literal>ceil(SHMMAX/PAGE_SIZE)</literal> if pages,
+        plus room for other applications</entry>
       </row>
 
       <row>
@@ -681,7 +693,7 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
         <entry><varname>semmni</varname></entry>
         <entry>nombre maximum d'identifiants de sémaphores (c'est-à-dire
          d'ensembles)</entry>
-        <entry>au moins <literal>ceil((max_connections + autovacuum_max_workers + 5) / 16)</literal></entry>
+        <entry>at least <literal>ceil((max_connections + autovacuum_max_workers + max_worker_processes + 5) / 16)</literal> plus room for other applications</entry>
        </row>
 
        <row>
@@ -722,8 +734,7 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
     cette quantité est facilement allouable. Néanmoins, si vous exécutez
     plusieurs copies du serveur ou si d'autres applications utilisent aussi de
     la mémoire partagée System V, il pourrait être nécessaire d'augmenter
-    <varname>SHMMAX</varname>, correspondant à la taille maximale d'un segment
-    de mémoire partagée, ou <varname>SHMALL</varname>, correspondant à la quantité
+    <varname>SHMALL</varname>, correspondant à la quantité
     totale de mémoire partagée System V pour tout le système. Notez que
     <varname>SHMALL</varname> est en nombre de blocs disques, et non pas en
     nombre d'octets sur de nombreux systèmes.
@@ -741,6 +752,7 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
    </para>
 
    <para>
+    When using System V semaphores,
     <productname>PostgreSQL</productname> utilise un sémaphore par connexion
     autorisée (<xref linkend="guc-max-connections"/>), par processus
     autovacuum autorisé (<xref linkend="guc-autovacuum-max-workers"/>) et par
@@ -777,14 +789,19 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
    </para>
 
    <para>
-    La paramètre <varname>semmsl</varname>, qui détermine le nombre de sémaphores dans
-    un ensemble, pourrait valoir au moins 17 pour <productname>PostgreSQL</productname>.
+    Various other settings related to <quote>semaphore undo</quote>, such as
+    <varname>SEMMNU</varname> and <varname>SEMUME</varname>, do not affect
+    <productname>PostgreSQL</productname>.
    </para>
 
    <para>
-    D'autres paramètres en relation avec l'<quote>annulation de sémaphores</quote>,
-    tels que <varname>semmnu</varname> et <varname>semume</varname>, n'affectent pas
-    <productname>PostgreSQL</productname>.
+    When using POSIX semaphores, the number of semaphores needed is the
+    same as for System V, that is one semaphore per allowed connection
+    (<xref linkend="guc-max-connections"/>), allowed autovacuum worker process
+    (<xref linkend="guc-autovacuum-max-workers"/>) and allowed background
+    process (<xref linkend="guc-max-worker-processes"/>).
+    On the platforms where this option is preferred, there is no specific
+    kernel limit on the number of POSIX semaphores.
    </para>
 
     <variablelist>
@@ -1002,11 +1019,11 @@ option        SEMMAP=256</programlisting>
 
 
 <varlistentry>
- <term><systemitem class="osname">OS X</systemitem></term>
+ <term><systemitem class="osname">macOS</systemitem></term>
  <listitem>
-  <indexterm><primary>OS X</primary><secondary>configuration ipc</secondary></indexterm>
+  <indexterm><primary>macOS</primary><secondary>configuration ipc</secondary></indexterm>
   <para>
-   La méthode recommandée pour configurer la mémoire partagée sous OS X
+   La méthode recommandée pour configurer la mémoire partagée sous macOS
    est de créer un fichier nommé <filename>/etc/sysctl.conf</filename>
    contenant des affectations de variables comme&nbsp;:
    <programlisting>kern.sysv.shmmax=4194304
@@ -1015,14 +1032,14 @@ kern.sysv.shmmni=32
 kern.sysv.shmseg=8
 kern.sysv.shmall=1024
    </programlisting>
-   Notez que, dans certaines versions d'OS X, <emphasis>les
+   Notez que, dans certaines versions de macOS, <emphasis>les
     cinq</emphasis> paramètres de mémoire partagée doivent être configurés
    dans <filename>/etc/sysctl.conf</filename>, sinon les valeurs seront
    ignorées.
   </para>
 
   <para>
-   Attention au fait que les versions récentes d'OS X ignorent les tentatives
+   Attention au fait que les versions récentes de macOS ignorent les tentatives
    de configuration de <varname>SHMMAX</varname> à une valeur qui n'est pas
    un multiple exact de 4096.
   </para>
@@ -1033,7 +1050,7 @@ kern.sysv.shmall=1024
   </para>
 
   <para>
-   Dans les anciennes versions d'OS X, vous aurez besoin de redémarrer
+   Dans les anciennes versions de macOS, vous aurez besoin de redémarrer
    pour que les modifications de la mémoire partagée soient prises en
    considération. À partir de la version 10.5, il est possible de tous
    les modifier en ligne sauf <varname>SHMMNI</varname>, grâce à
@@ -1045,7 +1062,7 @@ kern.sysv.shmall=1024
 
   <para>
    Le fichier <filename>/etc/sysctl.conf</filename> est seulement honoré
-   à partir de la version 1.0.3.9 de OS X. Si vous utilisez une version
+   à partir de la version 1.0.3.9 de macOS. Si vous utilisez une version
    antérieure, vous devez modifier le fichier <filename>/etc/rc</filename>
    et changer les valeurs dans les commandes suivantes&nbsp;:
    <programlisting>
@@ -1056,7 +1073,7 @@ sysctl -w kern.sysv.shmseg
 sysctl -w kern.sysv.shmall
    </programlisting>
    Notez que <filename>/etc/rc</filename> est habituellement écrasé lors
-   de mises à jour systèmes d'OS X, donc vous devez vous attendre à les
+   de mises à jour systèmes de macOS, donc vous devez vous attendre à les
    modifier manuellement après chaque mise à jour.
   </para>
 
@@ -1066,28 +1083,6 @@ sysctl -w kern.sysv.shmall
   </para>
  </listitem>
 </varlistentry>
-
-
-<varlistentry>
- <term><systemitem class="osname">sco openserver</systemitem></term>
- <listitem>
-  <indexterm><primary>sco openserver</primary><secondary>configuration ipc</secondary></indexterm>
-  <para>
-   Dans la configuration par défaut, seuls 512&nbsp;Ko de mémoire partagée
-   par segment est autorisé. Pour augmenter ce paramétrage, allez tout
-   d'abord dans le répertoire <filename>/etc/conf/cf.d</filename>. Pour afficher
-   la valeur courante de <varname>shmmax</varname>, lancez&nbsp;:
-   <programlisting>./configure -y SHMMAX</programlisting>
-        Pour configurer une nouvelle valeur de <varname>shmmax</varname>, lancez&nbsp;:
-<programlisting>./configure SHMMAX=<replaceable>valeur</replaceable></programlisting>
-        où <replaceable>value</replaceable> est la nouvelle valeur que vous voulez utiliser
-        (en octets). Après avoir configuré <varname>shmmax</varname>, reconstruisez le
-        noyau&nbsp;:
-<programlisting>./link_unix</programlisting>
-        et redémarrez.
-       </para>
-      </listitem>
-     </varlistentry>
 
 
      <varlistentry>
@@ -1173,30 +1168,87 @@ project.max-msg-ids=(priv,4096,deny)
 </varlistentry>
 
 
-<varlistentry>
- <term><systemitem class="osname">unixware</systemitem></term>
- <listitem>
-  <indexterm><primary>unixware</primary><secondary>configuration ipc</secondary></indexterm>
-  <para>
-   Avec <productname>unixware</productname> 7, la taille maximum des segments de
-   mémoire partagée est de 512&nbsp;Ko dans la configuration par défaut.
-   Pour afficher la valeur courante de <varname>shmmax</varname>, lancez&nbsp;:
-   <programlisting>/etc/conf/bin/idtune -g SHMMAX</programlisting>
-        qui affiche la valeur courante, par défaut, minimum et
-        maximum. Pour configurer une nouvelle valeur de <varname>shmmax</varname>,
-        lancez&nbsp;:
-<programlisting>/etc/conf/bin/idtune SHMMAX <replaceable>valeur</replaceable></programlisting>
-        où <replaceable>valeur</replaceable> est la nouvelle valeur que vous voulez
-        utiliser (en octets). Après avoir initialisé <varname>shmmax</varname>,
-        reconstruisez le noyau&nbsp;:
-<programlisting>/etc/conf/bin/idbuild -B</programlisting>
-        et relancez.
-       </para>
-      </listitem>
-     </varlistentry>
-
     </variablelist>
 
+  </sect2>
+
+  <sect2 id="systemd-removeipc">
+   <title>systemd RemoveIPC</title>
+
+   <indexterm>
+    <primary>systemd</primary>
+    <secondary>RemoveIPC</secondary>
+   </indexterm>
+
+   <para>
+    If <productname>systemd</productname> is in use, some care must be taken
+    that IPC resources (shared memory and semaphores) are not prematurely
+    removed by the operating system.  This is especially of concern when
+    installing PostgreSQL from source.  Users of distribution packages of
+    PostgreSQL are less likely to be affected, as
+    the <literal>postgres</literal> user is then normally created as a system
+    user.
+   </para>
+
+   <para>
+    The setting <literal>RemoveIPC</literal>
+    in <filename>logind.conf</filename> controls whether IPC objects are
+    removed when a user fully logs out.  System users are exempt.  This
+    setting defaults to on in stock <productname>systemd</productname>, but
+    some operating system distributions default it to off.
+   </para>
+
+   <para>
+    A typical observed effect when this setting is on is that the semaphore
+    objects used by a PostgreSQL server are removed at apparently random
+    times, leading to the server crashing with log messages like
+<screen>
+LOG: semctl(1234567890, 0, IPC_RMID, ...) failed: Invalid argument
+</screen>
+    Different types of IPC objects (shared memory vs. semaphores, System V
+    vs. POSIX) are treated slightly differently
+    by <productname>systemd</productname>, so one might observe that some IPC
+    resources are not removed in the same way as others.  But it is not
+    advisable to rely on these subtle differences.
+   </para>
+
+   <para>
+    A <quote>user logging out</quote> might happen as part of a maintenance
+    job or manually when an administrator logs in as
+    the <literal>postgres</literal> user or something similar, so it is hard
+    to prevent in general.
+   </para>
+
+   <para>
+    What is a <quote>system user</quote> is determined
+    at <productname>systemd</productname> compile time from
+    the <symbol>SYS_UID_MAX</symbol> setting
+    in <filename>/etc/login.defs</filename>.
+   </para>
+
+   <para>
+    Packaging and deployment scripts should be careful to create
+    the <literal>postgres</literal> user as a system user by
+    using <literal>useradd -r</literal>, <literal>adduser --system</literal>,
+    or equivalent.
+   </para>
+
+   <para>
+    Alternatively, if the user account was created incorrectly or cannot be
+    changed, it is recommended to set
+ <programlisting>
+RemoveIPC=no
+ </programlisting>
+    in <filename>/etc/systemd/logind.conf</filename> or another appropriate
+    configuration file.
+   </para>
+ 
+   <caution>
+    <para>
+     At least one of these two things has to be ensured, or the PostgreSQL
+     server will be very unreliable.
+    </para>
+   </caution>
   </sect2>
 
 
@@ -1625,20 +1677,26 @@ $ <userinput>grep Huge /proc/meminfo</userinput>
   </para>
 
   <para>
-   Les versions majeures de <productname>PostgreSQL</productname> sont
-   représentées par les deux premiers groupes de chiffres du numéro de
-   version, par exemple 8.4. Les versions mineures de
-   <productname>PostgreSQL</productname> sont représentées par le
-   troisième groupe de chiffres, par exemple 8.4.2 est la deuxième
-   version mineure de la 8.4. Les versions mineures ne modifient jamais
-   le format de stockage interne et sont donc compatibles avec les
-   versions antérieures et ultérieures de la même version majeure.
-   Par exemple, le format 8.4.2 est compatible avec le format des
-   versions 8.4, 8.4.1 et 8.4.6. Pour mettre à jour entre des versions
-   compatibles, vous devez simplement remplacer les binaires une fois le
-   serveur arrêté, puis redémarrer le serveur. Le répertoire des données
-   ne doit pas être modifié. Les mises à jour de versions mineures sont
-   aussi simples que ça.
+   Current <productname>PostgreSQL</productname> version numbers consist of a
+   major and a minor version number.  For example, in the version number 10.1,
+   the 10 is the major version number and the 1 is the minor version number,
+   meaning this would be the first minor release of the major release 10.  For
+   releases before <productname>PostgreSQL</productname> version 10.0, version
+   numbers consist of three numbers, for example, 9.5.3.  In those cases, the
+   major version consists of the first two digit groups of the version number,
+   e.g., 9.5, and the minor version is the third number, e.g., 3, meaning this
+   would be the third minor release of the major release 9.5.
+  </para>
+
+  <para>
+   Minor releases never change the internal storage format and are always
+   compatible with earlier and later minor releases of the same major version
+   number.  For example, version 10.1 is compatible with version 10.0 and
+   version 10.6.  Similarly, for example, 9.5.3 is compatible with 9.5.0,
+   9.5.1, and 9.5.6.  To update between compatible versions, you simply
+   replace the executables while the server is down and restart the server.
+   The data directory remains unchanged &mdash; minor upgrades are that
+   simple.
   </para>
 
   <para>
@@ -2239,6 +2297,10 @@ et <xref linkend="guc-ssl-key-file"/>.
   <para>
      Si la clé privée est protégée par une phrase de passe, le serveur la
 demandera et ne se lancera pas tant qu'elle n'aura pas été saisie.
+   Using a passphrase also disables the ability to change the server's SSL
+   configuration without a server restart.
+   Furthermore, passphrase-protected private keys cannot be used at all
+   on Windows.
 </para>
 
 <para>
@@ -2367,12 +2429,20 @@ localement peuvent être différents.)
 </table>
 
 <para>
-Les fichiers <filename>server.key</filename>,
-<filename>server.crt</filename>, <filename>root.crt</filename> et
-<filename>root.crl</filename> (or their configured alternative names)
-sont seulement examinés au démarrage du
-serveur&nbsp;; donc vous devez démarrer le serveur pour que les changements
-prennent effet.
+    The server reads these files at server start and whenever the server
+    configuration is reloaded.  On <systemitem class="osname">Windows</systemitem>
+    systems, they are also re-read whenever a new backend process is spawned
+    for a new client connection.
+   </para>
+
+   <para>
+    If an error in these files is detected at server start, the server will
+    refuse to start.  But if an error is detected during a configuration
+    reload, the files are ignored and the old SSL configuration continues to
+    be used.  On <systemitem class="osname">Windows</systemitem> systems, if an error in
+    these files is detected at backend start, that backend will be unable to
+    establish an SSL connection.  In all these cases, the error condition is
+    reported in the server log.
 </para>
 
 </sect2>
@@ -2381,31 +2451,15 @@ prennent effet.
 <title>Créer un certificat auto-signé</title>
 
 <para>
-Pour créer rapidement un certificat signé soi-même pour le serveur,
-utilisez la commande <productname>OpenSSL</productname> suivante&nbsp;:
-<programlisting>
-openssl req -new -text -out server.req
-</programlisting>
-Remplissez l'information que <application>openssl</application> demande.
-Assurez-vous de saisir le nom de l'hôte local dans <quote>Common
- Name</quote>&nbsp;; le mot de passe peut ne pas être saisi. Le programme
-générera une clé qui est protégée par une phrase de passe&nbsp;; il
-n'acceptera pas une phrase de passe qui fait moins de quatre caractères
-de long. Pour la supprimer (vous le devez si vous voulez un démarrage
-automatique du serveur), exécutez les commandes suivantes&nbsp;:
-<programlisting>
-openssl rsa -in privkey.pem -out server.key
-rm privkey.pem
-</programlisting>
-Saisissez l'ancienne phrase de passe pour déverrouiller la clé existante.
-Maintenant, lancez&nbsp;:
-<programlisting>
-openssl req -x509 -in server.req -text -key server.key -out server.crt
-</programlisting>
-pour transformer le certificat en un certificat auto-signé et pour copier
-la clé et le certificat là où le serveur les cherchera.
-Enfin, faites&nbsp;:
-<programlisting>
+     To create a quick self-signed certificate for the server, valid for 365
+     days, use the following <productname>OpenSSL</productname> command,
+     replacing <replaceable>yourdomain.com</replaceable> with the server's host name:
+ <programlisting>
+openssl req -new -x509 -days 365 -nodes -text -out server.crt \
+  -keyout server.key -subj "/CN=<replaceable>yourdomain.com</replaceable>"
+ </programlisting>
+    Then do:
+ <programlisting>
 chmod og-rwx server.key
 </programlisting>
 car le serveur rejetera le fichier si ses droits sont plus importants.

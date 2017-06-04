@@ -36,7 +36,7 @@
   <para>
    Un déclencheur spécifie que la base de données doit
    exécuter automatiquement une fonction donnée chaque fois qu'un certain type d'opération est
-   exécuté. Les fonctions déclencheur peuvent être attachées à une table,
+   exécuté. Les fonctions déclencheur peuvent être attachées à une table (partitionnée ou non),
    une vue ou une table distante.
   </para>
 
@@ -119,16 +119,24 @@
    <literal>BEFORE</literal> au niveau requête se déclenchent avant que la
    requête ne commence quoi que ce soit alors que les triggers
    <literal>AFTER</literal> au niveau requête se déclenchent tout à la fin de
-   la requête. Ces types de triggers peuvent être définis sur les tables et
-   vues. Les triggers <literal>BEFORE</literal> au niveau ligne se déclenchent
+   la requête. Ces types de triggers peuvent être définis sur les tables,
+   vues et tables externes. Les triggers <literal>BEFORE</literal> au niveau ligne se déclenchent
    immédiatement avant l'opération sur une ligne particulière alors que les
    triggers <literal>AFTER</literal> au niveau ligne se déclenchent à la fin
    de la requête (mais avant les triggers <literal>AFTER</literal> au niveau
    requête). Ces types de triggers peuvent seulement être définis sur les
-   tables et tables distantes. Les triggers <literal>INSTEAD OF</literal> au niveau ligne
+   tables non partitionnées et tables distantes. Les triggers <literal>INSTEAD OF</literal> au niveau ligne
    peuvent seulement être définis sur des vues et se déclenchent immédiatement
    sur chaque ligne de la vue qui est identifiée comme nécessitant cette
    opération.
+   </para>
+
+   <para>
+    A statement that targets a parent table in an inheritance or partitioning
+    hierarchy does not cause the statement-level triggers of affected child
+    tables to be fired; only the parent table's statement-level triggers are
+    fired.  However, row-level triggers of any affected child tables will be
+    fired.
   </para>
 
    <para>
@@ -415,6 +423,11 @@
    <secondary>en C</secondary>
   </indexterm>
 
+   <indexterm>
+    <primary>transition tables</primary>
+    <secondary>referencing from C trigger</secondary>
+   </indexterm>
+
   <para>
    Cette section décrit les détails de bas niveau de l'interface d'une fonction
    déclencheur. Ces informations ne sont nécessaires que lors de l'écriture
@@ -456,14 +469,16 @@
 
    <programlisting>typedef struct TriggerData
 {
-    NodeTag       type;
-    TriggerEvent  tg_event;
-    Relation      tg_relation;
-    HeapTuple     tg_trigtuple;
-    HeapTuple     tg_newtuple;
-    Trigger      *tg_trigger;
-    Buffer        tg_trigtuplebuf;
-    Buffer        tg_newtuplebuf;
+    NodeTag          type;
+    TriggerEvent     tg_event;
+    Relation         tg_relation;
+    HeapTuple        tg_trigtuple;
+    HeapTuple        tg_newtuple;
+    Trigger         *tg_trigger;
+    Buffer           tg_trigtuplebuf;
+    Buffer           tg_newtuplebuf;
+    Tuplestorestate *tg_oldtable;
+    Tuplestorestate *tg_newtable;
 } TriggerData;
    </programlisting>
 
@@ -652,6 +667,8 @@
     int16      *tgattr;
     char      **tgargs;
     char       *tgqual;
+    char       *tgoldtable;
+    char       *tgnewtable;
 } Trigger;
        </programlisting>
 
@@ -686,10 +703,40 @@
       </para>
      </listitem>
     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tg_oldtable</structfield></term>
+      <listitem>
+       <para>
+        A pointer to a structure of type <structname>Tuplestorestate</structname>
+        containing zero or more rows in the format specified by
+        <structfield>tg_relation</structfield>, or a <symbol>NULL</symbol> pointer
+        if there is no <literal>OLD TABLE</literal> transition relation.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tg_newtable</structfield></term>
+      <listitem>
+       <para>
+        A pointer to a structure of type <structname>Tuplestorestate</structname>
+        containing zero or more rows in the format specified by
+        <structfield>tg_relation</structfield>, or a <symbol>NULL</symbol> pointer
+        if there is no <literal>NEW TABLE</literal> transition relation.
+       </para>
+      </listitem>
+     </varlistentry>
+
    </variablelist>
   </para>
 
   <para>
+    To allow queries issued through SPI to reference transition tables, see
+    <xref linkend="spi-spi-register-trigger-data"/>.
+   </para>
+
+   <para>
    Une fonction déclencheur doit retourner soit un pointeur
    <structname>HeapTuple</structname> soit un pointeur <symbol>NULL</symbol> (<emphasis>pas</emphasis>
    une valeur SQL NULL, donc ne positionnez pas <parameter>isNull</parameter> à
@@ -728,6 +775,7 @@
   <para>
    Voici le code source de la fonction trigger :
    <programlisting><![CDATA[#include "postgres.h"
+#include "fmgr.h"
 #include "executor/spi.h"       /* nécessaire pour fonctionner avec SPI */
 #include "commands/trigger.h"   /* ... les déclencheurs */
 #include "utils/rel.h"          /* ... et relations */
