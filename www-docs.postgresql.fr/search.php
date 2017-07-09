@@ -199,13 +199,13 @@ $searchstring = preg_replace('/[\s\!\&\|]+$/', '', $searchstring);
 ## Remove unnecessary quotes around everything
 $searchstring = preg_replace('/^[\'"](.*)[\'"]$/', "$1", $searchstring);
 
-$query = "SELECT version, url, titre, ts_headline(contenu, q) AS resume, to_char(ts_rank(fti, q)*100, '999.99') AS score
-FROM pages, to_tsquery('".pg_escape_string($searchstring)."') AS q
+$query = "SELECT version, url, titre, ts_headline(contenu, q) AS resume, to_char(ts_rank_cd(fti, q,4)*100, '999.99') AS score
+FROM pages, to_tsquery('french','".pg_escape_string($searchstring)."') AS q
 WHERE fti @@ q ";
 if (array_key_exists($filtreversion, $version)) {
   $query .= "AND version=".pg_escape_string($filtreversion)." ";
 }
-$query .= "ORDER BY ts_rank(fti, q) DESC, version DESC
+$query .= "ORDER BY ts_rank_cd(fti, q,4) DESC, version DESC
 LIMIT 100";
 $result = pg_query($pgconn, $query);
 
