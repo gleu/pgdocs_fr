@@ -1,5 +1,5 @@
 #! /usr/bin/php -qC
-<?
+<?php
 
 function usage() {
   echo '
@@ -41,6 +41,9 @@ $PGPASSWORD = getenv('PGPASSWORD');
 $g_passwordrequired = false;
 $tags1 = '';
 $tags2 = '';
+
+$titre = '';
+$corps = '';
 
 // Déchiffrage des options en ligne de commande
 for ($i = 1; $i < $_SERVER["argc"]; $i++) {
@@ -182,7 +185,7 @@ pg_query($pgconn, $query);
 
 // lecture du répertoire
 if ($handle = opendir($dir)) {
-  echo "Traitement du répertoire : ";
+  echo "Traitement du répertoire : $dir";
 
   $result = pg_query($pgconn, 'BEGIN');
 
@@ -200,10 +203,10 @@ if ($handle = opendir($dir)) {
         $titre = $matches[1];
         $titre = preg_replace('#\s+#',' ',$titre);
       }
-      $titre = trim(ereg_replace('[0-9A-Z.]*\&nbsp;', '', $titre));
-      $titre = ereg_replace('Chapitre', '', $titre);
-      $titre = ereg_replace('Annexe', '', $titre);
-      $titre = ereg_replace('Partie', '', $titre);
+      $titre = trim(preg_replace('/[0-9A-Z.]*\&nbsp;/', '', $titre));
+      $titre = preg_replace('/Chapitre/', '', $titre);
+      $titre = preg_replace('/Annexe/', '', $titre);
+      $titre = preg_replace('/Partie/', '', $titre);
       $titre = html_entity_decode($titre,ENT_COMPAT,'utf-8');
       // récup des mots clés d'index
       if (preg_match('#<em class="firstterm"[^>]*>([^<]+)</em[^>]*>#si', $contenu, $matches)) {
@@ -252,6 +255,7 @@ if ($handle = opendir($dir)) {
       $corps = strip_tags($corps);
       $corps = preg_replace('#\s+#',' ',$corps);
       $corps = html_entity_decode($corps,ENT_COMPAT,'utf-8');
+
       // préparation de la requête...
       $query = "INSERT INTO pages (url, version, titre, tags1, tags2, contenu) VALUES (
                '".pg_escape_string($file)."',
