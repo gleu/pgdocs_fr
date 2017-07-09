@@ -1,4 +1,4 @@
-<?
+<?php
 $recherche = $_REQUEST['q'];
 $filtreversion = $_REQUEST['v'];
 
@@ -97,7 +97,7 @@ $version['906'] = '9.6';
       <h2><label for="q">Rechercher</label></h2>
       <input id="q" name="q" type="text" size="16" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_REQUEST['q'])>0 ? $_REQUEST['q'] : 'Rechercher' ?>" accesskey="s" />
   <select id="v" name="v">
-<?
+<?php
   $query = "SELECT version, count(*) as nb FROM pages GROUP BY version ORDER BY version DESC";
   $result = pg_query($pgconn, $query);
 
@@ -123,10 +123,10 @@ $version['906'] = '9.6';
   <div id="pgContentWrap">
   <div id="pgDownloadsWrap">
   <div id="content">
-<?
-$like[0]="'sql-%".pg_escape_string(ereg_replace(' ','',$recherche))."%.html'";
-$like[1]="'app-%".pg_escape_string(ereg_replace('_','',$recherche))."%.html'";
-$like[2]="'app-%".pg_escape_string(ereg_replace('_','-',$recherche))."%.html'";
+<?php
+$like[0]="'sql-%".pg_escape_string(preg_replace('/ /','',$recherche))."%.html'";
+$like[1]="'app-%".pg_escape_string(preg_replace('/_/','',$recherche))."%.html'";
+$like[2]="'app-%".pg_escape_string(preg_replace('/_/','-',$recherche))."%.html'";
 
 $query = "SELECT version, url, titre
 FROM pages
@@ -141,7 +141,7 @@ if (pg_num_rows($result) > 0) {
 		<div style="text-align:left;text-weight:normal;">
 <h1>Pages man</h1>
 <ol>
-<?
+<?php
 
 while ($ligne = pg_fetch_array($result)) {
   echo '<li>
@@ -152,15 +152,16 @@ while ($ligne = pg_fetch_array($result)) {
 ?>
 </ol>
 		</div>
-<?
+<?php
 }
 ?>
 		<div style="text-align:left;text-weight:normal;">
 <h1>Résultats complets</h1>
 <ol>
-<?
+<?php
 
 $searchstring = '';
+
 if( preg_match_all('/([-!]?)(\S+)\s*/', $recherche, $m, PREG_SET_ORDER ) ) {
   foreach( $m as $terms ) {
     if (strlen($terms[1])) {
@@ -181,6 +182,7 @@ if( preg_match_all('/([-!]?)(\S+)\s*/', $recherche, $m, PREG_SET_ORDER ) ) {
     }
   }
 }
+
 
 ## Strip out leading junk
 $searchstring = preg_replace('/^[\s\&\|]+/', '', $searchstring);
