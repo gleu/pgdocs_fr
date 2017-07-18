@@ -95,7 +95,7 @@ $version['906'] = '9.6';
       <form method="post" action="search.php">
       <div>
       <h2><label for="q">Rechercher</label></h2>
-      <input id="q" name="q" type="text" size="16" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_REQUEST['q'])>0 ? $_REQUEST['q'] : 'Rechercher' ?>" accesskey="s" />
+      <input id="q" name="q" type="text" size="16" maxlength="255" title='Vous pouvez utiliser les opérateurs suivants : "and", "&","not","!","or","|","<->" ("suivi de" pour recherche de phrase)' onfocus="if( this.value=='rechercher' ) this.value='';" value="<?= strlen($_request['q'])>0 ? $_request['q'] : 'rechercher' ?>" accesskey="s" />
   <select id="v" name="v">
 <?php
   $query = "SELECT version, count(*) as nb FROM pages GROUP BY version ORDER BY version DESC";
@@ -162,23 +162,34 @@ while ($ligne = pg_fetch_array($result)) {
 
 $searchstring = '';
 
+$no_and = false;
+
 if( preg_match_all('/([-!]?)(\S+)\s*/', $recherche, $m, PREG_SET_ORDER ) ) {
   foreach( $m as $terms ) {
     if (strlen($terms[1])) {
       $searchstring .= ' & !';
     }
-    if (strtolower($terms[2]) === 'and' && strlen($terms[3]) > 0) {
+    if (strtolower($terms[2]) === 'and') {
       $searchstring .= ' & ';
     }
-    else if ((strtolower($terms[2]) === 'or' or $terms[2] === '|') &&
-              strlen($terms[3]) > 0) {
+    else if (strtolower($terms[2]) === 'or' or $terms[2] === '|') {
       $searchstring .= ' | ';
     }
-    else if (strtolower($terms[2]) === 'not' && strlen($terms[3]) > 0) {
+    else if (strtolower($terms[2]) === 'not') {
       $searchstring .= ' & !';
     }
+    else if (strtolower($terms[2]) === '<->') {
+      $searchstring .= ' <->';
+      $no_and = true;
+    }
     else {
-      $searchstring .= " & $terms[2]";
+      if ($no_and) {
+        $searchstring .= " $terms[2]";
+        $no_and = false;
+      }
+      else {
+        $searchstring .= " & $terms[2]";
+      }
     }
   }
 }
