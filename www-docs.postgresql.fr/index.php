@@ -1,4 +1,4 @@
-<?
+<?php
 $recherche = $_REQUEST['q'];
 $filtreversion = $_REQUEST['v'];
 
@@ -96,7 +96,7 @@ $version['906'] = '9.6';
       <h2><label for="q">Rechercher</label></h2>
       <input id="q" name="q" type="text" size="16" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="<?= strlen($_REQUEST['q'])>0 ? $_REQUEST['q'] : 'Rechercher' ?>" accesskey="s" />
   <select id="v" name="v">
-<?
+<?php
   $query = "SELECT version, count(*) as nb FROM pages GROUP BY version ORDER BY version DESC";
   $result = pg_query($pgconn, $query);
 

@@ -1,4 +1,4 @@
-<?
+<?php
 $recherche = $_REQUEST['q'];
 $filtreversion = $_REQUEST['v'];
 
@@ -97,7 +97,7 @@ $version['906'] = '9.6';
       <h2><label for="q">Rechercher</label></h2>
       <input id="q" name="q" type="text" size="16" maxlength="255" title='Vous pouvez utiliser les opérateurs suivants : "and", "&","not","!","or","|","<->" ("suivi de" pour recherche de phrase)' onfocus="if( this.value=='rechercher' ) this.value='';" value="<?= strlen($_request['q'])>0 ? $_request['q'] : 'rechercher' ?>" accesskey="s" />
   <select id="v" name="v">
-<?
+<?php
   $query = "SELECT version, count(*) as nb FROM pages GROUP BY version ORDER BY version DESC";
   $result = pg_query($pgconn, $query);
 
@@ -123,10 +123,10 @@ $version['906'] = '9.6';
   <div id="pgContentWrap">
   <div id="pgDownloadsWrap">
   <div id="content">
-<?
-$like[0]="'sql-%".pg_escape_string(ereg_replace(' ','',$recherche))."%.html'";
-$like[1]="'app-%".pg_escape_string(ereg_replace('_','',$recherche))."%.html'";
-$like[2]="'app-%".pg_escape_string(ereg_replace('_','-',$recherche))."%.html'";
+<?php
+$like[0]="'sql-%".pg_escape_string(preg_replace('/ /','',$recherche))."%.html'";
+$like[1]="'app-%".pg_escape_string(preg_replace('/_/','',$recherche))."%.html'";
+$like[2]="'app-%".pg_escape_string(preg_replace('/_/','-',$recherche))."%.html'";
 
 $query = "SELECT version, url, titre
 FROM pages
@@ -141,7 +141,7 @@ if (pg_num_rows($result) > 0) {
 		<div style="text-align:left;text-weight:normal;">
 <h1>Pages man</h1>
 <ol>
-<?
+<?php
 
 while ($ligne = pg_fetch_array($result)) {
   echo '<li>
@@ -152,13 +152,13 @@ while ($ligne = pg_fetch_array($result)) {
 ?>
 </ol>
 		</div>
-<?
+<?php
 }
 ?>
 		<div style="text-align:left;text-weight:normal;">
 <h1>Résultats complets</h1>
 <ol>
-<?
+<?php
 
 $searchstring = '';
 
@@ -194,6 +194,7 @@ if( preg_match_all('/([-!]?)(\S+)\s*/', $recherche, $m, PREG_SET_ORDER ) ) {
   }
 }
 
+
 ## Strip out leading junk
 $searchstring = preg_replace('/^[\s\&\|]+/', '', $searchstring);
 
@@ -209,13 +210,13 @@ $searchstring = preg_replace('/[\s\!\&\|]+$/', '', $searchstring);
 ## Remove unnecessary quotes around everything
 $searchstring = preg_replace('/^[\'"](.*)[\'"]$/', "$1", $searchstring);
 
-$query = "SELECT version, url, titre, ts_headline(contenu, q) AS resume, to_char(ts_rank(fti, q)*100, '999.99') AS score
-FROM pages, to_tsquery('".pg_escape_string($searchstring)."') AS q
+$query = "SELECT version, url, titre, ts_headline(contenu, q) AS resume, to_char(ts_rank_cd(fti, q,4)*100, '999.99') AS score
+FROM pages, to_tsquery('french','".pg_escape_string($searchstring)."') AS q
 WHERE fti @@ q ";
 if (array_key_exists($filtreversion, $version)) {
   $query .= "AND version=".pg_escape_string($filtreversion)." ";
 }
-$query .= "ORDER BY ts_rank(fti, q) DESC, version DESC
+$query .= "ORDER BY ts_rank_cd(fti, q,4) DESC, version DESC
 LIMIT 100";
 $result = pg_query($pgconn, $query);
 
