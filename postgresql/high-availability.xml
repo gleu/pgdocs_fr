@@ -17,7 +17,7 @@
  <!-- seamlessly ? -->
  <para>
   Des serveurs de bases de données peuvent travailler ensemble pour permettre
-  à un serveur secondaire de prendre rapidement la main si le serveur principal
+  à un serveur standby de prendre rapidement la main si le serveur principal
   échoue (haute disponibilité, ou <foreignphrase>high availability</foreignphrase>),
   ou pour permettre à plusieurs serveurs de servir les mêmes données (répartition
   de charge, ou <foreignphrase>load balancing</foreignphrase>). Idéalement, les
@@ -144,11 +144,14 @@
 
      <!--
 https://forge.continuent.org/pipermail/sequoia/2006-November/004070.html
+La technologie Oracle RAC est une approche par disques partagés et renvoie
+aux autres noeuds uniquement les annulations de niveau cache mais pas
+réellement au niveau des données (physiques).
+Puisque les disques sont partagés, les données sont validées une seule 
+fois en s'appuyant sur un protocole de verrouillage distribué, de façon à
+ce que les noeuds s'accordent dans un système transactionnel sérialisable.
 
-Oracle RAC is a shared disk approach and just send cache invalidations
-to other nodes but not actual data. As the disk is shared, data is
-only committed once to disk and there is a distributed locking
-protocol to make nodes agree on a serializable transactional order.
+
 -->
 
     </listitem>
@@ -1222,59 +1225,66 @@ primary_slot_name = 'node_a_slot'
     considérés synchrones confirment la réception de leurs données. Le nombre
     de standbys dont les transactions doivent attendre la réponse est indiqué
     dans le paramètre <varname>synchronous_standby_names</varname>. Ce paramètre
-    indique aussi une liste des noms de standbys and the method (<literal>FIRST</literal> and
-    <literal>ANY</literal>) to choose synchronous standbys from the listed ones.
+    indique aussi une liste des noms des serveurs standbys ou l'emploi 
+    de la méthode (<literal>FIRST</literal> ou <literal>ANY</literal>) pour choisir 
+    sur quel serveur synchrone basculer parmi l'ensemble des serveurs listés.
    </para>
 
    <para>
-    The method <literal>FIRST</literal> specifies a priority-based synchronous
-    replication and makes transaction commits wait until their WAL records are
-    replicated to the requested number of synchronous standbys chosen based on
-    their priorities. The standbys whose names appear earlier in the list are
-    given higher priority and will be considered as synchronous. Other standby
-    servers appearing later in this list represent potential synchronous
-    standbys. If any of the current synchronous standbys disconnects for
-    whatever reason, it will be replaced immediately with the
-    next-highest-priority standby.
+    La méthode <literal>FIRST</literal> définit une réplication synchrone 
+    priorisée&nbsp;: elle temporise la validation de la transaction 
+    jusqu'à que les enregistrements WAL soient répliqués en 
+    fonction de la priorité définie des serveurs standbys dans une liste
+    ordonnée.
+    Le serveur standby dont le nom apparait en premier sur la liste est
+    prioritaire et est celui qui est considéré comme synchrone.
+    Les serveurs standbys suivants sont considérés comme un/des 
+    serveurs standbys synchrones potentiels.
+    Si le premier serveur synchrone venait à tomber,
+    il serait immédiatement remplacé par le serveur 
+    standby prioritaire suivant.
+    
    </para>
    <para>
-    An example of <varname>synchronous_standby_names</varname> for
-    a priority-based multiple synchronous standbys is:
+    Voici un exemple de configuration de <varname>synchronous_standby_names</varname> pour la 
+    réplication synchrone priorisée&nbsp;:
 <programlisting>
 synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
 </programlisting>
     Dans cet exemple, si les quatre serveurs standbys <literal>s1</literal>,
-    <literal>s2</literal>, <literal>s3</literal> et <literal>s4</literal> sont
-    fonctionnels et en cours d'exécution, les deux serveurs
-    <literal>s1</literal> et <literal>s2</literal> seront choisis comme standbys
-    synchrones car leurs noms apparaissent en premier dans la liste des serveurs
-    standbys. <literal>s3</literal> est un serveur standby synchrone potentiel et
-    prendra le rôle d'un standby synchrone si <literal>s1</literal> ou
-    <literal>s2</literal> tombe. <literal>s4</literal> est un standby asynchrone
-    comme son nom n'est pas dans la liste.
+    <literal>s2</literal>, <literal>s3</literal> et <literal>s4</literal> 
+    sont fonctionnels et en cours d'exécution, les deux serveurs
+    <literal>s1</literal> et <literal>s2</literal> seront choisis comme
+    standbys synchrones car leurs noms apparaissent en premier dans la 
+    liste des serveurs standbys. <literal>s3</literal> est un serveur 
+    standby synchrone potentiel et prendra le rôle d'un standby synchrone 
+    si <literal>s1</literal> ou <literal>s2</literal> tombe. 
+    <literal>s4</literal> est un standby asynchrone et son nom n'est pas dans la liste.
    </para>
 
    <para>
-    The method <literal>ANY</literal> specifies a quorum-based synchronous
-    replication and makes transaction commits wait until their WAL records
-    are replicated to <emphasis>at least</emphasis> the requested number of
-    synchronous standbys in the list.
+	La méthode <literal>ANY</literal> définit une réplication synchrone 
+	basée sur un quorum&nbsp;: elle temporise la validation de la 
+	transaction jusqu'à ce que les enregistrements WAL soient répliqués 
+	<emphasis>au moins</emphasis> sur le nombre de serveurs définis dans 
+	la liste.
    </para>
    <para>
-    An example of <varname>synchronous_standby_names</varname> for
-    a quorum-based multiple synchronous standbys is:
+    Voici un exemple de configuration du paramètre <varname>synchronous_standby_names</varname> pour la 
+    réplication synchrone avec un quorum&nbsp;:
 <programlisting>
  synchronous_standby_names = 'ANY 2 (s1, s2, s3)'
 </programlisting>
-    In this example, if four standby servers <literal>s1</literal>, <literal>s2</literal>,
-    <literal>s3</literal> and <literal>s4</literal> are running, transaction commits will
-    wait for replies from at least any two standbys of <literal>s1</literal>,
-    <literal>s2</literal> and <literal>s3</literal>. <literal>s4</literal> is an asynchronous
-    standby since its name is not in the list.
+    Dans cet exemple, sur quatre serveurs standbys démarrés <literal>s1</literal>, 
+    <literal>s2</literal>,<literal>s3</literal> et <literal>s4</literal>,
+    pour obtenir la validation d'une transaction, le serveur primaire
+    attendra la réponse d'au minimum deux standbys parmi <literal>s1</literal>,
+    <literal>s2</literal> et <literal>s3</literal>. <literal>s4</literal>  
+    est un standby asynchrone et son nom n'est pas dans la liste.
    </para>
    <para>
-    The synchronous states of standby servers can be viewed using
-    the <structname>pg_stat_replication</structname> view.
+    L'état de synchronicité des serveurs standbys peut être consulté
+    avec la vue <structname>pg_stat_replication</structname>.
    </para>
    </sect3>
 
@@ -1335,22 +1345,23 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
     <para>
      La meilleure solution pour la haute disponibilité est de s'assurer que vous
      conservez autant de serveurs standbys synchrones que demandés. Ceci se fait
-     en nommant pluseurs standbys synchrones potentiels avec
+     en nommant plusieurs standbys synchrones potentiels avec
      <varname>synchronous_standby_names</varname>.
    </para>
 
    <para>
-    In a priority-based synchronous replication, the standbys whose names
-    appear earlier in the list will be used as synchronous standbys.
-    Standbys listed after these will take over the role of synchronous standby
-    if one of current ones should fail.
+    Dans la réplication synchrone dite priorisée, les serveurs standbys dont les noms
+    apparaissent en premier seront utilisé comme standbys synchrones.
+    Les standbys définis ensuite prendront la place de serveur
+    synchrone si l'un des serveurs venait à tomber.
+    
    </para>
 
    <para>
-    In a quorum-based synchronous replication, all the standbys appearing
-    in the list will be used as candidates for synchronous standbys.
-    Even if one of them should fail, the other standbys will keep performing
-    the role of candidates of synchronous standby.
+    Dans la réplication dite de quorum, tous les standbys spécifiés dans la liste
+    seront utilisés comme des standbys synchrones potentiels.
+    Même si l'un d'entre eux tombe, les autres standbys continueront de
+    prétendre au rôle de standby synchrone.
    </para>
 
     <para>
@@ -1363,13 +1374,13 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
      sera d'autant plus longue.
      Le serveur de standby ne peut devenir un serveur de standby synchrone
      que lorsque le mode <literal>streaming</literal> est atteint.
-     This state can be viewed using
-     the <structname>pg_stat_replication</structname> view.
+     L'état de synchronicité des serveurs standbys peut être consulté
+     avec la vue <structname>pg_stat_replication</structname>.
     </para>
 
     <para>
      Si le serveur primaire redémarre alors que des opérations de commit étaient en attente de confirmation, les
-     transactions en attente ne seront réellement enregistrées qu'au moment où la base de donnée du serveur primaire
+     transactions en attente ne seront réellement enregistrées qu'au moment où la base de données du serveur primaire
      sera redémarrée.
      Il n'y a aucun moyen de savoir si tous les serveurs de standby ont reçu toutes
      les données WAL nécessaires au moment où le serveur primaire est déclaré hors-service. Des
@@ -1407,42 +1418,50 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
   </sect2>
 
   <sect2 id="continuous-archiving-in-standby">
-   <title>Continuous archiving in standby</title>
+   <title>Archivage continu côté standby</title>
 
    <indexterm>
-     <primary>continuous archiving</primary>
-     <secondary>in standby</secondary>
+     <primary>Archivage continu</primary>
+     <secondary>côté standby</secondary>
    </indexterm>
 
    <para>
-     When continuous WAL archiving is used in a standby, there are two
-     different scenarios: the WAL archive can be shared between the primary
-     and the standby, or the standby can have its own WAL archive. When
-     the standby has its own WAL archive, set <varname>archive_mode</varname>
-     to <literal>always</literal>, and the standby will call the archive
-     command for every WAL segment it receives, whether it's by restoring
-     from the archive or by streaming replication. The shared archive can
-     be handled similarly, but the <varname>archive_command</varname> must
-     test if the file being archived exists already, and if the existing file
-     has identical contents. This requires more care in the
-     <varname>archive_command</varname>, as it must
-     be careful to not overwrite an existing file with different contents,
-     but return success if the exactly same file is archived twice. And
-     all that must be done free of race conditions, if two servers attempt
-     to archive the same file at the same time.
+     Lorsque l'archivage continu est utilisé sur un standby, il existe
+     deux scénarios possibles&nbsp;: soit les archives sont partagées entre le
+     serveur primaire et le serveur de standby, soit le standby peut avoir
+     ses propres archives. Si le serveur possède ses propres archives, 
+     en définissant le paramètre <varname>archive_mode</varname> à 
+     <literal>always</literal>, le standby exécutera la commande 
+     d'archivage pour chaque segment de WAL qu'il aura reçu, peu importe 
+     qu'il utilise la réplication par les archives ou la réplication 
+     streaming.
+     
+     La gestion par archivage partagé peut être faite de la même manière, 
+     mais <varname>archive_command</varname> doit d'abord tester si le segment 
+     de WAL existe, et si le fichier existant contient les mêmes informations.
+     Cela demande plus de précaution lors de la définition de la commande, 
+     car elle doit vérifier qu'elle n'écrase pas un fichier existant avec
+     un contenu différent, et doit renvoyer un succès si le même fichier 
+     est archivé deux fois. Tout ceci devant être en plus effectué sans 
+     concurrence si deux serveurs essayent d'archiver le même fichier au 
+     même moment.
+
    </para>
 
    <para>
-     If <varname>archive_mode</varname> is set to <literal>on</literal>, the
-     archiver is not enabled during recovery or standby mode. If the standby
-     server is promoted, it will start archiving after the promotion, but
-     will not archive any WAL it did not generate itself. To get a complete
-     series of WAL files in the archive, you must ensure that all WAL is
-     archived, before it reaches the standby. This is inherently true with
-     file-based log shipping, as the standby can only restore files that
-     are found in the archive, but not if streaming replication is enabled.
-     When a server is not in recovery mode, there is no difference between
-     <literal>on</literal> and <literal>always</literal> modes.
+     Si <varname>archive_mode</varname> est défini à <literal>on</literal>, 
+     l'archivage n'est pas actif pendant les modes recovery et standby.
+     Si le serveur standby est promu, il commencera à réaliser l'archivage 
+     après sa promotion, et il archivera uniquement les fichiers qu'il a lui
+     même produit. Pour être sûr d'obtenir un jeu complet d'archives, vous
+     devez vous assurer que tous les fichiers WAL ont été archivés avant
+     qu'ils atteignent le standby. C'est implicitement toujours le cas 
+     avec un log-shipping s'appuyant sur les archives, car le standby ne
+     récupère que des informations provenant de ces mêmes fichiers 
+     archivés. Ce n'est pas le cas dans le cadre de la réplication
+     streaming.
+     Lorsqu'un serveur est en standby il n'y a aucune différence 
+     entre les modes <literal>on</literal> et <literal>always</literal>.
    </para>
   </sect2>
  </sect1>
@@ -1552,7 +1571,7 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
    Les opérations qui se produisent sur le primaire et les serveurs de standby sont
    des opérations normales d'archivage et de recovery. Le seul point de
    contact entre les deux serveurs de bases de données est l'archive de fichiers WAL
-   qu'ils partagent: le primaire écrivant dans l'archive, le secondaire
+   qu'ils partagent&nbsp;: le primaire écrivant dans l'archive, le standby
    lisant de l'archive. Des précautions doivent être prises pour s'assurer que les archives WAL de serveurs
    primaires différents ne soient pas mélangées ou confondues. L'archive n'a pas besoin
    d'être de grande taille si elle n'est utilisée que pour le fonctionnement de standby.
