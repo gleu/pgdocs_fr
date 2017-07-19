@@ -1,4 +1,6 @@
 <?php
+include "config.php";
+
 $recherche = $_REQUEST['q'];
 $filtreversion = $_REQUEST['v'];
 
@@ -12,7 +14,7 @@ $recherche = preg_replace('/:/', ' ', $recherche);
 
 $recherche_value = strlen($recherche)>0 ? $recherche : 'Rechercher';
 
-$pgconn = pg_connect("host=somehost dbname=somedb user=someuser password=somepassword") or die('Connexion impossible');
+$pgconn = @pg_connect("$DSN") or die('Connexion impossible');
 
 $query = "SET client_encoding TO utf8;";
 $result = pg_query($pgconn, $query);
@@ -129,6 +131,37 @@ $version['906'] = '9.6';
     Lelarge</a>.</p>
     <p>Certaines vieilles versions, non maintenues, sont disponibles sur
     l'<a href="index_obsoletes.php">index des version obsolètes</a>.</p>
+
+    <div id="pg10">
+      <h2>Documentation PostgreSQL, version 10 BETA!</h2>
+      <div class="listes">
+        <ul>
+            <li>Manuel au format HTML&nbsp;:
+                <a href="10/">Consultation en ligne</a>,
+                t&eacute;l&eacute;chargement en
+                <a onclick="pageTracker._trackPageview('/pg10.zip');"
+                href="http://docs.postgresql.fr/10/pg10.zip">ZIP</a> ou
+                <a onclick="pageTracker._trackPageview('/pg96.tar.gz');"
+                href="http://docs.postgresql.fr/10/pg10.tar.gz">TAR.GZ</a>
+            </li>
+<!--
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg10.pdf');"
+              href="http://docs.postgresql.fr/10/pg10.pdf">PDF</a>
+            </li>
+-->
+            <li>Document d'installation au format <a
+              onclick="pageTracker._trackPageview('/INSTALL10.html');"
+              href="http://docs.postgresql.fr/10/INSTALL.html">HTML</a> et
+              <a onclick="pageTracker._trackPageview('/INSTALL10.txt');"
+              href="http://docs.postgresql.fr/10/INSTALL.txt">texte</a>
+            </li>
+            <li><a onclick="pageTracker._trackPageview('/pg10.man.tar.gz');"
+              href="http://docs.postgresql.fr/10/pg10.man.tar.gz">Pages
+              man</a></li>
+        </ul>
+      </div>
+    </div>
+
     <div id="pg96">
       <h2>Documentation PostgreSQL, version 9.6</h2>
       <div class="listes">

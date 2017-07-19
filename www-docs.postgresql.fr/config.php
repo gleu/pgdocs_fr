@@ -1,0 +1,3 @@
+<?php
+$DSN = "host=localhost";
+?>
