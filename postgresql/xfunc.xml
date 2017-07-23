@@ -309,7 +309,7 @@ SELECT ajoute(1, 2) AS reponse;
    Voici une fonction plus utile, qui pourrait être utilisée pour débiter un
    compte bancaire&nbsp;:
 
-   <programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS integer AS $$
+   <programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS numeric AS $$
      UPDATE bank
         SET balance = balance - debit
         WHERE no_compte = tf1.no_compte;
@@ -337,7 +337,7 @@ $$ LANGUAGE SQL;
     Dans la pratique, on préférera vraisemblablement un résultat plus utile que
     la constante 1. Une définition plus probable est&nbsp;:
 
-<programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS integer AS $$
+<programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS numeric AS $$
      UPDATE bank
         SET balance = balance - debit
         WHERE no_compte = tf1.no_compte;
@@ -349,7 +349,7 @@ $$ LANGUAGE SQL;
    La même chose peut se faire en une commande en utilisant la clause
    <literal>RETURNING</literal>&nbsp;:
 
-   <programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS integer AS $$
+   <programlisting>CREATE FUNCTION tf1 (no_compte integer, debit numeric) RETURNS numeric AS $$
      UPDATE bank
         SET balance = balance - debit
         WHERE no_compte = tf1.no_compte
@@ -988,6 +988,29 @@ SELECT nom, listeenfant(nom) FROM noeuds;
      </para>
 
     <para>
+     <productname>PostgreSQL</productname>'s behavior for a set-returning function in a
+     query's select list is almost exactly the same as if the set-returning
+     function had been written in a <literal>LATERAL FROM</literal>-clause item
+     instead.  For example,
+<programlisting>
+SELECT x, generate_series(1,5) AS g FROM tab;
+</programlisting>
+     is almost equivalent to
+<programlisting>
+SELECT x, g FROM tab, LATERAL generate_series(1,5) AS g;
+</programlisting>
+     It would be exactly the same, except that in this specific example,
+     the planner could choose to put <structname>g</structname> on the outside of the
+     nestloop join, since <structname>g</structname> has no actual lateral dependency
+     on <structname>tab</structname>.  That would result in a different output row
+     order.  Set-returning functions in the select list are always evaluated
+     as though they are on the inside of a nestloop join with the rest of
+     the <literal>FROM</literal> clause, so that the function(s) are run to
+     completion before the next row from the <literal>FROM</literal> clause is
+     considered.
+    </para>
+
+    <para>
      If there is more than one set-returning function in the query's select
      list, the behavior is similar to what you get from putting the functions
      into a single <literal>LATERAL ROWS FROM( ... )</literal> <literal>FROM</literal>-clause
@@ -1018,6 +1041,9 @@ SELECT srf1(srf2(x), srf3(y)), srf4(srf5(z)) FROM tab;
     </para>
 
     <para>
+     Set-returning functions cannot be used within conditional-evaluation
+     constructs, such as <literal>CASE</literal> or <literal>COALESCE</literal>.  For
+     example, consider
      This behavior also means that set-returning functions will be evaluated
      even when it might appear that they should be skipped because of a
      conditional-evaluation construct, such as <literal>CASE</literal>
@@ -1025,25 +1051,13 @@ SELECT srf1(srf2(x), srf3(y)), srf4(srf5(z)) FROM tab;
 <programlisting>
 SELECT x, CASE WHEN x &gt; 0 THEN generate_series(1, 5) ELSE 0 END FROM tab;
 </programlisting>
-     It might seem that this should produce five repetitions of input
-     rows that have <literal>x &gt; 0</literal>, and a single repetition of those
-     that do not; but actually it will produce five repetitions of every
-     input row.  This is because <function>generate_series()</function> is run first,
-     and then the <literal>CASE</literal> expression is applied to its result rows.
-     The behavior is thus comparable to
-<programlisting>
-SELECT x, CASE WHEN x &gt; 0 THEN g ELSE 0 END
-  FROM tab, LATERAL generate_series(1,5) AS g;
-</programlisting>
-     It would be exactly the same, except that in this specific example,
-     the planner could choose to put <structname>g</structname> on the outside of the
-     nestloop join, since <structname>g</structname> has no actual lateral dependency
-     on <structname>tab</structname>.  That would result in a different output row
-     order.  Set-returning functions in the select list are always evaluated
-     as though they are on the inside of a nestloop join with the rest of
-     the <literal>FROM</literal> clause, so that the function(s) are run to
-     completion before the next row from the <literal>FROM</literal> clause is
-     considered.
+     It might seem that this should produce five repetitions of input rows
+     that have <literal>x &gt; 0</literal>, and a single repetition of those that do
+     not; but actually, because <function>generate_series(1, 5)</function> would be
+     run in an implicit <literal>LATERAL FROM</literal> item before
+     the <literal>CASE</literal> expression is ever evaluated, it would produce five
+     repetitions of every input row.  To reduce confusion, such cases produce
+     a parse-time error instead.
     </para>
 
      <note>
@@ -1070,11 +1084,34 @@ SELECT x, CASE WHEN x &gt; 0 THEN g ELSE 0 END
       functions.  Also, nested set-returning functions did not work as
       described above; instead, a set-returning function could have at most
       one set-returning argument, and each nest of set-returning functions
-      was run independently.  The behavior for conditional execution
-      (set-returning functions inside <literal>CASE</literal> etc) was different too.
+      was run independently.  Also, conditional execution (set-returning
+      functions inside <literal>CASE</literal> etc) was previously allowed,
+      complicating things even more.
       Use of the <literal>LATERAL</literal> syntax is recommended when writing
       queries that need to work in older <productname>PostgreSQL</productname> versions,
       because that will give consistent results across different versions.
+      If you have a query that is relying on conditional execution of a
+      set-returning function, you may be able to fix it by moving the
+      conditional test into a custom set-returning function.  For example,
+<programlisting>
+SELECT x, CASE WHEN y &gt; 0 THEN generate_series(1, z) ELSE 5 END FROM tab;
+</programlisting>
+      could become
+<programlisting>
+CREATE FUNCTION case_generate_series(cond bool, start int, fin int, els int)
+  RETURNS SETOF int AS $$
+BEGIN
+  IF cond THEN
+    RETURN QUERY SELECT generate_series(start, fin);
+  ELSE
+    RETURN QUERY SELECT els;
+  END IF;
+END$$ LANGUAGE plpgsql;
+
+SELECT x, case_generate_series(y &gt; 0, 1, z, 5) FROM tab;
+</programlisting>
+      This formulation will work the same in all versions
+      of <productname>PostgreSQL</productname>.
       </para>
      </note>
     </sect2>
@@ -1637,10 +1674,11 @@ LANGUAGE internal    STRICT;
     </para>
 
     <para>
-    Currently only one calling convention is used for C functions
-    (<quote>version 1</quote>). Support for that calling convention is
-    indicated by writing a <literal>PG_FUNCTION_INFO_V1()</literal> macro
-    call for the function, as illustrated below.
+     Actuellement, seule une convention d'appel est utilisée pour les
+     fonctions C (<quote>version 1</quote>). Le support pour cette convention
+     d'appel est indiqué en ajoutant un appel à la macro
+     <literal>PG_FUNCTION_INFO_V1()</literal> pour la fonction, comme illustré
+     ci-dessous.
     </para>
 
     <sect2 id="xfunc-c-dynload">
@@ -1962,8 +2000,8 @@ memcpy(destination->data, buffer, 40);
      <literal>VARHDRSZ</literal> est équivalent à <literal>sizeof(int32)</literal> mais
      est considéré comme une meilleure tournure de référence à la taille de
      l'overhead pour un type à longueur variable.
-     Also, the length field <emphasis>must</emphasis> be set using the
-     <literal>SET_VARSIZE</literal> macro, not by simple assignment.
+     De plus, le champ de longueur <emphasis>doit</emphasis> être configuré en utilisant
+     la macro <literal>SET_VARSIZE</literal>, pas une simple affectation.
     </para>
 
     <para>
@@ -2190,9 +2228,10 @@ memcpy(destination->data, buffer, 40);
      <para>
       Dans une fonction version-1, chaque argument existant est traité par une
       macro <function>PG_GETARG_<replaceable>xxx</replaceable>()</function>
-      correspondant au type de donnée de l'argument. In non-strict
-     functions there needs to be a previous check about argument null-ness
-     using <function>PG_ARGNULL_<replaceable>xxx</replaceable>()</function>.
+      correspondant au type de donnée de l'argument. Dans les fonctions non
+      strictes, il est nécessaire d'avoir une vérification précédente sur la
+      possibilité que l'argument soit NULL en utilisant
+      <function>PG_ARGNULL_<replaceable>xxx</replaceable>()</function>.
       Le résultat est renvoyé par une macro
       <function>PG_RETURN_<replaceable>xxx</replaceable>()</function>
       correspondant au type renvoyé.
@@ -2204,8 +2243,8 @@ memcpy(destination->data, buffer, 40);
      </para>
 
      <para>
-     Here are some examples using the version-1 calling convention:
-    </para>
+      Voici quelques exemples utilisant la convention d'appel version-1&nbsp;:
+     </para>
 
       <programlisting><![CDATA[#include "postgres.h"
 #include <string.h>
@@ -2303,10 +2342,10 @@ concat_text(PG_FUNCTION_ARGS)
 ]]></programlisting>
 
     <para>
-     Supposing that the above code has been prepared in file
-     <filename>funcs.c</filename> and compiled into a shared object,
-     we could define the functions to <productname>PostgreSQL</productname>
-     with commands like this:
+     En supposant que le code ci-dessus a été enregistré dans le fichier
+     <filename>funcs.c</filename> et compilé en un objet partagé, nous pouvons
+     définir les fonctions dans <productname>PostgreSQL</productname> avec les
+     commandes suivantes&nbsp;:
     </para>
 
 <programlisting>
@@ -2350,7 +2389,7 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
      the system should automatically assume a null result if any input
      value is null.  By doing this, we avoid having to check for null inputs
      in the function code.  Without this, we'd have to check for null values
-     explicitly, using PG_ARGISNULL().
+     explicitly, using <function>PG_ARGISNULL()</function>.
     </para>
 
     <para>
@@ -3078,7 +3117,7 @@ CREATE OR REPLACE FUNCTION retcomposite(integer, integer)
      </para>
 
      <para>
-      Le module <link linkend="tablefunc">contrib/tablefunc</link> situé dans les fichiers source
+      Le module <link linkend="tablefunc"><filename>contrib/tablefunc</filename></link> situé dans les fichiers source
       de la distribution contient d'autres exemples de fonctions renvoyant des
       ensembles.</para>
     </sect2>
