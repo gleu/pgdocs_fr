@@ -2,13 +2,479 @@
 <!-- doc/src/sgml/release-9.2.sgml -->
 <!-- See header comment in release.sgml about typical markup -->
 
+ <sect1 id="release-9-2-22">
+  <title>Release 9.2.22</title>
+
+  <formalpara>
+  <title>Release date:</title>
+  <para>2017-08-10</para>
+  </formalpara>
+
+  <para>
+   This release contains a variety of fixes from 9.2.21.
+   For information about new features in the 9.2 major release, see
+   <xref linkend="release-9-2"/>.
+  </para>
+
+  <para>
+   The <productname>PostgreSQL</productname> community will stop releasing updates
+   for the 9.2.X release series in September 2017.
+   Users are encouraged to update to a newer release branch soon.
+  </para>
+
+  <sect2>
+   <title>Migration to Version 9.2.22</title>
+
+   <para>
+    A dump/restore is not required for those running 9.2.X.
+   </para>
+
+   <para>
+    However, if you use foreign data servers that make use of user
+    passwords for authentication, see the first changelog entry below.
+   </para>
+
+   <para>
+    Also, if you are upgrading from a version earlier than 9.2.20,
+    see <xref linkend="release-9-2-20"/>.
+   </para>
+
+  </sect2>
+
+  <sect2>
+   <title>Changes</title>
+
+   <itemizedlist>
+
+    <listitem>
+     <para>
+      Further restrict visibility
+      of <structname>pg_user_mappings</structname>.<structfield>umoptions</structfield>, to
+      protect passwords stored as user mapping options
+      (Noah Misch)
+     </para>
+
+     <para>
+      The fix for CVE-2017-7486 was incorrect: it allowed a user
+      to see the options in her own user mapping, even if she did not
+      have <literal>USAGE</literal> permission on the associated foreign server.
+      Such options might include a password that had been provided by the
+      server owner rather than the user herself.
+      Since <structname>information_schema.user_mapping_options</structname> does not
+      show the options in such cases, <structname>pg_user_mappings</structname>
+      should not either.
+      (CVE-2017-7547)
+     </para>
+
+     <para>
+      By itself, this patch will only fix the behavior in newly initdb'd
+      databases.  If you wish to apply this change in an existing database,
+      you will need to do the following:
+     </para>
+
+     <procedure>
+      <step>
+       <para>
+        Restart the postmaster after adding <literal>allow_system_table_mods
+        = true</literal> to <filename>postgresql.conf</filename>.  (In versions
+        supporting <command>ALTER SYSTEM</command>, you can use that to make the
+        configuration change, but you'll still need a restart.)
+       </para>
+      </step>
+
+      <step>
+       <para>
+        In <emphasis>each</emphasis> database of the cluster,
+        run the following commands as superuser:
+<programlisting>
+SET search_path = pg_catalog;
+CREATE OR REPLACE VIEW pg_user_mappings AS
+    SELECT
+        U.oid       AS umid,
+        S.oid       AS srvid,
+        S.srvname   AS srvname,
+        U.umuser    AS umuser,
+        CASE WHEN U.umuser = 0 THEN
+            'public'
+        ELSE
+            A.rolname
+        END AS usename,
+        CASE WHEN (U.umuser &lt;&gt; 0 AND A.rolname = current_user
+                     AND (pg_has_role(S.srvowner, 'USAGE')
+                          OR has_server_privilege(S.oid, 'USAGE')))
+                    OR (U.umuser = 0 AND pg_has_role(S.srvowner, 'USAGE'))
+                    OR (SELECT rolsuper FROM pg_authid WHERE rolname = current_user)
+                    THEN U.umoptions
+                 ELSE NULL END AS umoptions
+    FROM pg_user_mapping U
+         LEFT JOIN pg_authid A ON (A.oid = U.umuser) JOIN
+        pg_foreign_server S ON (U.umserver = S.oid);
+</programlisting>
+       </para>
+      </step>
+
+      <step>
+       <para>
+        Do not forget to include the <literal>template0</literal>
+        and <literal>template1</literal> databases, or the vulnerability will still
+        exist in databases you create later.  To fix <literal>template0</literal>,
+        you'll need to temporarily make it accept connections.
+        In <productname>PostgreSQL</productname> 9.5 and later, you can use
+<programlisting>
+ALTER DATABASE template0 WITH ALLOW_CONNECTIONS true;
+</programlisting>
+        and then after fixing <literal>template0</literal>, undo that with
+<programlisting>
+ALTER DATABASE template0 WITH ALLOW_CONNECTIONS false;
+</programlisting>
+        In prior versions, instead use
+<programlisting>
+UPDATE pg_database SET datallowconn = true WHERE datname = 'template0';
+UPDATE pg_database SET datallowconn = false WHERE datname = 'template0';
+</programlisting>
+       </para>
+      </step>
+
+      <step>
+       <para>
+        Finally, remove the <literal>allow_system_table_mods</literal> configuration
+        setting, and again restart the postmaster.
+       </para>
+      </step>
+     </procedure>
+    </listitem>
+
+    <listitem>
+     <para>
+      Disallow empty passwords in all password-based authentication methods
+      (Heikki Linnakangas)
+     </para>
+
+     <para>
+      <application>libpq</application> ignores empty password specifications, and does
+      not transmit them to the server.  So, if a user's password has been
+      set to the empty string, it's impossible to log in with that password
+      via <application>psql</application> or other <application>libpq</application>-based
+      clients.  An administrator might therefore believe that setting the
+      password to empty is equivalent to disabling password login.
+      However, with a modified or non-<application>libpq</application>-based client,
+      logging in could be possible, depending on which authentication
+      method is configured.  In particular the most common
+      method, <literal>md5</literal>, accepted empty passwords.
+      Change the server to reject empty passwords in all cases.
+      (CVE-2017-7546)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      On Windows, retry process creation if we fail to reserve the address
+      range for our shared memory in the new process (Tom Lane, Amit
+      Kapila)
+     </para>
+
+     <para>
+      This is expected to fix infrequent child-process-launch failures that
+      are probably due to interference from antivirus products.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix low-probability corruption of shared predicate-lock hash table
+      in Windows builds (Thomas Munro, Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Avoid logging clean closure of an SSL connection as though
+      it were a connection reset (Michael Paquier)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent sending SSL session tickets to clients (Tom Lane)
+     </para>
+
+     <para>
+      This fix prevents reconnection failures with ticket-aware client-side
+      SSL code.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix code for setting <xref linkend="guc-tcp-keepalives-idle"/> on
+      Solaris (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix statistics collector to honor inquiry messages issued just after
+      a postmaster shutdown and immediate restart (Tom Lane)
+     </para>
+
+     <para>
+      Statistics inquiries issued within half a second of the previous
+      postmaster shutdown were effectively ignored.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ensure that the statistics collector's receive buffer size is at
+      least 100KB (Tom Lane)
+     </para>
+
+     <para>
+      This reduces the risk of dropped statistics data on older platforms
+      whose default receive buffer size is less than that.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix possible creation of an invalid WAL segment when a standby is
+      promoted just after it processes an <literal>XLOG_SWITCH</literal> WAL
+      record (Andres Freund)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <systemitem>SIGHUP</systemitem> and <systemitem>SIGUSR1</systemitem> handling in
+      walsender processes (Petr Jelinek, Andres Freund)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix unnecessarily slow restarts of <application>walreceiver</application>
+      processes due to race condition in postmaster (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix cases where an <command>INSERT</command> or <command>UPDATE</command> assigns
+      to more than one element of a column that is of domain-over-array
+      type (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Move autogenerated array types out of the way during
+      <command>ALTER ... RENAME</command> (Vik Fearing)
+     </para>
+
+     <para>
+      Previously, we would rename a conflicting autogenerated array type
+      out of the way during <command>CREATE</command>; this fix extends that
+      behavior to renaming operations.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Ensure that <command>ALTER USER ... SET</command> accepts all the syntax
+      variants that <command>ALTER ROLE ... SET</command> does (Peter Eisentraut)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Properly update dependency info when changing a datatype I/O
+      function's argument or return type from <type>opaque</type> to the
+      correct type (Heikki Linnakangas)
+     </para>
+
+     <para>
+      <command>CREATE TYPE</command> updates I/O functions declared in this
+      long-obsolete style, but it forgot to record a dependency on the
+      type, allowing a subsequent <command>DROP TYPE</command> to leave broken
+      function definitions behind.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Reduce memory usage when <command>ANALYZE</command> processes
+      a <type>tsvector</type> column (Heikki Linnakangas)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix unnecessary precision loss and sloppy rounding when multiplying
+      or dividing <type>money</type> values by integers or floats (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Tighten checks for whitespace in functions that parse identifiers,
+      such as <function>regprocedurein()</function> (Tom Lane)
+     </para>
+
+     <para>
+      Depending on the prevailing locale, these functions could
+      misinterpret fragments of multibyte characters as whitespace.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Use relevant <literal>#define</literal> symbols from Perl while
+      compiling <application>PL/Perl</application> (Ashutosh Sharma, Tom Lane)
+     </para>
+
+     <para>
+      This avoids portability problems, typically manifesting as
+      a <quote>handshake</quote> mismatch during library load, when working with
+      recent Perl versions.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In <application>psql</application>, fix failure when <command>COPY FROM STDIN</command>
+      is ended with a keyboard EOF signal and then another <command>COPY
+      FROM STDIN</command> is attempted (Thomas Munro)
+     </para>
+
+     <para>
+      This misbehavior was observed on BSD-derived platforms (including
+      macOS), but not on most others.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <application>pg_dump</application> to not emit invalid SQL for an empty
+      operator class (Daniel Gustafsson)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <application>pg_dump</application> output to stdout on Windows (Kuntal Ghosh)
+     </para>
+
+     <para>
+      A compressed plain-text dump written to stdout would contain corrupt
+      data due to failure to put the file descriptor into binary mode.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <function>pg_get_ruledef()</function> to print correct output for
+      the <literal>ON SELECT</literal> rule of a view whose columns have been
+      renamed (Tom Lane)
+     </para>
+
+     <para>
+      In some corner cases, <application>pg_dump</application> relies
+      on <function>pg_get_ruledef()</function> to dump views, so that this error
+      could result in dump/reload failures.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix dumping of function expressions in the <literal>FROM</literal> clause in
+      cases where the expression does not deparse into something that looks
+      like a function call (Tom Lane)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <application>pg_basebackup</application> output to stdout on Windows
+      (Haribabu Kommi)
+     </para>
+
+     <para>
+      A backup written to stdout would contain corrupt data due to failure
+      to put the file descriptor into binary mode.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix <application>pg_upgrade</application> to ensure that the ending WAL record
+      does not have <xref linkend="guc-wal-level"/> = <literal>minimum</literal>
+      (Bruce Momjian)
+     </para>
+
+     <para>
+      This condition could prevent upgraded standby servers from
+      reconnecting.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Always use <option>-fPIC</option>, not <option>-fpic</option>, when building
+      shared libraries with gcc (Tom Lane)
+     </para>
+
+     <para>
+      This supports larger extension libraries on platforms where it makes
+      a difference.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Fix unescaped-braces issue in our build scripts for Microsoft MSVC,
+      to avoid a warning or error from recent Perl versions (Andrew
+      Dunstan)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In MSVC builds, handle the case where the <application>openssl</application>
+      library is not within a <filename>VC</filename> subdirectory (Andrew Dunstan)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In MSVC builds, add proper include path for <application>libxml2</application>
+      header files (Andrew Dunstan)
+     </para>
+
+     <para>
+      This fixes a former need to move things around in standard Windows
+      installations of <application>libxml2</application>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In MSVC builds, recognize a Tcl library that is
+      named <filename>tcl86.lib</filename> (Noah Misch)
+     </para>
+    </listitem>
+
+   </itemizedlist>
+
+  </sect2>
+ </sect1>
+
  <sect1 id="release-9-2-21">
   <title>Release 9.2.21</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2017-05-11</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2017-05-11</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.20.
@@ -70,77 +536,9 @@
      <para>
       By itself, this patch will only fix the behavior in newly initdb'd
       databases.  If you wish to apply this change in an existing database,
-      you will need to do the following:
+      follow the corrected procedure shown in the changelog entry for
+      CVE-2017-7547, in <xref linkend="release-9-2-22"/>.
      </para>
-
-     <procedure>
-      <step>
-       <para>
-        Restart the postmaster after adding <literal>allow_system_table_mods
-        = true</literal> to <filename>postgresql.conf</filename>.  (In versions
-        supporting <command>ALTER SYSTEM</command>, you can use that to make the
-        configuration change, but you'll still need a restart.)
-       </para>
-      </step>
-
-      <step>
-       <para>
-        In <emphasis>each</emphasis> database of the cluster,
-        run the following commands as superuser:
-<programlisting>
-SET search_path = pg_catalog;
-CREATE OR REPLACE VIEW pg_user_mappings AS
-    SELECT
-        U.oid       AS umid,
-        S.oid       AS srvid,
-        S.srvname   AS srvname,
-        U.umuser    AS umuser,
-        CASE WHEN U.umuser = 0 THEN
-            'public'
-        ELSE
-            A.rolname
-        END AS usename,
-        CASE WHEN (U.umuser &lt;&gt; 0 AND A.rolname = current_user)
-                    OR (U.umuser = 0 AND pg_has_role(S.srvowner, 'USAGE'))
-                    OR (SELECT rolsuper FROM pg_authid WHERE rolname = current_user)
-                    THEN U.umoptions
-                 ELSE NULL END AS umoptions
-    FROM pg_user_mapping U
-         LEFT JOIN pg_authid A ON (A.oid = U.umuser) JOIN
-        pg_foreign_server S ON (U.umserver = S.oid);
-</programlisting>
-       </para>
-      </step>
-
-      <step>
-       <para>
-        Do not forget to include the <literal>template0</literal>
-        and <literal>template1</literal> databases, or the vulnerability will still
-        exist in databases you create later.  To fix <literal>template0</literal>,
-        you'll need to temporarily make it accept connections.
-        In <productname>PostgreSQL</productname> 9.5 and later, you can use
-<programlisting>
-ALTER DATABASE template0 WITH ALLOW_CONNECTIONS true;
-</programlisting>
-        and then after fixing <literal>template0</literal>, undo that with
-<programlisting>
-ALTER DATABASE template0 WITH ALLOW_CONNECTIONS false;
-</programlisting>
-        In prior versions, instead use
-<programlisting>
-UPDATE pg_database SET datallowconn = true WHERE datname = 'template0';
-UPDATE pg_database SET datallowconn = false WHERE datname = 'template0';
-</programlisting>
-       </para>
-      </step>
-
-      <step>
-       <para>
-        Finally, remove the <literal>allow_system_table_mods</literal> configuration
-        setting, and again restart the postmaster.
-       </para>
-      </step>
-     </procedure>
     </listitem>
 
     <listitem>
@@ -453,10 +851,10 @@ UPDATE pg_database SET datallowconn = false WHERE datname = 'template0';
  <sect1 id="release-9-2-20">
   <title>Release 9.2.20</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2017-02-09</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2017-02-09</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.19.
@@ -865,10 +1263,10 @@ Branch: REL9_2_STABLE [38bec1805] 2017-01-25 07:02:25 +0900
  <sect1 id="release-9-2-19">
   <title>Release 9.2.19</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2016-10-27</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2016-10-27</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.18.
@@ -1131,10 +1529,10 @@ Branch: REL9_2_STABLE [38bec1805] 2017-01-25 07:02:25 +0900
  <sect1 id="release-9-2-18">
   <title>Release 9.2.18</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2016-08-11</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2016-08-11</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.17.
@@ -1472,10 +1870,10 @@ Branch: REL9_2_STABLE [38bec1805] 2017-01-25 07:02:25 +0900
  <sect1 id="release-9-2-17">
   <title>Release 9.2.17</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2016-05-12</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2016-05-12</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.16.
@@ -1668,10 +2066,10 @@ Branch: REL9_2_STABLE [38bec1805] 2017-01-25 07:02:25 +0900
  <sect1 id="release-9-2-16">
   <title>Release 9.2.16</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2016-03-31</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2016-03-31</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.15.
@@ -1874,10 +2272,10 @@ Branch: REL9_2_STABLE [38bec1805] 2017-01-25 07:02:25 +0900
  <sect1 id="release-9-2-15">
   <title>Release 9.2.15</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2016-02-11</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2016-02-11</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.14.
@@ -2418,10 +2816,10 @@ Branch: REL9_2_STABLE [38bec1805] 2017-01-25 07:02:25 +0900
  <sect1 id="release-9-2-14">
   <title>Release 9.2.14</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2015-10-08</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2015-10-08</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.13.
@@ -3015,10 +3413,10 @@ Branch: REL9_2_STABLE [e90a629e1] 2015-09-22 14:58:38 -0700
  <sect1 id="release-9-2-13">
   <title>Release 9.2.13</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2015-06-12</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2015-06-12</para>
+  </formalpara>
 
   <para>
    This release contains a small number of fixes from 9.2.12.
@@ -3083,10 +3481,10 @@ Branch: REL9_2_STABLE [e90a629e1] 2015-09-22 14:58:38 -0700
  <sect1 id="release-9-2-12">
   <title>Release 9.2.12</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2015-06-04</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2015-06-04</para>
+  </formalpara>
 
   <para>
    This release contains a small number of fixes from 9.2.11.
@@ -3178,10 +3576,10 @@ Branch: REL9_2_STABLE [e90a629e1] 2015-09-22 14:58:38 -0700
  <sect1 id="release-9-2-11">
   <title>Release 9.2.11</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2015-05-22</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2015-05-22</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.10.
@@ -3760,10 +4158,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-10">
   <title>Release 9.2.10</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2015-02-05</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2015-02-05</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.9.
@@ -3784,7 +4182,7 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
     replace any <quote>Norwegian (Bokm&aring;l)_Norway</quote> locale names stored
     in <productname>PostgreSQL</productname> system catalogs with the plain-ASCII
     alias <quote>Norwegian_Norway</quote>.  For details see
-    <ulink url="http://wiki.postgresql.org/wiki/Changes_To_Norwegian_Locale">Changes_To_Norwegian_Locale</ulink>
+    <ulink url="http://wiki.postgresql.org/wiki/changes_to_norwegian_locale"></ulink>
    </para>
 
    <para>
@@ -4265,8 +4663,8 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
 
      <para>
       The most notable oversight was
-      that <varname>recovery_target_xid</varname> failed to delay application
-      of a two-phase commit.
+      that <varname>recovery_target_xid</varname> could not be used to stop at
+      a two-phase commit.
      </para>
     </listitem>
 
@@ -4677,10 +5075,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-9">
   <title>Release 9.2.9</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2014-07-24</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2014-07-24</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.8.
@@ -5158,10 +5556,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-8">
   <title>Release 9.2.8</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2014-03-20</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2014-03-20</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.7.
@@ -5337,9 +5735,6 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
       for DST law changes in Fiji and Turkey, plus historical changes in
       Israel and Ukraine.
      </para>
-
-     <para>
-     </para>
     </listitem>
 
    </itemizedlist>
@@ -5350,10 +5745,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-7">
   <title>Release 9.2.7</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2014-02-20</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2014-02-20</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.6.
@@ -5829,9 +6224,6 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
       some <application>psql</application> <literal>\d</literal> commands
       (Peter Eisentraut, Tom Lane)
      </para>
-
-     <para>
-     </para>
     </listitem>
 
     <listitem>
@@ -5960,10 +6352,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-6">
   <title>Release 9.2.6</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2013-12-05</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2013-12-05</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.5.
@@ -6295,10 +6687,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-5">
   <title>Release 9.2.5</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2013-10-10</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2013-10-10</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.4.
@@ -6524,6 +6916,13 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
 
     <listitem>
      <para>
+      Prevent errors in WAL replay due to references to uninitialized empty
+      pages (Andres Freund)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
       Fix <command>REINDEX TABLE</command> and <command>REINDEX DATABASE</command>
       to properly revalidate constraints and mark invalidated indexes as
       valid (Noah Misch)
@@ -6707,10 +7106,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-4">
   <title>Release 9.2.4</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2013-04-04</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2013-04-04</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.3.
@@ -7114,10 +7513,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-3">
   <title>Release 9.2.3</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2013-02-07</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2013-02-07</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.2.
@@ -7565,10 +7964,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-2">
   <title>Release 9.2.2</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2012-12-06</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2012-12-06</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.1.
@@ -8289,10 +8688,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2-1">
   <title>Release 9.2.1</title>
 
-  <note>
-  <title>Release Date</title>
-  <simpara>2012-09-24</simpara>
-  </note>
+  <formalpara>
+  <title>Release date:</title>
+  <para>2012-09-24</para>
+  </formalpara>
 
   <para>
    This release contains a variety of fixes from 9.2.0.
@@ -8394,9 +8793,6 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
       Improve selectivity estimation for text search queries involving
       prefixes, i.e. <replaceable>word</replaceable><literal>:*</literal> patterns  (Tom Lane)
      </para>
-
-     <para>
-     </para>
     </listitem>
 
     <listitem>
@@ -8460,10 +8856,10 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
  <sect1 id="release-9-2">
   <title>Release 9.2</title>
 
-  <note>
-   <title>Release Date</title>
-   <simpara>2012-09-10</simpara>
-  </note>
+  <formalpara>
+   <title>Release date:</title>
+   <para>2012-09-10</para>
+  </formalpara>
 
   <sect2>
    <title>Overview</title>
@@ -8518,7 +8914,7 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
       <listitem>
        <para>
         Add a <link
-        linkend="app-pgreceivexlog"><application>pg_receivexlog</application></link>
+        linkend="app-pgreceivewal"><application>pg_receivexlog</application></link>
         tool to archive WAL file changes as they are written
        </para>
       </listitem>
@@ -9680,7 +10076,7 @@ Branch: REL9_2_STABLE [6b700301c] 2015-02-17 16:03:00 +0100
       <listitem>
        <para>
         Add a <link
-        linkend="app-pgreceivexlog"><application>pg_receivexlog</application></link>
+        linkend="app-pgreceivewal"><application>pg_receivexlog</application></link>
         tool to archive WAL file changes as they are written, rather
         than waiting for completed WAL files (Magnus Hagander)
        </para>
