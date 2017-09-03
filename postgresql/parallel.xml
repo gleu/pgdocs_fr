@@ -32,8 +32,10 @@
 
    <para>
     Quand l'optimiseur détermine que la parallélisation est la stratégie la
-    plus rapide pour une requête particulière, il crée un plan d'exécution incluant
-    un <firstterm>n&oelig;ud Gather</firstterm>. En voici un exemple simple&nbsp;:
+    plus rapide pour une requête particulière, il crée un plan d'exécution
+    incluant un <firstterm>n&oelig;ud Gather</firstterm> ou un
+    <firstterm>n&oelig;ud Gather Merge</firstterm>. En voici un exemple
+    simple&nbsp;:
 
 <screen>
 EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
@@ -48,9 +50,11 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
    </para>
 
    <para>
-    Dans tous les cas, le n&oelig;ud <literal>Gather</literal> aura
-    extactement un no&oelig;ud enfant, qui est la portion du plan exécutée en
-    parallèle. Si le n&oelig;ud <literal>Gather</literal> est à la racine du
+    Dans tous les cas, le n&oelig;ud <literal>Gather</literal> ou
+    <literal>Gather Merge</literal> aura exactement un no&oelig;ud enfant, qui
+    est la portion du plan exécutée en parallèle. Si le n&oelig;ud
+    <literal>Gather</literal> ou <literal>Gather Merge</literal> est à la
+    racine du
     plan, alors la requête entière est parallélisée. S'il est placé ailleurs
     dans le plan, alors seulement cette portion du plan s'exécutera en
     parallèle. Dans l'exemple ci-dessus, la requête accède à une seule
@@ -68,11 +72,14 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     l'exécution de la requête, le processus en charge de la session
     demandera un nombre de processus d'arrière plan (<link
     linkend="bgworker">background workers</link>) égal au nombre de workers
-    choisi par le planificateur. Le nombre total de <foreignphrase>background
-    workers</foreignphrase> pouvant exister à un même moment est limité par les
-    paramètres <xref linkend="guc-max-worker-processes"/> et
-    <xref linkend="guc-max-parallel-workers"/>&nbsp;; il est donc possible
-    qu'une requête parallélisée s'exécute avec moins de
+    choisi par le planificateur. Le nombre de workers en tache de fond que le
+    planificateur considèrera utiliser est limité à au plus la valeur de
+    <xref linkend="guc-max-parallel-workers-per-gather"/> . Le nombre total de
+    <foreignphrase>background workers</foreignphrase> pouvant exister à un
+    même moment est limité par les paramètres <xref
+    linkend="guc-max-worker-processes"/> et <xref
+    linkend="guc-max-parallel-workers"/>. De ce fait, il est possible qu'une
+    requête parallélisée s'exécute avec moins de
     <foreignphrase>workers</foreignphrase> que prévu, voire même sans
     <foreignphrase>worker</foreignphrase> du tout. Le plan optimal peut
     dépendre du nombre de <foreignphrase>workers</foreignphrase> disponibles,
@@ -81,15 +88,14 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     <varname>max_worker_processes</varname>  et de
     <varname>max_parallel_workers</varname> pour qu'un plus grand nombre de
     <foreignphrase>workers</foreignphrase> puissent travailler simultanément
-    ou la diminution de <xref linkend="guc-max-parallel-workers-per-gather"/> pour que
+    ou la diminution de <varname>max_parallel_workers_per_gather</varname> pour que
     le planificateur réclame moins de <foreignphrase>workers</foreignphrase>.
    </para>
 
    <para>
     Chaque processus <foreignphrase>background worker</foreignphrase> démarré
     avec succès dans une requête parallélisée donnée exécutera la
-    portion du plan sous le n&oelig;ud
-    <literal>Gather</literal>. Le processus principal, appelé
+    portion parallélisée du plan. Le processus principal, appelé
     <foreignphrase>leader</foreignphrase>, exécutera aussi cette portion du
     plan bien qu'il ait des responsabilités supplémentaires&nbsp;: il doit
     aussi lire toutes les lignes générées par les
@@ -101,10 +107,21 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     génère un grand nombre de lignes, le <foreignphrase>leader</foreignphrase>
     peut être accaparé par la lecture des lignes générées par
     les <foreignphrase>workers</foreignphrase> et par le traitement
-    des autres étapes au-dessus du n&oelig;ud <literal>Gather</literal>. Dans de
+    des autres étapes au-dessus du n&oelig;ud <literal>Gather</literal> ou du
+    n&oelig;ud <literal>Gather Merge</literal>. Dans de
     tels cas, le <foreignphrase>leader</foreignphrase> travaillera très peu sur la
     portion parallélisée du plan.
    </para>
+
+   <para>
+    Quand le n&oelig;ud principal de la portion parallélisée est
+    <literal>Gather Merge</literal> au lieu de <literal>Gather</literal>, cela
+    indique que chaque processus exécutant la portion parallélisée du plan
+    produit des lignes triées, et que le processus principal s'occupe de
+    conserver l'ordre des lignes pendant leur assemblage. Par contre,
+    <literal>Gather</literal> lit les lignes de processus d'aide dans
+    n'importe quel ordre, détruisant tout ordre qui aurait pu exister.
+   </para>   
  </sect1>
 
  <sect1 id="when-can-parallel-query-be-used">
@@ -248,9 +265,9 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
         seulement survenir suite à l'utilisation d'un client qui ne se base
         pas sur la libpq. Si cela arrive fréquemment, il pourrait être une
         bonne idée de configurer <xref
-        linkend="guc-max-parallel-workers-per-gather"/> pour les sessions où
-        cela pourrait survenir, pour éviter de générer des plans de requêtes
-        non optimales s'ils sont exécutés de façon sérialisé.
+        linkend="guc-max-parallel-workers-per-gather"/> à zéro pour les
+        sessions où cela pourrait survenir, pour éviter de générer des plans
+        de requêtes non optimales s'ils sont exécutés de façon sérialisé.
       </para>
     </listitem>
 
@@ -293,9 +310,10 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     interne par l'optimiseur comme un <firstterm>plan
     partiel</firstterm>&nbsp;; c'est-à-dire construit de façon
     à ce que chaque processus exécutant le plan ne génère qu'un
-    sous-ensemble des lignes en sortie, et que chacune
-    ait la garantie d'être générée par exactement un des
-    processus participants.
+    sous-ensemble des lignes en sortie, et que chacune ait la garantie d'être
+    générée par exactement un des processus participants. Habituellement, cela
+    signifie que le parcours de la table pour cette requête sera un parcours
+    parallélisé sûr.
   </para>
 
  <sect2 id="parallel-scans">
@@ -341,10 +359,8 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     </listitem>
   </itemizedlist>
 
-    Seuls les types de parcours listés ci-dessus peuvent être utilisés pour un
-    parcours sur la table conductrice au sein d'un plan parallèle.  Tous les
-    autres types de parcours, comme les parcours parallèles d'index autre que
-    btree, pourraient être supportés dans le futur.
+    Les autres types de parcours, comme les parcours d'index autre que btree,
+    pourraient supportés la parallélisation dans le futur.
   </para>
  </sect2>
 
@@ -388,8 +404,9 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     connaît. Ceci se reflète dans le plan par le n&oelig;ud
     <literal>PartialAggregate</literal>. Puis les résultats partiels sont
     transférés au <foreignphrase>leader</foreignphrase> via le n&oelig;ud
-    <literal>Gather</literal>. Enfin, le <foreignphrase>leader</foreignphrase>
-    ré-agrège les résultats partiels de tous les
+    <literal>Gather</literal> ou <literal>Gather Merge</literal>. Enfin, le
+    <foreignphrase>leader</foreignphrase> ré-agrège les résultats partiels de
+    tous les
     <foreignphrase>workers</foreignphrase> pour produire le résultat final.
     Ceci apparaît dans le plan sous la forme d'un n&oelig;ud
     <literal>Finalize Aggregate</literal>.
@@ -471,9 +488,9 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     par le <foreignphrase>leader</foreignphrase> pendant
     l'exécution. De ce fait, les opérations à parallélisation
     restreinte ne peuvent jamais survenir sous un n&oelig;ud
-    <literal>Gather</literal>. Une opération à parallélisation non sûre ne
-    peut être exécutée dans une requête
-    parallélisée, y compris au niveau du
+    <literal>Gather</literal> ou <literal>Gather Merge</literal>. Une
+    opération à parallélisation non sûre ne peut être exécutée dans une
+    requête parallélisée, y compris au niveau du
     <foreignphrase>leader</foreignphrase>. Quand une requête contient quoi que
     ce soit non sûr à paralléliser, la parallélisation y est
     complètement désactivée.
@@ -507,7 +524,7 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     <listitem>
       <para>
         Accès à un <literal>InitPlan</literal> ou à un
-        <literal>SubPlan</literal>.
+        <literal>SubPlan</literal> corrélé.
       </para>
     </listitem>
   </itemizedlist>
@@ -583,8 +600,8 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     impliqués dans la requête pour obtenir un meilleur plan. Donc, par
     exemple, si une clause <literal>WHERE</literal> appliquée à une table
     particulière est à parallélisation restreinte, le planificateur ne
-    tentera pas de placer le parcours de cette table sous un n&oelig;ud
-    <literal>Gather</literal>. Dans certains cas, il serait possible 
+    tentera pas de placer le parcours de cette table dans une portion
+    parallélisée du plan. Dans certains cas, il serait possible 
     (voire efficace) d'inclure le parcours de cette table dans la
     partie parallèlisée de la requête et de différer l'évaluation de la 
     clause <literal>WHERE</literal> afin qu'elle se déroule au-dessus du
