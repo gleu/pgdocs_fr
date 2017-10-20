@@ -4286,6 +4286,85 @@ SELECT * FROM sales_summary_bytime;
   </programlisting>
  </example>
 
+
+   <para>
+    Les triggers <literal>AFTER</literal> peuvent aussi utiliser les
+    <firstterm>tables de transition</firstterm> pour inspecter l'ensemble
+    complet de lignes modifiées par l'instruction déclencheur. La commande
+    <command>CREATE TRIGGER</command> donne des noms à la ou aux tables de
+    transition. La fonction peut ensuite se référer à ces noms comme s'il
+    s'agissait de tables temporaires en lecture seule. <xref
+    linkend="plpgsql-trigger-audit-transition-example"/> montre un exemple.
+   </para>
+
+   <example id="plpgsql-trigger-audit-transition-example">
+    <title>Auditer avec les tables de transition</title>
+
+    <para>
+     Cet exemple produit les mêmes résultats que <xref
+     linkend="plpgsql-trigger-audit-example"/> mais au lieu d'utiliser un
+     trigger qui se déclenche pour chaque ligne, il utilise un trigger qui se
+     déclenche une fois par instruction, après avoir récupérer les
+     informations intéressantes dans une table de transition. Cela peut être
+     significativement plus rapide que l'approche du trigger par ligne lorsque
+     l'instruction déclencheur a modifié beaucoup de lignes. Notez qu'il est
+     nécessaire de faire une déclaration séparée du trigger pour chaque type
+     d'événement car les clauses <literal>REFERENCING</literal> doivent être
+     différentes dans chaque cas. Mais ceci ne nous empêche pas d'utiliser une
+     seule fonction trigger si nous le souhaitons. (En pratique, il pourrait
+     être préférable d'utiliser trois fonctions séparées et d'éviter les tests
+     à l'exécution sur la variable <varname>TG_OP</varname>.)
+    </para>
+
+<programlisting>
+CREATE TABLE emp (
+    empname           text NOT NULL,
+    salary            integer
+);
+
+CREATE TABLE emp_audit(
+    operation         char(1)   NOT NULL,
+    stamp             timestamp NOT NULL,
+    userid            text      NOT NULL,
+    empname           text      NOT NULL,
+    salary integer
+);
+
+CREATE OR REPLACE FUNCTION process_emp_audit() RETURNS TRIGGER AS $emp_audit$
+    BEGIN
+        --
+        -- Create rows in emp_audit to reflect the operations performed on emp,
+        -- making use of the special variable TG_OP to work out the operation.
+        --
+        IF (TG_OP = 'DELETE') THEN
+            INSERT INTO emp_audit
+                SELECT 'D', now(), user, o.* FROM old_table o;
+        ELSIF (TG_OP = 'UPDATE') THEN
+            INSERT INTO emp_audit
+                SELECT 'U', now(), user, n.* FROM new_table n;
+        ELSIF (TG_OP = 'INSERT') THEN
+            INSERT INTO emp_audit
+                SELECT 'I', now(), user, n.* FROM new_table n;
+        END IF;
+        RETURN NULL; -- result is ignored since this is an AFTER trigger
+    END;
+$emp_audit$ LANGUAGE plpgsql;
+
+CREATE TRIGGER emp_audit_ins
+    AFTER INSERT ON emp
+    REFERENCING NEW TABLE AS new_table
+    FOR EACH STATEMENT EXECUTE PROCEDURE process_emp_audit();
+CREATE TRIGGER emp_audit_upd
+    AFTER UPDATE ON emp
+    REFERENCING OLD TABLE AS old_table NEW TABLE AS new_table
+    FOR EACH STATEMENT EXECUTE PROCEDURE process_emp_audit();
+CREATE TRIGGER emp_audit_del
+    AFTER DELETE ON emp
+    REFERENCING OLD TABLE AS old_table
+    FOR EACH STATEMENT EXECUTE PROCEDURE process_emp_audit();
+</programlisting>
+   </example>
+
 </sect2>
 
 <sect2 id="plpgsql-event-trigger">

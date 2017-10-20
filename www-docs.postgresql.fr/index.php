@@ -133,7 +133,7 @@ $version['906'] = '9.6';
     l'<a href="index_obsoletes.php">index des version obsolètes</a>.</p>
 
     <div id="pg10">
-      <h2>Documentation PostgreSQL, version 10 BETA!</h2>
+      <h2>Documentation PostgreSQL, version 10</h2>
       <div class="listes">
         <ul>
             <li>Manuel au format HTML&nbsp;:
@@ -144,11 +144,9 @@ $version['906'] = '9.6';
                 <a onclick="pageTracker._trackPageview('/pg96.tar.gz');"
                 href="http://docs.postgresql.fr/10/pg10.tar.gz">TAR.GZ</a>
             </li>
-<!--
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg10.pdf');"
               href="http://docs.postgresql.fr/10/pg10.pdf">PDF</a>
             </li>
--->
             <li>Document d'installation au format <a
               onclick="pageTracker._trackPageview('/INSTALL10.html');"
               href="http://docs.postgresql.fr/10/INSTALL.html">HTML</a> et

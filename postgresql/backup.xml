@@ -938,29 +938,39 @@ SELECT pg_start_backup('label', false, false);
 <programlisting>
 SELECT * FROM pg_stop_backup(false, true);
 </programlisting>
-	 Cela met fin au processus de sauvegarde et réalise une bascule
-     automatique vers le prochain segment WAL. Cette bascule est nécessaire
-     pour permettre au dernier fichier de segment WAL écrit pendant la
-     sauvegarde d'être immédiatement archivable.
+     Cela met fin au processus de sauvegarde. Sur un serveur primaire, cela
+     réalise aussi une bascule automatique au prochain segment de journal de
+     transactions. Sur un serveur secondaire (standby), il n'est pas possible
+     de basculer automatiquement les segments des journaux de transactions,
+     donc vous pourriez vouloir utiliser <function>pg_switch_wal</function>
+     sur le primaire pour réaliser une bascule manuelle. Cette bascule est
+     nécessaire pour permettre au dernier fichier de segment WAL écrit pendant
+     la sauvegarde d'être immédiatement archivable.
     </para>
     <para>
-	 La fonction <function>pg_stop_backup</function> retournera une ligne avec trois
-	 valeurs. Le second de ces champs devrait être écrit dans un fichier nommé
-	 <filename>backup_label</filename> dans le répertoire racine de la sauvegarde.
-	 Le troisième champ devrait être écrit dans un fichier nommé 
-	 <filename>tablespace_map</filename> sauf si le champ est vide. Ces fichiers
-	 sont vitaux pour le fonctionnement de la sauvegarde et doivent être écrits sans modification.
+     La fonction <function>pg_stop_backup</function> retournera une ligne avec
+     trois valeurs. Le second de ces champs devrait être écrit dans un fichier
+     nommé <filename>backup_label</filename> dans le répertoire racine de la
+     sauvegarde. Le troisième champ devrait être écrit dans un fichier nommé
+     <filename>tablespace_map</filename> sauf si le champ est vide. Ces
+     fichiers sont vitaux pour le fonctionnement de la sauvegarde et doivent
+     être écrits sans modification.
     </para>
    </listitem>
    <listitem>
     <para>
-	 Une fois que les fichiers de segment WAL utilisés lors de la sauvegarde
+     Une fois que les fichiers de segment WAL utilisés lors de la sauvegarde
      sont archivés, c'est terminé. Le fichier identifié par le résultat de
-     <function>pg_stop_backup</function> est le dernier segment nécessaire pour produire
-     un jeu complet de fichiers de sauvegarde.
-     Si <varname>archive_mode</varname> est activé,
-     <function>pg_stop_backup</function> ne rend pas la main avant que le dernier segment
-     n'ait été archivé. L'archivage de ces fichiers est automatique puisque
+     <function>pg_stop_backup</function> est le dernier segment nécessaire
+     pour produire un jeu complet de fichiers de sauvegarde. Sur un serveur
+     primaire, si <varname>archive_mode</varname> est activé et que le
+     paramètre <literal>wait_for_archive</literal> est activé (valeur
+     <literal>true</literal>), <function>pg_stop_backup</function> ne rend pas
+     la main avant que le dernier segment n'ait été archivé. Sur un standby,
+     le paramètre <varname>archive_mode</varname> doit valoir
+     <literal>always</literal> pour que la fonction
+     <function>pg_stop_backup</function> attende. L'archivage de ces fichiers
+     est automatique puisque
      <varname>archive_command</varname> est déjà configuré. Dans la plupart des
      cas, c'est rapide, mais il est conseillé de surveiller le système d'archivage pour
      s'assurer qu'il n'y a pas de retard. Si le processus d'archivage a pris du retard
@@ -975,7 +985,8 @@ SELECT * FROM pg_stop_backup(false, true);
     <para>
      Si le processus de sauvegarde surveille et s'assure que tous les fichiers
      de segment WAL nécessaires à la sauvegarde soient archivés avec succès,
-     le second paramètre (positionné à true par défaut), peut être positionné à
+     le paramètre <literal>wait_for_archive</literal> (positionné à true par
+     défaut), peut être positionné à
      false pour que <function>pg_stop_backup</function> renvoie la main dès que
      l'enregistrement de fin de sauvegarde est écrit dans le WAL.  Par défaut,
      <function>pg_stop_backup</function> attendra jusqu'à ce que tous les WAL
@@ -991,14 +1002,14 @@ SELECT * FROM pg_stop_backup(false, true);
    <sect3 id="backup-lowlevel-base-backup-exclusive">
     <title>Créer une sauvegarde exclusive de bas niveau</title>
     <para>
-	 Le procédé pour une sauvegarde exclusive est majoritairement le même 
-	 que pour la non-exclusive, mais il diffère en quelques étapes clés.
-	 Il ne permet pas à plus d'une seule sauvegarde concurrente de s'exécuter,
-	 et il peut y avoir quelques problèmes sur le serveur s'il s'arrête brutalement pendant
-	 la sauvegarde. Avant la version 9.6 de PostgreSQL, il s'agissait de la seule méthode
-	 bas niveau disponible, mais il est maintenant recommandé que tous les
-	 utilisateurs mettent à jour leurs scripts pour utiliser une sauvegarde 
-	 non-exclusive si possible.
+     Le procédé pour une sauvegarde exclusive est majoritairement le même que
+     pour la non-exclusive, mais il diffère en quelques étapes clés. Ce type
+     de sauvegarde peut seulement être réalisé sur un serveur primaire et ne
+     permet pas des sauvegardes concurrentes. Avant la version 9.6 de
+     PostgreSQL,   il s'agissait de la seule méthode bas niveau disponible,
+     mais il est maintenant recommandé que tous les utilisateurs mettent à
+     jour leurs scripts pour utiliser une sauvegarde non-exclusive si
+     possible.
     </para>
     <para>
   <orderedlist>
@@ -1057,27 +1068,23 @@ SELECT pg_start_backup('label', true);
 	 <xref linkend="backup-lowlevel-base-backup-data"/> pour les considérations à 
 	 prendre en compte durant cette sauvegarde.
     </para>
+    <para>
+      Notez que, si le serveur s'arrête brutalement lors de la sauvegarde, il
+      pourrait ne pas être possible de recommencer tant que le fichier
+      <literal>backup_label</literal> ne soit manuellement supprimée du
+      répertoire <envar>PGDATA</envar>.
+    </para>
    </listitem>
    <listitem>
     <para>
      Se connecter à nouveau à la base de données en tant qu'utilisateur ayant
      le droit d'exécuter pg_stop_backup (superutilisateur, ou un utilisateur
      ayant le droit EXECUTE sur cette fonction) et lancer la commande&nbsp;:
-     <programlisting>SELECT pg_stop_backup();</programlisting> Cela met fin au
-     processus de sauvegarde et réalise une bascule automatique vers le
-     prochain segment WAL. Cette bascule est nécessaire pour permettre au
-     dernier fichier de segment WAL écrit pendant la sauvegarde d'être
-     immédiatement archivable. Lorsqu'elle est appelée sur un serveur
-     primaire, cette fonction termine le mode de sauvegarde et réalise une
-     bascule automatique vers le prochain journal de transactions. La raison
-     de cette bascule est de s'assurer que le dernier journal écrit pendant la
-     sauvegarde soit prêt à être archivé. Lorsqu'elle est appelée sur le
-     standby, cette fonction termine seulement le mode de sauvegarde. Une
-     bascule du journal de transactions sera nécessaire pour s'assurer que
-     tous les journaux de transactions nécessaires à la restauration de la
-     sauvegarde peuvent être archivés. Si le primaire n'a pas d'activé
-     suffisante en écriture pour en déclencher un,
-     <function>pg_switch_wal</function> devrait être exécuté sur le primaire.
+     <programlisting>SELECT pg_stop_backup();</programlisting> Cette fonction
+     met fin au processus de sauvegarde et réalise une bascule automatique
+     vers le prochain segment WAL. Cette bascule est nécessaire pour permettre
+     au dernier fichier de segment WAL écrit pendant la sauvegarde d'être
+     immédiatement archivable.
     </para>
    </listitem>
    <listitem>
