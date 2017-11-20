@@ -348,21 +348,17 @@ NET STOP postgresql-9.0
     <title>Préparez la mise à jour d'un serveur standby</title>
 
     <para>
-     Si vous mettez à jour des serveurs standbys (comme indiqué dans la
-     section <xref linkend="pgupgrade-step-replicas"/>), vérifiez que les
-     anciens serveurs standby sont à jour en utilisant
+     Si vous mettez à jour des serveurs standbys en utilisant les méthodes
+     indiquées dans la section <xref linkend="pgupgrade-step-replicas"/>),
+     vérifiez que les anciens serveurs standby sont à jour en utilisant
      <application>pg_controldata</application> sur l'ancien serveur primaire
      et l'ancien serveur standby. Vérifiez que les valeurs <quote>Latest
      checkpoint location</quote> sont identiques sur tous les serveurs. (Il y
      aura une différence si les anciens serveurs standbys ont été arrêtés
-     avant l'ancien serveur primaire.)
-    </para>
-
-    <para>
-     De plus, en cas de mise à jour des serveurs standbys, modifiez le
-     paramètre <varname>wal_level</varname> dans le fichier
-     <filename>postgresql.conf</filename> sur la nouvelle instance maître pour
-     que sa valeur corresponde à celle utilisée sur l'ancienne instance.
+     avant l'ancien serveur primaire.) De plus, modifiez
+     <varname>wal_level</varname> pour la valeur
+     <literal>hot_standby</literal> dans le fichier
+     <filename>postgresql.conf</filename> sur la nouvelle instance primaire.
     </para>
    </step>
 
@@ -469,13 +465,23 @@ pg_upgrade.exe
     et copie de journaux</title>
 
     <para>
-     Si vous avez des serveurs standby par réplication continue (voir
-     <xref linkend="streaming-replication"/>) ou par copie des journaux
-     de transactions (voir <xref linkend="warm-standby"/>), suivez les
-     étapes ci-dessous pour les mettre à jour. Vous ne lancerez pas
-     <application>pg_upgrade</application> sur les serveurs standby,
-     mais plutôt <application>rsync</application>. Ne démarrez
+     Si vous avez utilisé le mode lien et que vous avez des serveurs standby
+     par réplication continue (voir <xref linkend="streaming-replication"/>)
+     ou par copie des journaux de transactions (voir <xref
+     linkend="warm-standby"/>), vous pouvez suivre ces étapes pour les mettre
+     à jour rapidement. Vous ne lancerez pas
+     <application>pg_upgrade</application> sur les serveurs standby, mais
+     plutôt <application>rsync</application> sur le primaire. Ne démarrez
      encore aucun serveurs.
+    </para>
+
+    <para>
+     Si vous n'avez <emphasis>pas</emphasis> utilisé le mode lien, n'avez pas
+     ou ne voulez pas utiliser <application>rsync</application>, ou si vous
+     souhaitez une solution plus simple, ignorez les instructions dans cette
+     section et re-créez simplement les serveurs standbys une fois que
+     <application>pg_upgrade</application> a terminé et que la nouvelle
+     instance primaire est en cours d'exécution.
     </para>
 
     <substeps>
@@ -497,7 +503,7 @@ pg_upgrade.exe
        Assurez vous que les nouveaux répertoires de données sur les
        serveurs standby n'existent <emphasis>pas</emphasis> ou sont
        vides. Si <application>initdb</application> a été lancé,
-       détruisez les répertoires de données des serveurs standby.
+       détruisez les nouveaux répertoires de données des serveurs standby.
       </para>
      </step>
 
@@ -507,7 +513,7 @@ pg_upgrade.exe
       <para>
        Installez les mêmes fichiers objets partagés personnalisés
        sur les nouveaux serveurs standby que vous avez installé sur la
-       nouvelle instance maître.
+       nouvelle instance primaire.
       </para>
      </step>
 
@@ -524,7 +530,8 @@ pg_upgrade.exe
       <title>Sauvegardez les fichiers de configuration</title>
 
       <para>
-       Sauvegardez tous les fichiers de configuration des
+       Sauvegardez tous les fichiers de configuration des répertoires
+       de données des anciens
        serveurs standby que vous avez besoin de conserver,
        par exemple <filename>postgresql.conf</filename>,
        <literal>recovery.conf</literal>, dans la mesure où ceux-ci
@@ -536,37 +543,68 @@ pg_upgrade.exe
       <title>Lancez <application>rsync</application></title>
 
       <para>
-       À partir d'un répertoire qui est au-dessus du répertoire de
-       l'ancienne et de la nouvelle instances, lancez ceci pour chaque esclave&nbsp;:
+       Lors de l'utilisation du mode lien, les serveurs standbys peuvent être
+       rapidement mis à jour en utilisant <application>rsync</application>.
+       Pour cela, à partir d'un répertoire sur le serveur primaire qui est au-
+       dessus des répertoires de l'ancienne et de la nouvelle instances de
+       bases de données, exécutez ceci sur le <emphasis>primaire</emphasis>
+       pour chaque serveur standby&nbsp;:
 
 <programlisting>
-rsync --archive --delete --hard-links --size-only ancien_pgdata nouveau_pgdata repertoire_distant
+rsync --archive --delete --hard-links --size-only --no-inc-recursive ancien_pgdata nouveau_pgdata repertoire_distant
 </programlisting>
 
-       où <option>ancien_pgdata</option> et <option>nouveau_pgdata</option> sont
-       relatifs au répertoire courant, et <option>repertoire_distant</option> est
-       <emphasis>au-dessus</emphasis> des ancien et nouveau répertoires
-       des instances sur le serveur standby. Les anciens et nouveaux chemins
-       relatifs doivent correspondre sur le serveur maître et le serveur
-       standby. Consultez les pages du manuel de <application>rsync</application>
-       pour des détails sur la manière de spécifier le répertoire
-       distant, parexemple <literal>hotestandby:/opt/PostgreSQL</literal>.
-       <application>rsync</application> sera rapide lorsque l'option
-       <option>--link</option> de <application>pg_upgrade</application> est
-       utilisée car il créera des liens physiques sur le serveur distant plutôt
-       que de transférer les données utilisateur.
-       Malheureusement, <application>rsync</application> copie les fichiers
-       associés aux tables temporaires et aux tables non journalisées alors
-       que ce n'est pas utile.
+       où <option>ancien_pgdata</option> et <option>nouveau_pgdata</option>
+       sont relatifs au répertoire courant sur le primaire, et
+       <option>repertoire_distant</option> est <emphasis>au-dessus</emphasis>
+       des ancien et nouveau répertoires des instances sur le serveur standby.
+       La structure de répertoire sous les répertoires indiqués du primaire et
+       des standbys doivent correspondre sur le serveur maître et le serveur
+       standby. Consultez les pages du manuel de
+       <application>rsync</application> pour des détails sur la manière de
+       spécifier le répertoire distant, par exemple&nbsp;:
+
+<programlisting>
+rsync --archive --delete --hard-links --size-only --no-inc-recursive /opt/PostgreSQL/9.5/data \
+      /opt/PostgreSQL/9.6/data standby.example.com:/opt/PostgreSQL
+</programlisting>
+
+       Vous pouvez vérifier ce que la commande fait en utilisant l'option
+       <option>--dry-run</option> de <application>rsync</application>. Alors
+       que <application>rsync</application> doit être exécuté sur le primaire
+       pour au moins un standby, il est possible d'exécuter
+       <application>rsync</application> sur un standby mis à jour pour mettre
+       à jour les autres standbys tant que le standby mis à jour n'est pas
+       démarré.
+      </para>
+
+      <para>
+       Cela enregistre les liens créés par le mode lien de
+       <application>pg_upgrade</application> qui connecte les fichiers dans
+       les ancienne et nouvelle instances sur le serveur primaire. Puis, il
+       trouve les fichiers correspondant sur l'ancienne instance du standby et
+       crée les liens dans le répertoire de la nouvelle instance du standby.
+       Les fichiers qui n'étaient pas liés sur le primaire sont copiés du
+       primaire au standby. (Ils sont généralement petits.) Ceci permet une
+       mise à jour rapide du serveur standby. Malheureusement,
+       <application>rsync</application> copie sans besoin les fichiers
+       associés des tables temporaires et non journalisées parce que ces
+       fichiers n'existent normalement pas sur les serveurs standbys.
       </para>
 
       <para>
        Si vous avez des tablespaces, vous aurez besoin de lancer
        une commande <application>rsync</application> similaire pour
-       chaque répertoire de tablespace. Si vous avez déplacé
-       <filename>pg_xlog</filename> en dehors des répertoires de
-       données, <application>rsync</application> doit être lancé
-       aussi sur ces répertoires.
+       chaque répertoire de tablespace, par exemple&nbsp;:
+
+<programlisting>
+rsync --archive --delete --hard-links --size-only --no-inc-recursive /vol1/pg_tblsp/PG_9.5_201510051 \
+      /vol1/pg_tblsp/PG_9.6_201608131 standby.example.com:/vol1/pg_tblsp
+</programlisting>
+
+       Si vous avez déplacé le répertoire <filename>pg_xlog</filename> en
+       dehors des répertoires de données, <application>rsync</application>
+       doit aussi être exécuté sur ces répertoires.
       </para>
      </step>
 
@@ -578,8 +616,8 @@ rsync --archive --delete --hard-links --size-only ancien_pgdata nouveau_pgdata r
        de transactions. (Vous n'avez pas besoin d'exécuter
        les fonctions <function>pg_start_backup()</function> et
        <function>pg_stop_backup()</function> ou effectuer une sauvegarde
-       des fichiers car les esclaves sont toujours synchronisés avec
-       le maître.)
+       des fichiers car les standbys sont toujours synchronisés avec
+       le primaire.)
       </para>
      </step>
 
