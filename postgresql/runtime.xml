@@ -1163,6 +1163,89 @@ project.max-msg-ids=(priv,4096,deny)
 
   </sect2>
 
+  <sect2 id="systemd-removeipc">
+   <title>systemd et RemoveIPC</title>
+
+   <indexterm>
+    <primary>systemd</primary>
+    <secondary>RemoveIPC</secondary>
+   </indexterm>
+
+   <para>
+    Si <productname>systemd</productname> est utilisé, une attention
+    particulière doit être portée sur le fait que les ressources IPC (mémoire
+    partagée et sémaphore) ne soient pas prématurément suppriméees par le
+    système d'exploitation, et encore plus si l'installation de PostgreSQL
+    s'est faite à partir des sources. Les utilisateurs des packages des
+    distributions de PostgreSQL ont moins de risques d'être affectés car
+    l'utilisateur <literal>postgres</literal> est normalement créé comme un
+    utilisateur système.
+   </para>
+
+   <para>
+    La configuration <literal>RemoveIPC</literal> dans
+    <filename>logind.conf</filename> contrôle si les objets IPC sont supprimés
+    quand un utilisateur se déconnecte complètement. Les utilisateurs systèmes
+    ne sont pas concernés. Ce paramètre est activé (on) par défaut avant la
+    version originale de <productname>systemd</productname>, mais certains
+    systèmes d'exploitation choisissent de le configurer par défaut à off.
+   </para>
+
+   <para>
+    Un effet observé typiquement lorsque ce paramètre est activé est que les
+    objets de la sémaphore utilisée par un serveur PostgreSQL sont supprimés à
+    des moments aléatoires, amenant un arrêt brutal du serveur avec des
+    messages dans les traces de ce type
+<screen>
+LOG: semctl(1234567890, 0, IPC_RMID, ...) failed: Invalid argument
+</screen>
+    Les différents types d'objets IPC (mémoire partagée vs. sémaphores, System
+    V vs. POSIX) sont traités légèrement différemment par
+    <productname>systemd</productname>, donc une personne pourrait observer
+    que certaines ressources IPC ne sont pas supprimées de la même façon que
+    les autres. De toute façon, il n'est pas conseillé de se baser sur ces
+    différences subtiles.
+   </para>
+
+   <para>
+    Un événement du type <quote>utilisateur se déconnectant</quote> pourrait
+    survenir dans le cadre d'un job de maintenance ou manuellement quand un
+    administrateur se connecte avec l'utilisateur <literal>postgres</literal>
+    ou quelque chose de similaire, donc il est difficile de l'empêcher en
+    règle général.
+   </para>
+
+   <para>
+    Un <quote>utilisateur système</quote> est déterminé par
+    <productname>systemd</productname> au moment de la compilation suivant la
+    valeur du paramètre <symbol>SYS_UID_MAX</symbol> dans
+    <filename>/etc/login.defs</filename>.
+   </para>
+
+   <para>
+    Les scripts des packages et de déploiements doivent faire attention à
+    créer l'utilisateur <literal>postgres</literal> comme un utilisateur
+    système en utilisant <literal>useradd -r</literal>, <literal>adduser
+    --system</literal>, ou un équivalent.
+   </para>
+
+   <para>
+    Si le compte utilisateur a été créé de façon incorrect ou ne peut pas être
+    modifié, il est recommendé de configurer
+<programlisting>
+RemoveIPC=no
+</programlisting>
+    dans le fichier <filename>/etc/systemd/logind.conf</filename> ou dans tout
+    autre fichier de configuration approprié.
+   </para>
+
+   <caution>
+    <para>
+     Il faut s'assurer qu'une de ces deux actions a bien été réalisée. Dans le
+     cas contraire, le serveur PostgreSQL ne sera pas du tout stable.
+    </para>
+   </caution>
+  </sect2>
 
   <sect2>
    <title>Limites de ressources</title>
@@ -2157,37 +2240,47 @@ demandera et ne se lancera pas tant qu'elle n'aura pas été saisie.
 </para>
 
 <para>
-Dans certains cas, le certificat du serveur peut être signé par une
-autorité <quote>intermédiaire</quote> de certificats, plutôt que par un
-qui soit directement de confiance par les clients. Pour utiliser un tel
-certificat, ajoutez le certificat de l'autorité signataire au fichier
-<filename>server.crt</filename>, puis le certificat de l'autorité parente,
-et ainsi de suite jusqu'à l'autorité <quote>racine</quote> ou
-<quote>intermédiaire</quote> qui est acceptée par les clients, autrement dit
-signé par le fichier <filename>root.crt</filename> du client.
+Le premier certificat dans <filename>server.crt</filename> doit être le
+certificat du serveur car il doit correspondre à la clé privée du serveur. Les
+certificats des autorités <quote>intermédiaires</quote> d'autorité peuvent
+aussi être ajoutés au fichier. Le faire permet d'éviter la nécessité
+d'enregistrer les certificats intermédiaires des clients, en supposant que le
+certificat racine et les certificats intermédiaires ont été créés avec les
+extensions <literal>v3_ca</literal>. Ceci permet une expiration plus simple
+des certificats intermédiaires.
+</para>
+
+<para>
+Il n'est pas nécessaire d'ajouter le certificat racine dans le fichier
+<filename>server.crt</filename>. À la place, les clients doivent avoir le
+certificat racine de la chaîne de certificats du serveur.
 </para>
 
 <sect2 id="ssl-client-certificates">
 <title>Utiliser des certificats clients</title>
 
 <para>
-Pour réclamer l'envoi d'un certificat de confiance par le client, placez
-les certificats des autorités (<acronym>CA</acronym>) de confiance dans
-le fichier <filename>root.crt</filename> du répertoire des données,
-configurez le paramètre <xref linkend="guc-ssl-ca-file"/> du
-<filename>postgresql.conf</filename> à <literal>root.crt</literal>,
-et configurez le paramètre <literal>clientcert</literal> à 1
-sur la ligne <literal>hostssl</literal> appropriée dans le fichier
-<filename>pg_hba.conf</filename>. Un
-certificat pourra ensuite être réclamé lors du lancement de la connexion
-SSL. (Voir <xref linkend="libpq-ssl"/> pour une description de la
-configuration de certificats sur le client.) Le serveur vérifiera que le
-certificat du client est signé par une des autorités de confiance.
-Si des <acronym>CA</acronym> intermédiaires apparaissent dans le fichier
-<filename>root.crt</filename>, le fichier doit aussi contenir les chaînes
-de certificat jusqu'au <acronym>CA</acronym> racine.  Les
-entrées de la liste de révocation des certificats sont aussi vérifiées
-si le paramètre <xref linkend="guc-ssl-crl-file"/> est configuré.
+Pour réclamer au client de fournir un certificat de confiance, placez les
+certificats des autorités certificats racines (<acronym>CA</acronym>) dont
+vous avez confiance dans un fichier du répertoire des données, configurez le
+paramètre <xref linkend="guc-ssl-ca-file"/> dans
+<filename>postgresql.conf</filename> au nouveau nom du fichier, et ajoutez
+l'option d'authentification <literal>clientcert=1</literal> sur la ligne
+<literal>hostssl</literal> approprié dans <filename>pg_hba.conf</filename>. Un
+certificat sera alors réclamé du client lors du démarrage de la connexion SSL.
+(Voir <xref linkend="libpq-ssl"/> pour une description sur la configuration
+des certificats sur le client.) Le serveur vérifiera que le certificat client
+est signé par une des autorités de certificat de confiance.
+</para>
+
+<para>
+Les certificats intermédiaires chaînés jusqu'aux certificats racines existants
+peuvent aussi apparaître dans le fichier <filename>root.crt</filename> si vous
+souhaitez éviter d'avoir à les stocker sur les clients (en supposant que les
+certificats racine et intermédiaires ont été créés avec les extensions
+<literal>v3_ca</literal>). Les entrées dans la liste de révocation de
+certificats (CRL) sont aussi vérifiées si le paramètre <xref linkend="guc-ssl-
+crl-file"/> est configuré.
 <!-- If this URL changes replace it with a URL to www.archive.org. -->
 (Voir les <ulink
 url="http://h71000.www7.hp.com/doc/83final/ba554_90007/ch04s02.html">diagrammes montrant l'utilisation des certificats SSL</ulink>.)
@@ -2201,15 +2294,6 @@ pour les lignes spécifiées <literal>hostssl</literal>. Quand
 0, le serveur vérifiera toujours les certificats clients
 présentés avec sa liste CA si elle est configurée &mdash;
 mais il ne forcera pas la présentation d'un certificat client.
-</para>
-
-<para>
-Notez que <filename>root.crt</filename> du serveur liste les autorités de certificats
-de haut-niveau, ceux suffisamment de confiance pour signer les certificats
-des clients. En principe, il n'a pas besoin de lister l'autorité de
-certificats qui a signé le certificat du serveur bien que dans la plupart
-des cas, cette autorité sera aussi de confiance pour les certificats de
-clients.
 </para>
 
 <para>
@@ -2287,49 +2371,108 @@ prennent effet.
 </sect2>
 
 <sect2 id="ssl-certificate-creation">
-<title>Créer un certificat auto-signé</title>
+<title>Créer des certificats</title>
 
 <para>
-Pour créer rapidement un certificat signé soi-même pour le serveur,
-utilisez la commande <productname>OpenSSL</productname> suivante&nbsp;:
+Pour créer un certificat simple auto-signé pour le serveur, valide pour 365
+jours, utilisez la commande <productname>OpenSSL</productname> suivante, en
+remplaçant <replaceable>dbhost.yourdomain.com</replaceable> avec le nom d'hôte
+du serveur&nbsp;
 <programlisting>
-openssl req -new -text -out server.req
+openssl req -new -x509 -days 365 -nodes -text -out server.crt \
+  -keyout server.key -subj "/CN=<replaceable>dbhost.yourdomain.com</replaceable>"
 </programlisting>
-Remplissez l'information que <application>openssl</application> demande.
-Assurez-vous de saisir le nom de l'hôte local dans <quote>Common
- Name</quote>&nbsp;; le mot de passe peut ne pas être saisi. Le programme
-générera une clé qui est protégée par une phrase de passe&nbsp;; il
-n'acceptera pas une phrase de passe qui fait moins de quatre caractères
-de long. Pour la supprimer (vous le devez si vous voulez un démarrage
-automatique du serveur), exécutez les commandes suivantes&nbsp;:
-<programlisting>
-openssl rsa -in privkey.pem -out server.key
-rm privkey.pem
-</programlisting>
-Saisissez l'ancienne phrase de passe pour déverrouiller la clé existante.
-Maintenant, lancez&nbsp;:
-<programlisting>
-openssl req -x509 -in server.req -text -key server.key -out server.crt
-</programlisting>
-pour transformer le certificat en un certificat auto-signé et pour copier
-la clé et le certificat là où le serveur les cherchera.
-Enfin, faites&nbsp;:
+Puis, exécutez&nbsp;:
 <programlisting>
 chmod og-rwx server.key
 </programlisting>
-car le serveur rejetera le fichier si ses droits sont plus importants.
-Pour plus de détails sur la façon de créer la clé privée et le certificat
-de votre serveur, référez-vous à la documentation
-d'<productname>OpenSSL</productname>.
+car le serveur rejetera le fichier si ses droits sont plus importants. Pour
+plus de détails sur la façon de créer la clé privée et le certificat de votre
+serveur, référez-vous à la documentation d'<productname>OpenSSL</productname>.
 </para>
 
 <para>
-Un certificat auto-signé peut être utilisé pour tester, mais un
-certificat signé par une autorité (<acronym>CA</acronym>) (un des
-<acronym>CAs</acronym> global ou un local) devra être utilisé lorsque
-le serveur sera en production pour que le client puisse vérifier
-l'identité du serveur. Si tous les clients sont locaux à l'organisation,
-utiliser un <acronym>CA</acronym> local est recommandé.
+Bien qu'un certificat auto-signé puisse être utilisé pour des tests, un
+certificat signé par une autorité de certificats (<acronym>CA</acronym>)
+(habituellement un <acronym>CA</acronym> racine entreprise) devrait être
+utilisé en production.
+</para>
+ 
+<para>
+Pour créer un certificat serveur dont l'identité peut être validé par des
+clients, créez tout d'abord une demande de signature de certificat
+(<acronym>CSR</acronym>) et un fichier clés public/privé&nbsp;:
+<programlisting>
+openssl req -new -nodes -text -out root.csr \
+  -keyout root.key -subj "/CN=<replaceable>root.yourdomain.com</replaceable>"
+chmod og-rwx root.key
+</programlisting>
+Puis, signez la demande avec la clé pour créer une autorité de certificat
+racine (en utilisant l'emplacement du fichier de configuration
+<productname>OpenSSL</productname> par défaut sur
+<productname>Linux</productname>)&nbsp;:
+<programlisting>
+openssl x509 -req -in root.csr -text -days 3650 \
+  -extfile /etc/ssl/openssl.cnf -extensions v3_ca \
+  -signkey root.key -out root.crt
+</programlisting>
+Enfin, créez un certificat serveur signé par la nouvelle autorité de
+certificat racine&nbsp;:
+<programlisting>
+openssl req -new -nodes -text -out server.csr \
+  -keyout server.key -subj "/CN=<replaceable>dbhost.yourdomain.com</replaceable>"
+chmod og-rwx server.key
+
+openssl x509 -req -in server.csr -text -days 365 \
+  -CA root.crt -CAkey root.key -CAcreateserial \
+  -out server.crt
+</programlisting>
+<filename>server.crt</filename> et <filename>server.key</filename> doivent
+être stockés sur le serveur, et <filename>root.crt</filename> doit être stocké
+sur le client pour que le client puisse vérifier que le certificat feuille du
+serveur a été signé par son propre certificat racine de confiance.
+<filename>root.key</filename> doit être enregistré hors ligne pour l'utiliser
+pour créer les prochains certificats.
+</para>
+ 
+<para>
+Il est aussi possible de créer une chaîne de confiance qui inclut les
+certificats intermédiaires&nbsp;:
+<programlisting>
+# root
+openssl req -new -nodes -text -out root.csr \
+  -keyout root.key -subj "/CN=<replaceable>root.yourdomain.com</replaceable>"
+chmod og-rwx root.key
+openssl x509 -req -in root.csr -text -days 3650 \
+  -extfile /etc/ssl/openssl.cnf -extensions v3_ca \
+  -signkey root.key -out root.crt
+
+# intermediate
+openssl req -new -nodes -text -out intermediate.csr \
+  -keyout intermediate.key -subj "/CN=<replaceable>intermediate.yourdomain.com</replaceable>"
+chmod og-rwx intermediate.key
+openssl x509 -req -in intermediate.csr -text -days 1825 \
+  -extfile /etc/ssl/openssl.cnf -extensions v3_ca \
+  -CA root.crt -CAkey root.key -CAcreateserial \
+  -out intermediate.crt
+
+# leaf
+openssl req -new -nodes -text -out server.csr \
+  -keyout server.key -subj "/CN=<replaceable>dbhost.yourdomain.com</replaceable>"
+chmod og-rwx server.key
+openssl x509 -req -in server.csr -text -days 365 \
+  -CA intermediate.crt -CAkey intermediate.key -CAcreateserial \
+  -out server.crt
+</programlisting>
+<filename>server.crt</filename> et <filename>intermediate.crt</filename>
+doivent être concaténés dans un fichier certificat et stocké sur le serveur.
+<filename>server.key</filename> doit aussi être stocké sur le serveur.
+<filename>root.crt</filename> doit être stocké sur le client pour que le
+client puisse vérifier que le certificat feuille du serveur a été signé par
+une chaîne de certificats liés au certificat racine de confiance.
+<filename>root.key</filename> et <filename>intermediate.key</filename> doivent
+être stockées hors ligne pour être utilisé dans la création des certificats
+futurs.
 </para>
 
 </sect2>
