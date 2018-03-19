@@ -72,6 +72,23 @@
 
    <warning>
     <para>
+     Si des utilisateurs non dignes de confiance ont accès à une base de
+     données qui n'a pas adopté une <link
+     linkend="ddl-schemas-patterns">méthode sécurisée d'utilisation des
+     schémas</link>, commencez chaque session en supprimant du
+     <varname>search_path</varname> les schémas accessibles par tout le monde.
+     Il est possible de configurer le paramètre <literal>options</literal> à
+     la valeur <literal>-csearch_path=</literal>. Sinon, il est possible
+     d'exécuter <literal>PQexec(<replaceable>conn</replaceable>, "SELECT
+     pg_catalog.set_config('search_path', '', false)")</literal> tout de suite
+     après la connexion. Cette considération n'est pas spécifique à la
+     <application>libpq</application>&nbsp;; elle s'applique à chaque
+     interface permettant d'exécuter des commandes SQL arbitraires.
+    </para>
+   </warning>
+
+   <warning>
+    <para>
      Sur Unix, la création d'un processus via l'appel système fork() avec des
      connexions libpq ouvertes peut amener à des résultats imprévisibles car
      les processus parent et enfants partagent les même sockets et les mêmes
@@ -5949,7 +5966,8 @@ main(void)
 {
     mydata *data;
     PGresult *res;
-    PGconn *conn = PQconnectdb("dbname = postgres");
+    PGconn *conn =
+        PQconnectdb("dbname=postgres options=-csearch_path=");
 
     if (PQstatus(conn) != CONNECTION_OK)
     {
@@ -7335,13 +7353,16 @@ testlibpq.o(.text+0xa4): undefined reference to `PQerrorMessage'
     <application>libpq</application></title>
 
 <programlisting><![CDATA[/*
+ * src/test/examples/testlibpq.c
+ *
+ *
  * testlibpq.c
  *
  *      Test the C version of libpq, the PostgreSQL frontend library.
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include <libpq-fe.h>
+#include "libpq-fe.h"
 
 static void
 exit_nicely(PGconn *conn)
@@ -7380,6 +7401,18 @@ main(int argc, char **argv)
                 PQerrorMessage(conn));
         exit_nicely(conn);
     }
+
+    /* Set always-secure search path, so malicous users can't take control. */
+    res = PQexec(conn,
+                 "SELECT pg_catalog.set_config('search_path', '', false)");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK)
+    {
+        fprintf(stderr, "SET failed: %s", PQerrorMessage(conn));
+        PQclear(res);
+        exit_nicely(conn);
+    }
+
+    PQclear(res);
 
     /*
      * Our test case here involves using a cursor, for which we must be inside
@@ -7460,6 +7493,9 @@ main(int argc, char **argv)
     <application>libpq</application></title>
 
 <programlisting><![CDATA[/*
+ * src/test/examples/testlibpq2.c
+ *
+ *
  * testlibpq2.c
  *      Test of the asynchronous notification interface
  *
@@ -7478,16 +7514,21 @@ main(int argc, char **argv)
  *   CREATE RULE r1 AS ON INSERT TO TBL1 DO
  *     (INSERT INTO TBL2 VALUES (new.i); NOTIFY TBL2);
  *
- * and do this four times:
+ * Start this program, then from psql do this four times:
  *
- *   INSERT INTO TBL1 VALUES (10);
+ *   INSERT INTO TESTLIBPQ2.TBL1 VALUES (10);
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <sys/time.h>
-#include <libpq-fe.h>
+#include <sys/types.h>
+#ifdef HAVE_SYS_SELECT_H
+#include <sys/select.h>
+#endif
+
+#include "libpq-fe.h"
 
 static void
 exit_nicely(PGconn *conn)
@@ -7525,6 +7566,18 @@ main(int argc, char **argv)
                 PQerrorMessage(conn));
         exit_nicely(conn);
     }
+
+    /* Set always-secure search path, so malicous users can't take control. */
+    res = PQexec(conn,
+                 "SELECT pg_catalog.set_config('search_path', '', false)");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK)
+    {
+        fprintf(stderr, "SET failed: %s", PQerrorMessage(conn));
+        PQclear(res);
+        exit_nicely(conn);
+    }
+
+    PQclear(res);
 
     /*
      * Issue LISTEN command to enable notifications from the rule's NOTIFY.
@@ -7596,12 +7649,17 @@ main(int argc, char **argv)
     <application>libpq</application></title>
 
 <programlisting><![CDATA[/*
+ * src/test/examples/testlibpq3.c
+ *
+ *
  * testlibpq3.c
  *      Test out-of-line parameters and binary I/O.
  *
  * Before running this, populate a database with the following commands
  * (provided in src/test/examples/testlibpq3.sql):
  *
+ * CREATE SCHEMA testlibpq3;
+ * SET search_path = testlibpq3;
  * CREATE TABLE test1 (i int4, t text, b bytea);
  *
  * INSERT INTO test1 values (1, 'joe''s place', '\\000\\001\\002\\003\\004');
@@ -7728,6 +7786,16 @@ main(int argc, char **argv)
                 PQerrorMessage(conn));
         exit_nicely(conn);
     }
+
+    /* Set always-secure search path, so malicous users can't take control. */
+    res = PQexec(conn, "SET search_path = testlibpq3");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK)
+    {
+        fprintf(stderr, "SET failed: %s", PQerrorMessage(conn));
+        PQclear(res);
+        exit_nicely(conn);
+    }
+    PQclear(res);
 
     /*
      * The point of this program is to illustrate use of PQexecParams() with

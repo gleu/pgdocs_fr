@@ -1688,6 +1688,22 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
     correspond dans d'autres schémas de la base.
    </para>
 
+   <para>
+    La possibilité de créer des objets de même nom dans différents schémas
+    complique l'écriture d'une requête qui référence précisément les mêmes
+    objets à chaque fois. Cela ouvre aussi la possibilité aux utilisateurs de
+    modifier le comportement des requêtes des autres utilisations, par
+    accident ou volontairement. À cause de la prévalence des noms non
+    qualifiés dans les requêtes et de leur utilisation des internes de
+    <productname>PostgreSQL</productname>, ajouter un schéma à
+    <varname>search_path</varname> demande en effet à tous les utilisateurs
+    d'avoir le droit <literal>CREATE</literal> sur ce schéma. Quand vous
+    exécutez une requête ordinaire, un utilisateur mal intentionné capable de
+    créer des objets dans un schéma de votre chemin de recherche peut prendre
+    contrôle et exécuter des fonctions SQL arbitraire comme si vous les
+    exécutiez.
+   </para>
+
    <indexterm>
     <primary>schéma</primary>
     <secondary>courant</secondary>
@@ -1792,8 +1808,9 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
     <literal>USAGE</literal> sur le schéma <literal>public</literal>.
     Cela permet à tous les utilisateurs qui peuvent se connecter
     à une base de données de créer des objets dans son schéma
-    <literal>public</literal>. Si cela ne doit pas être le cas, ce privilège
-    peut être révoqué&nbsp;:
+    <literal>public</literal>.
+    Certaines <link linkend="ddl-schemas-patterns">méthodes d'usage</link>
+    demandent à révoquer ce droit&nbsp;:
 <programlisting>REVOKE CREATE ON SCHEMA public FROM PUBLIC;</programlisting>
     Le premier <quote>public</quote> est le schéma, le second
     <quote>public</quote> signifie <quote>tout utilisateur</quote>. Dans le
@@ -1844,51 +1861,86 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
    <title>Utilisation</title>
 
    <para>
-    Les schémas peuvent être utilisés de différentes façons pour organiser
-    les données. Certaines d'entre elles, recommandées, sont facilement supportés par la
-    configuration par défaut&nbsp;:
+    Les schémas peuvent être utilisés de différentes façons pour organiser les
+    données. Il existe quelques méthodes facilement supportées par la
+    configuration par défaut, dont une seule est suffisant lorsque les
+    utilisateurs de l'instance ne font pas confiance aux autres
+    utilisateurs&nbsp;:
     <itemizedlist>
+      <!-- "DROP SCHEMA public" is inferior to this REVOKE, because pg_dump
+           doesn't preserve that DROP. -->
      <listitem>
       <para>
-       si aucun schéma n'est créé, alors tous les utilisateurs
-       ont implicitement accès au schéma public. Cela permet de simuler une
-       situation dans laquelle les schémas ne sont pas disponibles.
-       Cette situation est essentiellement recommandée lorsqu'il n'y a qu'un
-       utilisateur, ou un très petit nombre d'utilisateurs qui coopèrent au
-       sein d'une base de données. Cette configuration permet aussi d'opérer 
-       une transition en douceur depuis un monde où les schémas sont inconnus&nbsp;;
+       Contraindre les utilisateurs ordinaires aux schémas privés des
+       utilisateurs. Pour cela, exécutez <literal>REVOKE CREATE ON SCHEMA
+       public FROM PUBLIC</literal>, et créez un schéma pour chaque
+       utilisateur, du nom de cet utilisateur. Si les utilisateurs affectés se
+       sont déjà connectés avant cette opération, pensez à réaliser un audit
+       du schéma public en recherchant des objets de même nom que ceux du
+       schéma <literal>pg_catalog</literal>. Rappelez-vous que le chemin de
+       recherche par défaut commence avec <literal>$user</literal>, qui est
+       remplacé par le nom de l'utilisateur. De ce fait, si chaque utilisateur
+       a un schéma séparé, ils accèdent à leur propre schéma par défaut.
       </para>
      </listitem>
 
      <listitem>
       <para>
-       pour chaque utilisateur, un schéma, de nom identique à celui de
-       l'utilisateur, peut être créé. Le chemin de recherche par défaut
-       commence par <literal>$user</literal>, soit le nom de l'utilisateur.
-       Si tous les utilisateurs disposent d'un schéma distinct, ils accèdent, par
-       défaut, à leur propre schéma.
-     <!--  </para>
-
-      <para> -->
-       Dans cette configuration, il est possible de révoquer l'accès
-       au schéma public (voire de supprimer ce schéma)
-       pour confiner les utilisateurs dans leur propre schéma&nbsp;;
+       Supprimer le schéma public de chaque chemin de recherche par défaut des
+       utilisateurs en exécutant <literal>ALTER ROLE
+       <replaceable>utilisateur</replaceable> SET search_path =
+       "$utilisateur"</literal>. Tous conservent la possibilité de créer des
+       objets dans le schéma public mais seuls les noms qualifiés choisiront
+       ces objets. Un utilisant disposant de l'attribut
+       <literal>CREATEROLE</literal> peut enlever cette configuration et
+       exécuter n'importe quel requête sous l'identité des utilisateurs se
+       basant sur cette configuration. Si vous donnez l'attribut
+       <literal>CREATEROLE</literal> à des utilisateurs sans garantie sur
+       cette capacité pratiquement équivalente à l'attribut superutilisateur,
+       utilisez plutôt la première méthode.
       </para>
      </listitem>
 
      <listitem>
       <para>
-       l'installation d'applications partagées (tables utilisables
-       par tout le monde, fonctionnalités supplémentaires fournies par
-       des applications tiers, etc) peut se faire dans des schémas distincts.
-       Il faut alors accorder des privilèges appropriés
-       pour permettre aux autres utilisateurs d'y accéder. Les utilisateurs
-       peuvent alors se référer à ces objets additionnels en qualifiant
-       leur nom du nom de schéma ou ajouter les schémas
-       supplémentaires dans leur chemin de recherche, au choix.
+       Supprimer le schéma public du <varname>search_path</varname> dans <link
+       linkend="config-setting-configuration-
+       file"><filename>postgresql.conf</filename></link>. La conséquence pour
+       l'utilisateur correspond à celle de la méthode précédente. En plus des
+       implications pour le <literal>CREATEROLE</literal>, cela demande de
+       faire confiance aux propriétaires des bases de données de la même
+       façon. Si vous affectez l'attribut <literal>CREATEROLE</literal>,
+       l'attribut <literal>CREATEDB</literal> ou la propriété d'une base de
+       données à des utilisateurs sans garantie sur cette capacité
+       pratiquement équivalente à l'attribut superutilisateur, utilisez plutôt
+       la première méthode.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Conserver la valeur par défaut. Tous les utilisateurs ont accès au
+       schéma public implicitement. Ceci simule la situation où les schémas ne
+       sont pas du tout disponibles, réalisant ainsi une transition tranquille
+       vers un monde qui ne connait pas les schémas. Néanmoins, tout
+       utilisateur peut exécuter des requêtes arbitraires sous l'identité
+       d'utilisateur qui ne se protège pas individuellement. Cette méthode est
+       seulement acceptable quand la base de données n'a qu'un seul
+       utilisateur ou peu d'utilisateurs mais qui se font confiance.
       </para>
      </listitem>
     </itemizedlist>
+   </para>
+
+   <para>
+    Pour chaque méthode, pour installer des applications partagées (tables
+    utilisées par tout le monde, fonctions supplémentaires fournies par des
+    tiers, etc.), placez les dans des schémas séparés. Rappelez-vous de donner
+    les droits appropriés pour permettre aux autres utilisateurs d'y accéder.
+    Les utilisateurs peuvent ensuite faire référence à ces objets
+    supplémentaires en les qualifiant avec le nom du schéma ou ils peuvent
+    placer les schémas supplémentaires dans leur chemin de recherche, suivant
+    leur préférence.
    </para>
   </sect2>
 
@@ -1913,8 +1965,7 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
    <para>
     Le concept de schéma <literal>public</literal> n'existe pas non plus dans le
     standard SQL. Pour plus de conformité au standard, le schéma
-    <literal>public</literal> ne devrait pas être utilisé (voire être
-    supprimé).
+    <literal>public</literal> ne devrait pas être utilisé.
    </para>
 
    <para>
