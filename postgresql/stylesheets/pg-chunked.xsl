@@ -29,7 +29,6 @@
 
     <!-- Including our others customized chunks templates -->
   <xsl:include href="xhtml/pg-legalnotice.xsl"/>
-  <xsl:include href="xhtml/pg-index.xsl"/>
   <xsl:include href="xhtml/pg-navigational.xsl"/>
   <xsl:include href="xhtml/pg-function.xsl"/>
 
