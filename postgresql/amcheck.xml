@@ -10,13 +10,13 @@
 
  <para>
   Le module <filename>amcheck</filename> fournit des fonctions vous permettant
-  de vérifier la cohérence logique de la structure des index.  Si la structure
+  de vérifier la cohérence logique de la structure des relations.  Si la structure
   semble valide, aucune erreur n'est levée.
  </para>
 
  <para>
   Les fonctions vérifient diverses <emphasis>propriétés invariables</emphasis>
-  dans la structure de la représentation de certains index.  La justesse des
+  dans la structure de la représentation de certains relations. La justesse des
   fonctions permettant l'accès aux données durant les parcours d'index et
   d'autres opération importantes reposent sur le fait que ces propriétés
   invariables soient toujours vraies.  Par exemple, certaines fonctions
@@ -48,7 +48,7 @@
   <variablelist>
    <varlistentry>
     <term>
-     <function>bt_index_check(index regclass) returns void</function>
+     <function>bt_index_check(index regclass, heapallindexed boolean) returns void</function>
      <indexterm>
       <primary>bt_index_check</primary>
      </indexterm>
@@ -59,7 +59,9 @@
          <function>bt_index_check</function> que sa cible, un index B-Tree,
       respecte une vériété de propriétés invariables.  Exemple d'utilisation :
 <screen>
-test=# SELECT bt_index_check(c.oid), c.relname, c.relpages
+test=# SELECT bt_index_check(index =&gt; c.oid, heapallindexed =&gt; i.indisunique),
+               c.relname,
+               c.relpages
 FROM pg_index i
 JOIN pg_opclass op ON i.indclass[0] = op.oid
 JOIN pg_am am ON op.opcmethod = am.oid
@@ -69,7 +71,7 @@ WHERE am.amname = 'btree' AND n.nspname = 'pg_catalog'
 -- Ignore les tables temporaires, qui peuvent appartenir à d'autres sessions
 AND c.relpersistence != 't'
 -- La fonction peut renvoyer une erreur si cela est omis :
-AND i.indisready AND i.indisvalid
+AND c.relkind = 'i' AND i.indisready AND i.indisvalid
 ORDER BY c.relpages DESC LIMIT 10;
  bt_index_check |             relname             | relpages 
 ----------------+---------------------------------+----------
@@ -85,26 +87,29 @@ ORDER BY c.relpages DESC LIMIT 10;
                 | pg_amop_fam_strat_index         |        5
 (10 rows)
 </screen>
-      Cette exemple montre une session qui effectue une vérification de chacun
+      Cet exemple montre une session qui effectue une vérification de chacun
       des index sur le catalogue dans la base de données <quote>test</quote>.
-      Seul le détail des 10 plus gros index vérifiés est affiché.
-      Puisqu'aucune erreur n'est retournée, tous les index testés semblent être
-      cohérent au niveau logique.  Bien évidemment, cette requête pourrait être
-      facilement modifiée pour appeler <function>bt_index_check</function> sur
-      chacun des index présents dans la base de données pour lesquels la
-      vérification est supportée.
+      Seul le détail des 10 plus gros index vérifiés est affiché. La
+      vérification de la présence des lignes dans la table ainsi que des
+      lignes dans l'index est requis uniquement pour les index d'unicité.
+      Puisqu'aucune erreur n'est retournée, tous les index testés semblent
+      être cohérent au niveau logique.  Bien évidemment, cette requête
+      pourrait être facilement modifiée pour appeler
+      <function>bt_index_check</function> sur chacun des index présents dans
+      la base de données pour lesquels la vérification est supportée.
      </para>
      <para>
       <function>bt_index_check</function> acquiert un
       <literal>AccessShareLock</literal> sur l'index cible ainsi que sur la
-      relation à laquelle il appartient.  Ce niveau de verrouillage est le même
-      que celui acquis sur les relations lors d'une simple requête
-      <literal>SELECT</literal> statements.
-      <function>bt_index_check</function> ne vérifie pas les propriétés
-      invariantes qui englobent les relations enfant/parent, et ne vérifie pas
-      non plus que l'index est cohérent par rapport au contenu de la relation
-      associée.  Quand un test léger, de routine, pour détecter des problèmes
-      de corruption est nécessaire sur un environnement de production, utiliser
+      relation à laquelle il appartient.  Ce niveau de verrouillage est le
+      même que celui acquis sur les relations lors d'une simple requête
+      <literal>SELECT</literal>. <function>bt_index_check</function> ne
+      vérifie pas les propriétés invariantes qui englobent les relations
+      enfant/parent, mais vérifiera la présence de toutes les lignes de la
+      table et des lignes d'index à l'intérieur de l'index quand
+      <parameter>heapallindexed</parameter> vaut <literal>true</literal>.
+      Quand un test léger, de routine, pour détecter des problèmes de
+      corruption est nécessaire sur un environnement de production, utiliser
       <function>bt_index_check</function> offre généfalement le meilleur
       compromis entre la minutie de la vérification et l'impact limité sur les
       performances de l'application ainsi que sa disponibilité.
@@ -114,7 +119,7 @@ ORDER BY c.relpages DESC LIMIT 10;
 
    <varlistentry>
     <term>
-     <function>bt_index_parent_check(index regclass) returns void</function>
+     <function>bt_index_parent_check(index regclass, heapallindexed boolean) returns void</function>
      <indexterm>
       <primary>bt_index_parent_check</primary>
      </indexterm>
@@ -123,17 +128,19 @@ ORDER BY c.relpages DESC LIMIT 10;
     <listitem>
      <para>
       <function>bt_index_parent_check</function> teste que sa cible, un index
-      B-Tree, respecte un certain nombre de propriétés invariantes.  Les
-      vérifications effectuées par <function>bt_index_parent_check</function>
-      sont un sur-ensemble des vérifications effectuées par
-      <function>bt_index_check</function>.
+      B-Tree, respecte un certain nombre de propriétés invariantes. En option,
+      quand l'argument <parameter>heapallindexed</parameter> vaut
+      <literal>true</literal>, la fonction vérifie la présence de toutes les
+      lignes dans la table, et la présence de tous les liens dans la structure
+      de l'index. Les vérifications réalisables par
+      <function>bt_index_parent_check</function> sont un sur-ensemble des
+      vérifications réalisées par <function>bt_index_check</function>.
       On peut voir <function>bt_index_parent_check</function> comme une version
       plus minitieuse de <function>bt_index_check</function> :
       contrairement à <function>bt_index_check</function>,
       <function>bt_index_parent_check</function> vérifie également les
       propriétés invariantes qui englobent les relations parent/enfant.
-      Cependant, cette fonction ne vérifie pas que l'index cible est cohérent
-      avec la relation associée.  <function>bt_index_parent_check</function>
+      <function>bt_index_parent_check</function>
       respecte la convention habituelle qui consiste à retourner une erreur si
       une incohérence ou tout autre problème est détecté.
      </para>
@@ -165,6 +172,47 @@ ORDER BY c.relpages DESC LIMIT 10;
     </listitem>
    </varlistentry>
   </variablelist>
+ </sect2>
+
+ <sect2>
+  <title>Optional <parameter>heapallindexed</parameter> verification</title>
+ <para>
+  When the <parameter>heapallindexed</parameter> argument to
+  verification functions is <literal>true</literal>, an additional
+  phase of verification is performed against the table associated with
+  the target index relation.  This consists of a <quote>dummy</quote>
+  <command>CREATE INDEX</command> operation, which checks for the
+  presence of all hypothetical new index tuples against a temporary,
+  in-memory summarizing structure (this is built when needed during
+  the basic first phase of verification).  The summarizing structure
+  <quote>fingerprints</quote> every tuple found within the target
+  index.  The high level principle behind
+  <parameter>heapallindexed</parameter> verification is that a new
+  index that is equivalent to the existing, target index must only
+  have entries that can be found in the existing structure.
+ </para>
+ <para>
+  The additional <parameter>heapallindexed</parameter> phase adds
+  significant overhead: verification will typically take several times
+  longer.  However, there is no change to the relation-level locks
+  acquired when <parameter>heapallindexed</parameter> verification is
+  performed.
+ </para>
+ <para>
+  The summarizing structure is bound in size by
+  <varname>maintenance_work_mem</varname>.  In order to ensure that
+  there is no more than a 2% probability of failure to detect an
+  inconsistency for each heap tuple that should be represented in the
+  index, approximately 2 bytes of memory are needed per tuple.  As
+  less memory is made available per tuple, the probability of missing
+  an inconsistency slowly increases.  This approach limits the
+  overhead of verification significantly, while only slightly reducing
+  the probability of detecting a problem, especially for installations
+  where verification is treated as a routine maintenance task.  Any
+  single absent or malformed tuple has a new opportunity to be
+  detected with each new verification attempt.
+ </para>
+
  </sect2>
 
  <sect2>
@@ -210,16 +258,29 @@ ORDER BY c.relpages DESC LIMIT 10;
     </para>
    </listitem>
    <listitem>
+    <para>
+     Des incohérences dans la structure entre les index et les tables indexées
+     (lors que la vérification <parameter>heapallindexed</parameter> est
+     réalisée).
+    </para>
+    <para>
+     Il n'y a pas de vérification avec la table initiale en temps normal. Les
+     symptômes d'une corrution de la table peuvent être subtils.
+    </para>
+   </listitem>
+   <listitem>
      <para>
      Une corruption causée par un hypothétique bug non encore découvert dans
-     l'implémentation associée à la méthode d'accès ou au code effectuant le
-     tri.
+     l'implémentation associée à la méthode d'accès, au code effectuant le
+     tri ou à la gestion transactionnelle.
     </para>
     <para>
      La vérification automatique de l'intégrité structurelle des index joue un
      rôle sur les principaux tests des fonctionnalités nouvelles ou proposées
      dans <productname>PostgreSQL</productname> qui pourraient possiblement
-     autoriser l'introduction d'incohérence logiques.  Une stratégie de test
+     autoriser l'introduction d'incohérence logiques. La vérification de la
+     structure de la table et des informations de visibilité et de statut des
+     transactions associées joue un rôle similaire. Une stratégie de test
      évidente est d'appeler les fonctions d'<filename>amcheck</filename> de
      manière continue en même temps que les tests de régression standard sont
      lancés.  Voir <xref
@@ -258,6 +319,12 @@ ORDER BY c.relpages DESC LIMIT 10;
      <emphasis>absolue</emphasis> contre les défaillances résultant en une
      corruption mémoire.
     </para>
+    <para>
+     Quand la vérification <parameter>heapallindexed</parameter> est réalisée,
+     il y a une chance fortement accrue de détecter des erreurs d'un bit car
+     l'égalité binaire stricte est testée et les attributs indexés de la table
+     sont testés.
+    </para>
    </listitem>
   </itemizedlist>
   De manière générale, <filename>amcheck</filename> ne peut que prouver la
@@ -269,9 +336,7 @@ ORDER BY c.relpages DESC LIMIT 10;
   <title>Réparer une corruption</title>
  <para>
   Aucune erreur concernant une corruption remontée par
-  <filename>amcheck</filename> ne devrait être un faux positif.  Dans la
-  pratique, <filename>amcheck</filename> est plus à même de trouver des bugs
-  logiciels que des problèmes matériels.
+  <filename>amcheck</filename> ne devrait être un faux positif.
   <filename>amcheck</filename> remonte des erreurs dans le cas où des
   conditions, par définition, ne devraient jamais arriver, et par conséquent
   une analyse minutieuse des erreurs remontées par <filename>amcheck</filename>

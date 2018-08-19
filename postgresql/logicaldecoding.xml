@@ -154,8 +154,8 @@ postgres=# SELECT pg_drop_replication_slot('regression_slot');
    qu'une nouvelle connexion soit acceptée.
   </para>
   <programlisting>
-$ pg_recvlogical -d postgres --slot test --create-slot
-$ pg_recvlogical -d postgres --slot test --start -f -
+$ pg_recvlogical -d postgres --slot=test --create-slot
+$ pg_recvlogical -d postgres --slot=test --start -f -
 <keycombo action="simul"><keycap>Control</keycap><keycap>Z</keycap></keycombo>
 $ psql -d postgres -c "INSERT INTO data(data) VALUES('4');"
 $ fg
@@ -163,7 +163,7 @@ $ fg
  table public.data: INSERT: id[integer]:4 data[text]:'4'
  COMMIT 693
 <keycombo action="simul"><keycap>Control</keycap><keycap>C</keycap></keycombo>
-$ pg_recvlogical -d postgres --slot test --drop-slot
+$ pg_recvlogical -d postgres --slot=test --drop-slot
   </programlisting>
  </sect1>
  <sect1 id="logicaldecoding-explanation">
@@ -243,18 +243,21 @@ $ pg_recvlogical -d postgres --slot test --drop-slot
     a arrêté de les consommer. Un seul destinataire peut consommer les
     changements d'un slot à un instant donné.
    </para>
-   <note>
+   <caution>
     <para>
      Les slots de réplications persistent après un arrêt brutal et ne
      connaissent rien de l'état de leur(s) consommateur(s).  Ils empêcheront
      la suppression automatique des ressources nécessaires même si aucune
      connexion ne les utilise.  Cela consomme de l'espace car aucun des
-     journaux de transactions et aucune des lignes des catalogues systèmes requis
-     ne peuvent être supprimés par <command>VACUUM</command> tant qu'ils sont requis par un slot
-     de réplication. Par conséquent, si un slot n'est plus nécessaire, il
-     devrait être supprimé.
+     journaux de transactions et aucune des lignes des catalogues systèmes
+     requis ne peuvent être supprimés par <command>VACUUM</command> tant
+     qu'ils sont requis par un slot de réplication. Dans les cas extrêmes,
+     cela pourrait causer l'arrêt de la base pour empêcher une réutilisation
+     des identifiants de transactions (voir <xref
+     linkend="vacuum-for-wraparound"/>). Par conséquent, si un slot n'est plus
+     nécessaire, il devrait être supprimé.
     </para>
-   </note>
+   </caution>
   </sect2>
   <sect2>
    <title>Plugins de sortie</title>
@@ -377,6 +380,7 @@ typedef struct OutputPluginCallbacks
     LogicalDecodeStartupCB startup_cb;
     LogicalDecodeBeginCB begin_cb;
     LogicalDecodeChangeCB change_cb;
+    LogicalDecodeTruncateCB truncate_cb;
     LogicalDecodeCommitCB commit_cb;
     LogicalDecodeMessageCB message_cb;
     LogicalDecodeFilterByOriginCB filter_by_origin_cb;
@@ -387,8 +391,11 @@ typedef void (*LogicalOutputPluginInit) (struct OutputPluginCallbacks *cb);
     </programlisting>
     Les callbacks <function>begin_cb</function>, <function>change_cb</function>
     et <function>commit_cb</function> sont obligatoires,
-    alors que <function>startup_cb</function>, <function>filter_by_origin_cb</function>
-    et <function>shutdown_cb</function> sont facultatifs.
+    alors que <function>startup_cb</function>,
+    <function>filter_by_origin_cb</function>, <function>truncate_cb</function>
+    et <function>shutdown_cb</function> sont facultatifs. Si
+    <function>truncate_cb</function> n'est pas configuré mais que
+    <command>TRUNCATE</command> doit être décodé, l'action sera ignoré.
    </para>
   </sect2>
 
@@ -478,12 +485,18 @@ typedef void (*LogicalDecodeStartupCB) (struct LogicalDecodingContext *ctx,
 typedef struct OutputPluginOptions
 {
     OutputPluginOutputType output_type;
+    bool        receive_rewrites;
 } OutputPluginOptions;
      </programlisting>
      <literal>output_type</literal> doit être positionné soit à
      <literal>OUTPUT_PLUGIN_TEXTUAL_OUTPUT</literal> ou à
      <literal>OUTPUT_PLUGIN_BINARY_OUTPUT</literal>. Voir aussi <xref
      linkend="logicaldecoding-output-mode"/>.
+     Si <literal>receive_rewrites</literal> vaut true, le plugin de sortie
+     sera aussi appelé pour les modifications réasliées par des réécritures du
+     fichier HEAP lors de certaines opérations DDL. Ceci est intéressant pour
+     les plugins qui gèrent la réplication DDL mais ils nécessitent une
+     gestion particulière.
     </para>
     <para>
      Le callback de démarrage devrait valider les options présentes dans
@@ -564,6 +577,28 @@ typedef void (*LogicalDecodeChangeCB) (struct LogicalDecodingContext *ctx,
       avec le décodage logique.
      </para>
     </note>
+   </sect3>
+
+   <sect3 id="logicaldecoding-output-plugin-truncate">
+    <title>Callback Truncate</title>
+
+    <para>
+     La fonction callback <function>truncate_cb</function> est appelée pour la
+     commande <command>TRUNCATE</command>.
+<programlisting>
+typedef void (*LogicalDecodeTruncateCB) (struct LogicalDecodingContext *ctx,
+                                         ReorderBufferTXN *txn,
+                                         int nrelations,
+                                         Relation relations[],
+                                         ReorderBufferChange *change);
+</programlisting>
+     Les paramètres sont identiques à ceux du callback
+     <function>change_cb</function>. Néanmoins, comme les actions du
+     <command>TRUNCATE</command> sur les tables liées par clés étrangères
+     doivent être exécutées ensembles, ce callback reçoit un tableau de
+     relations au lieu d'une seule relation. Voir la description de
+     l'instruction <xref linkend="sql-truncate"/> pour les détails.
+    </para>
    </sect3>
 
    <sect3 id="logicaldecoding-output-plugin-filter-origin">

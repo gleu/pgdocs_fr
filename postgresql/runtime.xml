@@ -137,7 +137,22 @@ root# <userinput>chown postgres /usr/local/pgsql</userinput></screen>
    le système de bases de données, il est essentiel qu'il soit sécurisé par
    rapport à des accès non autorisés. Du coup, <command>initdb</command>
    supprimera les droits d'accès à tout le monde sauf l'utilisateur
-   <productname>PostgreSQL</productname>.
+   <productname>PostgreSQL</productname>, and optionally, group.
+   Group access, when enabled, is read-only.  This allows an unprivileged
+   user in the same group as the cluster owner to take a backup of the
+   cluster data or perform other operations that only require read access.
+  </para>
+
+  <para>
+   Note that enabling or disabling group access on an existing cluster requires
+   the cluster to be shut down and the appropriate mode to be set on all
+   directories and files before restarting
+   <productname>PostgreSQL</productname>.  Otherwise, a mix of modes might
+   exist in the data directory.  For clusters that allow access only by the
+   owner, the appropriate modes are <literal>0700</literal> for directories
+   and <literal>0600</literal> for files.  For clusters that also allow
+   reads by the group, the appropriate modes are <literal>0750</literal>
+   for directories and <literal>0640</literal> for files.
   </para>
 
   <para>
@@ -240,7 +255,7 @@ root# <userinput>chown postgres /usr/local/pgsql</userinput></screen>
     en local. Si les implémentations du client et du serveur
     <acronym>NFS</acronym> ne fournissent pas les sémantiques des systèmes de
     fichiers standards, cela peut poser des problèmes de fiabilité (voir <ulink
-    url="http://www.time-travellers.org/shane/papers/NFS_considered_harmful.html"></ulink>).
+    url="https://www.time-travellers.org/shane/papers/NFS_considered_harmful.html"></ulink>).
     En particulier, des écritures asynchrones (décalées dans le temps) sur le
     serveur <acronym>NFS</acronym> peuvent poser des soucis de fiabilité. Si
     possible, montez les systèmes de fichiers <acronym>NFS</acronym> en
@@ -942,14 +957,7 @@ option        SHMSEG=256
 option        SYSVSEM
 option        SEMMNI=256
 option        SEMMNS=512
-option        SEMMNU=256
-option        SEMMAP=256</programlisting>
-       </para>
-       <para>
-        Vous pourriez aussi vouloir configurer votre noyau pour verrouiller la
-        mémoire partagée en RAM et l'empêcher d'être paginée en swap. Ceci se
-        fait en utilisant le paramètre <literal>kern.ipc.shm_use_phys</literal> de
-        <command>sysctl</command>.
+option        SEMMNU=256</programlisting>
        </para>
       </listitem>
      </varlistentry>
@@ -1405,7 +1413,7 @@ RemoveIPC=no
     Sur Linux 2.6 et ultérieur, il est possible de modifier
     le comportement du noyau avec le <quote>overcommit memory</quote>.
     Bien que ce paramétrage n'empêchera pas ce <ulink
-    url="http://lwn.net/Articles/104179/">comportement</ulink>, il réduira sa
+    url="https://lwn.net/Articles/104179/">comportement</ulink>, il réduira sa
     fréquence de façon significative et contribuera du coup à un système
     plus robuste. Ceci se fait en sélectionnant le mode strict de
     l'overcommit via <command>sysctl</command>&nbsp;:
@@ -1487,15 +1495,15 @@ export PG_OOM_ADJUST_VALUE=0
    <varname>CONFIG_HUGETLB_PAGE=y</varname>. Vous devez aussi configurer le
    paramètre noyau <varname>vm.nr_hugepages</varname>. Pour estimer le nombre
    nécessaire de « huge pages », lancer <productname>PostgreSQL</productname>
-   sans activer les « huge pages » et vérifier la valeur de
-   <varname>VmPeak</varname> pour le processus postmaster, ainsi que la taille
+   sans activer les « huge pages » et vérifier la taille du segment de mémoire
+   partagée anonyme pour le processus postmaster, ainsi que la taille
    des « huge pages » pour le système en utilisant le système de fichiers
    <filename>/proc</filename>. Cela pourrait ressembler à ceci&nbsp;:
    <programlisting>
 $ <userinput>head -1 $PGDATA/postmaster.pid</userinput>
 4170
-$ <userinput>grep ^VmPeak /proc/4170/status</userinput>
-VmPeak:  6490428 kB
+$ <userinput>pmap 4170 | awk '/rw-s/ &amp;&amp; /zero/ {print $2}'</userinput>
+6490428K
 $ <userinput>grep ^Hugepagesize /proc/meminfo</userinput>
 Hugepagesize:       2048 kB
    </programlisting>
@@ -1992,10 +2000,10 @@ surligne les étapes nécessaires.
 <title>Mettre à jour les données via la réplication</title>
 
 <para>
-Il est aussi possible d'utiliser certaines méthodes de réplication,
-comme <productname>Slony</productname>, pour créer un serveur esclave
+Il est aussi possible d'utiliser des méthodes de réplication logique
+pour créer un serveur esclave
 avec la version à jour de <productname>PostgreSQL</productname>.
-Ceci est possible car Slony permet une réplication entre des
+Ceci est possible car la réplication logique permet une réplication entre des
 versions majeures différentes de
 <productname>PostgreSQL</productname>. L'esclave peut se trouver sur
 le même serveur ou sur un autre. Une fois qu'il est synchronisé
@@ -2004,6 +2012,14 @@ avec le serveur maître (qui utilise toujours l'ancienne version de
 serveur maître sur le nouveau serveur et arrêter l'ancien maître.
 Ce type de bascule fait que l'arrêt requis pour la mise à jour se
 mesure seulement en secondes.
+</para>
+ 
+<para>
+ This method of upgrading can be performed using the built-in logical
+ replication facilities as well as using external logical replication
+ systems such as <productname>pglogical</productname>,
+ <productname>Slony</productname>, <productname>Londiste</productname>, and
+ <productname>Bucardo</productname>.
 </para>
 
 </sect2>
@@ -2220,50 +2236,21 @@ construction de <productname>PostgreSQL</productname> (voir le <xref
 linkend="installation"/>).
 </para>
 
-<para>
-Avec le support <acronym>ssl</acronym> compilé, le serveur
-<productname>PostgreSQL</productname> peut être lancé avec
-<acronym>ssl</acronym> activé en activant <xref linkend="guc-ssl"/> dans
-<filename>PostgreSQL.conf</filename>. Le serveur écoutera les deux
-connexions, standard et <acronym>SSL</acronym> sur le même port TCP, et
-négociera avec tout client l'utilisation de <acronym>SSL</acronym>. Par
-défaut, le client peut choisir cette option&nbsp;; voir <xref
-linkend="auth-pg-hba-conf"/> sur la façon de configurer le serveur pour
-réclamer l'utilisation de <acronym>SSL</acronym> pour certaines, voire
-toutes les connexions.
-</para>
-
-<para>
-<productname>PostgreSQL</productname> lit le fichier de configuration
-d'<productname>OpenSSL</productname> pour le serveur. Par défaut, ce
-fichier est nommé <filename>openssl.cnf</filename> et est situé dans le
-répertoire indiqué par <literal>openssl version -d</literal>.
-Cette valeur par défaut peut être surchargée en configurant la variable
-d'environnement <envar>OPENSSL_CONF</envar> avec le nom du fichier de
-configuration désiré.
-</para>
-
-<para>
-<productname>OpenSSL</productname> accepte une gamme étendue d'algorithmes
-de chiffrement et d'authentification, de différentes forces. Bien qu'une
-liste d'algorithmes de chiffrement peut être indiquée dans le fichier de
-configuration d'<productname>OpenSSL</productname>, vous pouvez spécifier
-des algorithmes spécifiques à utiliser par le serveur de la base de
-données en modifiant le paramètre <xref linkend="guc-ssl-ciphers"/> dans
-<filename>postgresql.conf</filename>.
-</para>
-
-<note>
-<para>
-Il est possible d'avoir une authentification sans le chiffrement en
-utilisant les algorithmes <literal>NULL-SHA</literal> ou
-<literal>NULL-MD5</literal>. Néanmoins, une attaque du type
-<foreignphrase>man-in-the-middle</foreignphrase> pourrait lire et passer
-les communications entre client et serveur. De plus, le temps pris par
-le chiffrement est minimal comparé à celui pris par l'authentification.
-Pour ces raisons, les algorithmes NULL ne sont pas recommandés.
-</para>
-</note>
+  <sect2 id="ssl-setup">
+   <title>Basic Setup</title>
+ 
+  <para>
+   With <acronym>SSL</acronym> support compiled in, the
+   <productname>PostgreSQL</productname> server can be started with
+   <acronym>SSL</acronym> enabled by setting the parameter
+   <xref linkend="guc-ssl"/> to <literal>on</literal> in
+   <filename>postgresql.conf</filename>.  The server will listen for both normal
+   and <acronym>SSL</acronym> connections on the same TCP port, and will negotiate
+   with any connecting client on whether to use <acronym>SSL</acronym>.  By
+   default, this is at the client's option; see <xref
+   linkend="auth-pg-hba-conf"/> about how to set up the server to require
+   use of <acronym>SSL</acronym> for some or all connections.
+  </para>
 
 <para>
 Pour démarrer dans le mode <acronym>SSL</acronym>, les fichiers contenant le
@@ -2285,6 +2272,15 @@ et <xref linkend="guc-ssl-key-file"/>.
    clé sont gérés par le système d'exploitation. L'utilisateur qui exécute le
    serveur <productname>PostgreSQL</productname> doit être un membre du groupe
    qui a accès aux fichiers certificat et clé.
+  </para>
+
+  <para>
+    If the data directory allows group read access then certificate files may
+    need to be located outside of the data directory in order to conform to the
+    security requirements outlined above.  Generally, group access is enabled
+    to allow an unprivileged user to backup the database, and in that case the
+    backup software will not be able to read the certificate files and will
+    likely error.
   </para>
 
   <para>
@@ -2312,6 +2308,40 @@ Il n'est pas nécessaire d'ajouter le certificat racine dans le fichier
 <filename>server.crt</filename>. À la place, les clients doivent avoir le
 certificat racine de la chaîne de certificats du serveur.
 </para>
+  </sect2>
+
+  <sect2 id="ssl-openssl-config">
+   <title>OpenSSL Configuration</title>
+
+  <para>
+   <productname>PostgreSQL</productname> reads the system-wide
+   <productname>OpenSSL</productname> configuration file. By default, this
+   file is named <filename>openssl.cnf</filename> and is located in the
+   directory reported by <literal>openssl version -d</literal>.
+   This default can be overridden by setting environment variable
+   <envar>OPENSSL_CONF</envar> to the name of the desired configuration file.
+  </para>
+
+  <para>
+   <productname>OpenSSL</productname> supports a wide range of ciphers
+   and authentication algorithms, of varying strength.  While a list of
+   ciphers can be specified in the <productname>OpenSSL</productname>
+   configuration file, you can specify ciphers specifically for use by
+   the database server by modifying <xref linkend="guc-ssl-ciphers"/> in
+   <filename>postgresql.conf</filename>.
+  </para>
+
+  <note>
+   <para>
+    It is possible to have authentication without encryption overhead by
+    using <literal>NULL-SHA</literal> or <literal>NULL-MD5</literal> ciphers.  However,
+    a man-in-the-middle could read and pass communications between client
+    and server.  Also, encryption overhead is minimal compared to the
+    overhead of authentication.  For these reasons NULL ciphers are not
+    recommended.
+   </para>
+  </note>
+  </sect2>
 
 <sect2 id="ssl-client-certificates">
 <title>Utiliser des certificats clients</title>
@@ -2371,7 +2401,7 @@ de la méthode d'authentification <literal>cert</literal>.)
 <para>
 <xref linkend="ssl-file-usage"/> résume les fichiers qui ont un lien
 avec la configuration de SSL sur le serveur. (Les noms de fichiers
-indiqués sont les noms par défaut ou typiques. Les noms configurés
+indiqués sont les noms par défaut. Les noms configurés
 localement peuvent être différents.)
 </para>
 

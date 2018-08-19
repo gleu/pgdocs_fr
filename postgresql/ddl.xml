@@ -1616,6 +1616,17 @@ CREATE POLICY compte_admins ON comptes TO admins
     USING (admin = current_user);
 </programlisting>
 
+  <para>
+   The policy above implicitly provides a <literal>WITH CHECK</literal>
+   clause identical to its <literal>USING</literal> clause, so that the
+   constraint applies both to rows selected by a command (so a manager
+   cannot <command>SELECT</command>, <command>UPDATE</command>,
+   or <command>DELETE</command> existing rows belonging to a different
+   manager) and to rows modified by a command (so rows belonging to a
+   different manager cannot be created via <command>INSERT</command>
+   or <command>UPDATE</command>).
+  </para>
+
 <para>
    Si aucun rôle n'est indiqué ou si le nom de pseudo rôle
    <literal>PUBLIC</literal> est utilisé, alors la politique s'applique
@@ -1631,19 +1642,31 @@ CREATE POLICY police_utilisateur ON utilisateurs
 </programlisting>
 
   <para>
-   Pour utiliser une politique différente pour les lignes ajoutées à
-   la table de celle appliquée pour les lignes visibles, la clause
-   <literal>WITH CHECK</literal> peut être utilisée. Cette politique
-   autorisera tous les utilisateurs à voir toutes les lignes de la
-   table <literal>utilisateurs</literal>, mais seulement à modifier
-   les leurs&nbsp;:
+   This works similarly to the previous example.
+  </para>
+
+  <para>
+   Pour utiliser une politique différente pour les lignes ajoutées à la table
+   de celle appliquée pour les lignes visibles, plusieurs politiques peuvent
+   être combinées. Cette paire de politiques autorisera tous les utilisateurs
+   à voir toutes les lignes de la table <literal>utilisateurs</literal>, mais
+   seulement à modifier les leurs&nbsp;:
   </para>
 
 <programlisting>
-CREATE POLICY police_utilisateur ON utilisateurs
-    USING (true)
-    WITH CHECK (user_name = current_user);
-</programlisting>
+CREATE POLICY user_sel_policy ON users
+    FOR SELECT
+    USING (true);
+CREATE POLICY user_mod_policy ON users
+    USING (user_name = current_user);
+ </programlisting>
+ 
+  <para>
+   In a <command>SELECT</command> command, these two policies are combined
+   using <literal>OR</literal>, with the net effect being that all rows
+   can be selected.  In other command types, only the second policy applies,
+   so that the effects are the same as before.
+  </para>
 
   <para>
    La sécurité niveau ligne peut également être désactivée avec
@@ -2380,12 +2403,14 @@ SELECT * FROM information WHERE groupe_id = 2 FOR UPDATE;
        Supprimer le schéma public de chaque chemin de recherche par défaut des
        utilisateurs en exécutant <literal>ALTER ROLE
        <replaceable>utilisateur</replaceable> SET search_path =
-       "$utilisateur"</literal>. Tous conservent la possibilité de créer des
+       "$user"</literal>. Tous conservent la possibilité de créer des
        objets dans le schéma public, mais seuls les noms qualifiés choisiront
-       ces objets. Un utilisateur disposant de l'attribut
+       ces objets. While qualified table references are fine, calls
+       to functions in the public schema <link linkend="typeconv-func">will be
+       unsafe or unreliable</link>.  Also, un utilisateur disposant de l'attribut
        <literal>CREATEROLE</literal> peut enlever cette configuration et
        exécuter n'importe quelle requête sous l'identité des utilisateurs se
-       basant sur cette configuration. Si vous donnez l'attribut
+       basant sur cette configuration. Si you create functions or extensions in the public schema or si vous donnez l'attribut
        <literal>CREATEROLE</literal> à des utilisateurs sans garantie sur
        cette capacité pratiquement équivalente à l'attribut superutilisateur,
        utilisez plutôt la première méthode.
@@ -2398,13 +2423,14 @@ SELECT * FROM information WHERE groupe_id = 2 FOR UPDATE;
        linkend="config-setting-configuration-
        file"><filename>postgresql.conf</filename></link>. La conséquence pour
        l'utilisateur correspond à celle de la méthode précédente. En plus des
-       implications pour le <literal>CREATEROLE</literal>, cela demande de
-       faire confiance aux propriétaires des bases de données de la même
-       façon. Si vous affectez l'attribut <literal>CREATEROLE</literal>,
-       l'attribut <literal>CREATEDB</literal> ou la propriété d'une base de
-       données à des utilisateurs sans garantie sur cette capacité
-       pratiquement équivalente à l'attribut superutilisateur, utilisez plutôt
-       la première méthode.
+       implications pour les fonctions et <literal>CREATEROLE</literal>, cela demande de
+       faire confiance aux propriétaires des bases de données like
+       <literal>CREATEROLE</literal>.  If you create functions or extensions
+       in the public schema or si vous affectez l'attribut
+       <literal>CREATEROLE</literal>, l'attribut <literal>CREATEDB</literal>
+       ou la propriété d'une base de données à des utilisateurs sans garantie
+       sur cette capacité pratiquement équivalente à l'attribut
+       superutilisateur, utilisez plutôt la première méthode.
       </para>
      </listitem>
 
@@ -2942,6 +2968,18 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term>Hash Partitioning</term>
+    <listitem>
+     <para>
+      The table is partitioned by specifying a modulus and a remainder for
+      each partition. Each partition will hold the rows for which the hash
+      value of the partition key divided by the specified modulus will
+      produce the specified remainder.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
 
      Si votre application nécessite d'utiliser d'autres formes de
@@ -2969,10 +3007,9 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
     Toutes les lignes insérées dans la table partitionnée seront redirigées
     vers une des <firstterm>partitions</firstterm> en se basant sur la valeur
     de la clé de partitionnement. Chaque partition a un sous-ensemble des
-    données défini par ses <firstterm>limites de partition</firstterm>.  Pour
-    l'instant, les méthodes de partitionnement supportées sont le
-    partitionnement par intervalles et par liste, où on assigne à chaque
-    partition respectivement un intervalle de clés et une liste de clés.
+    données défini par ses <firstterm>limites de partition</firstterm>. Les
+    méthodes de partitionnement actuellement supportées sont le
+    partitionnement par intervalles, par liste et par hachage.
    </para>
 
    <para>
@@ -2980,8 +3017,7 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
     partitionnées, en utilisant ce qu'on appelle du
     <firstterm>sous-partitionnement</firstterm>. Les partitions peuvent avoir
     leurs propres index, contraintes et valeurs par défaut, différents de
-    ceux des autres partitions. Les index doivent être créés séparément pour
-    chaque partition.  Voir <xref linkend="sql-createtable"/> pour plus de
+    ceux des autres partitions. Voir <xref linkend="sql-createtable"/> pour plus de
     détails sur la création des tables partitionnées et des partitions.
    </para>
 
@@ -2998,9 +3034,9 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
 
    <para>
     Dans les faits, les partitions individuelles sont liées à la table
-    partitionnée grâce à l'héritage &nbsp;; il n'est pas possible d'utiliser une
-    partie des fonctionnalités de l'héritage vues dans la section précédente
-    avec les tables partitionnées et les partitions.  Par exemple, une
+    partitionnée grâce à l'héritage &nbsp;; il n'est pas possible d'utiliser les
+    fonctionnalités génériques de l'héritage (discuté ci-dessous) avec des tables
+    déclarées partitionnées et leurs partitions. Par exemple, une
     partition ne peut pas avoir d'autre parent qu'une table partitionnée dont
     elle est une partition, et une table standard ne peut pas hériter d'une
     table partitionnée faisant d'elle son parent.  Cela veut dire que les
@@ -3025,16 +3061,23 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
      <listitem>
       <para>
        Utiliser <literal>ONLY</literal> pour ajouter ou supprimer une
-       contrainte sur la table partitionnée uniquement est supporté s'il n'y a
+       contrainte sur la table partitionnée uniquement est supporté tant qu'il n'y a
        pas de partition. Une fois qu'il existe des partitions, utiliser
        <literal>ONLY</literal> remontera une erreur puisqu'ajouter ou supprimer
        des contraintes sur uniquement la table partitionnée, quand des
        partitions existent, n'est pas supporté.  À la place, des contraintes
-       peuvent être ajoutées ou supprimées, quand elles ne sont pas présentes
-       sur la table parente, directement sur les partitions.  Comme une table
-       partitionnée ne contient jamais de données directement, essayer
-       d'utiliser <command>TRUNCATE</command> <literal>ONLY</literal> sur une
-       table partitionnée retournera toujours une erreur.
+       sur les partitions elles-mêmes peuvent être ajoutées ou (si elles ne
+       sont pas présentes sur la table parente) supprimées directement sur les
+       partitions.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Comme une table partitionnée ne contient jamais de données
+       directement, essayer d'utiliser <command>TRUNCATE</command>
+       <literal>ONLY</literal> sur une table partitionnée retournera toujours
+       une erreur.
       </para>
      </listitem>
 
@@ -3063,11 +3106,14 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
    </para>
 
    <para>
-    Les partitions peuvent également être des tables étrangères (voir
-    <xref linkend="sql-createforeigntable"/>), bien que ce cas ait des
-    limitations qui n'existent pas avec des tables normales. Par exemple, les
-    données insérées dans la table partitionnée ne sont pas redirigées vers la
-    partition qui est une table étrangère.
+    Les partitions peuvent également être des tables étrangères, bien que ce cas ait des
+    limitations qui n'existent pas avec des tables normales&nbsp;; see <xref linkend="sql-createforeigntable"/> for
+    more information.
+   </para>
+
+   <para>
+    Updating the partition key of a row might cause it to be moved into a
+    different partition where this row satisfies the partition bounds.
    </para>
 
    <sect3 id="ddl-partitioning-declarative-example">
@@ -3213,20 +3259,15 @@ CREATE TABLE measurement_y2006m02 PARTITION OF measurement
         Créez un index sur la ou les colonnes de la clé, ainsi que tout autre
         index que vous pourriez vouloir pour chaque partition.  (L'index sur la clé
         n'est pas strictement nécessaire, mais c'est utile dans la plupart des
-        scénarios. Si vous voulez que les valeurs de la clé soient uniques, alors
-        vous devriez toujours créer un index unique ou une contrainte de clé
-        primaire pour chaque partition.)
+        scénarios.) This automatically creates
+        one index on each partition, and any partitions you create or attach
+        later will also contain the index.
      </para>
 
-<programlisting>CREATE INDEX ON measurement_y2006m02 (logdate);
-CREATE INDEX ON measurement_y2006m03 (logdate);
-...
-CREATE INDEX ON measurement_y2007m11 (logdate);
-CREATE INDEX ON measurement_y2007m12 (logdate);
-CREATE INDEX ON measurement_y2008m01 (logdate);</programlisting>
+<programlisting>CREATE INDEX ON measurement (logdate);</programlisting>
        <para>
         Assurez-vous que le paramètre de configuration <xref
-            linkend="guc-constraint-exclusion"/> ne soit pas désactivé dans
+            linkend="guc-enable-partition-pruning"/> ne soit pas désactivé dans
         <filename>postgresql.conf</filename>.  S'il l'est, les requêtes ne
         seront pas optimisées comme voulu.
         </para>
@@ -3339,51 +3380,59 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
 
    <para>
     Les limitations suivantes s'appliquent aux tables partitionnées :
+
     <itemizedlist>
      <listitem>
       <para>
-       Il n'y a pas de commande disponible pour créer les index correspondant
-       sur toutes les partitions automatiquement. Les index doivent être
-       ajoutés sur chaque partition avec des commandes séparées. Cela signifie
-       également qu'il n'y a pas de moyen de créer une clé primaire, un index
-       unique ou une contrainte d'exclusion couvrant toutes les partitions &nbsp;; il
-       est seulement possible de contraindre chaque partition de niveau feuille
-       individuellement.
+       There is no way to create an
+       exclusion constraint spanning all partitions; it is only possible
+       to constrain each leaf partition individually.
       </para>
      </listitem>
 
      <listitem>
       <para>
-       Puisque les clés primaires ne sont pas supportées sur les tables
-       partitionnées, les clés étrangères référençant des tables partitionnées
-       ne sont pas supportées, pas plus qu'une clé étrangère depuis une table
-       partitionnée référençant une autre table.
+       While primary keys are supported on partitioned tables, foreign
+       keys referencing partitioned tables are not supported.  (Foreign key
+       references from a partitioned table to some other table are supported.)
       </para>
      </listitem>
 
      <listitem>
       <para>
-       Utiliser la clause <literal>ON CONFLICT</literal> avec des tables
-       partitionnées remontera une erreur, car les contraintes unique ou
-       d'exclusion ne peuvent être créées que sur les partitions individuelles.
-       Il n'y a pas de support pour imposer l'unicité (ou une contrainte
-       d'exclusion) sur l'intégralité d'une hiérarchie de partitionnement.
+       When an <command>UPDATE</command> causes a row to move from one
+       partition to another, there is a chance that another concurrent
+       <command>UPDATE</command> or <command>DELETE</command> misses this row.
+       Suppose session 1 is performing an <command>UPDATE</command> on a
+       partition key, and meanwhile a concurrent session 2 for which this row
+       is visible performs an <command>UPDATE</command> or
+       <command>DELETE</command> operation on this row. Session 2 can silently
+       miss the row if the row is deleted from the partition due to session
+       1's activity.  In such case, session 2's
+       <command>UPDATE</command> or <command>DELETE</command>, being unaware of
+       the row movement thinks that the row has just been deleted and concludes
+       that there is nothing to be done for this row. In the usual case where
+       the table is not partitioned, or where there is no row movement,
+       session 2 would have identified the newly updated row and carried out
+       the <command>UPDATE</command>/<command>DELETE</command> on this new row
+       version.
       </para>
      </listitem>
 
      <listitem>
       <para>
-       Un <command>UPDATE</command> qui a pour conséquence de déplacer une
-       ligne d'une partition à une autre échouera, car la nouvelle ligne ne
-       satisfera pas la contrainte de partition implicite de la partition
-       d'origine.
+       <literal>BEFORE ROW</literal> triggers, if necessary, must be defined
+       on individual partitions, not the partitioned table.
       </para>
      </listitem>
 
      <listitem>
       <para>
-       Les triggers de lignes, si nécessaires, doivent être définis sur les
-       partitions individuelles et non sur la table partitionnée.
+       Mixing temporary and permanent relations in the same partition tree is
+       not allowed.  Hence, if the partitioned table is permanent, so must be
+       its partitions and likewise if the partitioned table is temporary.  When
+       using temporary relations, all members of the partition tree have to be
+       from the same session.
       </para>
      </listitem>
     </itemizedlist>
@@ -3404,10 +3453,9 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
      <itemizedlist>
       <listitem>
        <para>
-        Le partitionnement impose le fait que toutes les partitions doivent
-        avoir exactement le même ensemble de colonnes que le parent, mais
-        l'héritage de table permet aux enfants d'avoir des colonnes
-        supplémentaires qui ne sont pas présentes dans la table parent.
+        For declarative partitioning, partitions must have exactly the same set
+        of columns as the partitioned table, whereas with table inheritance,
+        child tables may have extra columns not present in the parent.
        </para>
       </listitem>
 
@@ -3419,12 +3467,11 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
 
       <listitem>
        <para>
-        Le partitionnement déclaratif ne supporte que le partitionnement par
-        liste et par intervalles, alors que l'héritage de table autorise la
-        division des données de la manière choisie par l'utilisateur.  (Notez
-        toutefois que si les contraintes d'exclusions ne sont pas capables de
-        filtrer la liste des partitions de manière efficace, la performance des
-        requêtes sera très mauvaise.)
+        Declarative partitioning only supports range, list and hash
+        partitioning, whereas table inheritance allows data to be divided in a
+        manner of the user's choosing.  (Note, however, that if constraint
+        exclusion is unable to prune child tables effectively, query performance
+        might be poor.)
        </para>
       </listitem>
 
@@ -3447,17 +3494,17 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
 
      <para>
       Nous utilisons la même table <structname>measurement</structname> que
-      nous avons déjà utilisée au-dessus. Pour l'implémenter comme une table
-      partitionnée en utilisant l'héritage, utilisez les étapes suivantes :
+      nous avons déjà utilisée au-dessus. Pour l'implémenter le partitionnement
+      en utilisant l'héritage, utilisez les étapes suivantes :
 
       <orderedlist spacing="compact">
        <listitem>
         <para>
          Créez la table <quote>master</quote>, à partir de laquelle toutes les
-         partitions seront héritées. Cette table ne contiendra aucune donnée.
+         tables <quote>filles</quote> hériteront. Cette table ne contiendra aucune donnée.
          Ne définissez aucune contrainte de vérification sur cette table, à
          moins que vous n'ayez l'intention de l'appliquer de manière identique
-         sur toutes les partitions. Il n'y a aucun intérêt à définir d'index
+         sur toutes les tables filles. Il n'y a aucun intérêt à définir d'index
          ou de contrainte unique sur elle non plus. Pour notre exemple, la
          table master correspond à la table
          <structname>measurement</structname> définie à l'origine.
@@ -3469,7 +3516,7 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
          Créez plusieurs tables <quote>enfant</quote> qui chacune hérite de la
          table master. Normalement, ces tables n'auront aucune colonne
          supplémentaire par rapport à celles héritées de la table master.
-         Tout comme avec le partitionnement déclaratif, ces partitions ont 
+         Tout comme avec le partitionnement déclaratif, ces tables filles ont
          tous les aspects des tables (ou tables étrangères)
          <productname>PostgreSQL</productname> normales.
         </para>
@@ -3489,8 +3536,8 @@ CREATE TABLE measurement_y2008m01 () INHERITS (measurement);
        <listitem>
         <para>
          Ajoutez les contraintes de tables qui ne se chevauchent pas sur les
-         tables de partition pour définir les valeurs de clé autorisées dans
-         chaque partition.
+         tables filles pour définir les valeurs de clé autorisées dans
+         chaque table fille.
         </para>
 
         <para>
@@ -3502,18 +3549,18 @@ CHECK ( outletID &gt;= 100 AND outletID &lt; 200 )
 </programlisting>
          Assurez-vous que les contraintes garantissent qu'il n'y a pas de
          chevauchement entre les valeurs de clés permises dans différentes
-         partitions. Une erreur fréquente est de mettre en place des
+         tables filles. Une erreur fréquente est de mettre en place des
          contraintes d'intervalle comme ceci :
 <programlisting>
 CHECK ( outletID BETWEEN 100 AND 200 )
 CHECK ( outletID BETWEEN 200 AND 300 )
 </programlisting>
-         Cet exemple est faux puisqu'on ne peut pas savoir à quelle partition
+         Cet exemple est faux puisqu'on ne peut pas savoir à quelle table fille
          appartient la valeur de clé 200.
         </para>
 
         <para>
-         Il serait préférable de créer à la place les partitions comme cela :
+         Il serait préférable de créer à la place les tables filles comme cela :
 
 <programlisting>
 CREATE TABLE measurement_y2006m02 (
@@ -3542,7 +3589,7 @@ CREATE TABLE measurement_y2008m01 (
 
        <listitem>
         <para>
-         Pour chaque partition, créez un index sur la ou les colonnes de la clé,
+         Pour chaque table fille, créez un index sur la ou les colonnes de la clé,
          ainsi que tout autre index que vous voudriez.
 <programlisting>
 CREATE INDEX measurement_y2006m02_logdate ON measurement_y2006m02 (logdate);
@@ -3558,10 +3605,10 @@ CREATE INDEX measurement_y2008m01_logdate ON measurement_y2008m01 (logdate);
         <para>
          Nous voulons que notre application soit capable de dire
          <literal>INSERT INTO measurement ...</literal> et d'avoir les données
-         redirigées dans la table de partition appropriée.  Nous pouvons
+         redirigées dans la table fille appropriée.  Nous pouvons
          réaliser cela en attachant une fonction de déclencheur convenable sur
          la table master. Si les données doivent être ajoutées sur la dernière
-         table de partition uniquement, nous pouvons utiliser une fonction de
+         table fille uniquement, nous pouvons utiliser une fonction de
          déclencheur très simple :
 
 <programlisting>
@@ -3587,12 +3634,12 @@ CREATE TRIGGER insert_mesure_trigger
      </programlisting>
 
      La fonction déclencheur doit être redéfinie chaque mois pour qu'elle
-     pointe toujours sur la partition active. La définition du déclencheur
+     pointe toujours sur la table fille active. La définition du déclencheur
      n'a pas besoin d'être redéfinie.
     </para>
 
     <para>
-     Il est également possible de laisser le serveur localiser la partition
+     Il est également possible de laisser le serveur localiser la table fille
      dans laquelle doit être insérée la ligne proposée en entrée. Une
      fonction déclencheur plus complexe peut être utilisée pour cela &nbsp;:
 
@@ -3621,7 +3668,7 @@ LANGUAGE plpgsql;
 
      La définition du déclencheur ne change pas. Chaque
      test <literal>IF</literal> doit correspondre exactement à la
-     contrainte <literal>CHECK</literal> de cette partition.
+     contrainte <literal>CHECK</literal> de cette table fille.
     </para>
 
     <para>
@@ -3633,7 +3680,7 @@ LANGUAGE plpgsql;
     <note>
      <para>
       En pratique, il pourrait être préférable de vérifier prioritairement la
-      dernière partition créée si la plupart des insertions lui sont
+      dernière table fille créée si la plupart des insertions lui sont
       destinées. Pour des raisons de simplicité, les tests du déclencheur
       sont présentés dans le même ordre que les autres parties de l'exemple.
      </para>
@@ -3641,7 +3688,7 @@ LANGUAGE plpgsql;
 
     <para>
          Une approche différente est de rediriger les insertions dans la table
-         de partition appropriée à l'aide de règles, plutôt qu'un déclencheur,
+         fille appropriée à l'aide de règles, plutôt qu'un déclencheur,
          sur la table master. Par exemple :
 
 <programlisting>
@@ -3668,7 +3715,7 @@ DO INSTEAD
         <para>
          Soyez conscient que <command>COPY</command> ignore les règles. Si vous voulez utiliser
          <command>COPY</command> pour insérer des données, vous devrez les
-         copier dans la bonne table de partition plutôt que dans la table
+         copier dans la bonne table fille plutôt que dans la table
          master. <command>COPY</command> déclenche les triggers, vous
          pouvez donc l'utilisez normalement si vous utilisez l'approche par
          déclencheur.
@@ -3694,33 +3741,33 @@ DO INSTEAD
      </para>
 
      <para>
-      Comme nous pouvons le voir, un schéma de partitionnement complexe peut
+      Comme nous pouvons le voir, une hiérarchie complexe de tables peut
       nécessiter une quantité de DDL non négligeable. Dans l'exemple du dessus,
-      nous créerions une nouvelle partition chaque mois, il serait donc sage
+      nous créerions une nouvelle table fille chaque mois, il serait donc sage
       d'écrire un script qui génère le DDL requis automatiquement.
      </para>
     </sect3>
 
     <sect3 id="ddl-partitioning-inheritance-maintenance">
-     <title>Maintenance de partition</title>
+     <title>Maintenance du partitionnement par héritage</title>
      <para>
       Pour supprimer les anciennes données rapidement, il suffit de supprimer
-      la partition qui n'est plus nécessaire :
+      la table fille qui n'est plus nécessaire :
   <programlisting>DROP TABLE mesure_a2006m02;
   </programlisting>
      </para>
 
     <para>
-     Pour supprimer la partition de la table partitionnée, mais pour garder
+     Pour supprimer la table fille de la hiérarchie de tables, mais pour garder
      l'accès à la table en tant que telle :
   <programlisting>ALTER TABLE mesure_a2006m02 NO INHERIT mesure;
   </programlisting>
  </para>
 
     <para>
-     Pour ajouter une nouvelle partition pour gérer les nouvelles données,
-     créez une partition vide tout comme les partitions originales ont été
-     créées au-dessus :
+     Pour ajouter une nouvelle table fille pour gérer les nouvelles données,
+     créez une table fille vide tout comme les tables filles originales ont été
+     créées ci-dessus :
 
   <programlisting>
 CREATE TABLE mesure_a2008m02 (
@@ -3728,9 +3775,10 @@ CREATE TABLE mesure_a2008m02 (
     ) INHERITS (mesure);
   </programlisting>
 
-     De manière alternative, vous pourriez vouloir créer la nouvelle table en
-     dehors de la structure de partition, et en faire une partition après avoir
-     chargé, vérifié et transformé les données :
+     Alternatively, one may want to create and populate the new child table
+     before adding it to the table hierarchy.  This could allow data to be
+     loaded, checked, and transformed before being made visible to queries on
+     the parent table.
 
   <programlisting>
 CREATE TABLE mesure_a2008m02
@@ -3748,15 +3796,15 @@ ALTER TABLE mesure_a2008m02 INHERIT mesure;
    <sect3 id="ddl-partitioning-inheritance-caveats">
     <title>Restrictions</title>
     <para>
-     Les restrictions suivantes s'appliquent aux tables partitionnées utilisant
-     l'héritage&nbsp;:
+     Les restrictions suivantes s'appliquent au partitionnement par
+     héritage&nbsp;:
      <itemizedlist>
       <listitem>
         <para>
         Il n'existe pas de moyen automatique de vérifier que toutes les
         contraintes de vérification (<literal>CHECK</literal>) sont
         mutuellement exclusives. Il est plus sûr de créer un code qui fabrique
-        les partitions et crée et/ou modifie les objets associés plutôt que de
+        les tables filles et crée et/ou modifie les objets associés plutôt que de
         les créer manuellement&nbsp;;
        </para>
       </listitem>
@@ -3769,7 +3817,7 @@ ALTER TABLE mesure_a2008m02 INHERIT mesure;
         partition. Une commande  <command>UPDATE</command> qui tente de le
         faire échoue à cause des contraintes <literal>CHECK</literal>. Pour
         gérer ce type de cas, des déclencheurs peuvent être convenablement
-        positionnés pour la mise à jour sur les tables de partition, mais cela
+        positionnés pour la mise à jour sur les tables filles, mais cela
         rend la gestion de la structure beaucoup plus complexe.
        </para>
       </listitem>
@@ -3777,7 +3825,7 @@ ALTER TABLE mesure_a2008m02 INHERIT mesure;
       <listitem>
        <para>
         Si <command>VACUUM</command> ou <command>ANALYZE</command> sont lancés
-        manuellement, il est obligatoire de les utiliser sur chaque partition.
+        manuellement, il est obligatoire de les utiliser sur chaque table fille.
         Une commande comme&nbsp;:
 <programlisting>
 ANALYZE measurement;
@@ -3792,14 +3840,14 @@ ANALYZE measurement;
             CONFLICT</literal> ont probablement peu de chances de fonctionner
         comme attendu, dans la mesure où l'action du <literal>ON
             CONFLICT</literal> est uniquement effectuée dans le cas de
-        violations qui sont uniques à la table cible, pas à ses tables enfants.
+        violations qui sont uniques à la table cible, pas à ses tables filles.
        </para>
       </listitem>
 
       <listitem>
        <para>
         Les déclencheurs ou les règles seront nécessaires pour rediriger les
-        lignes vers la partition voulue, à moins que l'application ne soit
+        lignes vers la table fille voulue, à moins que l'application ne soit
         explicitement au courant du schéma de partitionnement.  Les
         déclencheurs peuvent être plus compliqués à écrire, et seront bien plus
         lents que la redirection de ligne effectuée en interne par le
@@ -3811,58 +3859,57 @@ ANALYZE measurement;
    </sect3>
   </sect2>
 
-  <sect2 id="ddl-partitioning-constraint-exclusion">
-    <title>Partitionnement et exclusion de contrainte</title>
+  <sect2 id="ddl-partition-pruning">
+   <title>Partition Pruning</title>
 
  <indexterm>
-  <primary>exclusion de contrainte</primary>
+  <primary>partition pruning</primary>
  </indexterm>
 
  <para>
-  L'<firstterm>exclusion de contrainte</firstterm> est une technique
-  d'optimisation des requêtes pour améliorer les performances sur les tables
-  partitionnées telles que décrites plus haut (les tables partitionnées qui
-  utilisent le partitionnement déclaratif ainsi que celles qui sont implémentées en
-  utilisant l'héritage). Par exemple&nbsp;:
+  <firstterm>Partition pruning</firstterm> is a query optimization technique
+  that improves performance for declaratively partitioned tables.
+  As an example:
 
-  <programlisting>SET constraint_exclusion = on;
+  <programlisting>SET enable_partition_pruning = on;                 -- the default
 SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';</programlisting>
 
-    Sans exclusion de contrainte, la requête ci-dessus parcourt chacune
-    des partitions de la table <structname>mesure</structname>. Avec l'exclusion
-    de contrainte activée, le planificateur examine les contraintes de chaque
-    partition et tente de prouver que la partition n'a pas besoin d'être
-    parcourue parce qu'elle ne peut pas contenir de lignes correspondant à
-    la clause <literal>WHERE</literal> de la requête. Quand le planificateur peut
-    le prouver, il exclut la partition du plan de requête.
-   </para>
+  Without partition pruning, the above query would scan each of the
+  partitions of the <structname>measurement</structname> table. With
+  partition pruning enabled, the planner will examine the definition
+  of each partition and prove that the partition need not
+  scanned because it could not contain any rows meeting the query's
+  <literal>WHERE</literal> clause.  When the planner can prove this, it
+  excludes (<firstterm>prunes</firstterm>) the partition from the query
+  plan.
+ </para>
 
    <para>
-    La commande <command>EXPLAIN</command> permet d'afficher la
-    différence entre un plan avec <varname>constraint_exclusion</varname>
-    activé (<foreignphrase>on</foreignphrase>) et un plan avec ce paramètre désactivé
-    (<foreignphrase>off</foreignphrase>). Un plan typique non optimisé pour ce type de
-    table est&nbsp;:
+    By using the EXPLAIN command and the <xref
+    linkend="guc-enable-partition-pruning"/> configuration parameter, it's
+    possible to show the difference between a plan for which partitions have
+    been pruned and one for which they have not.  A typical unoptimized
+    plan for this type of table setup is:
 
-<programlisting>SET constraint_exclusion = off;
+<programlisting>SET enable_partition_pruning = off;
 EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
 
-                                          QUERY PLAN
--------------------------------------------------------------------------------------
- Aggregate  (cost=158.66..158.68 rows=1 width=0)
-   -&gt;  Append  (cost=0.00..151.88 rows=2715 width=0)
-         -&gt;  Seq Scan on mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2008-01-01'::date)
-         -&gt;  Seq Scan on mesure_a2006m02 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2008-01-01'::date)
-         -&gt;  Seq Scan on mesure_ay2006m03 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2008-01-01'::date)
-...
-         -&gt;  Seq Scan on mesure_a2007m12 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2008-01-01'::date)
-         -&gt;  Seq Scan on mesure_a2008m01 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2008-01-01'::date)
-  </programlisting>
+                                    QUERY PLAN
+-----------------------------------------------------------------------------------
+ Aggregate  (cost=188.76..188.77 rows=1 width=8)
+   -&gt;  Append  (cost=0.00..181.05 rows=3085 width=0)
+         -&gt;  Seq Scan on measurement_y2006m02  (cost=0.00..33.12 rows=617 width=0)
+               Filter: (logdate &gt;= '2008-01-01'::date)
+         -&gt;  Seq Scan on measurement_y2006m03  (cost=0.00..33.12 rows=617 width=0)
+                Filter: (logdate &gt;= '2008-01-01'::date)
+ ...
+         -&gt;  Seq Scan on measurement_y2007m11  (cost=0.00..33.12 rows=617 width=0)
+               Filter: (logdate &gt;= '2008-01-01'::date)
+         -&gt;  Seq Scan on measurement_y2007m12  (cost=0.00..33.12 rows=617 width=0)
+               Filter: (logdate &gt;= '2008-01-01'::date)
+         -&gt;  Seq Scan on measurement_y2008m01  (cost=0.00..33.12 rows=617 width=0)
+               Filter: (logdate &gt;= '2008-01-01'::date)
+</programlisting>
 
   Quelques partitions, voire toutes, peuvent utiliser des parcours d'index
   à la place des parcours séquentiels de la table complète, mais le fait est
@@ -3871,25 +3918,127 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
   un plan significativement moins coûteux est obtenu, qui délivre la même
   réponse&nbsp;:
 
-  <programlisting>SET constraint_exclusion = on;
+  <programlisting>SET enable_partition_pruning = on;
 EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
-                                          QUERY PLAN
--------------------------------------------------------------------------------------
- Aggregate  (cost=63.47..63.48 rows=1 width=0)
-   ->  Append  (cost=0.00..60.75 rows=1086 width=0)
-         ->  Seq Scan on mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2008-01-01'::date)
-         ->  Seq Scan on mesure_a2008m01 mesure  (cost=0.00..30.38 rows=543 width=0)
-               Filter: (date_trace &gt;= '2008-01-01'::date)</programlisting>
+
+                                    QUERY PLAN
+-----------------------------------------------------------------------------------
+ Aggregate  (cost=37.75..37.76 rows=1 width=8)
+   -&gt;  Append  (cost=0.00..36.21 rows=617 width=0)
+         -&gt;  Seq Scan on measurement_y2008m01  (cost=0.00..33.12 rows=617 width=0)</programlisting>
    </para>
 
    <para>
-    L'exclusion de contrainte	 n'est pilotée que par les contraintes
-    <literal>CHECK</literal>, pas par la présence d'index. Il n'est donc pas
-    nécessaire de définir des index sur les colonnes clés. Le fait qu'un index
-    doive être créé pour une partition donnée dépend de ce que les requêtes qui
-    parcourent la partition parcourent en général une grande partie de la partition
-    ou seulement une petite partie. Un index est utile dans le dernier cas, pas dans le premier.
+    Note that partition pruning is driven only by the constraints defined
+    implicitly by the partition keys, not by the presence of indexes.
+    Therefore it isn't necessary to define indexes on the key columns.
+    Whether an index needs to be created for a given partition depends on
+    whether you expect that queries that scan the partition will
+    generally scan a large part of the partition or just a small part.
+    An index will be helpful in the latter case but not the former.
+   </para>
+
+   <para>
+    Partition pruning can be performed not only during the planning of a
+    given query, but also during its execution.  This is useful as it can
+    allow more partitions to be pruned when clauses contain expressions
+    whose values are not known at query planning time; for example,
+    parameters defined in a <command>PREPARE</command> statement, using a
+    value obtained from a subquery or using a parameterized value on the
+    inner side of a nested loop join.  Partition pruning during execution
+    can be performed at any of the following times:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       During initialization of the query plan.  Partition pruning can be
+       performed here for parameter values which are known during the
+       initialization phase of execution.  Partitions which are pruned
+       during this stage will not show up in the query's
+       <command>EXPLAIN</command> or <command>EXPLAIN ANALYZE</command>.
+       It is possible to determine the number of partitions which were
+       removed during this phase by observing the
+       <quote>Subplans Removed</quote> property in the
+       <command>EXPLAIN</command> output.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       During actual execution of the query plan.  Partition pruning may
+       also be performed here to remove partitions using values which are
+       only known during actual query execution.  This includes values
+       from subqueries and values from execution-time parameters such as
+       those from parameterized nested loop joins.  Since the value of
+       these parameters may change many times during the execution of the
+       query, partition pruning is performed whenever one of the
+       execution parameters being used by partition pruning changes.
+       Determining if partitions were pruned during this phase requires
+       careful inspection of the <literal>nloops</literal> property in
+       the <command>EXPLAIN ANALYZE</command> output.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <para>
+    Partition pruning can be disabled using the
+    <xref linkend="guc-enable-partition-pruning"/> setting.
+   </para>
+
+   <note>
+    <para>
+     Currently, pruning of partitions during the planning of an
+     <command>UPDATE</command> or <command>DELETE</command> command is
+     implemented using the constraint exclusion method (however, it is
+     controlled by the <literal>enable_partition_pruning</literal> rather than
+     <literal>constraint_exclusion</literal>) &mdash; see the following section
+     for details and caveats that apply.
+    </para>
+
+    <para>
+     Also, execution-time partition pruning currently only occurs for the
+     <literal>Append</literal> node type, not <literal>MergeAppend</literal>.
+    </para>
+
+    <para>
+     Both of these behaviors are likely to be changed in a future release
+     of <productname>PostgreSQL</productname>.
+    </para>
+   </note>
+  </sect2>
+
+  <sect2 id="ddl-partitioning-constraint-exclusion">
+   <title>Partitioning and Constraint Exclusion</title>
+
+   <indexterm>
+    <primary>constraint exclusion</primary>
+   </indexterm>
+
+   <para>
+    <firstterm>Constraint exclusion</firstterm> is a query optimization
+    technique similar to partition pruning.  While it is primarily used
+    for partitioned tables using the legacy inheritance method, it can be
+    used for other purposes, including with declarative partitioning.
+   </para>
+
+   <para>
+    Constraint exclusion works in a very similar way to partition
+    pruning, except that it uses each table's <literal>CHECK</literal>
+    constraints &mdash; which gives it its name &mdash; whereas partition
+    pruning uses the table's partition bounds, which exists only in the
+    case of declarative partitioning.  Another difference is that
+    constraint exclusion is only applied at plan time; there is no attempt
+    to remove partitions at execution time.
+   </para>
+
+   <para>
+    The fact that constraint exclusion uses <literal>CHECK</literal>
+    constraints, which makes it slow compared to partition pruning, can
+    sometimes be used as an advantage: because constraints can be defined
+    even on declaratively-partitioned tables, in addition to their internal
+    partition bounds, constraint exclusion may be able
+    to elide additional partitions from the query plan.
    </para>
 
    <para>
@@ -3904,11 +4053,16 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
    </para>
 
  <para>
-  Les restrictions suivantes s'appliquent à l'exclusion de contraintes, qui
-  sont utilisées à la fois par l'héritage et par les tables
-  partitionnées&nbsp;:
+  Les restrictions suivantes s'appliquent à l'exclusion de contraintes&nbsp;:
 
   <itemizedlist>
+   <listitem>
+    <para>
+     Constraint exclusion is only applied during query planning; unlike
+     partition pruning, it cannot be applied during query execution.
+    </para>
+   </listitem>
+
    <listitem>
     <para>
      L'exclusion de contrainte ne fonctionne que si la clause
@@ -3916,7 +4070,7 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
      paramètres externes). Par exemple, une comparaison entre une fonction
      non immutable telle que <function>CURRENT_TIMESTAMP</function> ne peut
      pas être optimisée, car le planificateur ne peut pas savoir dans quelle
-     partition la valeur de la fonction ira lors de l'exécution.
+     table fille la valeur de la fonction ira lors de l'exécution.
     </para>
    </listitem>
 
@@ -3924,30 +4078,26 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
     <para>
      Les contraintes de partitionnement doivent rester simples.  Dans le cas
      contraire, le planificateur peut rencontrer des difficultés à déterminer
-     les partitions qu'il n'est pas nécessaire de parcourir.  Des conditions
+     les tables filles qu'il n'est pas nécessaire de parcourir.  Des conditions
      simples d'égalité pour le partitionnement de liste ou des tests
      d'intervalle simples lors de partitionnement par intervalles sont
      recommandées, comme cela est illustré dans les exemples précédents. Une
      bonne règle consiste à s'assurer que les comparaisons entre colonnes de
      partitionnement et constantes utilisées par les contraintes de
      partitionnement se fassent uniquement à l'aide d'opérateurs utilisables
-     par les index B-tree, ce qui s'applique même aux tables partitionnées, car
-     seules les colonnes indexables avec un index B-tree sont autorisées dans la
-     clé de partitionnement.  (Ce n'est pas un problème quand on utilise le
-     partitionnement déclaratif, puisque les contraintes générées
-     automatiquement sont suffisamment simples pour être comprises par
-     l'optimiseur).
+     par les index B-tree car seules les colonnes indexables avec un index
+     B-tree sont autorisées dans la clé de partitionnement.
     </para>
    </listitem>
 
    <listitem>
     <para>
-     Toutes les contraintes de toutes les partitions de la table maître sont
+     Toutes les contraintes sur toutes les filles de la table parent sont
      examinées lors de l'exclusion de contraintes. De ce fait, un grand nombre
-     de partitions augmente considérablement le temps de
-     planification de la requête. Un partitionnement qui utilise ces
-     techniques fonctionne assez bien jusqu'environ une centaine de partitions&nbsp;;
-     il est impensable de vouloir atteindre des milliers de partitions.
+     des filles augmente considérablement le temps de
+     planification de la requête. So the legacy
+      inheritance based partitioning will work well with up to perhaps a
+      hundred child tables; don't try to use many thousands of children.
     </para>
    </listitem>
 
@@ -4047,7 +4197,7 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
 
  <listitem>
   <para>
-   Fonctions et opérateurs
+   Fonctions, procédures et opérateurs
   </para>
  </listitem>
 

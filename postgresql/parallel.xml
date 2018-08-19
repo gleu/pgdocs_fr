@@ -176,8 +176,11 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
         La requête écrit des données ou verrouille des lignes de la base. Si
         une requête contient une opération de modification de données, soit au
         niveau supérieur, soit dans une CTE, aucun plan parallèle ne peut être
-        généré pour cette requête. Ceci est une limitation de l'implémentation
-        actuelle qui pourrait être supprimée dans une prochaine version.
+        généré pour cette requête. Il existe des exceptions&nbsp;: les
+        commandes <literal>CREATE TABLE ... AS</literal>, <literal>SELECT
+        INTO</literal> et <literal>CREATE MATERIALIZED VIEW</literal>, qui
+        créent une nouvelle table et la peuplent peuvent utiliser un plan
+        parallélisé.
       </para>
     </listitem>
 
@@ -268,16 +271,6 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
         linkend="guc-max-parallel-workers-per-gather"/> à zéro pour les
         sessions où cela pourrait survenir, pour éviter de générer des plans
         de requêtes non optimales s'ils sont exécutés de façon sérialisé.
-      </para>
-    </listitem>
-
-    <listitem>
-      <para>
-        Une requête préparée est exécutée en utilisant une instruction
-        <literal>CREATE TABLE .. AS EXECUTE ..</literal>. Cette construction
-        convertit ce qui serait autrement une opération en lecture seule en
-        une opération en lecture/écriture, la rendant ainsi inutilisable pour
-        une requête parallélisée.
       </para>
     </listitem>
 
@@ -373,25 +366,40 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     jointure par hashage ou une jointure par tri-fusion.  Le côté interne de la
     jointure peut être n'importe quel type de plan non parallèle qui est par
     ailleurs supportés par l'optimiseur pourvu qu'il soit sûr de le lancer au
-    sein d'un worker parallèle.  Par exemple, si une boucle imbriquée est
-    choisie, le côté interne pourrait être un parcours d'index dont la valeur
-    de recherche est prise depuis le côté externe de la jointure.
+    sein d'un worker parallèle. Suivant le type de jointure, la relation interne
+    peut aussi être un plan parallélisé.
   </para>
 
-  <para>
-    Chaque worker exécutera la partie interne de la jointure en entier. Ce
-    n'est généralement pas un problème pour les boucles imbriquées, mais cela
-    peut se révéler inefficace pour les cas impliquant des jointures par
-    hashage ou tri-fusion.  Par exemple, pour une jointure par hashage, cette
-    restriction signifie qu'une table de hashage identique est créé dans chaque
-    worker, ce qui fonctionne bien pour les jointures de petites tables mais
-    qui pourrait ne pas être efficace quand la table interne est grande.  Pour
-    une jointure par tri-fusion, cela pourrait signifier que chaque worker
-    réalise un tri séparé de la relation interne, ce qui pourrait être lent.
-    Bien entendu, dans les cas où un plan parallèle de ce type ne serait pas
-    efficace, l'optimiseur de requête choisira normalement un autre type de
-    plan (peut-être un qui n'utilise pas de parallélisme) à la place.
-  </para>
+  <itemizedlist>
+    <listitem>
+      <para>
+        In a <emphasis>nested loop join</emphasis>, the inner side is always
+        non-parallel.  Although it is executed in full, this is efficient if
+        the inner side is an index scan, because the outer tuples and thus
+        the loops that look up values in the index are divided over the
+        cooperating processes.
+      </para>
+    </listitem>
+    <listitem>
+      <para>
+        In a <emphasis>merge join</emphasis>, the inner side is always
+        a non-parallel plan and therefore executed in full.  This may be
+        inefficient, especially if a sort must be performed, because the work
+        and resulting data are duplicated in every cooperating process.
+      </para>
+    </listitem>
+    <listitem>
+      <para>
+        In a <emphasis>hash join</emphasis> (without the "parallel" prefix),
+        the inner side is executed in full by every cooperating process
+        to build identical copies of the hash table.  This may be inefficient
+        if the hash table is large or the plan is expensive.  In a
+        <emphasis>parallel hash join</emphasis>, the inner side is a
+        <emphasis>parallel hash</emphasis> that divides the work of building
+        a shared hash table over the cooperating processes.
+      </para>
+    </listitem>
+  </itemizedlist>
  </sect2>
 
  <sect2 id="parallel-aggregation">
@@ -443,6 +451,54 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
    </para>
   </sect2>
 
+  <sect2 id="parallel-append">
+   <title>Parallel Append</title>
+
+   <para>
+     Whenever <productname>PostgreSQL</productname> needs to combine rows
+     from multiple sources into a single result set, it uses an
+     <literal>Append</literal> or <literal>MergeAppend</literal> plan node.
+     This commonly happens when implementing <literal>UNION ALL</literal> or
+     when scanning a partitioned table.  Such nodes can be used in parallel
+     plans just as they can in any other plan.  However, in a parallel plan,
+     the planner may instead use a <literal>Parallel Append</literal> node.
+   </para>
+
+   <para>
+     When an <literal>Append</literal> node is used in a parallel plan, each
+     process will execute the child plans in the order in which they appear,
+     so that all participating processes cooperate to execute the first child
+     plan until it is complete and then move to the second plan at around the
+     same time.  When a <literal>Parallel Append</literal> is used instead, the
+     executor will instead spread out the participating processes as evenly as
+     possible across its child plans, so that multiple child plans are executed
+     simultaneously.  This avoids contention, and also avoids paying the startup
+     cost of a child plan in those processes that never execute it.
+   </para>
+
+   <para>
+     Also, unlike a regular <literal>Append</literal> node, which can only have
+     partial children when used within a parallel plan, a <literal>Parallel
+     Append</literal> node can have both partial and non-partial child plans.
+     Non-partial children will be scanned by only a single process, since
+     scanning them more than once would produce duplicate results.  Plans that
+     involve appending multiple results sets can therefore achieve
+     coarse-grained parallelism even when efficient partial plans are not
+     available.  For example, consider a query against a partitioned table
+     which can be only be implemented efficiently by using an index that does
+     not support parallel scans.  The planner might choose a <literal>Parallel
+     Append</literal> of regular <literal>Index Scan</literal> plans; each
+     individual index scan would have to be executed to completion by a single
+     process, but different scans could be performed at the same time by
+     different processes.
+   </para>
+
+   <para>
+     <xref linkend="guc-enable-parallel-append" /> can be used to disable
+     this feature.
+   </para>
+  </sect2>
+ 
  <sect2 id="parallel-plan-tips">
   <title>Conseils pour les plans parallélisés</title>
 
@@ -523,8 +579,14 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
 
     <listitem>
       <para>
-        Accès à un <literal>InitPlan</literal> ou à un
-        <literal>SubPlan</literal> corrélé.
+        Noeuds du plan pour lesquels un <literal>InitPlan</literal> est
+        attaché.
+      </para>
+    </listitem>
+
+    <listitem>
+      <para>
+        Noeuds du plan qui référencent un <literal>SubPlan</literal> corrélé.
       </para>
     </listitem>
   </itemizedlist>

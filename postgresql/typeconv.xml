@@ -272,7 +272,21 @@ de recherche.
 Vérifier que l'opérateur accepte le type exact des arguments en
 entrée.  Si un opérateur existe (il peut en avoir uniquement un qui
 corresponde exactement dans l'ensemble des opérateurs considérés),
-utiliser cet opérateur.
+utiliser cet opérateur. Le manque de correspondance exacte crée
+un risque de sécurité lors de l'appel, via un nom qualifié
+  <footnote id="op-qualified-security">
+   <!-- If you edit this, consider editing func-qualified-security. -->
+   <para>
+    Le risque ne vient pas d'un nom sans qualification de schéma parce qu'un
+    chemin de recherche contenant des schémas permettant à des utilisateurs
+    sans confiance de créer des objets n'est pas un <link
+    linkend="ddl-schemas-patterns">modèle d'utilisation sécurisée des
+    schémas</link>.
+   </para>
+  </footnote>
+(inhabituel), tout opérateur trouvé dans un schéma permettant à des
+utilisateurs sans confiance de créer des objets. Dans de telles situations,
+convertir les arguments pour forcer une correspondance exacte.
 </para>
 
 <substeps>
@@ -620,6 +634,30 @@ SELECT * FROM ma_table WHERE val = text 'foo';
       ou, si les deux fonctions sont dans le même schéma, celle qui n'est pas VARIADIC
       est préférée.
      </para>
+     <para>
+     Le manque de correspondance exacte crée un risque de sécurité lors de l'appel,
+     via un nom qualifié
+       <footnote id="func-qualified-security">
+        <!-- If you edit this, consider editing op-qualified-security. -->
+        <para>
+         Le risque ne vient pas d'un nom sans qualification de schéma parce qu'un
+         chemin de recherche contenant des schémas permettant à des utilisateurs
+         sans confiance de créer des objets n'est pas un <link
+         linkend="ddl-schemas-patterns">modèle d'utilisation sécurisée des
+         schémas</link>.
+        </para>
+       </footnote>,
+     d'une fonction avec un nombre variable d'arguments trouvée dans un schéma qui
+     permet à des utilisateurs sans confiance de créer des objets. Un utilisateur
+     mal intentionné peut prendre contrôle et exécuter des fonctions SQL
+     arbitraires comme si vous les aviez exécuté. Remplacez un appel utilisant le
+     mot clé <literal>VARIADIC</literal> qui contourne ce risque. Les appels
+     utilisant des paramètres <literal>VARIADIC "any"</literal> n'ont généralement
+     pas de formulation équivalent contenant le mot clé
+     <literal>VARIADIC</literal>. Pour réaliser ces appels en tout sécurité, le
+     schéma de la fonction doit permettre de créer des objets uniquement à des
+     utilisateurs de confiance.
+     </para>
     </step>
     <step performance="optional">
      <para>
@@ -633,6 +671,18 @@ SELECT * FROM ma_table WHERE val = text 'foo';
       capable de déterminer laquelle sélectionnée, ce qui résultera en une erreur
       <quote>ambiguous function call</quote>.
      </para>
+     <para>
+      Ceci crée un risque de disponibilité lors de l'appel, via un nom
+      qualifié<footnoteref linkend="func-qualified-security"/>, de toute
+      fonction trouvée dans un schéma permettant à des utilisateurs sans
+      confiance de créer des objets. Un utilisateur mal intentionné peut créer
+      une fonction avec le nom d'une fonction existante, répliquant les
+      paramètres de la fonction et ajouter des nouveaux paramètres avec des
+      valeurs par défaut. Ceci empêche les nouveaux appels à la fonction
+      originale. Pour supprimer ce risque, placez les fonctions dans des
+      schémas permettant uniquement aux utilisateurs de confiance de créer des
+      objets.
+     </para>
     </step>
    </substeps>
   </step>
@@ -642,8 +692,13 @@ SELECT * FROM ma_table WHERE val = text 'foo';
     Vérifier que la fonction accepte le type exact des arguments en entrée.
     Si une fonction existe (il peut en avoir uniquement une qui correspond
     exactement dans tout l'ensemble des fonctions considérées), utiliser cette
-    fonction (les cas impliquant le type <type>unknown</type> ne
-    trouveront jamais de correspondance à cette étape).
+    fonction. Le manque d'une correspondance exacte crée un risque de sécurité
+    lors de l'appel, via un nom qualifié<footnoteref
+    linkend="func-qualified-security"/>, d'une fonction trouvée dans un schéma
+    permettant à des utilisateurs sans confiance de créer des objets. Dans de
+    telles situations, convertir les arguments pour forcer une correspondance
+    exacte. (Les cas impliquant le type <type>unknown</type> ne trouveront
+    jamais de correspondance à cette étape).
    </para>
   </step>
 
@@ -779,6 +834,58 @@ constantes numériques avec un point décimal, la requête suivante ne
 requièrera pas une conversion de types et pourra par conséquent être
 un peu plus efficace&nbsp;:
 <screen>SELECT round(4.0, 4);</screen>
+</para>
+</example>
+
+<example>
+<title>Résolution de fonction à arguments variables</title>
+
+<para>
+<screen>
+CREATE FUNCTION public.variadic_example(VARIADIC numeric[]) RETURNS int
+  LANGUAGE sql AS 'SELECT 1';
+CREATE FUNCTION
+</screen>
+
+Cette fonction accepte, mais ne requiert pas, le mot clé VARIADIC. Elle tolère
+des arguments à la fois entier et numérique&nbsp;:
+
+<screen>
+SELECT public.variadic_example(0),
+       public.variadic_example(0.0),
+       public.variadic_example(VARIADIC array[0.0]);
+ variadic_example | variadic_example | variadic_example
+------------------+------------------+------------------
+                1 |                1 |                1
+(1 row)
+</screen>
+
+Néanmoins, le premier et le second appels préféreront des fonctions plus
+spécifiques si elles sont disponibles&nbsp;:
+
+<screen>
+CREATE FUNCTION public.variadic_example(numeric) RETURNS int
+  LANGUAGE sql AS 'SELECT 2';
+CREATE FUNCTION
+
+CREATE FUNCTION public.variadic_example(int) RETURNS int
+  LANGUAGE sql AS 'SELECT 3';
+CREATE FUNCTION
+
+SELECT public.variadic_example(0),
+       public.variadic_example(0.0),
+       public.variadic_example(VARIADIC array[0.0]);
+ variadic_example | variadic_example | variadic_example
+------------------+------------------+------------------
+                3 |                2 |                1
+(1 row)
+</screen>
+
+Étant donné la configuration par défaut et si seule la première fonction existe,
+le premier et le deuxième appels ne sont pas sécurisés. Tout utilisateur
+peut les intercepter en créant la deuxième et la troisième fonction. En utilisant
+une correspondance exacte du type d'argument et en utilisant le mot clé
+<literal>VARIADIC</literal>, le troisième appel est sécurisé.
 </para>
 </example>
 

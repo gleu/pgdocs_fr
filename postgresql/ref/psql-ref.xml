@@ -132,6 +132,8 @@ echo '\x \\ SELECT * FROM foo;' | psql
        chaîne contient plusieurs commandes <acronym>SQL</acronym>, sauf si des
        commandes <command>BEGIN</command>/<command>COMMIT</command> explicites
        sont incluses dans la chaîne pour la diviser en plusieurs transactions.
+       (See <xref linkend="protocol-flow-multi-statement"/>
+       for more details about how the server handles multi-query strings.)
        De plus, <application>psql</application> n'affiche que le résultat
        de la dernière commande <acronym>SQL</acronym> dans la chaîne. Ce
        comportement est différent de celui où la même chaîne est lue à partir
@@ -848,6 +850,10 @@ basetest=&gt;
     Les formes <literal>:'<replaceable>variable_name</replaceable>'</literal> et
     <literal>:"<replaceable>variable_name</replaceable>"</literal> décrites ici
     fonctionnent également.
+    The <literal>:{?<replaceable>variable_name</replaceable>}</literal> syntax allows
+    testing whether a variable is defined. It is substituted by
+    TRUE or FALSE.
+    Escaping the colon with a backslash protects it from substitution.
     </para>
 
     <para>
@@ -1475,17 +1481,17 @@ basetest=&gt;
 
 
      <varlistentry>
-      <term><literal>\df[antwS+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">motif</replaceable></link> ]</literal></term>
+      <term><literal>\df[anptwS+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">motif</replaceable></link> ]</literal></term>
 
       <listitem>
        <para>
         Liste les fonctions, ainsi que leurs types de données pour le résultat, leurs
         types de données pour les arguments et les
         types de fonctions, qui sont classés comme <quote>agg</quote> (agrégat),
-        <quote>normal</quote>, <quote>trigger</quote>, or <quote>window</quote>.
+        <quote>normal</quote>, <quote>procedure</quote>, <quote>trigger</quote>, or <quote>window</quote>.
         Afin de n'afficher que les fonctions d'un type spécifié,
         ajoutez les lettres correspondantes, respectivement <literal>a</literal>,
-        <literal>n</literal>, <literal>t</literal>, or <literal>w</literal> à la commande. Si <replaceable
+        <literal>n</literal>, <literal>p</literal>, <literal>t</literal>, or <literal>w</literal> à la commande. Si <replaceable
         class="parameter">motif</replaceable> est
         spécifié, seules les fonctions dont le nom correspond au motif sont
         affichées.
@@ -1897,9 +1903,9 @@ Tue Oct 26 21:40:57 CEST 1999
 
       <listitem>
        <para>
-        Cette commande récupère et édite la définition de la fonction
+        Cette commande récupère et édite la définition de la fonction ou procédure
         désignée sous la forme d'une commande <command>CREATE OR REPLACE
-         FUNCTION</command>.
+         FUNCTION</command> ou <command>CREATE OR REPLACE PROCEDURE</command>.
         L'édition est faite de la même façon que pour <literal>\edit</literal>.
         Une fois l'éditeur fermé, la commande mise à jour attend
         dans le tampon de requête&nbsp;; tapez <literal>;</literal> ou
@@ -2053,6 +2059,25 @@ Tue Oct 26 21:40:57 CEST 1999
 	et ni l'interpolation des variables ni la substitution par guillemets
 	inverses n'y sont effectuées. Le reste de la ligne est simplement
 	passé littéralement au shell.
+        </para>
+        </listitem>
+      </varlistentry>
+
+
+      <varlistentry>
+        <term><literal>\gdesc</literal></term>
+
+        <listitem>
+        <para>
+         Shows the description (that is, the column names and data types)
+         of the result of the current query buffer.  The query is not
+         actually executed; however, if it contains some type of syntax
+         error, that error will be reported in the normal way.
+        </para>
+
+        <para>
+         If the current query buffer is empty, the most recently sent query
+         is described instead.
         </para>
         </listitem>
       </varlistentry>
@@ -2237,7 +2262,7 @@ bonjour 10
      </varlistentry>
 
 
-     <varlistentry>
+     <varlistentry id="psql-metacommand-if">
         <term><literal>\if</literal> <replaceable class="parameter">expression</replaceable></term>
         <term><literal>\elif</literal> <replaceable class="parameter">expression</replaceable></term>
         <term><literal>\else</literal></term>
@@ -2796,7 +2821,7 @@ lo_import 152801
            <para>
             Contrôle l'utilisation d'un paginateur pour les requêtes et les
             affichages de l'aide de <application>psql</application>. Si la variable
-            d'environnement <envar>PAGER</envar> est configurée, la sortie est
+            d'environnement <envar>PSQL_PAGER</envar> ou <envar>PAGER</envar> est configurée, la sortie est
             envoyée via un tube (<foreignphrase>pipe</foreignphrase>) dans
             le programme spécifié. Sinon, une valeur par
             défaut dépendant de la plateforme (comme <filename>more</filename>)
@@ -3081,9 +3106,11 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
 
       <listitem>
        <para>
-        Cette commande récupère et affiche la définition d'une fonction sous la forme d'une
-        commande <command>CREATE OR REPLACE FUNCTION</command>.
-        La définition est affichée via le canal de sortie courant, tel que défini par <command>\o</command>.
+        Cette commande récupère et affiche la définition d'une fonction ou
+        procédure sous la forme d'une commande <command>CREATE OR REPLACE
+        FUNCTION</command> ou <command>CREATE OR REPLACE PROCEDURE</command>.
+        La définition est affichée via le canal de sortie courant, tel que
+        défini par <command>\o</command>.
        </para>
 
        <para>
@@ -3309,6 +3336,47 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
        </para>
       </listitem>
      </varlistentry>
+
+
+      <varlistentry>
+        <term><literal>\;</literal></term>
+        <listitem>
+        <para>
+        Backslash-semicolon is not a meta-command in the same way as the
+        preceding commands; rather, it simply causes a semicolon to be
+        added to the query buffer without any further processing.
+        </para>
+
+        <para>
+        Normally, <application>psql</application> will dispatch a SQL command to the
+        server as soon as it reaches the command-ending semicolon, even if
+        more input remains on the current line.  Thus for example entering
+<programlisting>
+select 1; select 2; select 3;
+</programlisting>
+        will result in the three SQL commands being individually sent to
+        the server, with each one's results being displayed before
+        continuing to the next command.  However, a semicolon entered
+        as <literal>\;</literal> will not trigger command processing, so that the
+        command before it and the one after are effectively combined and
+        sent to the server in one request.  So for example
+<programlisting>
+select 1\; select 2\; select 3;
+</programlisting>
+        results in sending the three SQL commands to the server in a single
+        request, when the non-backslashed semicolon is reached.
+        The server executes such a request as a single transaction,
+        unless there are explicit <command>BEGIN</command>/<command>COMMIT</command>
+        commands included in the string to divide it into multiple
+        transactions.  (See <xref linkend="protocol-flow-multi-statement"/>
+        for more details about how the server handles multi-query strings.)
+        <application>psql</application> prints only the last query result
+        it receives for each request; in this example, although all
+        three <command>SELECT</command>s are indeed executed, <application>psql</application>
+        only prints the <literal>3</literal>.
+        </para>
+        </listitem>
+      </varlistentry>
 
     </variablelist>
    </para>
@@ -3619,6 +3687,16 @@ bar
      </varlistentry>
 
      <varlistentry>
+      <term><varname>ERROR</varname></term>
+      <listitem>
+       <para>
+        <literal>true</literal> if the last SQL query failed, <literal>false</literal> if
+        it succeeded.  See also <varname>SQLSTATE</varname>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><varname>FETCH_COUNT</varname></term>
       <listitem>
        <para>
@@ -3752,6 +3830,19 @@ bar
      </varlistentry>
 
      <varlistentry>
+      <term><varname>LAST_ERROR_MESSAGE</varname></term>
+      <term><varname>LAST_ERROR_SQLSTATE</varname></term>
+      <listitem>
+       <para>
+        The primary error message and associated SQLSTATE code for the most
+        recent failed query in the current <application>psql</application> session, or
+        an empty string and <literal>00000</literal> if no error has occurred in
+        the current session.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term>
        <varname>ON_ERROR_ROLLBACK</varname>
        <indexterm>
@@ -3836,6 +3927,16 @@ bar
      </varlistentry>
 
      <varlistentry>
+      <term><varname>ROW_COUNT</varname></term>
+      <listitem>
+       <para>
+        The number of rows returned or affected by the last SQL query, or 0
+        if the query failed or did not report a row count.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><varname>SERVER_VERSION_NAME</varname></term>
       <term><varname>SERVER_VERSION_NUM</varname></term>
       <listitem>
@@ -3885,6 +3986,17 @@ bar
        <para>
         Configuer cette variable à <literal>on</literal> est équivalent à
         l'option <option>-s</option> en ligne de commande.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><varname>SQLSTATE</varname></term>
+      <listitem>
+       <para>
+        The error code (see <xref linkend="errcodes-appendix"/>) associated
+        with the last SQL query's failure, or <literal>00000</literal> if it
+        succeeded.
        </para>
       </listitem>
      </varlistentry>
@@ -3999,6 +4111,12 @@ basetest=&gt; <userinput>INSERT INTO ma_table VALUES (:'contenu');</userinput>
      <literal>:'nom'</literal>, ou <literal>:"nom"</literal>) n'est pas remplacée, sauf si
      la variable nommée est actuellement positionnée. Dans tous les cas, vous pouvez échapper un
      caractère deux-points avec un antislash pour le protéger des substitutions.
+    </para>
+
+    <para>
+     The <literal>:{?<replaceable>name</replaceable>}</literal> special syntax returns TRUE
+     or FALSE depending on whether the variable exists or not, and is thus
+     always substituted, unless the colon is backslash-escaped.
     </para>
 
     <para>
@@ -4284,22 +4402,6 @@ $endif
    </varlistentry>
 
    <varlistentry>
-    <term><envar>PAGER</envar></term>
-
-    <listitem>
-     <para>
-      Si les résultats d'une requête ne tiennent pas sur l'écran, ils sont
-      envoyés via un tube sur cette commande. Les valeurs typiques sont
-      <literal>more</literal> ou <literal>less</literal>. La valeur par défaut
-      dépend de la plateforme. L'utilisation du paginateur peut être
-      désactivée en configurant <envar>PAGER</envar> à vide ou en utilisant
-      les options relatives au paginateur de la commande
-      <command>\pset</command>.
-     </para>
-    </listitem>
-   </varlistentry>
-
-   <varlistentry>
     <term><envar>PGDATABASE</envar></term>
     <term><envar>PGHOST</envar></term>
     <term><envar>PGPORT</envar></term>
@@ -4322,12 +4424,8 @@ $endif
       Éditeur utilisé par les commandes <command>\e</command>
       <command>\ef</command> et <command>\ev</command>. Les variables sont
       examinées dans l'ordre donné&nbsp;; la première initialisée est utilisée.
-     </para>
-
-     <para>
-      Les éditeurs intégrés par défaut sont <filename>vi</filename> sur
-      les systèmes Unix et <filename>notepad.exe</filename> sur les
-      systèmes Windows.
+      If none of them is set, the default is to use <filename>vi</filename>
+      on Unix systems or <filename>notepad.exe</filename> on Windows systems.
      </para>
     </listitem>
    </varlistentry>
@@ -4371,6 +4469,27 @@ PSQL_EDITOR_LINENUMBER_ARG='--line '
       Emplacement alternatif pour le fichier d'historique des commandes.
       L'expansion du symbole <literal>~</literal> est réalisée.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><envar>PSQL_PAGER</envar></term>
+    <term><envar>PAGER</envar></term>
+
+    <listitem>
+     <para>
+      If a query's results do not fit on the screen, they are piped
+      through this command. Typical values are <literal>more</literal>
+      or <literal>less</literal>.
+      Use of the pager can be disabled by setting <envar>PSQL_PAGER</envar>
+      or <envar>PAGER</envar> to an empty string, or by adjusting the
+      pager-related options of the <command>\pset</command> command.
+      These variables are examined in the order listed;
+      the first that is set is used.
+      If none of them is set, the default is to use <literal>more</literal> on most
+      platforms, but <literal>less</literal> on Cygwin.
+     </para>
+
     </listitem>
    </varlistentry>
 

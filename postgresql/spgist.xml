@@ -46,7 +46,7 @@
 
   <para>
    Une partie des informations fournies ici sont extraites du
-   <ulink url="http://www.cs.purdue.edu/spgist/">site web</ulink> du projet
+   <ulink url="https://www.cs.purdue.edu/spgist/">site web</ulink> du projet
    d'indexation SP-GiST de l'université Purdue.
    L'implémentation de <acronym>SP-GiST</acronym> dans <productname>PostgreSQL</productname>
    est principalement maintenue par Teodor Sigaev et Oleg Bartunov, plus
@@ -135,6 +135,24 @@
       </entry>
      </row>
      <row>
+      <entry><literal>poly_ops</literal></entry>
+      <entry><type>polygon</type></entry>
+      <entry>
+       <literal>&lt;&lt;</literal>
+       <literal>&amp;&lt;</literal>
+       <literal>&amp;&amp;</literal>
+       <literal>&amp;&gt;</literal>
+       <literal>&gt;&gt;</literal>
+       <literal>~=</literal>
+       <literal>@&gt;</literal>
+       <literal>&lt;@</literal>
+       <literal>&amp;&lt;|</literal>
+       <literal>&lt;&lt;|</literal>
+       <literal>|&gt;&gt;</literal>
+       <literal>|&amp;&gt;</literal>
+      </entry>
+     </row>
+     <row>
       <entry><literal>text_ops</literal></entry>
       <entry><type>text</type></entry>
       <entry>
@@ -147,6 +165,7 @@
        <literal>~&lt;~</literal>
        <literal>~&gt;=~</literal>
        <literal>~&gt;~</literal>
+       <literal>^@</literal>
       </entry>
      </row>
      <row>
@@ -255,17 +274,21 @@
 
   <para>
    Un index de classe d'opérateur pour <acronym>SP-GiST</acronym> peut
-   proposer cinq méthodes personnalisées. Chacune de ces cinq méthodes doit
-   suivre la convention qui consiste à accepter deux arguments de type
-   <type>internal</type>, le premier étant un pointeur vers une structure C
-   contenant les valeurs en entrée de cette méthode, et le second étant un
-   pointeur vers une structure C où les valeurs en sortie seront placées. Quatre
-   de ces méthodes retournent <type>void</type> car leurs résultats sont présent
-   dans la structure en sortie. Mais la méthode <function>leaf_consistent</function>
-   retourne en complément une valeur de type <type>boolean</type>. Les méthodes
-   ne doivent modifier aucun des champs de la structure en entrée. Dans tous les
-   cas, la structure en sortie est initialisée avec des zéros avant l'appel à la
-   méthode personnalisée.
+   proposer cinq méthodes personnalisées, et une optionnelle. Chacune de ces
+   cinq méthodes obligatoires doit suivre la convention qui consiste à
+   accepter deux arguments de type <type>internal</type>, le premier étant un
+   pointeur vers une structure C contenant les valeurs en entrée de cette
+   méthode, et le second étant un pointeur vers une structure C où les valeurs
+   en sortie seront placées. Quatre de ces méthodes retournent
+   <type>void</type> car leurs résultats sont présent dans la structure en
+   sortie. Mais la méthode <function>leaf_consistent</function> retourne en
+   complément une valeur de type <type>boolean</type>. Les méthodes ne doivent
+   modifier aucun des champs de la structure en entrée. Dans tous les cas, la
+   structure en sortie est initialisée avec des zéros avant l'appel à la
+   méthode personnalisée. La sixième méthode, optionnelle,
+   <function>compress</function> accepte une donnée à indexer comme seul
+   argument et renvoie la valeur convenable pour un enregistrement physique
+   dans un enregistrement feuille.
   </para>
 
   <para>
@@ -300,6 +323,7 @@ typedef struct spgConfigOut
 {
     Oid         prefixType;     /* Le type de donnée des préfixe des tuples intermédiaires */
     Oid         labelType;      /* Le type de donnée des labels de n&oelig;ud des tuples intermédiaires */
+    Oid         leafType;       /* Type de données pour les valeurs de tuple feuille */
     bool        canReturnData;  /* Opclass peut reconstruire les données originales */
     bool        longValuesOK;   /* Opclass sait gérer les valeurs plus grandes qu'une page */
 } spgConfigOut;
@@ -321,6 +345,22 @@ typedef struct spgConfigOut
       <structfield>attType</structfield> est de longueur variable et que la classe
       d'opérateur est capable de segmenter les grandes valeurs en répétant les suffixes
       (voir <xref linkend="spgist-limits"/>).
+     </para>
+
+     <para>
+      <structfield>leafType</structfield> is typically the same as
+      <structfield>attType</structfield>.  For the reasons of backward
+      compatibility, method <function>config</function> can
+      leave <structfield>leafType</structfield> uninitialized; that would
+      give the same effect as setting <structfield>leafType</structfield> equal
+      to <structfield>attType</structfield>.  When <structfield>attType</structfield>
+      and <structfield>leafType</structfield> are different, then optional
+      method <function>compress</function> must be provided.
+      Method <function>compress</function> is responsible
+      for transformation of datums to be indexed from <structfield>attType</structfield>
+      to <structfield>leafType</structfield>.
+      Note: both consistent functions will get <structfield>scankeys</structfield>
+      unchanged, without transformation using <function>compress</function>.
      </para>
     </listitem>
    </varlistentry>
@@ -398,10 +438,16 @@ typedef struct spgChooseOut
 } spgChooseOut;
       </programlisting>
 
-      <structfield>datum</structfield> est la valeur initiale de la donnée qui
-      a été insérée dans l'index.
-      <structfield>leafDatum</structfield> est initialement le même que
-      <structfield>datum</structfield>, mais peut changer à des niveaux inférieurs de l'arbre
+      <structfield>datum</structfield> est la valeur initiale de type
+      <structname>spgConfigIn</structname>.<structfield>attType</structfield>
+      de la donnée qui a été insérée dans l'index.
+      <structfield>leafDatum</structfield> est une valeur de type
+      <structname>spgConfigOut</structname>.<structfield>leafType</structfield>
+      qui est initialement un résultat de la méthode
+      <function>compress</function> appliquée à <structfield>datum</structfield>
+      quand la méthode <function>compress</function> est fournie, ou la même valeur que
+      <structfield>datum</structfield> dans le cas contraire.
+      <structfield>leafDatum</structfield> peut changer à des niveaux inférieurs de l'arbre
       si la fonction <function>choose</function> ou <function>picksplit</function>
       change cette valeur. Lorsque la recherche liée à l'insertion atteint une feuille,
       la valeur actuelle de <structfield>leafDatum</structfield> sera stockée
@@ -435,7 +481,7 @@ typedef struct spgChooseOut
       Définir <structfield>levelAdd</structfield> à l'incrément de
       <structfield>level</structfield> nécessaire pour descendre au travers de ce n&oelig;ud,
       ou le laisser à 0 si la classe d'opérateur n'utilise pas de niveaux.
-      Définir <structfield>restDatum</structfield> à la valeur de <structfield>datum</structfield>
+      Définir <structfield>restDatum</structfield> à la valeur de <structfield>leafDatum</structfield>
       si la classe d'opérateur ne modifie pas les valeurs d'un niveau au suivant,
       ou dans le cas contraire, définir la valeur modifiée pour être utilisée comme
       valeur de <structfield>leafDatum</structfield> au niveau suivant.
@@ -526,7 +572,8 @@ typedef struct spgPickSplitOut
       </programlisting>
 
       <structfield>nTuples</structfield> est le nombre de lignes feuilles fournies.
-      <structfield>datums</structfield> est un tableau de leurs données.
+      <structfield>datums</structfield> est un tableau de leurs données de type
+      <structname>spgConfigOut</structname>.<structfield>leafType</structfield>.
       <structfield>level</structfield> est le niveau actuel que les lignes feuille concernées
       partagent, qui deviendra le niveau de la nouvelle ligne intermédiaire.
      </para>
@@ -636,7 +683,9 @@ typedef struct spgInnerConsistentOut
       <structfield>reconstructedValue</structfield> est la valeur reconstruite pour la ligne parent.
       La valeur est <literal>(Datum) 0</literal> au niveau le plus haut ou si la fonction
       <function>inner_consistent</function> ne fournit pas de valeur pour le
-      niveau supérieur. <structfield>traversalValue</structfield> est un
+      niveau supérieur. <structfield>reconstructedValue</structfield> est toujours de type
+      <structname>spgConfigOut</structname>.<structfield>leafType</structfield> type.
+      <structfield>traversalValue</structfield> est un
       pointer vers toute donnée traverse passée à l'appel précédent de
       <function>inner_consistent</function> sur l'enregistrement parent de
       l'index, ou NULL à la racine.
@@ -664,8 +713,10 @@ typedef struct spgInnerConsistentOut
       pour descendre vers chaque n&oelig;ud à visiter (dans la plupart des cas, les incréments seront
       les mêmes pour chaque n&oelig;ud, mais ce n'est pas systématique, et ainsi un tableau est employé).
       Si la reconstruction de la valeur est nécessaire, définir
-      <structfield>reconstructedValues</structfield> comme le tableau des valeurs reconstruites
-      pour chaque n&oelig;ud enfant à visiter. Sinon, laisser
+      <structfield>reconstructedValues</structfield> comme le tableau des
+      valeurs de type
+      <structname>spgConfigOut</structname>.<structfield>leafType</structfield>
+      reconstruites pour chaque n&oelig;ud enfant à visiter. Sinon, laisser
       <structfield>reconstructedValues</structfield> à la valeur NULL.
       S'il est souhaitable de passer les informations supplémentaires hors
       bande (<quote>valeurs traverses</quote>) pour diminuer les niveaux de
@@ -738,6 +789,8 @@ typedef struct spgLeafConsistentOut
       <structfield>reconstructedValue</structfield> est la valeur reconstruite pour la ligne parent&nbsp;;
       Il s'agit de <literal>(Datum) 0</literal> au niveau racine ou si la fonction
       <function>inner_consistent</function> ne fournit pas de valeur au niveau parent.
+      <structfield>reconstructedValue</structfield> est toujours de type
+      <structname>spgConfigOut</structname>.<structfield>leafType</structfield>.
       <structfield>traversalValue</structfield> est un pointeur vers toute
       donnée traverse passée lors de l'appel précédent à
       <function>inner_consistent</function> de l'enregistrement parent de
@@ -747,14 +800,16 @@ typedef struct spgLeafConsistentOut
       <structfield>returnData</structfield> est <literal>true</literal> s'il est nécessaire de reconstruire
       les données pour cette requête. Cela ne sera le cas que lorsque la fonction
       <function>config</function> vérifie <structfield>canReturnData</structfield>.
-      <structfield>leafDatum</structfield> est la valeur de la clé stockée dans la ligne de feuille en cours.
+      <structfield>leafDatum</structfield> est la valeur de la clé stockée de
+      <structname>spgConfigOut</structname>.<structfield>leafType</structfield> dans la ligne de feuille en cours.
      </para>
 
      <para>
       La fonction doit retourner <literal>true</literal> si la ligne de feuille correspond à la requête
       ou <literal>false</literal> sinon. Dans le cas où la valeur serait <literal>true</literal>,
       et que <structfield>returnData</structfield> est <literal>true</literal> alors
-      <structfield>leafValue</structfield> doit être défini à la valeur originale fournie
+      <structfield>leafValue</structfield> doit être défini à la valeur originale, de type
+      <structname>spgConfigIn</structname>.<structfield>attType</structfield> fournie
       pour être indexée pour cette ligne de feuille.
       <structfield>recheck</structfield> peut être défini à <literal>true</literal> si la correspondance
       est incertaine et ainsi l'opérateur doit être réappliqué à la pile de ligne courante
@@ -762,6 +817,26 @@ typedef struct spgLeafConsistentOut
      </para>
     </listitem>
    </varlistentry>
+  </variablelist>
+
+  <para>
+   The optional user-defined method is:
+  </para>
+
+  <variablelist>
+    <varlistentry>
+     <term><function>Datum compress(Datum in)</function></term>
+     <listitem>
+      <para>
+       Converts the data item into a format suitable for physical storage in
+       a leaf tuple of index page.  It accepts
+       <structname>spgConfigIn</structname>.<structfield>attType</structfield>
+       value and return
+       <structname>spgConfigOut</structname>.<structfield>leafType</structfield>
+       value.  Output value should not be toasted.
+      </para>
+     </listitem>
+    </varlistentry>
   </variablelist>
 
   <para>

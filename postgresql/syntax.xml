@@ -1490,6 +1490,12 @@ $1.unecolonne
    </para>
 
    <para>
+    When issuing queries in a database where some users mistrust other users,
+    observe security precautions from <xref linkend="typeconv-func"/> when
+    writing function calls.
+   </para>
+
+   <para>
     En option, les arguments peuvent avoir leur nom attaché. Voir la <xref
     linkend="sql-syntax-calling-funcs"/> pour les détails.
    </para>
@@ -1771,17 +1777,24 @@ FROM generate_series(1,10) AS s(i);
     et la clause <replaceable class="parameter">clause_portée</replaceable>
     optionnelle fait partie de&nbsp;:
     <synopsis>
-{ RANGE | ROWS } <replaceable>début_portée</replaceable>
-{ RANGE | ROWS } BETWEEN <replaceable>début_portée</replaceable> AND <replaceable>fin_portée</replaceable>
+{ RANGE | ROWS | GROUPS } <replaceable>début_portée</replaceable> [ <replaceable>frame_exclusion</replaceable> ]
+{ RANGE | ROWS | GROUPS } BETWEEN <replaceable>début_portée</replaceable> AND <replaceable>fin_portée</replaceable> [ <replaceable>frame_exclusion</replaceable> ]
     </synopsis>
     avec <replaceable>début_portée</replaceable> et
     <replaceable>fin_portée</replaceable> pouvant faire partie de
     <synopsis>
 UNBOUNDED PRECEDING
-<replaceable>valeur</replaceable> PRECEDING
+<replaceable>décalage</replaceable> PRECEDING
 CURRENT ROW
-<replaceable>valeur</replaceable> FOLLOWING
+<replaceable>décalage</replaceable> FOLLOWING
 UNBOUNDED FOLLOWING
+</synopsis>
+    et <replaceable>frame_exclusion</replaceable> peut valoir
+<synopsis>
+EXCLUDE CURRENT ROW
+EXCLUDE GROUP
+EXCLUDE TIES
+EXCLUDE NO OTHERS
     </synopsis>
    </para>
 
@@ -1823,13 +1836,16 @@ UNBOUNDED FOLLOWING
    <para>
     La clause <replaceable class="parameter">clause_portée</replaceable> indique
     l'ensemble de lignes constituant la <firstterm>portée de la
-     fenêtre</firstterm>, qui est un sous-ensemble de la partition en cours, pour
+    fenêtre</firstterm>, qui est un sous-ensemble de la partition en cours, pour
     les fonctions de fenêtrage qui agissent sur ce sous-ensemble plutôt que sur
-    la partition entière. Le sous-ensemble peut être spécifié avec le mode
-    <literal>RANGE</literal> ou avec le mode <literal>ROWS</literal>. Dans les
-    deux cas, il s'exécute de <replaceable>début_portée</replaceable> à
-    <replaceable>fin_portée</replaceable>.  Si <replaceable>fin_portée</replaceable>
-    est omis, il vaut par défaut <literal>CURRENT ROW</literal>.
+    la partition entière. The set of rows in the frame can vary depending on
+    which row is the current row.  Le sous-ensemble peut être spécifié avec le
+    mode <literal>RANGE</literal>, avec le mode <literal>ROWS</literal> ou
+    avec le mode <literal>GROUPS</literal>. Dans les deux cas, il s'exécute de
+    <replaceable>début_portée</replaceable> à
+    <replaceable>fin_portée</replaceable>.  Si
+    <replaceable>fin_portée</replaceable> est omis, la fin vaut par défaut
+    <literal>CURRENT ROW</literal>.
    </para>
 
    <para>
@@ -1842,27 +1858,91 @@ UNBOUNDED FOLLOWING
    </para>
 
    <para>
-    Dans le mode <literal>RANGE</literal>, un
+    Dans les modes <literal>RANGE</literal> et <literal>GROUPS</literal>, un
     <replaceable>début_portée</replaceable> à <literal>CURRENT ROW</literal>
     signifie que le sous-ensemble commence avec la ligne suivant la ligne
-    courante (une ligne que <literal>ORDER BY</literal> considère comme
+    courante (une ligne que la clause <literal>ORDER BY</literal> de la fenêtre considère comme
     équivalente à la ligne courante), alors qu'un
     <replaceable>fin_portée</replaceable> à <literal>CURRENT ROW</literal>
-    signifie que le sous-ensemble se termine avec le <literal>ORDER BY</literal> équivalent. Dans
+    signifie que le sous-ensemble se termine avec the current
+    row's last peer row. Dans
     le mode <literal>ROWS</literal>, <literal>CURRENT ROW</literal> signifie
     simplement la ligne courante.
    </para>
 
    <para>
-    La <replaceable>valeur</replaceable> <literal>PRECEDING</literal> et la
-    <replaceable>valeur</replaceable> <literal>FOLLOWING</literal> sont
-    actuellement seulement autorisées dans le mode <literal>ROWS</literal>.
-    Elles indiquent que le sous-ensemble commence ou finit au nombre spécifié
-    de lignes avant ou après la ligne courante.
-    <replaceable>valeur</replaceable> doit être une expression entière ne
-    contenant pas de variables, de fonctions d'agrégat ou de fonctions de
-    fenêtrage. La valeur doit être non NULL et positive. Elle peut être égale
-    à zéro, auquel cas elle sélectionne simplement la ligne courante.
+    In the <replaceable>offset</replaceable> <literal>PRECEDING</literal>
+    and <replaceable>offset</replaceable> <literal>FOLLOWING</literal> frame
+    options, the <replaceable>offset</replaceable> must be an expression not
+    containing any variables, aggregate functions, or window functions.
+    The meaning of the <replaceable>offset</replaceable> depends on the
+    frame mode:
+    <itemizedlist>
+     <listitem>
+      <para>
+       In <literal>ROWS</literal> mode,
+       the <replaceable>offset</replaceable> must yield a non-null,
+       non-negative integer, and the option means that the frame starts or
+       ends the specified number of rows before or after the current row.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       In <literal>GROUPS</literal> mode,
+       the <replaceable>offset</replaceable> again must yield a non-null,
+       non-negative integer, and the option means that the frame starts or
+       ends the specified number of <firstterm>peer groups</firstterm>
+       before or after the current row's peer group, where a peer group is a
+       set of rows that are equivalent in the <literal>ORDER BY</literal>
+       ordering.  (There must be an <literal>ORDER BY</literal> clause
+       in the window definition to use <literal>GROUPS</literal> mode.)
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       In <literal>RANGE</literal> mode, these options require that
+       the <literal>ORDER BY</literal> clause specify exactly one column.
+       The <replaceable>offset</replaceable> specifies the maximum
+       difference between the value of that column in the current row and
+       its value in preceding or following rows of the frame.  The data type
+       of the <replaceable>offset</replaceable> expression varies depending
+       on the data type of the ordering column.  For numeric ordering
+       columns it is typically of the same type as the ordering column,
+       but for datetime ordering columns it is an <type>interval</type>.
+       For example, if the ordering column is of type <type>date</type>
+       or <type>timestamp</type>, one could write <literal>RANGE BETWEEN
+       '1 day' PRECEDING AND '10 days' FOLLOWING</literal>.
+       The <replaceable>offset</replaceable> is still required to be
+       non-null and non-negative, though the meaning
+       of <quote>non-negative</quote> depends on its data type.
+      </para>
+     </listitem>
+    </itemizedlist>
+    In any case, the distance to the end of the frame is limited by the
+    distance to the end of the partition, so that for rows near the partition
+    ends the frame might contain fewer rows than elsewhere.
+   </para>
+
+   <para>
+    Notice that in both <literal>ROWS</literal> and <literal>GROUPS</literal>
+    mode, <literal>0 PRECEDING</literal> and <literal>0 FOLLOWING</literal>
+    are equivalent to <literal>CURRENT ROW</literal>.  This normally holds
+    in <literal>RANGE</literal> mode as well, for an appropriate
+    data-type-specific meaning of <quote>zero</quote>.
+   </para>
+
+   <para>
+    The <replaceable>frame_exclusion</replaceable> option allows rows around
+    the current row to be excluded from the frame, even if they would be
+    included according to the frame start and frame end options.
+    <literal>EXCLUDE CURRENT ROW</literal> excludes the current row from the
+    frame.
+    <literal>EXCLUDE GROUP</literal> excludes the current row and its
+    ordering peers from the frame.
+    <literal>EXCLUDE TIES</literal> excludes any peers of the current
+    row from the frame, but not the current row itself.
+    <literal>EXCLUDE NO OTHERS</literal> simply specifies explicitly the
+    default behavior of not excluding the current row or its peers.
    </para>
 
    <para>
@@ -1880,10 +1960,14 @@ UNBOUNDED FOLLOWING
     pas valoir <literal>UNBOUNDED FOLLOWING</literal>,
     <replaceable>fin_portée</replaceable> ne peut pas valoir <literal>UNBOUNDED
      PRECEDING</literal>, et le choix de <replaceable>fin_portée</replaceable>
-    ne peut pas apparaître avant le choix de
-    <replaceable>début_portée</replaceable> &mdash; par exemple, <literal>RANGE
+    ne peut pas apparaître avant list of <replaceable>frame_start</replaceable>
+    and <replaceable>frame_end</replaceable> options than
+    the <replaceable>frame_start</replaceable> choice does &mdash; par exemple, <literal>RANGE
      BETWEEN CURRENT ROW AND <replaceable>valeur</replaceable> PRECEDING</literal>
     n'est pas autorisé.
+    But, for example, <literal>ROWS BETWEEN 7 PRECEDING AND 8
+    PRECEDING</literal> is allowed, even though it would never select any
+    rows.
    </para>
 
    <para>
@@ -2460,6 +2544,8 @@ SELECT CASE WHEN min(employees) > 0
    argument dans le même ordre que ce qui a été défini à la création de la
    fonction. Dans la notation nommée, les arguments sont précisés par leur
    nom et peuvent du coup être intégrés dans n'importe quel ordre.
+   For each notation, also consider the effect of function argument types,
+   documented in <xref linkend="typeconv-func"/>.
   </para>
 
   <para>

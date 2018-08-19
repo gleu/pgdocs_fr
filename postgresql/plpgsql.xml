@@ -140,6 +140,8 @@
     aussi accepter ou renvoyer n'importe quel type composite (type ligne) spécifié
     par nom. Il est aussi possible de déclarer une fonction
     <application>PL/pgSQL</application> renvoyant un type <type>record</type>,
+    which means that any composite type will do as input, or as returning
+    <type>record</type>
     signifiant que le résultat est un type ligne dont les colonnes sont déterminées
     par spécification dans la requête appelante (voir la
     <xref linkend="queries-tablefunctions"/>).
@@ -167,7 +169,8 @@
 
    <para>
     Enfin, une fonction <application>PL/pgSQL</application> peut être déclarée comme renvoyant
-    <type>void</type> si elle n'a pas de valeur de retour utile.
+    <type>void</type> si elle n'a pas de valeur de retour utile. (Alternatively, it
+    could be written as a procedure in that case.)
    </para>
 
    <para>
@@ -669,14 +672,6 @@ DECLARE
     (lignes complètes de tables). Dans ce cas, l'identifiant correspondant
     <literal>$<replaceable>n</replaceable></literal> sera une variable ligne à partir de laquelle
     les champs peuvent être sélectionnés avec la notation pointée, par exemple <literal>$1.id_utilisateur</literal>.
-   </para>
-
-   <para>
-    Seules les colonnes définies par l'utilisateur sont accessibles
-    dans une variable de type ligne, et non l'OID ou d'autres colonnes systèmes (parce que
-    la ligne pourrait être issue d'une vue). Les champs du type ligne héritent des tailles
-    des champs de la table ou de leur précision pour les types de données tels que
-    <type>char(<replaceable>n</replaceable>)</type>.
    </para>
 
    <para>
@@ -1885,6 +1880,34 @@ SELECT * FROM obtient_idvol_disponibles(CURRENT_DATE);
    </note>
   </sect3>
  </sect2>
+
+   <sect2 id="plpgsql-statements-returning-procedure">
+    <title>Returning From a Procedure</title>
+
+    <para>
+     A procedure does not have a return value.  A procedure can therefore end
+     without a <command>RETURN</command> statement.  If
+     a <command>RETURN</command> statement is desired to exit the code early,
+     then <symbol>NULL</symbol> must be returned.  Returning any other value
+     will result in an error.
+    </para>
+
+    <para>
+     If a procedure has output parameters, then the output values can be
+     assigned to the parameters as if they were variables.  For example:
+<programlisting>
+CREATE PROCEDURE triple(INOUT x int)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    x := x * 3;
+END;
+$$;
+
+CALL triple(5);
+</programlisting>
+    </para>
+   </sect2>
 
  <sect2 id="plpgsql-conditionals">
   <title>Contrôles conditionnels</title>
@@ -3185,7 +3208,12 @@ BEGIN
     <literal>FORWARD</literal> ou
     <literal>BACKWARD</literal>.
     Omettre <replaceable>direction</replaceable> est identique à spécifier
-    <literal>NEXT</literal>. Les valeurs <replaceable>direction</replaceable>
+    <literal>NEXT</literal>.
+     In the forms using a <replaceable>count</replaceable>,
+     the <replaceable>count</replaceable> can be any integer-valued
+     expression (unlike the SQL <command>FETCH</command> command,
+     which only allows an integer constant).
+    Les valeurs <replaceable>direction</replaceable>
     qui nécessitent d'aller en sens inverse risquent d'échouer sauf si le
     curseur a été déclaré ou ouvert avec l'option <literal>SCROLL</literal>.
    </para>
@@ -3220,26 +3248,6 @@ MOVE <optional> <replaceable>direction</replaceable> { FROM | IN } </optional> <
     et ne renvoie donc pas les lignes du déplacement. Comme avec <command>SELECT
      INTO</command>, la variable spéciale <literal>FOUND</literal> peut être
     lue pour vérifier s'il y avait bien les lignes correspondant au déplacement.
-   </para>
-
-   <para>
-    La clause de <replaceable>direction</replaceable> peut être l'une des
-    variantes autorisées dna sla commande SQL <xref linkend="sql-fetch"/>,
-    nommément
-    <literal>NEXT</literal>,
-    <literal>PRIOR</literal>,
-    <literal>FIRST</literal>,
-    <literal>LAST</literal>,
-    <literal>ABSOLUTE</literal> <replaceable>nombre</replaceable>,
-    <literal>RELATIVE</literal> <replaceable>nombre</replaceable>,
-    <literal>ALL</literal>,
-    <literal>FORWARD</literal> <optional> <replaceable>nombre</replaceable> | <literal>ALL</literal> </optional>, ou
-    <literal>BACKWARD</literal> <optional> <replaceable>nombre</replaceable> | <literal>ALL</literal> </optional>.
-    Omettre <replaceable>direction</replaceable> est identique à spécifier
-    <literal>NEXT</literal>.
-    Les valeurs <replaceable>direction</replaceable> qui nécessitent de se
-    déplacer en arrière risquent d'échouer sauf si le curseur a été déclaré ou
-    ouvert avec l'option <literal>SCROLL</literal>.
    </para>
 
    <para>
@@ -3445,6 +3453,95 @@ END LOOP <optional> <replaceable>label</replaceable> </optional>;
  </sect2>
 
 </sect1>
+
+  <sect1 id="plpgsql-transactions">
+   <title>Transaction Management</title>
+
+   <para>
+    In procedures invoked by the <command>CALL</command> command
+    as well as in anonymous code blocks (<command>DO</command> command),
+    it is possible to end transactions using the
+    commands <command>COMMIT</command> and <command>ROLLBACK</command>.  A new
+    transaction is started automatically after a transaction is ended using
+    these commands, so there is no separate <command>START
+    TRANSACTION</command> command.  (Note that <command>BEGIN</command> and
+    <command>END</command> have different meanings in PL/pgSQL.)
+   </para>
+
+   <para>
+    Here is a simple example:
+<programlisting>
+CREATE PROCEDURE transaction_test1()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    FOR i IN 0..9 LOOP
+        INSERT INTO test1 (a) VALUES (i);
+        IF i % 2 = 0 THEN
+            COMMIT;
+        ELSE
+            ROLLBACK;
+        END IF;
+    END LOOP;
+END
+$$;
+
+CALL transaction_test1();
+</programlisting>
+   </para>
+
+   <para>
+    Transaction control is only possible in <command>CALL</command> or
+    <command>DO</command> invocations from the top level or nested
+    <command>CALL</command> or <command>DO</command> invocations without any
+    other intervening command.  For example, if the call stack is
+    <command>CALL proc1()</command> &rarr; <command>CALL proc2()</command>
+    &rarr; <command>CALL proc3()</command>, then the second and third
+    procedures can perform transaction control actions.  But if the call stack
+    is <command>CALL proc1()</command> &rarr; <command>SELECT
+    func2()</command> &rarr; <command>CALL proc3()</command>, then the last
+    procedure cannot do transaction control, because of the
+    <command>SELECT</command> in between.
+   </para>
+
+   <para>
+    Special considerations apply to cursor loops.  Consider this example:
+<programlisting>
+CREATE PROCEDURE transaction_test2()
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN SELECT * FROM test2 ORDER BY x LOOP
+        INSERT INTO test1 (a) VALUES (r.x);
+        COMMIT;
+    END LOOP;
+END;
+$$;
+
+CALL transaction_test2();
+</programlisting>
+    Normally, cursors are automatically closed at transaction commit.
+    However, a cursor created as part of a loop like this is automatically
+    converted to a holdable cursor by the first <command>COMMIT</command> or
+    <command>ROLLBACK</command>.  That means that the cursor is fully
+    evaluated at the first <command>COMMIT</command> or
+    <command>ROLLBACK</command> rather than row by row.  The cursor is still
+    removed automatically after the loop, so this is mostly invisible to the
+    user.
+   </para>
+
+   <para>
+    Transaction commands are not allowed in cursor loops driven by commands
+    that are not read-only (for example <command>UPDATE
+    ... RETURNING</command>).
+   </para>
+
+   <para>
+    A transaction cannot be ended inside a block with exception handlers.
+   </para>
+  </sect1>
 
 <sect1 id="plpgsql-errors-and-messages">
  <title>Erreurs et messages</title>
@@ -5436,14 +5533,13 @@ $$ LANGUAGE plpgsql;
 
 <programlisting>CREATE OR REPLACE PROCEDURE cs_create_job(v_job_id IN INTEGER) IS
     a_running_job_count INTEGER;
-    PRAGMA AUTONOMOUS_TRANSACTION; -- <co id="co.plpgsql-porting-pragma"/>
 BEGIN
-    LOCK TABLE cs_jobs IN EXCLUSIVE MODE; -- <co id="co.plpgsql-porting-locktable"/>
+    LOCK TABLE cs_jobs IN EXCLUSIVE MODE;
 
     SELECT count(*) INTO a_running_job_count FROM cs_jobs WHERE end_stamp IS NULL;
 
     IF a_running_job_count &gt; 0 THEN
-        COMMIT; -- free lock <co id="co.plpgsql-porting-commit"/>
+        COMMIT; -- free lock
         raise_application_error(-20000, 'Unable to create a new job: a job is currently running.');
     END IF;
 
@@ -5463,45 +5559,10 @@ show errors
   </para>
 
   <para>
-   Les procédures comme celles-ci peuvent être aisément converties en
-   fonctions <productname>PostgreSQL</productname> renvoyant un <type>void</type>. Cette
-   procédure en particulier est intéressante parce qu'elle peut nous apprendre diverses
-   choses&nbsp;:
-
-   <calloutlist>
-    <callout arearefs="co.plpgsql-porting-pragma">
-     <para>
-      Il n'y a pas d'instruction <literal>PRAGMA</literal> dans <productname>PostgreSQL</productname>.
-     </para>
-    </callout>
-
-    <callout arearefs="co.plpgsql-porting-locktable">
-     <para>
-      Si vous faites un <command>LOCK TABLE</command> dans <application>PL/pgSQL</application>,
-      le verrou ne sera pas libéré jusqu'à ce que la transaction appelante soit
-      terminée.
-     </para>
-    </callout>
-
-    <callout arearefs="co.plpgsql-porting-commit">
-     <para>
-      Vous ne pouvez pas lancer un <command>COMMIT</command> dans une fonction
-      <application>PL/pgSQL</application>. La fonction est lancée à
-      l'intérieur d'une transaction externe et, du coup, un
-      <command>COMMIT</command> impliquerait simplement la fin de l'exécution de
-      la fonction. Néanmoins, dans ce cas particulier, ce n'est de toute
-      façon pas nécessaire parce que le verrou obtenu par <command>LOCK
-       TABLE</command> sera libéré lors de la levée de l'erreur.
-     </para>
-    </callout>
-   </calloutlist>
-  </para>
-
-  <para>
    Voici comment nous pourrions porter cette procédure vers
    <application>PL/pgSQL</application>&nbsp;:
 
-   <programlisting>CREATE OR REPLACE FUNCTION cs_create_job(v_job_id integer) RETURNS void AS $$
+   <programlisting>CREATE OR REPLACE PROCEDURE cs_create_job(v_job_id integer) AS $$
 DECLARE
   a_running_job_count integer;
 BEGIN
@@ -5510,6 +5571,7 @@ BEGIN
   SELECT count(*) INTO a_running_job_count FROM cs_jobs WHERE end_stamp IS NULL;
 
   IF a_running_job_count &gt; 0 THEN
+    COMMIT; -- free lock
     RAISE EXCEPTION 'Unable to create a new job: a job is currently running'; -- <co id="co.plpgsql-porting-raise"/>
   END IF;
 
@@ -5522,6 +5584,7 @@ BEGIN
     WHEN unique_violation THEN -- <co id="co.plpgsql-porting-exception"/>
     -- ne vous inquietez pas si cela existe déjà
   END;
+  COMMIT;
 END;
 $$ LANGUAGE plpgsql;
    </programlisting>
@@ -5548,12 +5611,6 @@ $$ LANGUAGE plpgsql;
      </para>
     </callout>
    </calloutlist>
-
-   La principale différence fonctionnelle entre cette procédure et
-   l'équivalent Oracle est que le verrou exclusif sur la table
-   <literal>cs_jobs</literal> sera détenu jusqu'à la fin de la transaction
-   appelante. De plus, si l'appelant annule plus tard (par exemple à cause
-   d'une erreur), les effets de cette procédure seront annulés.
   </para>
  </example>
 </sect2>

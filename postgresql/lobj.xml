@@ -280,7 +280,18 @@ Oid lo_import_with_oid(PGconn *conn, const char *filename, Oid lobjId);
     écritures des autres transactions validées ainsi que les écritures de la
     transaction en cours. Ceci est similaire à la différence de comportement
     entre les modes de transaction <literal>REPEATABLE READ</literal> et <literal>READ
-     COMMITTED</literal> pour les requêtes SQL <command>SELECT</command>.
+    COMMITTED</literal> pour les requêtes SQL <command>SELECT</command>.
+   </para>
+
+   <para>
+    <function>lo_open</function> échouera si le droit
+    <literal>SELECT</literal> n'est pas disponible pour le Large Object ou si
+    <symbol>INV_WRITE</symbol> est indiqué et que le droit
+    <literal>UPDATE</literal> n'est pas disponible. (Avant
+    <productname>PostgreSQL</productname> 11, ces vérifications de droit
+    étaient réalisée pour la première vraie lecture ou écriture utilisant ce
+    descripteur.) Ces vérifications de droit peuvent être désactivées avec le
+    paramètre <xref linkend="guc-lo-compat-privileges"/>.
    </para>
 
    <para>
@@ -620,12 +631,35 @@ SELECT lo_export(image.donnees, '/tmp/motd') FROM image
    côté serveur se comportent considérablement différemment de leurs analogues côté
    client. Ces deux fonctions lisent et écrivent des fichiers dans le système de
    fichiers du serveur en utilisant les droits du propriétaire du serveur de base
-   de données. Du coup, leur utilisation est restreinte aux superutilisateurs PostgreSQL.
-   Au contraire des fonctions côté serveur, les fonctions d'import et d'export côté
-   client lisent et écrivent des fichiers dans le système de fichiers du client en
-   utilisant les droits du programme client. Les fonctions côté client ne nécessitent
-   pas le droit superutilisateur.
+   de données. Du coup, par défaut, leur utilisation est restreinte aux
+   superutilisateurs PostgreSQL. Au contraire des fonctions côté serveur, les
+   fonctions d'import et d'export côté client lisent et écrivent des fichiers
+   dans le système de fichiers du client en utilisant les droits du programme
+   client. Les fonctions côté client ne nécessitent pas de droits particuliers
+   sur la base, sauf celui de lire et écrire le Large Object en question.
   </para>
+
+  <caution>
+   <para>
+    Il est possible de donner (<xref linkend="sql-grant"/>) le droit
+    d'utiliser les fonctions serveurs <function>lo_import</function> et
+    <function>lo_export</function> à des utilisateurs standards mais les
+    implications sur la sécurité doivent être mesurées avec attention. Un
+    utilisateur mal intentionné avec de tels droits pourrait facilement les
+    utiliser pour devenir superutilisateur (par exemple en réécrivant les
+    fichiers de configuration du serveur) ou pourrait attaquer le reste du
+    système de fichiers du serveur, sans avoir à se soucier d'obtenir les
+    droits de superutilisateur de la base de données. <emphasis>L'accès aux
+    rôles ayant de tels droits doit de ce fait être gardé très
+    précautionneusement, tout comme l'accès aux rôles
+    superutilisateur.</emphasis> Néanmoins, si l'utilisation des fonctions
+    serveurs <function>lo_import</function> et <function>lo_export</function>
+    sont nécessaires pour certaines tâches de routine, il est plus sûr
+    d'utiliser un rôle avec ces droits qu'un rôle avec les droits complets du
+    superutilisateur car cela aide à réduire le risque de dommages pour les
+    erreurs accidentelles.
+   </para>
+  </caution>
 
   <para>
    Les fonctionnalités de <function>lo_read</function> et
@@ -656,7 +690,7 @@ SELECT lo_export(image.donnees, '/tmp/motd') FROM image
  * testlo.c
  *    test utilisant des objets larges avec libpq
  *
- * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -891,7 +925,7 @@ main(int argc, char **argv)
      */
     res = PQexec(conn,
                  "SELECT pg_catalog.set_config('search_path', '', false)");
-    if (PQresultStatus(res) != PGRES_COMMAND_OK)
+    if (PQresultStatus(res) != PGRES_TUPLES_OK)
     {
         fprintf(stderr, "SET failed: %s", PQerrorMessage(conn));
         PQclear(res);
