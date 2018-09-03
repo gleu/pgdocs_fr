@@ -1616,11 +1616,23 @@ CREATE POLICY compte_admins ON comptes TO admins
     USING (admin = current_user);
 </programlisting>
 
-<para>
+  <para>
+   La politique ci-dessous fournit implicitement une clause <literal>WITH
+   CHECK</literal> identique à sa clause <literal>USING</literal>, pour que la
+   contrainte s'applique à la fois aux lignes sélectionnées par une commande
+   (donc un administrateur ne peut pas exécuter <command>SELECT</command>,
+   <command>UPDATE</command>, ou <command>DELETE</command> sur des lignes
+   existantes appartenant à un autre administrateur) et aux lignes modifiées
+   par une commande (donc des lignes appartenant à un autre administrateur ne
+   peuvent pas être créées via <command>INSERT</command> ou
+   <command>UPDATE</command>).
+  </para>
+
+  <para>
    Si aucun rôle n'est indiqué ou si le nom de pseudo rôle
    <literal>PUBLIC</literal> est utilisé, alors la politique s'applique
    à tous les utilisateurs du système. Pour autoriser tous les
-   utilisateurs à accéder à leurs propres lignes dans une table
+   utilisateurs à accéder seulement à leurs propres lignes dans une table
    <literal>utilisateurs</literal>, une simple politique peut être
    utilisée&nbsp;:
   </para>
@@ -1631,19 +1643,32 @@ CREATE POLICY police_utilisateur ON utilisateurs
 </programlisting>
 
   <para>
-   Pour utiliser une politique différente pour les lignes ajoutées à
-   la table de celle appliquée pour les lignes visibles, la clause
-   <literal>WITH CHECK</literal> peut être utilisée. Cette politique
-   autorisera tous les utilisateurs à voir toutes les lignes de la
-   table <literal>utilisateurs</literal>, mais seulement à modifier
-   les leurs&nbsp;:
+   Ceci fonctionne de façon similaire à l'exemple précédent.
+  </para>
+
+  <para>
+   Pour utiliser une politique différente pour les lignes ajoutées à la table
+   de celle appliquées pour les lignes visibles, plusieurs politiques peuvent
+   être combinées. Cette paire de politiques permettrait à tous les
+   utilisateurs de visualiser toutes les lignes de la table
+   <literal>utilisateurs</literal>, mais seulement de modifier leur propre
+   fiche&nbsp;:
   </para>
 
 <programlisting>
-CREATE POLICY police_utilisateur ON utilisateurs
-    USING (true)
-    WITH CHECK (user_name = current_user);
+CREATE POLICY user_sel_policy ON users
+    FOR SELECT
+    USING (true);
+CREATE POLICY user_mod_policy ON users
+    USING (user_name = current_user);
 </programlisting>
+
+  <para>
+   Dans une commande <command>SELECT</command>, ces deux politiques sont
+   combinées en utilisant <literal>OR</literal>, avec comme effet direct que
+   toutes les lignes peuvent être lues. Dans les autres types de commandes,
+   seule la deuxième politique s'applique, donc l'effet est le même qu'avant.
+  </para>
 
   <para>
    La sécurité niveau ligne peut également être désactivée avec
@@ -2382,29 +2407,33 @@ SELECT * FROM information WHERE groupe_id = 2 FOR UPDATE;
        <replaceable>utilisateur</replaceable> SET search_path =
        "$utilisateur"</literal>. Tous conservent la possibilité de créer des
        objets dans le schéma public, mais seuls les noms qualifiés choisiront
-       ces objets. Un utilisateur disposant de l'attribut
-       <literal>CREATEROLE</literal> peut enlever cette configuration et
-       exécuter n'importe quelle requête sous l'identité des utilisateurs se
-       basant sur cette configuration. Si vous donnez l'attribut
-       <literal>CREATEROLE</literal> à des utilisateurs sans garantie sur
-       cette capacité pratiquement équivalente à l'attribut superutilisateur,
-       utilisez plutôt la première méthode.
+       ces objets. Bien que les références qualifiées aux tables sont
+       correctes, les appels aux fonctions du schéma public <link
+       linkend="typeconv-func">ne seront pas sûrs ou fiables</link>.  De plus,
+       un utilisateur disposant de l'attribut <literal>CREATEROLE</literal>
+       peut enlever cette configuration et exécuter n'importe quel requête
+       sous l'identité des utilisateurs se basant sur cette configuration. Si
+       vous créez des fonctions ou extensions dans le schéma public ou si vous
+       donnez l'attribut <literal>CREATEROLE</literal> à des utilisateurs sans
+       garantie sur cette capacité pratiquement équivalente à l'attribut
+       superutilisateur, utilisez plutôt la première méthode.
       </para>
      </listitem>
 
      <listitem>
       <para>
        Supprimer le schéma public du <varname>search_path</varname> dans <link
-       linkend="config-setting-configuration-
-       file"><filename>postgresql.conf</filename></link>. La conséquence pour
-       l'utilisateur correspond à celle de la méthode précédente. En plus des
-       implications pour le <literal>CREATEROLE</literal>, cela demande de
-       faire confiance aux propriétaires des bases de données de la même
-       façon. Si vous affectez l'attribut <literal>CREATEROLE</literal>,
-       l'attribut <literal>CREATEDB</literal> ou la propriété d'une base de
-       données à des utilisateurs sans garantie sur cette capacité
-       pratiquement équivalente à l'attribut superutilisateur, utilisez plutôt
-       la première méthode.
+       linkend="config-setting-configuration-file"><filename>postgresql.conf</filename></link>.
+       La conséquence pour l'utilisateur correspond à celle de la méthode
+       précédente. En plus des implications pour les fonctions et pour le
+       <literal>CREATEROLE</literal>, cela demande de faire confiance aux
+       propriétaires des bases de données comme pour les utilisateurs ayant
+       l'attribut <literal>CREATEROLE</literal>. Si vous créez des fonctions
+       ou des extensions dans le schéma public ou si vous affectez l'attribut
+       <literal>CREATEROLE</literal>, l'attribut <literal>CREATEDB</literal>
+       ou la propriété d'une base de données à des utilisateurs sans garantie
+       sur cette capacité pratiquement équivalente à l'attribut
+       superutilisateur, utilisez plutôt la première méthode.
       </para>
      </listitem>
 
@@ -3338,7 +3367,7 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
     <title>Limitations</title>
 
    <para>
-    Les limitations suivantes s'appliquent aux tables partitionnées :
+    Les limitations suivantes s'appliquent aux tables partitionnées&nbsp;:
     <itemizedlist>
      <listitem>
       <para>
@@ -3384,6 +3413,17 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
       <para>
        Les triggers de lignes, si nécessaires, doivent être définis sur les
        partitions individuelles et non sur la table partitionnée.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Mixer des tables temporaires et permanentes dans le même arbre de
+       partition n'est pas autorisé. De ce fait, si la table partitionnée est
+       permanente, toutes ces partitions le sont. De la même façon si la table
+       partitionnée est temporaire. Lors de l'utilisation de tables
+       temporaires, tous les membres de l'arbre de partition doit provenir de
+       la même session.
       </para>
      </listitem>
     </itemizedlist>
