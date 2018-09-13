@@ -65,7 +65,7 @@
 
     <row>
      <entry><type>bit varying [ (<replaceable>n</replaceable>) ]</type></entry>
-     <entry><type>varbit</type></entry>
+     <entry><type>varbit [ (<replaceable>n</replaceable>) ]</type></entry>
      <entry>Suite de bits de longueur variable</entry>
     </row>
 
@@ -531,16 +531,14 @@
    </para>
 
    <para>
-    Dans ce qui suit, on utilise les termes suivants&nbsp;:
-    l'<firstterm>échelle</firstterm> d'un <type>numeric</type> est le
-    nombre de chiffres décimaux de la partie fractionnaire, à droite du
-    séparateur de décimales. La
-    <firstterm>précision</firstterm> d'un <type>numeric</type> est le
-    nombre total de chiffres significatifs dans le nombre complet,
-    c'est-à-dire le nombre de chiffres de part et d'autre du séparateur.
-    Donc, le nombre 23.5141
-    a une précision de 6 et une échelle de 4. On peut considérer que
-    les entiers ont une échelle de 0.
+    Dans ce qui suit, on utilise les termes suivants. La
+    <firstterm>précision</firstterm> d'un <type>numeric</type> est le nombre
+    total de chiffres significatifs dans le nombre complet, c'est-à-dire le
+    nombre de chiffres de part et d'autre du séparateur.
+    L'<firstterm>échelle</firstterm> d'un <type>numeric</type> est le nombre
+    de chiffres décimaux de la partie fractionnaire, à droite du séparateur de
+    décimales. Donc, le nombre 23.5141 a une précision de 6 et une échelle de
+    4. On peut considérer que les entiers ont une échelle de 0.
    </para>
 
    <para>
@@ -2771,17 +2769,6 @@ P <optional> <replaceable>années</replaceable>-<replaceable>mois</replaceable>-
     </para>
 
     <para>
-     De façon interne, les valeurs de type <type>interval</type> sont stockées
-     comme mois, jours et secondes. C'est ainsi parce que le nombre de jours
-     d'un mois varie, et un jour peut avoir 23 ou 25 heures si des changements d'heures
-     sont impliqués. Les champs mois et jours sont des entiers, alors que le champ secondes
-     peut stocker des nombres décimaux. Les intervalles étant habituellement créés à partir de chaînes
-     constantes ou de soustractions de <type>timestamps</type>, cette méthode fonctionne bien
-     dans la plupart des cas. Les fonctions <function>justify_days</function> et <function>justify_hours</function>
-     sont disponibles pour ajuster les jours et heures qui dépassent leurs portées habituelles.
-    </para>
-
-    <para>
      Dans le format verbeux de saisie, et dans certains champs des formats
      plus compacts, les valeurs de champs peuvent avoir des parties décimales&nbsp;;
      par exemple, <literal>'1.5 week'</literal> ou <literal>'01:02:03.45'</literal>.
@@ -2832,6 +2819,34 @@ P <optional> <replaceable>années</replaceable>-<replaceable>mois</replaceable>-
       </tbody>
      </tgroup>
     </table>
+
+    <para>
+     En interne, les valeurs <type>interval</type> sont enregistrées comme des
+     mois, jours et secondes. C'est fait ainsi parce que le nombre de jours
+     dans un mois varie, et un jour peut avoir 23 ou 25 heures s'il y a eu un
+     changement d'heure. Les champs mois et jours sont des entiers alors que
+     le champ des secondes peut contenir des fractions. Comme les intervalles
+     sont habituellement créés à partir de chaînes constantes ou de
+     soustractions de <type>timestamp</type>, cette méthode de stockage
+     fonctionne bien dans la plupart des cas mais peut être la cause de
+     résultats inattendus&nbsp;:
+
+<programlisting>
+SELECT EXTRACT(hours from '80 minutes'::interval);
+ date_part
+-----------
+         1
+
+SELECT EXTRACT(days from '80 hours'::interval);
+ date_part
+-----------
+         0
+</programlisting>
+
+     Les fonctions <function>justify_days</function> et
+     <function>justify_hours</function> sont disponibles pour ajuster les
+     jours et heures qui dépassent l'étendue normale.
+    </para>
 
    </sect2>
 
@@ -3157,16 +3172,26 @@ SELECT personne.nom, vacances.nombre_de_semaines FROM personne, vacances
    <title>Détails d'implémentation</title>
 
    <para>
+    Les labels enum sont sensibles à la casse, donc <type>'heureux'</type>
+    n'est pas identique à <type>'HEUREUX'</type>. Les espaces blancs dans les
+    labels sont aussi pris en compte.
+   </para>
+
+   <para>
+    Bien que les types enum ont principalement pour but d'être des ensembles
+    statiques de valeurs, il est possible d'ajouter de nouvelles valeurs à un
+    type enum existant et de renommer les valeurs existantes (voir <xref
+    linkend="sql-altertype"/>). Les valeurs existantes ne peuvent pas être
+    supprimées d'un type enum, pas plus qu'il n'est possible de modifier
+    l'ordre de tri de ces valeurs, si ce n'est en supprimant puis en re-
+    créant le type enum.
+   </para>
+
+   <para>
     Une valeur enum occupe quatre octets sur disque. La longueur du label texte
     d'une valeur enum est limité au paramètre <symbol>NAMEDATALEN</symbol>
     codé en dur dans <productname>PostgreSQL</productname>&nbsp;; dans les
     constructions standards, cela signifie un maximum de 63 octets.
-   </para>
-
-   <para>
-    Les labels enum sont sensibles à la casse, donc
-    <type>'heureux'</type> n'est pas identique à <type>'HEUREUX'</type>.
-    Les espaces blancs sont significatifs dans les labels.
    </para>
 
    <para>
@@ -4469,6 +4494,61 @@ SET xmloption TO { DOCUMENT | CONTENT };
     &rowtypes;
 
     &rangetypes;
+
+  <sect1 id="domains">
+   <title>Types domaine</title>
+
+   <indexterm zone="domains">
+    <primary>domaine</primary>
+   </indexterm>
+
+   <indexterm zone="domains">
+    <primary>type de données</primary>
+    <secondary>domaine</secondary>
+   </indexterm>
+
+   <para>
+    Un <firstterm>domaine</firstterm> est un type de données défini par
+    l'utilisateur. Il est basé sur un autre <firstterm>type
+    sous-jacent</firstterm>. En option, il peut avoir des constraintes qui
+    restreignent les valeurs valides à un sous-ensemble de ce que permettrait
+    le type sous-jacent. Pour le reste, il se comporte comme le type
+    sous-jacent &mdash; par exemple, tout opérateur ou fonction qui peut être
+    appliqué au type sous-jacent fonctionne avec le domaine. Le type
+    sous-jacent peut être tout type, interne ou défini par l'utilisateur, type
+    enum, type tableau, type composé, type intervalle ou autre domaine.
+   </para>
+
+   <para>
+    Par exemple, nous pouvons créer un domaine sur des entiers qui n'accepte
+    que des valeurs positives&nbsp;:
+<programlisting>
+CREATE DOMAIN posint AS integer CHECK (VALUE &gt; 0);
+CREATE TABLE mytable (id posint);
+INSERT INTO mytable VALUES(1);   -- works
+INSERT INTO mytable VALUES(-1);  -- fails
+</programlisting>
+   </para>
+
+   <para>
+    Quand un opérateur ou une fonction du type sous-jacent est appliqué à la
+    valeur d'un domaine, le domaine est automatiquement converti vers le type
+    sous-jacent. Donc, par exemple, le résultat de <literal>mytable.id -
+    1</literal> est considéré être de type <type>integer</type>, et non pas
+    <type>posint</type>. Nous pouvons écrire <literal>(mytable.id -
+    1)::posint</literal> pour convertir le résultat avec le type
+    <type>posint</type>, causant une nouvelle vérification des contraintes du
+    domaine. Dans ce cas, cela résultera en une erreur si l'expression a été
+    appliquée à une valeur de 1 pour <structfield>id</structfield>. Affecter
+    une valeur du type sous-jacent à un champ ou variable du type domaine est
+    autorisé sans forcer une conversion explicite mais les contraintes du
+    domaine seront vérifiées.
+   </para>
+
+   <para>
+    Pour plus d'informations, voir <xref linkend="sql-createdomain"/>.
+   </para>
+  </sect1>
 
     <sect1 id="datatype-oid">
      <title>Types identifiant d'objet</title>

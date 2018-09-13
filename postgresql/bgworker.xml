@@ -42,7 +42,8 @@
    <type>BackgroundWorker *worker, BackgroundWorkerHandle **handle</type>)</function>.
   À la différence de <function>RegisterBackgroundWorker</function>, qui ne peut
   être appelée que depuis le postmaster,<function>RegisterDynamicBackgroundWorker</function>
-  doit être appelée depuis un processus client standard.
+  doit être appelée depuis un processus client standard ou un processus en
+  tâche de fond.
  </para>
 
  <para>
@@ -52,6 +53,7 @@ typedef void (*bgworker_main_type)(Datum main_arg);
 typedef struct BackgroundWorker
 {
     char        bgw_name[BGW_MAXLEN];
+    char        bgw_type[BGW_MAXLEN];
     int         bgw_flags;
     BgWorkerStartTime bgw_start_time;
     int         bgw_restart_time;       /* in seconds, or BGW_NEVER_RESTART */
@@ -65,8 +67,16 @@ typedef struct BackgroundWorker
  </para>
 
  <para>
-  <structfield>bgw_name</structfield> est une chaîne de caractères à utiliser
+  <structfield>bgw_name</structfield> et <structfield>bgw_type</structfield>
+  sont des chaînes de caractères à utiliser
   dans les messages de trace, liste de processus et autres listes similaires.
+  <structfield>bgw_type</structfield> devrait être identique pour tous les
+  processus en tâche de fond du même type pour qu'il soit possibl de grouper
+  ces processus avec une liste des processus par exemple. Par contre,
+  <structfield>bgw_name</structfield> peut contenir des informations
+  supplémentaires sur ce processus spécifique. (Typiquement, la chaîne de
+  <structfield>bgw_name</structfield> contiendra le type en quelque sort, mais
+  ce n'est pas requis strictement.)
  </para>
 
  <para>
@@ -161,7 +171,7 @@ typedef struct BackgroundWorker
 
   <para>
    Sur Windows (et partout où <literal>EXEC_BACKEND</literal> est défini) ou
-   dans des processus en tache de fond dynamiques, il n'est pas sûre de passer
+   dans des processus en tâche de fond dynamiques, il n'est pas sûr de passer
    un <type>Datum</type> par référence, il faut le passe par valeur. Si un
    argument est requis, il est plus sûr de passer un int32 ou toute autre petite
    valeur et l'utiliser comme un index d'un tableau alloué en mémoire partagée.
@@ -189,8 +199,8 @@ typedef struct BackgroundWorker
  </para>
 
  <para>Une fois démarré, le processus peut se connecter à une base en appelant
-  <function>BackgroundWorkerInitializeConnection(<parameter>char *dbname</parameter>, <parameter>char *username</parameter>)</function> ou
-  <function>BackgroundWorkerInitializeConnectionByOid(<parameter>Oid dboid</parameter>, <parameter>Oid useroid</parameter>)</function>.
+  <function>BackgroundWorkerInitializeConnection(<parameter>char *dbname</parameter>, <parameter>char *username</parameter>, <parameter>uint32 flags</parameter>)</function> ou
+  <function>BackgroundWorkerInitializeConnectionByOid(<parameter>Oid dboid</parameter>, <parameter>Oid useroid</parameter>, <parameter>uint32 flags</parameter>)</function>.
   Cela autorise le processus à exécuter des transactions et des requêtes en
   utilisant l'interface <literal>SPI</literal>. Si <varname>dbname</varname>
   vaut NULL ou que <varname>dboid</varname> vaut
@@ -198,9 +208,13 @@ typedef struct BackgroundWorker
   particulier, mais les catalogues partagés peuvent être accédés. Si
   <varname>username</varname> vaut NULL ou que <varname>useroid</varname> vaut
   <literal>InvalidOid</literal>, le processus sera démarré avec le super
-  utilisateur créé durant <command>initdb</command>. Un background worker ne
-  peut être appelé que par une de ces deux fonctions, et seulement une fois.
-  Il n'est pas possible de changer de base de données.
+  utilisateur créé durant <command>initdb</command>. Si
+  <literal>BGWORKER_BYPASS_ALLOWCONN</literal> est indiqué pour le paramètre
+  <varname>flags</varname>, il est possible de contourner la restriction de se
+  connecter aux bases de données ne permettant pas une connexions des
+  utilisateurs. Un background worker ne peut être appelé que par une de ces
+  deux fonctions, et seulement une fois. Il n'est pas possible de changer de
+  base de données.
  </para>
 
  <para>
@@ -270,6 +284,18 @@ typedef struct BackgroundWorker
   <literal>BGWH_STARTED</literal>, et le PID sera écrit à l'adresse fournie.
   Sinon, la valeur de retour sera <literal>BGWH_STOPPED</literal> ou
   <literal>BGWH_POSTMASTER_DIED</literal>.
+ </para>
+
+ <para>
+  Un processus peut aussi attendre l'arrêt d'un autre processus en tâche de
+  fond, en utilisant la fonction
+  <function>WaitForBackgroundWorkerShutdown(<parameter>BackgroundWorkerHandle
+  *handle</parameter>)</function> et en passant le
+  <type>BackgroundWorkerHandle *</type> obtenu à l'enregistrement. Cette
+  fonction bloquera l'exécution jusqu'à l'arrêt de l'autre processus ou
+  jusqu'à la mort de postmaster. Quand le processus en tâche de fond quitte,
+  la valeur de retour est <literal>BGWH_STOPPED</literal>. Si postmaster
+  meurt, il renverra <literal>BGWH_POSTMASTER_DIED</literal>.
  </para>
 
  <para>

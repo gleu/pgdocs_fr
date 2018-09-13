@@ -22,8 +22,9 @@
  </refnamediv>
 
  <refsynopsisdiv>
-  <synopsis>CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class="parameter">nom</replaceable> ] ON <replaceable class="parameter">nom_table</replaceable> [ USING <replaceable class="parameter">méthode</replaceable> ]
+  <synopsis>CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class="parameter">nom</replaceable> ] ON [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ USING <replaceable class="parameter">méthode</replaceable> ]
     ( { <replaceable class="parameter">nom_colonne</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">classeop</replaceable> ] [ ASC | DESC ] [ NULLS { FIRST | LAST } ] [, ...] )
+    [ INCLUDE ( <replaceable class="parameter">nom_colonne</replaceable> [, ...] ) ]
     [ WITH ( <replaceable class="parameter">parametre_stockage</replaceable> = <replaceable class="parameter">valeur</replaceable> [, ... ] ) ]
     [ TABLESPACE <replaceable class="parameter">nom_espacelogique</replaceable> ]
     [ WHERE <replaceable class="parameter">prédicat</replaceable> ]
@@ -112,6 +113,12 @@
       qu'une donnée est ajoutée. Les tentatives d'insertion ou de mises à jour
       qui résultent en des entrées dupliquées engendrent une erreur.
      </para>
+
+     <para>
+      Des restrictions supplémentaires s'appliquent quand des index uniques
+      sont appliquées aux tables partitionnées. Voir <xref
+      linkend="sql-createtable" />.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -144,6 +151,53 @@
    </varlistentry>
 
    <varlistentry>
+    <term><literal>INCLUDE</literal></term>
+    <listitem>
+     <para>
+      La clause optionnelle <literal>INCLUDE</literal> indique une liste de
+      colonnes qui seront incluses dans l'index comme des colonnes
+      <firstterm>non clés</firstterm>. Une colonne non clé ne peut pas être
+      utilisée dans la qualification d'une recherche par parcours d'index, et
+      elle est ignorée pour la contrainte d'unicité ou d'exclusion assurée par
+      l'index. Néanmoins, un parcours d'index couvrant peut renvoyer le
+      contenu des colonnes non clés sans avoir à visiter la table de l'index
+      car il est directement disponible dans l'index. De façon, l'ajout de
+      colonnes non clés autorise l'utilisation de parcours d'index couvrants
+      pour les requêtes qui, autrement, ne les auraient pas utilisés.
+     </para>
+
+     <para>
+      Il est conseillé de rester prudent sur l'ajout de colonnes non clés dans
+      un index, tout spécialement pour les colonnes larges. Si un
+      enregistrement d'un index dépasse la taille maximale autorisée pour le
+      type de l'index l'insertion de données échouera. Dans tous les cas, les
+      colonnes non clés dupliquent les données de la table et augmentent la
+      taille de l'index, ralentissant potentiellement les recherches.
+     </para>
+
+     <para>
+      Les colonnes listées dans la clause <literal>INCLUDE</literal> n'ont pas
+      besoin de classes d'opérateur appropriées. La clause peut contenir les
+      colonnes dont les types de données n'ont pas de classes d'opérateur
+      définis pour une méthode d'accès donnée.
+     </para>
+
+     <para>
+      Les expressions ne sont pas supportées comme colonnes incluses car elles
+      ne peuvent pas être utilisées dans des parcours d'index couvrants.
+     </para>
+
+     <para>
+      Actuellement, seule la méthode d'accès B-tree accepte cette fonctionnalité.
+      Dans les index B-tree, les valeurs des colonnes listées dans la clause
+      <literal>INCLUDE</literal> sont incluses dans les enregistrements feuilles qui
+      correspondent à des enregistrements de lignes de table, mais ne sont pas incluses
+      dans les enregistrements de plus haut niveau.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">nom</replaceable></term>
     <listitem>
      <para>
@@ -152,6 +206,17 @@
       parent. Si le nom est omis, <productname>PostgreSQL</productname>
       choisit un nom convenable basé sur le nom de la table parent et celui
       des colonnes indexées.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ONLY</literal></term>
+    <listitem>
+     <para>
+      Indique de ne pas faire de récursion pour la création des index sur les
+      partitions si la table est partitionnée. Par défaut, la récursion a
+      lieu.
      </para>
     </listitem>
    </varlistentry>
@@ -302,13 +367,48 @@
    <para>
     La clause <literal>WITH</literal> optionnelle spécifie des
     <firstterm>paramètres de stockage</firstterm> pour l'index. Chaque méthode
-    d'indexage peut avoir son propre ensemble de paramètres de stockage. Les
-    méthodes d'indexage <literal>B-tree</literal>, <literal>hash</literal> et
-    <literal>GiST</literal> et <literal>SP-GiST</literal> acceptent toutes un seul paramètre&nbsp;:
+    d'indexage peut avoir son propre ensemble de paramètres de stockage. Tous
+    les index acceptent le paramètre suivant&nbsp;:
    </para>
 
    <variablelist>
+    <varlistentry>
+     <term><literal>recheck_on_update</literal></term>
+     <listitem>
+      <para>
+       Indique s'il faut vérifier de nouveau la valeur d'un index fonctionnel
+       pour savoir si nous pouvons utiliser une mise à jour HOT. La valeur par
+       défaut est ON pour les index fonctionnels avec un coût total de
+       l'expression inférieur à 1000 et à OFF pour les autres. Vous pouvez
+       décider de le désactiver (OFF) si vous savez qu'une fonction utilisée
+       dans un index a peu de chance de renvoyer la même valeur si une des
+       colonnes en entrée est mise à jour et donc que la vérification serait
+       coûteuse sans raison.
+      </para>
+       
+      <para>
+       Les index fonctionnels sont fréquemment utilisés dans le cas où la
+       fonction renvoie un sous-ensemble de l'argument. Des exemples seraient
+       d'accéder une partie d'une chaîne avec <literal>SUBSTR()</literal> ou
+       d'accéder à un seul champ dans un document JSON en utilisant une
+       expression telle que <literal>(bookinfo-&gt;&gt;'isbn')</literal>. Dans
+       cet exemple, le document JSON pourrait être fréquemment mis à jour,
+       alors qu'il est peu fréquent que le champ ISBN d'un livre soit modifié,
+       donc nous voudrions conserver la valeur ON pour ce paramètre avec cet
+       index. Un champ changeant plus fréquemment pourrait avoir un index avec
+       ce paramètre passé à OFF alors que des champs très fréquemment modifiés
+       feraient mieux d'éviter de réindexer tout sous une forte charge.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
 
+   <para>
+     Les méthodes d'index B-tree, hash, GiST et SP-GiST acceptent toutes ce
+     paramètre&nbsp;:
+   </para>
+
+   <variablelist>
     <varlistentry>
      <term><literal>fillfactor</literal></term>
      <listitem>
@@ -328,6 +428,43 @@
        minimiser le besoin de pages divisées. Les autres méthodes d'indexage
        utilisent un facteur de remplissage de façon différente mais en gros
        analogue&nbsp;; le facteur de remplissage varie suivant les méthodes.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+
+   <para>
+    Les index B-tree acceptent en option ce paramètre&nbsp;:
+   </para>
+
+   <variablelist>
+    <varlistentry>
+     <term><literal>vacuum_cleanup_index_scale_factor</literal></term>
+     <listitem>
+      <para>
+       Valeur par index pour le <xref
+       linkend="guc-vacuum-cleanup-index-scale-factor"/>.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+
+   <para>
+    Les index GiST acceptent en option ce paramètre&nbsp;:
+   </para>
+ 
+   <variablelist>
+    <varlistentry>
+    <term><literal>buffering</literal></term>
+     <listitem>
+      <para>
+       Détermine si la technique de construction par tampon décrite dans <xref
+       linkend="gist-buffering-build"/> est utilisé pour construire l'index. À
+       <literal>OFF</literal>, cette technique est désactivée. À
+       <literal>ON</literal>, elle est activée. À <literal>AUTO</literal>,
+       elle est initialement désactivée mais peut être activée quand la taille
+       de l'index atteint <xref linkend="guc-effective-cache-size"/>. La
+       valeur par défaut est <literal>AUTO</literal>.
       </para>
      </listitem>
     </varlistentry>
@@ -583,6 +720,25 @@
   </para>
 
   <para>
+   Quand <literal>CREATE INDEX</literal> est appelé sur une table
+   partitionnée, le comportement par défaut est de vérifier que toutes les
+   partitions ont un index correspondant. Chaque partition est tout d'abord
+   vérifiée pour déterminer si un index équivalent existe déjà. Si c'est le
+   cas, cet index sera attaché comme index la partition avec l'index en cours
+   de création, qui deviendra son index parent. Si aucun index correspondant
+   n'existe, un nouvel index sera créé et attaché automatiquement. Le nom du
+   nouvel index dans chaque partition sera déterminé comme si aucun nom
+   d'index n'avait été spécifié dans la commande. Si l'option
+   <literal>ONLY</literal> est indiquée, aucune récursion n'est réalisée et
+   l'index est marqué invalide. (<command>ALTER INDEX ... ATTACH
+   PARTITION</command> transforme l'index en valide une fois que toutes les
+   partitions ont récupéré l'index.) Néanmoins, notez que toute partition
+   créée dans le futur en utilisant <command>CREATE TABLE ... PARTITION
+   OF</command> contiendra automatiquement l'index que cette option soit
+   spécifiée ou non.
+  </para>
+
+  <para>
    Pour les méthodes d'indexage qui supportent les parcours ordonnés (actuellement
    seulement pour les B-tree), les clauses optionnelles <literal>ASC</literal>,
    <literal>DESC</literal>, <literal>NULLS FIRST</literal> et/ou <literal>NULLS
@@ -608,6 +764,64 @@
   </para>
 
   <para>
+   <productname>PostgreSQL</productname> peut construire des index en
+   utilisant plusieurs CPU pour traiter plus rapidement les lignes de la
+   table. Cette fonctionnalité est connue sous le nom de
+   <firstterm>construction d'index parallélisée</firstterm>. Pour les méthodes
+   d'indexage qui supportent la construction d'index en parallèle
+   (actuellement seulement les B-tree),
+   <varname>maintenance_work_mem</varname> indique la quantité maximale de
+   mémoire pouvant être utilisée pour chaque opération de construction
+   d'index, quelque soit le nombre de processus workers démarrés.
+   Habituellement, un modèle de coût détermine automatiquement le nombre de
+   workers à exécuter.
+  </para>
+
+  <para>
+   Les constructions d'index parallélisées pourraient bénéficier d'une
+   augmentation du <varname>maintenance_work_mem</varname>, là où une
+   construction équivalente mais non parallélisée ne verrait que peu ou pas de
+   bénéfices. Notez que <varname>maintenance_work_mem</varname> peut
+   influencer le nombre de processus workers demandés car les workers
+   parallélisés doivent avoir au moins <literal>32 Mo</literal> provenant du
+   <varname>maintenance_work_mem</varname> global. Il doit aussi rester
+   <literal>32 Mo</literal> pour le processus leader. Augmenter <xref
+   linkend="guc-max-parallel-workers-maintenance"/> pourrait permettre
+   l'utilisation d'un plus grand nombre de workers, ce qui réduirait le temps
+   nécessaire pour la création de l'index, à condition que cette création ne
+   soit pas déjà freiné par les disques. Bien sûr, il doit rester suffisamment
+   de CPU qui auraient été autrement inutilisés.
+  </para>
+
+  <para>
+   Configurer une valeur pour <literal>parallel_workers</literal> via <xref
+   linkend="sql-altertable"/> contrôle directement le nombre de processus
+   workers parallélisés réclamé par un <command>CREATE INDEX</command> sur la
+   table. Ceci contourne complètement le modèle de coût, et empêche
+   <varname>maintenance_work_mem</varname> d'affcter le nombre demandé de
+   workers parallélisés. Configurer <literal>parallel_workers</literal> à 0
+   via <command>ALTER TABLE</command> désactivera les constructions d'index
+   parallélisées sur la table dans tous les cas.
+  </para>
+
+  <tip>
+   <para>
+    Vous pourriez vouloir réinitialiser <literal>parallel_workers</literal>
+    après l'avoir configuré pour permettre une construction d'index. Ceci
+    évite des changements inattendus dans les plans de requêtes, vu que
+    <literal>parallel_workers</literal> affecte <emphasis>tous</emphasis> les
+    parcours parallélisés de table.
+   </para>
+  </tip>
+
+  <para>
+   Bien que <command>CREATE INDEX</command> avec l'option
+   <literal>CONCURRENTLY</literal> accepte les constructions parallélisées
+   sans restrictions particulières, seul le premier parcours de table est
+   réellement exécuté en parallèle.
+  </para>
+
+  <para>
    <xref linkend="sql-dropindex"/> est utilisé
    pour supprimer un index.
   </para>
@@ -630,6 +844,15 @@
    table <literal>films</literal>&nbsp;:
    <programlisting>CREATE UNIQUE INDEX title_idx ON films (title);
    </programlisting>
+  </para>
+
+  <para>
+   Pour créer un index B-tree unique sur la colonne <literal>title</literal>
+   avec les colonnes incluses <literal>director</literal> et <literal>rating</literal>
+   de la table <literal>films</literal>&nbsp;:
+<programlisting>
+CREATE UNIQUE INDEX title_idx ON films (title) INCLUDE (director, rating);
+</programlisting>
   </para>
 
   <para>

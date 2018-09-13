@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- doc/src/sgml/jit.sgml -->
+
+<chapter id="jit">
+ <title><acronym>JIT</acronym> (compilation à la volée)</title>
+
+ <indexterm zone="jit">
+  <primary><acronym>JIT</acronym></primary>
+ </indexterm>
+
+ <indexterm>
+  <primary>Compilation à la volée</primary>
+  <see><acronym>JIT</acronym></see>
+ </indexterm>
+
+ <para>
+  Ce chapitre décrit ce qu'est le <acronym>JIT</acronym> (compilation à la volée),
+  et comment le configurer dans <productname>PostgreSQL</productname>.
+ </para>
+
+ <sect1 id="jit-reason">
+  <title>Qu'est-ce que le <acronym>JIT</acronym> ?</title>
+
+  <para>
+   La compilation à la volée (ou <acronym>JIT</acronym> pour
+   <foreignphrase>Just-in-Time Compilation</foreignphrase>) est le processus de
+   transformation de l'évaluation d'un programme interprété en un programme
+   natif, et ce pendant l'exécution.
+
+   Par exemple, au lieu d'utiliser une fonction qui sait évaluer des
+   expressions SQL arbitraires pour évaluer un prédicat SQL comme
+   <literal>WHERE a.col = 3</literal>, il est possible de générer une fonction
+   que le CPU peut exécuter nativement, et qui ne traite que cette expression,
+   fournissant ainsi une accélération.
+  </para>
+
+  <para>
+   <productname>PostgreSQL</productname> sait procéder à une compilation
+   <acronym>JIT</acronym> grâce à
+   <ulink url="https://llvm.org/"><productname>LLVM</productname></ulink>
+   s'il a été compilé avec
+   <literal>--with-llvm</literal> (voir <xref linkend="configure-with-llvm"/>).
+  </para>
+
+  <para>
+   Consultez <filename>src/backend/jit/README</filename> pour plus de détails.
+  </para>
+
+  <sect2 id="jit-accelerated-operations">
+   <title><acronym>JIT</acronym> Opérations accélérées</title>
+   <para>
+    Actuellement, l'implémentation <acronym>JIT</acronym>
+    de <productname>PostgreSQL</productname>
+    supporte l'accélération de l'évaluation d'expression et du décodage
+    d'enregistrement. Plusieurs autres opérations pourraient être accélérées
+    dans le futur.
+   </para>
+   <para>
+    L'évaluation d'expression est utilisée pour évaluer les clauses
+    <literal>WHERE</literal>, les listes de colonnes, les agrégats et les projections.
+    Elle peut être accélérée en générant du code spécifique à chaque cas.
+   </para>
+   <para>
+    Le décodage d'enregistrement est le processus de transformation d'un
+    enregistrement sur disque (voir <xref linkend="storage-tuple-layout"/>)
+    dans sa représentation en mémoire.
+    Il peut être accéléré en créant une fonction spécifique au format de la
+    table et au nombre de colonnes extraites.
+   </para>
+  </sect2>
+
+  <sect2 id="jit-optimization">
+   <title>Optimisation</title>
+   <para>
+    <productname>LLVM</productname>
+    permet d'optimiser le code généré. Certaines optimisations sont suffisamment
+    peu coûteuses pour être accomplies à chaque utilisation du
+    <acronym>JIT</acronym>, alors que d'autres n'ont de bénéfice que pour les
+    requêtes durant plus longtemps.
+
+    Voir <ulink url="https://llvm.org/docs/passes.html#transform-passes"> pour
+    plus de détails sur les optimisations.
+   </ulink>
+  </para>
+  </sect2>
+
+  <sect2 id="jit-inlining">
+   <title>Inclusion</title>
+   <para>
+    <productname>PostgreSQL</productname> est très extensible et permet de
+    définir de nouveaux types de données, fonctions, opérateurs et autres
+    objets de base de données&nbsp;; voir <xref linkend="extend"/>.
+    En fait, ceux intégrés sont implémentés avec à peu près les mêmes
+    mécanismes. Cette extensibilité a un surcoût, par exemple à cause des appels
+    de fonction (voir <xref linkend="xfunc"/>).
+    Pour réduire ce surcoût, la compilation <acronym>JIT</acronym>
+    peut intégrer le corps des petites fonctions dans les expressions qui les
+    utilisent. Cela permet d'optimiser un pourcentage significatif du surcoût.
+   </para>
+  </sect2>
+
+ </sect1>
+
+ <sect1 id="jit-decision">
+  <title>Quand utiliser le <acronym>JIT</acronym> ?</title>
+
+  <para>
+   La compilation <acronym>JIT</acronym> bénéficie surtout aux requêtes de longue
+   durée et limitées par le processeur. Ce seront souvent des requêtes
+   analytiques. Pour les requêtes courtes, le surcoût apporté par la compilation
+   <acronym>JIT</acronym> sera souvent supérieur au temps qu'elle permet de gagner.
+  </para>
+
+  <para>
+   Pour déterminer si la compilation <acronym>JIT</acronym> est utilisée,
+   on utilise le coût total d'une requête (voir
+   <xref linkend="planner-stats-details"/>
+   et <xref linkend="runtime-config-query-constants"/>).
+  </para>
+
+  <para>
+   Le coût de la requête sera comparé au GUC <xref linkend="guc-jit-above-cost"/>.
+   Si le coût est supérieur, une compilation <acronym>JIT</acronym> sera
+   opérée.
+
+  </para>
+
+  <para>
+   Si le planificateur, en se basant sur le critère ci-dessus, a décidé que la
+   compilation <acronym>JIT</acronym> est bénéfique, deux autres décisions sont
+   prises.
+   Premièrement, si la requête est plus coûteuse que le GUC
+   <xref linkend="guc-jit-optimize-above-cost"/>, les optimisations coûteuses
+   sont utilisées pour améliorer le code. Deuxièmement, si la requête est plus
+   coûteuse que le GUC <xref linkend="guc-jit-inline-above-cost"/>,
+   les fonctions courtes et les opérateurs utilisés dans la requête seront
+   intégrés. Ces deux opérations augmentent le surcoût du <acronym>JIT</acronym>,
+   mais peuvent réduire considérablement le temps d'exécution.
+  </para>
+
+  <para>
+   Cette décision basée sur le coût sera faite lors de la planification,
+   et non pas lors de l'exécution. Cela veut dire que si l'on utilise les
+   instructions préparées, et que le plan générique est utilisé (voir
+   <xref linkend="sql-prepare-notes"/>), les valeurs des GUC prises en compte
+   sont celles au moment de la préparation, non de l'exécution.
+  </para>
+
+  <note>
+   <para>
+    Si <xref linkend="guc-jit"/> est à <literal>off</literal>,
+    ou si aucune implémentation du <acronym>JIT</acronym> n'est disponible
+    (par exemple parce que le serveur a été compilé sans
+    <literal>--with-llvm</literal>), le <acronym>JIT</acronym> ne sera pas
+    opéré, même s'il est considéré comme bénéfique selon les critères
+    ci-dessus. Placer <xref linkend="guc-jit"/> à <literal>off</literal>
+    prend effet au moment de la planification comme de l'exécution.
+   </para>
+  </note>
+
+  <para>
+   <xref linkend="sql-explain"/> peut être utilisé pour voir si le
+   <acronym>JIT</acronym> est utilisé ou pas. Par exemple, voici une requête
+   n'utilisant pas le <acronym>JIT</acronym>&nbsp;:
+
+<screen>
+=# EXPLAIN ANALYZE SELECT SUM(relpages) FROM pg_class;
+                                                 QUERY PLAN
+-------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=16.27..16.29 rows=1 width=8) (actual time=0.303..0.303 rows=1 loops=1)
+   ->  Seq Scan on pg_class  (cost=0.00..15.42 rows=342 width=4) (actual time=0.017..0.111 rows=356 loops=1)
+ Planning Time: 0.116 ms
+ Execution Time: 0.365 ms
+(4 rows)
+</screen>
+
+   Étant donné le coût de la planification, il est parfaitement raisonnable
+   que le <acronym>JIT</acronym> ne soit pas utilisé, son coût aurait été
+   supérieur au temps épargné. Ajuster les limites de coût amèneront son
+   utilisation&nbsp;:
+
+<screen>
+=# SET jit_above_cost = 10;
+SET
+=# EXPLAIN ANALYZE SELECT SUM(relpages) FROM pg_class;
+                                                 QUERY PLAN
+-------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=16.27..16.29 rows=1 width=8) (actual time=6.049..6.049 rows=1 loops=1)
+   ->  Seq Scan on pg_class  (cost=0.00..15.42 rows=342 width=4) (actual time=0.019..0.052 rows=356 loops=1)
+ Planning Time: 0.133 ms
+ JIT:
+   Functions: 3
+   Generation Time: 1.259 ms
+   Inlining: false
+   Inlining Time: 0.000 ms
+   Optimization: false
+   Optimization Time: 0.797 ms
+   Emission Time: 5.048 ms
+ Execution Time: 7.416 ms
+</screen>
+
+   Comme on le voit ici, le <acronym>JIT</acronym> a été utilisé, mais pas
+   l'intégration et l'optimisation coûteuse.
+   Si <xref
+   linkend="guc-jit-optimize-above-cost"/> et
+   <xref linkend="guc-jit-inline-above-cost"/> étaient abaissés
+   comme <xref linkend="guc-jit-above-cost"/>, cela changerait.
+  </para>
+ </sect1>
+
+ <sect1 id="jit-configuration" xreflabel="jit configuration">
+  <title>Configuration</title>
+
+  <para>
+   <xref linkend="guc-jit"/>
+   détermine si la compilation <acronym>JIT</acronym>
+   est activée ou désactivée.
+  </para>
+
+  <para>
+   Comme expliqué dans <xref linkend="jit-decision"/> les variables de
+   configuration <xref linkend="guc-jit-above-cost"/>,
+   <xref linkend="guc-jit-optimize-above-cost"/>,
+   <xref linkend="guc-jit-inline-above-cost"/>
+   décident si la compilation <acronym>JIT</acronym>
+   est opérée pour une requête, et quel effort peut y être consacré.
+  </para>
+
+  <para>
+   Pour le développement et le débogage, quelques autres GUC existent.
+   <xref linkend="guc-jit-dump-bitcode"/> permet d'inspecter le bitcode généré.
+   <xref linkend="guc-jit-debugging-support"/> permet à GDB de voir les fonctions
+   générées. <xref linkend="guc-jit-profiling-support"/> émet des informations
+   pour que le profileur <productname>perf</productname> puisse
+   raisonnablement interpréter les fonctions générées par le <acronym>JIT</acronym>.
+  </para>
+
+  <para>
+   <xref linkend="guc-jit-provider"/> détermine quelle implémentation
+   <acronym>JIT</acronym> est utilisée. Il est rarement nécessaire de le changer.
+   Voir <xref linkend="jit-pluggable"/>.
+  </para>
+ </sect1>
+
+ <sect1 id="jit-extensibility" xreflabel="jit extensibility">
+  <title>Extensibilité</title>
+
+  <sect2 id="jit-extensibility-bitcode">
+   <title>Support de l'intégration pour les extensions</title>
+   <para>
+    L'implémentation <acronym>JIT</acronym> de <productname>PostgreSQL</productname>
+    peut intégrer l'implémentation des opérateurs et fonctions (de types
+    <literal>C</literal> et <literal>internal</literal>). Voir
+    <xref linkend="jit-inlining"/>. Pour le faire pour les fonctions au sein des
+    extensions, la définition de ces fonctions doit être disponible. En
+    utilisant <link linkend="extend-pgxs">PGXS</link> pour construire une extension
+    pour un serveur compilé avec le support LLVM, les fichiers nécessaires
+    seront automatiquement installés.
+   </para>
+
+   <para>
+    Les fichiers adéquats doivent être installés dans
+    <filename>$pkglibdir/bitcode/$extension/</filename>
+    et un résumé de ceux-ci dans
+    <filename>$pkglibdir/bitcode/$extension.index.bc</filename>, où
+    <literal>$pkglibdir</literal> est le répertoire retourné par
+    <literal>pg_config --pkglibdir</literal> et <literal>$extension</literal>
+    le nom (<foreignphrase>basename</foreignphrase>) de la librairie partagée de
+    l'extension.
+
+    <note>
+     <para>
+      Pour les fonctions construites dans <productname>PostgreSQL</productname>
+      même, le bitcode est installé dans
+      <literal>$pkglibdir/bitcode/postgres</literal>.
+     </para>
+    </note>
+   </para>
+  </sect2>
+
+  <sect2 id="jit-pluggable">
+   <title>Fournisseur <acronym>JIT</acronym> interchangeable</title>
+
+   <para>
+    <productname>PostgreSQL</productname> fournit une implémentation du
+    <acronym>JIT</acronym> basée sur <productname>LLVM</productname>.
+    L'interface au fournisseur du <acronym>JIT</acronym> est ouverte
+    et le fournisseur peut être changé sans recompiler. Le fournisseur
+    est choisi par le GUC <xref linkend="guc-jit-provider"/>.
+   </para>
+
+   <sect3>
+    <title> Interface du fournisseur <acronym>JIT</acronym></title>
+    <para>
+     Un fournisseur <acronym>JIT</acronym> est chargé en chargeant dynamiquement
+     la librairie partagée indiquée. Pour la situer, le chemin de recherche de
+     librairie habituel est utilisé. Pour fournir les callbacks du fournisseur
+     <acronym>JIT</acronym> et pour indiquer que la librairie est bien un fournisseur
+     <acronym>JIT</acronym>, cette dernière doit fournir une fonction nommée
+     <function>_PG_jit_provider_init</function>. À cette fonction est passée
+     une structure qui doit être remplie avec les pointeurs des fonctions
+     callback pour les différentes actions.
+<programlisting>
+struct JitProviderCallbacks
+{
+    JitProviderResetAfterErrorCB reset_after_error;
+    JitProviderReleaseContextCB release_context;
+    JitProviderCompileExprCB compile_expr;
+};
+extern void _PG_jit_provider_init(JitProviderCallbacks *cb);
+</programlisting>
+    </para>
+   </sect3>
+  </sect2>
+ </sect1>
+
+</chapter>

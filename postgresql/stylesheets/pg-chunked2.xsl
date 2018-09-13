@@ -34,4 +34,6 @@
     <!-- No XML declaration -->
   <xsl:param name="chunker.output.omit-xml-declaration" select="'yes'"/>
 
+  <!-- Custom french translation -->
+  <xsl:param name="l10n.xml" select="document('../stylesheets/pgfrl10n.xml')"/>
 </xsl:stylesheet>

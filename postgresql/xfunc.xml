@@ -76,6 +76,39 @@
 
 </sect1>
 
+  <sect1 id="xproc">
+   <title>User-defined Procedures</title>
+
+  <indexterm zone="xproc">
+   <primary>procedure</primary>
+   <secondary>user-defined</secondary>
+  </indexterm>
+
+   <para>
+    A procedure is a database object similar to a function.  The difference is
+    that a procedure does not return a value, so there is no return type
+    declaration.  While a function is called as part of a query or DML
+    command, a procedure is called explicitly using
+    the <xref linkend="sql-call"/> statement.
+   </para>
+
+   <para>
+    The explanations on how to define user-defined functions in the rest of
+    this chapter apply to procedures as well, except that
+    the <xref linkend="sql-createprocedure"/> command is used instead, there is
+    no return type, and some other features such as strictness don't apply.
+   </para>
+
+   <para>
+    Collectively, functions and procedures are also known
+    as <firstterm>routines</firstterm><indexterm><primary>routine</primary></indexterm>.
+    There are commands such as <xref linkend="sql-alterroutine"/>
+    and <xref linkend="sql-droproutine"/> that can operate on functions and
+    procedures without having to know which kind it is.  Note, however, that
+    there is no <literal>CREATE ROUTINE</literal> command.
+   </para>
+  </sect1>
+
 <sect1 id="xfunc-sql">
  <title>Fonctions en langage de requêtes (<acronym>SQL</acronym>)</title>
 
@@ -355,6 +388,31 @@ $$ LANGUAGE SQL;
         WHERE no_compte = tf1.no_compte
      RETURNING balance;
 $$ LANGUAGE SQL;
+</programlisting>
+    </para>
+
+    <para>
+     A <acronym>SQL</acronym> function must return exactly its declared
+     result type.  This may require inserting an explicit cast.
+     For example, suppose we wanted the
+     previous <function>add_em</function> function to return
+     type <type>float8</type> instead.  This won't work:
+
+<programlisting>
+CREATE FUNCTION add_em(integer, integer) RETURNS float8 AS $$
+    SELECT $1 + $2;
+$$ LANGUAGE SQL;
+</programlisting>
+
+     even though in other contexts <productname>PostgreSQL</productname>
+     would be willing to insert an implicit cast to
+     convert <type>integer</type> to <type>float8</type>.
+     We need to write it as
+
+<programlisting>
+CREATE FUNCTION add_em(integer, integer) RETURNS float8 AS $$
+    SELECT ($1 + $2)::float8;
+$$ LANGUAGE SQL;
    </programlisting>
   </para>
 
@@ -455,9 +513,12 @@ $$ LANGUAGE SQL;
     </listitem>
     <listitem>
      <para>
-      Vous devez transtyper les expressions pour concorder avec la définition
-      du type composite ou bien vous aurez l'erreur suivante&nbsp;:
+      We must ensure each expression's type matches the corresponding
+      column of the composite type, inserting a cast if necessary.
+      Otherwise we'll get errors like this:
       <screen><computeroutput>ERROR:  function declared to return emp returns varchar instead of text at column 1</computeroutput></screen>
+      As with the base-type case, the function will not insert any casts
+      automatically.
        </para>
       </listitem>
      </itemizedlist>
@@ -475,6 +536,11 @@ $$ LANGUAGE SQL;</programlisting>
       cette situation mais c'est une alternative pratique dans certains cas
       &mdash; par exemple, si nous avons besoin de calculer le résultat en
       appelant une autre fonction qui renvoie la valeur composite désirée.
+      Another example is that if we are trying to write a function that
+      returns a domain over composite, rather than a plain composite type,
+      it is always necessary to write it as returning a single column,
+      since there is no other way to produce a value that is exactly of
+      the domain type.
     </para>
 
     <para>
@@ -679,7 +745,10 @@ SELECT mleast(ARRAY[10, -1, 5, 4.4]);    -- doesn't work
       Quelque fois, il est utile de pouvoir passer un tableau déjà construit
       à une fonction variadic&nbsp;; ceci est particulièrement intéressant quand
       une fonction variadic veut passer son paramètre tableau à une autre
-      fonction. Vous pouvez faire cela en spécifiant <literal>VARIADIC</literal>
+      fonction. Also,
+      this is the only secure way to call a variadic function found in a schema
+      that permits untrusted users to create objects; see
+      <xref linkend="typeconv-func"/>.  Vous pouvez faire cela en spécifiant <literal>VARIADIC</literal>
       dans l'appel&nbsp;:
 
       <screen>
@@ -748,7 +817,10 @@ SELECT mleast(arr =&gt; ARRAY[10, -1, 5, 4.4]);
       d'une valeur par défaut. (Bien que l'utilisation de la notation avec des
       arguments nommés pourrait autoriser une relâche de cette restriction,
       elle est toujours forcée pour que la notation des arguments de position
-      fonctionne correctement.)
+      fonctionne correctement.) Whether or not you use it,
+      this capability creates a need for precautions when calling functions in
+      databases where some users mistrust other users; see
+      <xref linkend="typeconv-func"/>.
      </para>
 
      <para>
@@ -1346,7 +1418,10 @@ $$ LANGUAGE SQL;
     <para>
      Plusieurs fonctions peuvent être définies avec le même nom SQL à condition
      que les arguments soient différents. En d'autres termes, les noms de
-     fonction peuvent être <firstterm>surchargés</firstterm>. Quand une
+     fonction peuvent être <firstterm>surchargés</firstterm>. Whether or not
+     you use it, this capability entails security precautions when calling
+     functions in databases where some users mistrust other users; see
+     <xref linkend="typeconv-func"/>. Quand une
      requête est exécutée, le serveur déterminera la fonction à appeler à
      partir des types de données des arguments et du nombre d'arguments. La
      surcharge peut aussi être utilisée pour simuler des fonctions avec un
@@ -1796,19 +1871,11 @@ LANGUAGE internal    STRICT;
       que le fichier contient un <quote>bloc magique</quote> avec un contenu
       approprié. Ceci permet au serveur de détecter les incompatibilités évidentes
       comme du code compilet pour une version majeure différente de
-      <productname>PostgreSQL</productname>. Un bloc magique est requis à partir de
-      <productname>PostgreSQL</productname> 8.2. Pour inclure un bloc magique,
+      <productname>PostgreSQL</productname>. Pour inclure un bloc magique,
       écrivez ceci dans un (et seulement un) des fichiers source du module, après
       avoir inclus l'en-tête <filename>fmgr.h</filename>&nbsp;:
 
-      <programlisting>#ifdef PG_MODULE_MAGIC
-PG_MODULE_MAGIC;
-#endif
-      </programlisting>
-
-      Le test <literal>#ifdef</literal> peut être omis si le code n'a pas besoin
-      d'être compilé avec des versions de <productname>PostgreSQL</productname>
-      antérieures à la 8.2.
+      <programlisting>PG_MODULE_MAGIC;</programlisting>
      </para>
 
      <para>
@@ -2257,9 +2324,7 @@ memcpy(destination->data, buffer, 40);
 #include "fmgr.h"
 #include "utils/geo_decls.h"
 
-#ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
-#endif
 
 /* par valeur */
 
@@ -2597,9 +2662,7 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
       <programlisting><![CDATA[#include "postgres.h"
 #include "executor/executor.h"  /* pour GetAttributeByName() */
 
-#ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
-#endif
 
 PG_FUNCTION_INFO_V1(c_surpaye);
 
@@ -3246,7 +3309,7 @@ make_array(PG_FUNCTION_ARGS)
       du tableau comme des arguments séparés. La fonction elle-même doit
       implémenter ce comportement si nécessaire, après avoir utilisé
       <function>get_fn_expr_variadic</function> pour savoir si les arguments
-      actuels ont été marqué avec <literal>VARIADIC</literal>.
+      actuels ont été marqués avec <literal>VARIADIC</literal>.
      </para>
     </sect2>
 

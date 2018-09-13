@@ -220,10 +220,11 @@ GetForeignPlan (PlannerInfo *root,
     <para>
 <programlisting>
 void
-GetForeignUpperPaths (PlannerInfo *root,
-                      UpperRelationKind stage,
-                      RelOptInfo *input_rel,
-                      RelOptInfo *output_rel);
+GetForeignUpperPaths(PlannerInfo *root,
+                     UpperRelationKind stage,
+                     RelOptInfo *input_rel,
+                     RelOptInfo *output_rel,
+                     void *extra);
 </programlisting>
      Crée les chemins d'accès possibles pour le traitement <firstterm>relation
      de niveau supérieur</firstterm>, qui est le terme de l'optimiseur pour tout
@@ -247,7 +248,11 @@ GetForeignUpperPaths (PlannerInfo *root,
      <literal>output_rel</literal> est la relation supérieure devant recevoir
      les chemins représentation le traitement de cette étape, et
      <literal>input_rel</literal> est la relation représentant la source de
-     cette étape. (Notez que les chemins <structname>ForeignPath</structname>
+     cette étape. The <literal>extra</literal> parameter provides additional details,
+     currently, it is set only for <literal>UPPERREL_PARTIAL_GROUP_AGG</literal>
+     or <literal>UPPERREL_GROUP_AGG</literal>, in which case it points to a
+     <literal>GroupPathExtraData</literal> structure.
+     (Notez que les chemins <structname>ForeignPath</structname>
      ajoutés à <literal>output_rel</literal> n'auront typiquement pas de
      dépendances directes avec les chemins de <literal>input_rel</literal> car
      leur traitement se fait en externe. Néanmoins, examiner les chemins
@@ -755,6 +760,72 @@ EndForeignModify (EState *estate,
     Si le pointeur vers <function>EndForeignModify</function> est initialisé
     à <literal>NULL</literal>, aucune action n'a lieu pendant l'arrêt de
     l'exécuteur.
+    </para>
+
+    <para>
+     Tuples inserted into a partitioned table by <command>INSERT</command> or
+     <command>COPY FROM</command> are routed to partitions.  If an FDW
+     supports routable foreign-table partitions, it should also provide the
+     following callback functions.  These functions are also called when
+     <command>COPY FROM</command> is executed on a foreign table.
+    </para>
+
+    <para>
+<programlisting>
+void
+BeginForeignInsert(ModifyTableState *mtstate,
+                   ResultRelInfo *rinfo);
+</programlisting>
+
+     Begin executing an insert operation on a foreign table.  This routine is
+     called right before the first tuple is inserted into the foreign table
+     in both cases when it is the partition chosen for tuple routing and the
+     target specified in a <command>COPY FROM</command> command.  It should
+     perform any initialization needed prior to the actual insertion.
+     Subsequently, <function>ExecForeignInsert</function> will be called for
+     each tuple to be inserted into the foreign table.
+    </para>
+
+    <para>
+     <literal>mtstate</literal> is the overall state of the
+     <structname>ModifyTable</structname> plan node being executed; global data about
+     the plan and execution state is available via this structure.
+     <literal>rinfo</literal> is the <structname>ResultRelInfo</structname> struct describing
+     the target foreign table.  (The <structfield>ri_FdwState</structfield> field of
+     <structname>ResultRelInfo</structname> is available for the FDW to store any
+     private state it needs for this operation.)
+    </para>
+
+    <para>
+     When this is called by a <command>COPY FROM</command> command, the
+     plan-related global data in <literal>mtstate</literal> is not provided
+     and the <literal>planSlot</literal> parameter of
+     <function>ExecForeignInsert</function> subsequently called for each
+     inserted tuple is <literal>NULL</literal>, whether the foreign table is
+     the partition chosen for tuple routing or the target specified in the
+     command.
+    </para>
+
+    <para>
+     If the <function>BeginForeignInsert</function> pointer is set to
+     <literal>NULL</literal>, no action is taken for the initialization.
+    </para>
+
+    <para>
+<programlisting>
+void
+EndForeignInsert(EState *estate,
+                 ResultRelInfo *rinfo);
+</programlisting>
+
+     End the insert operation and release resources.  It is normally not important
+     to release palloc'd memory, but for example open files and connections
+     to remote servers should be cleaned up.
+    </para>
+
+    <para>
+     If the <function>EndForeignInsert</function> pointer is set to
+     <literal>NULL</literal>, no action is taken for the termination.
    </para>
 
    <para>
@@ -1232,10 +1303,12 @@ AnalyzeForeignTable (Relation relation,
     signature suivante&nbsp;:
     <programlisting>
 int
-AcquireSampleRowsFunc (Relation relation, int elevel,
-                       HeapTuple *rows, int targrows,
-                       double *totalrows,
-                       double *totaldeadrows);
+AcquireSampleRowsFunc(Relation relation,
+                      int elevel,
+                      HeapTuple *rows,
+                      int targrows,
+                      double *totalrows,
+                      double *totaldeadrows);
     </programlisting>
 
     Un échantillon récupéré au hasard et comprenant au plus
@@ -1429,6 +1502,26 @@ ShutdownForeignScan(ForeignScanState *node);
     que le segment DSM disparaissent devraient implémenter cette méthode.
    </para>
  </sect2>
+
+   <sect2 id="fdw-callbacks-reparameterize-paths">
+    <title>FDW Routines For reparameterization of paths</title>
+
+    <para>
+<programlisting>
+List *
+ReparameterizeForeignPathByChild(PlannerInfo *root, List *fdw_private,
+                                 RelOptInfo *child_rel);
+</programlisting>
+    This function is called while converting a path parameterized by the
+    top-most parent of the given child relation <literal>child_rel</literal> to be
+    parameterized by the child relation. The function is used to reparameterize
+    any paths or translate any expression nodes saved in the given
+    <literal>fdw_private</literal> member of a <structname>ForeignPath</structname>. The
+    callback may use <literal>reparameterize_path_by_child</literal>,
+    <literal>adjust_appendrel_attrs</literal> or
+    <literal>adjust_appendrel_attrs_multilevel</literal> as required.
+    </para>
+   </sect2>
 
  </sect1>
 

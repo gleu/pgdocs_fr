@@ -851,12 +851,15 @@ UPDATE tt SET ti =
 
    <para>
     <productname>PostgreSQL</productname> fournit les fonctions
-    <function>to_tsquery</function>, <function>plainto_tsquery</function> et
-    <function>phraseto_tsquery</function> pour
+    <function>to_tsquery</function>, <function>plainto_tsquery</function>,
+    <function>phraseto_tsquery</function> et <function>websearch_to_tsquery</function> pour
     convertir une requête dans le type de données <type>tsquery</type>.
     <function>to_tsquery</function> offre un accès à d'autres fonctionnalités
     que <function>plainto_tsquery</function> et <function>phraseto_tsquery</function>
     mais est moins indulgent sur ses arguments.
+    <function>websearch_to_tsquery</function> est une version simplifiée de
+    <function>to_tsquery</function> avec une syntaxe différente, similaire à
+    celle utilisée par les moteurs web de recherche.
    </para>
 
    <indexterm>
@@ -1021,6 +1024,86 @@ SELECT phraseto_tsquery('english', 'The Fat &amp; Rats:C');
 </screen>
    </para>
 
+<synopsis>
+websearch_to_tsquery(<optional> <replaceable class="parameter">config</replaceable> <type>regconfig</type>, </optional> <replaceable class="parameter">querytext</replaceable> <type>text</type>) returns <type>tsquery</type>
+</synopsis>
+
+   <para>
+    <function>websearch_to_tsquery</function> crée une valeur
+    <type>tsquery</type> à partir de <replaceable>querytext</replaceable> en
+    utilisant une syntaxe différente dans laquelle un texte simple non formaté
+    est une requête valide. Contrairement à
+    <function>plainto_tsquery</function> et
+    <function>phraseto_tsquery</function>, elle reconnaît aussi certains
+    opérateurs. De plus, cette fonction ne doit jamais lever d'erreurs de
+    syntaxe, ce qui permet de l'utiliser pour la recherche à partir d'entrées
+    brutes fournies par un utilisateur. La syntaxe suivante est
+    supportée&nbsp;:
+    <itemizedlist  spacing="compact" mark="bullet">
+     <listitem>
+       <para>
+        <literal>unquoted text</literal>&nbsp;: du texte en dehors de
+        guillemets sera convertit en des termes séparés par des opérateurs
+        <literal>&amp;</literal>, comme traité par
+        <function>plainto_tsquery</function>.
+      </para>
+     </listitem>
+     <listitem>
+       <para>
+        <literal>"quoted text"</literal>&nbsp;: du texte à l'intérieur de
+        guillemets sera converti en termes séparés par des opérateurs
+        <literal>&lt;-&gt;</literal>, comme traité par
+        <function>phraseto_tsquery</function>.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>OR</literal>&nbsp;: un OU logique sera converti vers
+       l'opérateur <literal>|</literal>.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>-</literal>&nbsp;: l'opérateur logique NON sera converti vers
+       l'opérateur <literal>!</literal>.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+   <para>
+    Exemples&nbsp;:
+<screen>
+SELECT websearch_to_tsquery('english', 'The fat rats');
+ websearch_to_tsquery
+----------------------
+ 'fat' &amp; 'rat'
+(1 row)
+
+SELECT websearch_to_tsquery('english', '"supernovae stars" -crab');
+       websearch_to_tsquery
+----------------------------------
+ 'supernova' &lt;-&gt; 'star' &amp; !'crab'
+(1 row)
+
+SELECT websearch_to_tsquery('english', '"sad cat" or "fat rat"');
+       websearch_to_tsquery
+-----------------------------------
+ 'sad' &lt;-&gt; 'cat' | 'fat' &lt;-&gt; 'rat'
+(1 row)
+
+SELECT websearch_to_tsquery('english', 'signal -"segmentation fault"');
+         websearch_to_tsquery
+---------------------------------------
+ 'signal' &amp; !( 'segment' &lt;-&gt; 'fault' )
+(1 row)
+
+SELECT websearch_to_tsquery('english', '""" )( dummy \\ query &lt;-&gt;');
+ websearch_to_tsquery
+----------------------
+ 'dummi' &amp; 'queri'
+(1 row)
+</screen>
+    </para>
   </sect2>
 
   <sect2 id="textsearch-ranking">
@@ -1342,6 +1425,7 @@ LIMIT 10;
      </listitem>
     </itemizedlist>
 
+    Ces noms d'option sont reconnues quelque soit la casse.
     Toute option omise recevra une valeur par défaut&nbsp;:
 
     <programlisting>
@@ -2913,14 +2997,14 @@ SELECT plainto_tsquery('supernova star');
     aucun des fichiers de configuration <application>Ispell</application>. Les
     dictionnaires sont disponibles pour un grand nombre de langues à partir
     du <ulink
-    url="http://ficus-www.cs.ucla.edu/geoff/ispell.html">site web Ispell</ulink>.
+    url="https://www.cs.hmc.edu/~geoff/ispell.html">site web Ispell</ulink>.
     De plus, certains formats de fichiers dictionnaires plus modernes sont
     supportés &mdash; <ulink
-    url="http://en.wikipedia.org/wiki/MySpell">MySpell</ulink> (OO &lt; 2.0.1)
-    et <ulink url="http://sourceforge.net/projects/hunspell">Hunspell</ulink>
+    url="https://en.wikipedia.org/wiki/MySpell">MySpell</ulink> (OO &lt; 2.0.1)
+    et <ulink url="https://sourceforge.net/projects/hunspell/">Hunspell</ulink>
     (OO &gt;= 2.0.2). Une large liste de dictionnaires est disponible sur le
     <ulink
-    url="http://wiki.services.openoffice.org/wiki/Dictionaries">Wiki d'OpenOffice
+    url="https://wiki.openoffice.org/wiki/Dictionaries">Wiki d'OpenOffice
     </ulink>.
    </para>
 
@@ -3745,12 +3829,11 @@ SELECT plainto_tsquery('supernovae stars');
    Le partitionnement de gros ensembles et l'utilisation intelligente des index
    GIN et GiST autorise l'implémentation de recherches très rapides avec une
    mise à jour en ligne. Le partitionnement peut se faire au niveau de la base
-   en utilisant l'héritage, ou
-   en distribuant les documents sur des serveurs et en récupérant les résultats
-   de la recherche en utilisant le module <filename>contrib/dblink</filename>.
-   Ce dernier est possible car les fonctions de score utilisent les
-   informations locales.
-  </para>
+   en utilisant l'héritage, ou en distribuant les documents sur des serveurs
+   et en récupérant les résultats de la recherche, par exemple via un accès
+   <link linkend="ddl-foreign-data">Foreign Data</link>. Ce dernier est
+   possible car les fonctions de score utilisent les informations
+   locales.</para>
 
  </sect1>
 
