@@ -115,8 +115,11 @@ for ($i = 1; $i < $_SERVER["argc"]; $i++) {
           case '10':
             $version_int = 100;
             break;
+          case '11':
+            $version_int = 110;
+            break;
           default:
-            echo "Il s'agit d'une version majeure : 8.1 à 8.4, 9.0 à 9.6, et 10.\n";
+            echo "Il s'agit d'une version majeure : 8.1 à 8.4, 9.0 à 9.6, 10, et 11.\n";
             exit;
             break;
         }
