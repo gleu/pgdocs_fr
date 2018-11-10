@@ -146,11 +146,9 @@ $version['110'] = '11';
                 <a onclick="pageTracker._trackPageview('/pg96.tar.gz');"
                 href="http://docs.postgresql.fr/11/pg11.tar.gz">TAR.GZ</a>
             </li>
-			<!--
             <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg11.pdf');"
               href="http://docs.postgresql.fr/11/pg11.pdf">PDF</a>
             </li>
-			-->
             <li>Document d'installation au format <a
               onclick="pageTracker._trackPageview('/INSTALL11.html');"
               href="http://docs.postgresql.fr/11/INSTALL.html">HTML</a> et
