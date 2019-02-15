@@ -23,8 +23,8 @@
   <title>Interprétation des Date/Heure saisies</title>
 
   <para>
-   Les entrées de type date/heure sont toutes décodées en utilisant le processus
-   suivant.
+   Les chaînes en entrée de type date/heure sont décodées en utilisant le
+   processus suivant.
   </para>
 
   <procedure>
@@ -77,21 +77,22 @@
 
    <step>
     <para>
-     Si le lexème est une chaîne texte, le comparer avec les différentes chaînes
-     possibles&nbsp;:
+     Si le lexème est une chaîne texte alphabétique, le comparer avec les
+     différentes chaînes possibles&nbsp;:
     </para>
 
     <substeps>
      <step>
       <para>
-       Faire une recherche binaire dans la table pour vérifier si le lexème
-       est une abréviation de fuseau horaire.
+       Vérifier si le jeton correspond à une abréviation connue d'un fuseau
+       horaire. Ces abréviations sont fournies par le fichier de configuration
+       décrit dans <xref linkend="datetime-config-files"/>.
       </para>
      </step>
 
      <step>
       <para>
-       S'il n'est pas trouvé, une recherche binaire est effectuée dans la table
+       S'il n'est pas trouvé, rechercher dans la table interne
        pour vérifier si le lexème est une chaîne spéciale
        (<literal>today</literal>, par exemple),
        un jour (<literal>Thursday</literal>, par exemple),
@@ -193,6 +194,82 @@
   </procedure>
  </sect1>
 
+
+  <sect1 id="datetime-invalid-input">
+   <title>Gestion des horodatages ambigus ou invalides</title>
+
+   <para>
+    D'ordinaire, si une chaîne date/heure est syntaxiquement valide mais
+    contient des valeurs de champs hors de l'intervalle, une erreur sera
+    renvoyée. Par exemple, une entrée indiquant le 31 février sera rejetée.
+   </para>
+
+   <para>
+    Lors d'un changement d'heure, il est possible qu'une chaîne apparemment
+    valide représente un horodatage inexistant ou ambigu. Ce genre de cas n'est
+    pas rejeté. L'ambiguité est résolue en déterminant le décalage UTC à
+    appliquer. Par exemple, supposons que le paramètre
+    <xref linkend="guc-timezone"/> est configuré à
+    <literal>America/New_York</literal>&nbsp;:
+<programlisting>
+=&gt; SELECT '2018-03-11 02:30'::timestamptz;
+      timestamptz
+------------------------
+ 2018-03-11 03:30:00-04
+(1 row)
+</programlisting>
+    Comme ce jour était une transition vers l'avant pour ce fuseau horaire,
+    l'heure 2:30AM n'existe pas&nbsp;; les horloges passent directement de 2h
+    à 3h EDT. <productname>PostgreSQL</productname> interpréte l'heure donnée
+    comme s'il s'agissait de l'heure standard (UTC-5), qui se décline donc en
+    3:30 EDT (UTC-4).
+   </para>
+
+   <para>
+    De la même façon, prenons en considération ce comportement lors d'une
+    transition en arrière&nbsp;:
+<programlisting>
+=&gt; SELECT '2018-11-04 02:30'::timestamptz;
+      timestamptz
+------------------------
+ 2018-11-04 02:30:00-05
+(1 row)
+</programlisting>
+    À cette date, il existe deux interprétations possibles de 2:30AM&nbsp;;
+    soit 2:30AM EDT, soit une heure après la transition, 2:30AM EST.
+    De nouveau, <productname>PostgreSQL</productname> interpète l'heure donnée
+    comme s'il s'agissait de l'heure standard (UTC-5). Nous ouvons forcer
+    l'interprétation en spécifiant le temps et sa règle de conversion&nbsp;:
+<programlisting>
+=&gt; SELECT '2018-11-04 02:30 EDT'::timestamptz;
+      timestamptz
+------------------------
+ 2018-11-04 01:30:00-05
+(1 row)
+</programlisting>
+    Cet horodatage peut être interprété soit comme 2:30 UTC-4 soit comme
+    1:30 UTC-5&nbsp;; le code de sortie de l'horodatage a choisi ce dernier.
+   </para>
+
+   <para>
+    La règle précise qui se trouve appliquée dans de tels cas est qu'un
+    horodatage invalide qui semble survenir pendant une transition vers
+    l'avant est affecté au décalage UTC qui prévaut dans le fuseau horaire
+    juste avant la transition alors qu'un horodatage ambigu qui semble
+    survenir pendant une transition vers l'arrière se voit affecté le décalage
+    UTC qui prévaut juste après la transition. Dans la plupart des fuseaux
+    horaires, ceci est équivalent à dire que <quote>l'interprétation du temps
+    standard est préféré lorsqu'il y a un doute</quote>.
+   </para>
+
+   <para>
+    Dans tous les cas, le décalage UTC associé à un horodatage peut être
+    spécifié explicitement, en utilisant soit un décalage numérique UTC ou une
+    abréviation de fuseau horaire correspondent au décalage TUC fixé. La règle
+    donnée s'applique seulement si nécessaire pour convertir un décalage UTC
+    pour un fuseau horaire pour lequel le décalage varie.
+   </para>
+  </sect1>
 
  <sect1 id="datetime-keywords">
   <title>Mots clés Date/Heure</title>
