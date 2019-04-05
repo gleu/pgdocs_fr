@@ -52,7 +52,7 @@
 <div id="pgContent">
   <div id="pgSideWrap">
     <div id="pgSideNav">
-      <form method="post" action="http://docs.postgresql.fr/search.php">
+      <form method="post" action="https://docs.postgresql.fr/search.php">
         <div>
           <h2><label for="q">Rechercher</label></h2>
           <input type='hidden' id='v' name='v' value='904' />
