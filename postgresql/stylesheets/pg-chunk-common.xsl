@@ -55,8 +55,9 @@
       <form method="post" action="http://docs.postgresql.fr/search.php">
         <div>
           <h2><label for="q">Rechercher</label></h2>
-          <input type='hidden' id='v' name='v' value='901' />
-          <input id="q" name="q" type="text" size="10" maxlength="255" onfocus="if( this.value=='Rechercher' ) this.value='';" value="Rechercher" accesskey="r" /><input id="submit" name="submit" type="submit" value="Rechercher" />
+          <input type='hidden' id='v' name='v' value='906' />
+		  <input id="q" name="q" type="text" size="16" maxlength="255" title='Vous pouvez utiliser les opérateurs suivants : "and", "&","not","!","or","|","<->" ("suivi de" pour recherche de phrase)' onfocus="if( this.value=='rechercher' ) this.value='';" value="<?= strlen($_request['q'])>0 ? $_request['q'] : 'rechercher' ?>" accesskey="s" />
+          <input id="submit" name="submit" type="submit" value="Rechercher" />
         </div>
       </form>
     </div>
