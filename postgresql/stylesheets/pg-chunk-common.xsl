@@ -52,10 +52,10 @@
 <div id="pgContent">
   <div id="pgSideWrap">
     <div id="pgSideNav">
-      <form method="post" action="http://docs.postgresql.fr/search.php">
+      <form method="post" action="https://docs.postgresql.fr/search.php">
         <div>
           <h2><label for="q">Rechercher</label></h2>
-          <input type='hidden' id='v' name='v' value='904' />
+          <input type='hidden' id='v' name='v' value='905' />
 		  <input id="q" name="q" type="text" size="16" maxlength="255" title='Vous pouvez utiliser les opérateurs suivants : and, not, or' onfocus="if( this.value=='rechercher' ) this.value='';" value="rechercher" accesskey="s" />
           <input id="submit" name="submit" type="submit" value="Rechercher" />
         </div>
