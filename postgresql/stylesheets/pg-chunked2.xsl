@@ -6,7 +6,7 @@
 
     <!-- We use XHTML -->
   <xsl:import href="/opt/docbook-xsl/xhtml/docbook.xsl"/>
-  <xsl:param name="chunker.output.encoding" select="'UTF-85'"/>
+  <xsl:param name="chunker.output.encoding" select="'UTF-8'"/>
 
 
     <!-- Including our others customized elements templates -->
