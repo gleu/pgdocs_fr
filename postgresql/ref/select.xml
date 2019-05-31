@@ -73,7 +73,7 @@ SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replac
 
 <phrase>et <replaceable class="parameter">requête_with</replaceable> est&nbsp;:</phrase>
 
-    <replaceable class="parameter">nom_requête_with</replaceable> [ ( <replaceable class="parameter">nom_colonne</replaceable> [, ...] ) ] AS ( <replaceable class="parameter">select</replaceable> | <replaceable class="parameter">valeurs</replaceable> | <replaceable class="parameter">insert</replaceable> | <replaceable class="parameter">update</replaceable> | <replaceable class="parameter">delete</replaceable> )
+    <replaceable class="parameter">nom_requête_with</replaceable> [ ( <replaceable class="parameter">nom_colonne</replaceable> [, ...] ) ] AS [ [ NOT ] MATERIALIZED ] ( <replaceable class="parameter">select</replaceable> | <replaceable class="parameter">valeurs</replaceable> | <replaceable class="parameter">insert</replaceable> | <replaceable class="parameter">update</replaceable> | <replaceable class="parameter">delete</replaceable> )
 
 TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
   </synopsis>
@@ -98,7 +98,8 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
       Elles jouent le rôle de tables temporaires qui peuvent être référencées
       dans la liste <literal>FROM</literal>. Une requête
       <literal>WITH</literal> qui est référencée plus d'une fois dans
-      <literal>FROM</literal> n'est calculée qu'une fois
+      <literal>FROM</literal> n'est calculée qu'une fois,
+      unless specified otherwise with <literal>NOT MATERIALIZED</literal>
       (voir <xref linkend="sql-with"/> ci-dessous).
      </para>
     </listitem>
@@ -278,19 +279,52 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
    </para>
 
    <para>
+    The primary query and the <literal>WITH</literal> queries are all
+    (notionally) executed at the same time.  This implies that the effects of
+    a data-modifying statement in <literal>WITH</literal> cannot be seen from
+    other parts of the query, other than by reading its <literal>RETURNING</literal>
+    output.  If two such data-modifying statements attempt to modify the same
+    row, the results are unspecified.
+   </para>
+
+   <para>
     Une propriété clé des requêtes <literal>WITH</literal> est qu'elles ne sont
-    évaluées qu'une seule fois par exécution de la requête principale,
-    même si la requête principale les utilise plus d'une fois.
+    normalement évaluées qu'une seule fois par exécution de la requête principale,
+    même si la 1requête principale les utilise plus d'une fois.
     En particulier, vous avez la garantie que les traitements de modification de données
     sont exécutés une seule et unique fois, que la requête principale lise tout ou partie de leur sortie.
    </para>
 
    <para>
-    Tout se passe comme si la requête principale et les requêtes <literal>WITH</literal> étaient toutes
-    exécutées en même temps. Ceci a pour conséquence que les effets d'un ordre de modification dans une clause
-    <literal>WITH</literal> ne peuvent pas être vues des autres parties de la requête, sauf en lisant la sortie
-    de <literal>RETURNING</literal>. Si deux de ces ordres de modifications tentent de modifier la même ligne,
-    les résultats sont imprévisibles.
+    However, a <literal>WITH</literal> query can be marked
+    <literal>NOT MATERIALIZED</literal> to remove this guarantee.  In that
+    case, the <literal>WITH</literal> query can be folded into the primary
+    query much as though it were a simple sub-<literal>SELECT</literal> in
+    the primary query's <literal>FROM</literal> clause.  This results in
+    duplicate computations if the primary query refers to
+    that <literal>WITH</literal> query more than once; but if each such use
+    requires only a few rows of the <literal>WITH</literal> query's total
+    output, <literal>NOT MATERIALIZED</literal> can provide a net savings by
+    allowing the queries to be optimized jointly.
+    <literal>NOT MATERIALIZED</literal> is ignored if it is attached to
+    a <literal>WITH</literal> query that is recursive or is not
+    side-effect-free (i.e., is not a plain <literal>SELECT</literal>
+    containing no volatile functions).
+   </para>
+
+   <para>
+    By default, a side-effect-free <literal>WITH</literal> query is folded
+    into the primary query if it is used exactly once in the primary
+    query's <literal>FROM</literal> clause.  This allows joint optimization
+    of the two query levels in situations where that should be semantically
+    invisible.  However, such folding can be prevented by marking the
+    <literal>WITH</literal> query as <literal>MATERIALIZED</literal>.
+    That might be useful, for example, if the <literal>WITH</literal> query
+    is being used as an optimization fence to prevent the planner from
+    choosing a bad plan.
+    <productname>PostgreSQL</productname> versions before v12 never did
+    such folding, so queries written for older versions might rely on
+    <literal>WITH</literal> to act as an optimization fence.
    </para>
 
    <para>
@@ -2114,6 +2148,12 @@ FROM manufacturiers m LEFT JOIN LATERAL recupere_nom_produits(m.id) pnom ON true
    <para>
     <literal>ROWS FROM( ... )</literal> est une extension du standard
     SQL.
+   </para>
+
+   <para>
+    The <literal>MATERIALIZED</literal> and <literal>NOT
+    MATERIALIZED</literal> options of <literal>WITH</literal> are extensions
+    of the SQL standard.
    </para>
   </refsect2>
  </refsect1>

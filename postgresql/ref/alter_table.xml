@@ -72,7 +72,6 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     NO FORCE ROW LEVEL SECURITY
     CLUSTER ON <replaceable class="parameter">nom_index</replaceable>
     SET WITHOUT CLUSTER
-    SET WITH OIDS
     SET WITHOUT OIDS
     SET TABLESPACE <replaceable class="parameter">nouveau_tablespace</replaceable>
     SET { LOGGED | UNLOGGED }
@@ -87,9 +86,9 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
 
 <phrase>et <replaceable class="parameter">spec_limite_partition</replaceable> vaut&nbsp;:</phrase>
 
-IN ( { <replaceable class="parameter">litéral_numérique</replaceable> | <replaceable class="parameter">litéral_chaîne</replaceable> | TRUE | FALSE | NULL } [, ...] ) |
-FROM ( { <replaceable class="parameter">litéral_numérique</replaceable> | <replaceable class="parameter">litéral_chaîne</replaceable> | TRUE | FALSE | MINVALUE | MAXVALUE } [, ...] )
-  TO ( { <replaceable class="parameter">litéral_numérique</replaceable> | <replaceable class="parameter">litéral_chaîne</replaceable> | TRUE | FALSE | MINVALUE | MAXVALUE } [, ...] ) |
+IN ( <replaceable class="parameter">expr_limite_partition</replaceable> [, ...] ) |
+FROM ( { <replaceable class="parameter">expr_limite_partition</replaceable> | MINVALUE | MAXVALUE } [, ...] )
+  TO ( { <replaceable class="parameter">expr_limite_partition</replaceable> | MINVALUE | MAXVALUE } [, ...] ) |
 WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>, REMAINDER <replaceable class="parameter">litéral_numérique</replaceable> )
 
 <phrase>et <replaceable class="parameter">contrainte_colonne</replaceable> vaut&nbsp;:</phrase>
@@ -103,7 +102,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
   UNIQUE <replaceable class="parameter">paramètres_index</replaceable> |
   PRIMARY KEY <replaceable class="parameter">paramètres_index</replaceable> |
   REFERENCES <replaceable class="parameter">table_référencée</replaceable> [ ( <replaceable class="parameter">colonne_référencée</replaceable> ) ] [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ]
-    [ ON DELETE <replaceable class="parameter">action</replaceable> ] [ ON UPDATE <replaceable class="parameter">action</replaceable> ] }
+    [ ON DELETE <replaceable class="parameter">action_referentielle</replaceable> ] [ ON UPDATE <replaceable class="parameter">action_referentielle</replaceable> ] }
 [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
 
 <phrase>et <replaceable class="parameter">contrainte_table</replaceable> vaut&nbsp;:</phrase>
@@ -114,7 +113,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
   PRIMARY KEY ( <replaceable class="parameter">nom_colonne</replaceable> [, ... ] ) <replaceable class="parameter">paramètres_index</replaceable> |
   EXCLUDE [ USING <replaceable class="parameter">méthode_index</replaceable> ] ( <replaceable class="parameter">élément_exclus</replaceable> WITH <replaceable class="parameter">opérateur</replaceable> [, ... ] ) <replaceable class="parameter">paramètres_index</replaceable> [ WHERE ( <replaceable class="parameter">prédicat</replaceable> ) ] |
   FOREIGN KEY ( <replaceable class="parameter">nom_colonne</replaceable> [, ... ] ) REFERENCES <replaceable class="parameter">table_référencée</replaceable> [ ( <replaceable class="parameter">colonne_référencée</replaceable> [, ... ] ) ]
-    [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ] [ ON DELETE <replaceable class="parameter">action</replaceable> ] [ ON UPDATE <replaceable class="parameter">action</replaceable> ] }
+    [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ] [ ON DELETE <replaceable class="parameter">action_referentielle</replaceable> ] [ ON UPDATE <replaceable class="parameter">action_referentielle</replaceable> ] }
 [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
 
 <phrase>et <replaceable class="parameter">contrainte_table_utilisant_index</replaceable> vaut&nbsp;:</phrase>
@@ -213,10 +212,18 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
      <term><literal>SET</literal>/<literal>DROP NOT NULL</literal></term>
      <listitem>
       <para>
-       Modifie l'autorisation de
-       valeurs NULL. <literal>SET NOT NULL</literal> ne peut être utilisé que
-       si la colonne ne contient pas de valeurs NULL.
-      </para>
+       Modifie l'autorisation de valeurs NULL. 
+     </para>
+
+     <para>
+      <literal>SET NOT NULL</literal> may only be applied to a column
+      providing none of the records in the table contain a
+      <literal>NULL</literal> value for the column.  Ordinarily this is
+      checked during the <literal>ALTER TABLE</literal> by scanning the
+      entire table; however, if a valid <literal>CHECK</literal> constraint is
+      found which proves no <literal>NULL</literal> can exist, then the
+      table scan is skipped.
+     </para>
 
      <para>
       Si cette table est une partition, il n'est pas possible d'effectuer de
@@ -364,33 +371,37 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        syntaxe identique à <xref linkend="sql-createtable"/>, plus
        l'option <literal>NOT VALID</literal>, qui est actuellement
        seulement autorisée pour les contraintes de type clé étrangère et les
-       contraintes CHECK. Si
-       la contrainte est marquée <literal>NOT VALID</literal>, la
-       vérification initiale, potentiellement lente, permettant de
-       s'assurer que toutes les lignes de la table satisfont la contrainte,
-       est ignorée. La contrainte sera toujours assurée pour les insertions
-       et mises à jour suivantes (autrement dit, elles échoueront sauf
-       s'il existe une ligne correspondante dans la table référencée
-       par
-       la clé étrangère, ou elles échoueront sauf si la nouvelle ligne correspond aux
-       contraintes de vérification spécifiées)
-       Par contre, la base de données ne supposera pas que la contrainte
-       est valable pour toutes les lignes dans la table, tant que la
-       contrainte n'a pas été validée en utilisant l'option <literal>VALIDATE
-        CONSTRAINT</literal>. Les contraintes de type clé étrangère sur des
-       tables partitionnées ne peuvent pas être déclarées <literal>NOT
-       VALID</literal> actuellement.
+       contraintes CHECK.
       </para>
 
-     <para>
-      L'ajout d'une contrainte de clé primaire requiert un verrou
-      <literal>SHARE ROW EXCLUSIVE</literal> sur la table référencée.
-     </para>
+      <para>
+       Normally, this form will cause a scan of the table to verify that all
+       existing rows in the table satisfy the new constraint.  But if
+       the <literal>NOT VALID</literal> option is used, this
+       potentially-lengthy scan is skipped.  The constraint will still be
+       enforced against subsequent inserts or updates (that is, they'll fail
+       unless there is a matching row in the referenced table, in the case
+       of foreign keys, or they'll fail unless the new row matches the
+       specified check condition).  But the
+       database will not assume that the constraint holds for all rows in
+       the table, until it is validated by using the <literal>VALIDATE
+       CONSTRAINT</literal> option.
+       See <xref linkend="sql-altertable-notes"
+       endterm="sql-altertable-notes-title"/> below for more information
+       about using the <literal>NOT VALID</literal> option.
+      </para>
 
       <para>
-       Des restrictions supplémentaires s'appliquent quand des contraintes
-       uniques ou des clés primaires sont ajoutées à des tables partitionnées.
-       Voir <xref linkend="sql-createtable" />.
+       Addition of a foreign key constraint requires a
+       <literal>SHARE ROW EXCLUSIVE</literal> lock on the referenced table,
+       in addition to the lock on the table receiving the constraint.
+      </para>
+
+      <para>
+       Additional restrictions apply when unique or primary key constraints
+       are added to partitioned tables; see <xref linkend="sql-createtable"/>.
+       Also, foreign key constraints on partitioned
+       tables may not be declared <literal>NOT VALID</literal> at present.
       </para>
      </listitem>
     </varlistentry>
@@ -469,21 +480,9 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        Elle le fait en parcourant la table pour s'assurer qu'il n'existe
        aucune ligne pour laquelle la contrainte n'est pas satisfaite. Si
        la contrainte est déjà marquée valide, cette clause ne fait rien.
-      </para>
-      <para>
-       La validation peut être un long processus sur des tables volumineuses.
-       L'intérêt de séparer la validation de la création initiale est que vous
-       pouvez déférer la validation à un moment plus calme, ou peut être utilisé
-       pour donner un temps supplémentaire pour corriger les erreurs existantes
-       tout en évitant de nouvelles erreurs.  À noter également que la
-       validation en elle-même n'empêche pas les écritures normales sur la table
-       pendant qu'elle est en cours.
-      </para>
-      <para>
-       La validation ne nécessite qu'un verrou <literal>SHARE UPDATE EXCLUSIVE</literal>
-       sur la table en cours de modification.  Si la contrainte est une clé
-       étrangère, alors un verrou <literal>ROW SHARE</literal> est également
-       nécessaire sur la table référencée par la contrainte.
+       (See <xref linkend="sql-altertable-notes"
+       endterm="sql-altertable-notes-title"/> below for an explanation of the
+       usefulness of this command.)
       </para>
      </listitem>
     </varlistentry>
@@ -634,29 +633,12 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
     </varlistentry>
 
     <varlistentry>
-     <term><literal>SET WITH OIDS</literal></term>
-     <listitem>
-      <para>
-       Cette forme ajoute une colonne système <literal>oid</literal> à la table
-       (voir <xref linkend="ddl-system-columns"/>).
-       Elle ne fait rien si la table a déjà des OID.
-      </para>
-
-      <para>
-       Ce n'est pas équivalent à <literal>ADD COLUMN oid oid</literal>. Cette
-       dernière ajouterait une colonne normale nommée <literal>oid</literal>,
-       qui n'est pas une colonne système.
-      </para>
-     </listitem>
-    </varlistentry>
-
-    <varlistentry>
      <term><literal>SET WITHOUT OIDS</literal></term>
      <listitem>
       <para>
-       Supprime la colonne système <literal>oid</literal> de la
-       table. Cela est strictement équivalent à <literal>DROP COLUMN oid RESTRICT</literal>,
-       à ceci près qu'aucun avertissement n'est émis si la colonne <literal>oid</literal> n'existe plus.
+       Backward-compatible syntax for removing the <literal>oid</literal>
+       system column.  As <literal>oid</literal> system columns cannot be
+       added anymore, this never has an effect.
       </para>
      </listitem>
     </varlistentry>
@@ -669,7 +651,15 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
       indiqué, et déplace les fichiers de données associés à la table vers le
       nouveau tablespace. Les index de la table, s'il y en a, ne sont pas
       déplacés mais ils peuvent l'être avec des commandes <literal>SET
-      TABLESPACE</literal> séparées. Toutes les tables de la base de donnée
+      TABLESPACE</literal> séparées.
+      When applied to a partitioned table, nothing is moved, but any
+      partitions created afterwards with
+      <command>CREATE TABLE PARTITION OF</command> will use that tablespace,
+      unless the <literal>TABLESPACE</literal> clause is used to override it.
+     </para>
+
+     <para>
+      Toutes les tables de la base de donnée
       d'un tablespace peuvent être déplacées en utilisant la clause
       <literal>ALL IN TABLESPACE</literal>, ce qui verrouillera toutes les
       tables pour les déplacer une par une. Cette clause supporte aussi
@@ -725,18 +715,6 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
       <varname>random_page_cost</varname>, <varname>n_distinct</varname> et
       <varname>n_distinct_inherited</varname>.
       </para>
-
-      <note>
-       <para>
-        Bien que <command>CREATE TABLE</command> autorise la spécification de
-        <literal>OIDS</literal> avec la syntaxe <literal>WITH (<replaceable
-         class="parameter">paramètre_stockage</replaceable>)</literal>,
-        <command>ALTER TABLE</command> ne traite pas les <literal>OIDS</literal>
-        comme un paramètre de stockage. À la place, utiliser les formes
-        <literal>SET WITH OIDS</literal> et <literal>SET WITHOUT OIDS</literal>
-        pour changer le statut des OID sur la table.
-       </para>
-      </note>
      </listitem>
     </varlistentry>
 
@@ -796,10 +774,8 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
       <para>
        Cette forme lie la table à un type composite comme si la commande
        <command>CREATE TABLE OF</command> l'avait créée. la liste des noms de colonnes et leurs types
-       doit correspondre précisément à ceux du type composite&nbsp;; il est permis de différer la présence d'une colonne
-       système
-       <literal>oid</literal>.
-       . La table ne doit pas hériter d'une autre table. Ces restrictions garantissent que la commande
+       doit correspondre précisément à ceux du type composite.
+       La table ne doit pas hériter d'une autre table. Ces restrictions garantissent que la commande
        <command>CREATE TABLE OF</command> pourrait permettre la définition d'une table équivalente.
       </para>
      </listitem>
@@ -1226,8 +1202,8 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
   </variablelist>
  </refsect1>
 
- <refsect1>
-  <title>Notes</title>
+ <refsect1 id="sql-altertable-notes">
+  <title id="sql-altertable-notes-title">Notes</title>
 
   <para>
    Le mot clé <literal>COLUMN</literal> n'est pas nécessaire. Il peut
@@ -1253,8 +1229,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
    binairement avec le nouveau type ou vers le domaine non contraint sur le
    nouveau type. Dans ces cas, la réécriture de la table n'est pas nécessaire
    mais tous les index sur les colonnes affectées doivent être reconstruits.
-   Ajouter ou supprimer une colonne système <literal>oid</literal> nécessite
-   aussi de réécrire la table entière. Les reconstructions de table et/ou
+   Les reconstructions de table et/ou
    index peuvent prendre beaucoup de temps pour une grosse table. De plus,
    cela nécessitera au plus deux fois l'espace disque.
   </para>
@@ -1277,6 +1252,32 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
    en une seule passe sur la table de plusieurs parcours et réécritures.
   </para>
 
+   <para>
+    Scanning a large table to verify a new foreign key or check constraint
+    can take a long time, and other updates to the table are locked out
+    until the <command>ALTER TABLE ADD CONSTRAINT</command> command is
+    committed.  The main purpose of the <literal>NOT VALID</literal>
+    constraint option is to reduce the impact of adding a constraint on
+    concurrent updates.  With <literal>NOT VALID</literal>,
+    the <command>ADD CONSTRAINT</command> command does not scan the table
+    and can be committed immediately.  After that, a <literal>VALIDATE
+    CONSTRAINT</literal> command can be issued to verify that existing rows
+    satisfy the constraint.  The validation step does not need to lock out
+    concurrent updates, since it knows that other transactions will be
+    enforcing the constraint for rows that they insert or update; only
+    pre-existing rows need to be checked.  Hence, validation acquires only
+    a <literal>SHARE UPDATE EXCLUSIVE</literal> lock on the table being
+    altered.  (If the constraint is a foreign key then a <literal>ROW
+    SHARE</literal> lock is also required on the table referenced by the
+    constraint.)  In addition to improving concurrency, it can be useful to
+    use <literal>NOT VALID</literal> and <literal>VALIDATE
+    CONSTRAINT</literal> in cases where the table is known to contain
+    pre-existing violations.  Once the constraint is in place, no new
+    violations can be inserted, and the existing problems can be corrected
+    at leisure until <literal>VALIDATE CONSTRAINT</literal> finally
+    succeeds.
+   </para>
+
   <para>
    La forme <literal>DROP COLUMN</literal> ne supprime pas physiquement la
    colonne, mais la rend simplement invisible aux opérations SQL.
@@ -1285,9 +1286,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
    Ainsi, supprimer une colonne ne réduit pas immédiatement la taille de la
    table sur disque car l'espace occupé par la colonne n'est pas
    récupéré. Cet espace est récupéré au fur et à mesure des
-   mises à jour des lignes de la table. (Ceci n'est pas vrai quand on supprime
-   la colonne système <literal>oid</literal>&nbsp;; ceci est fait avec une réécriture
-   immédiate de la table.)
+   mises à jour des lignes de la table.
   </para>
 
   <para>

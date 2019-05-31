@@ -1001,15 +1001,26 @@ SELECT * FROM pg_stop_backup(false, true);
    </sect3>
    <sect3 id="backup-lowlevel-base-backup-exclusive">
     <title>Créer une sauvegarde exclusive de bas niveau</title>
+
+    <note>
+     <para>
+      The exclusive backup method is deprecated and should be avoided.
+      Prior to <productname>PostgreSQL</productname> 9.6, this was the only
+      low-level method available, but it is now recommended that all users
+      upgrade their scripts to use non-exclusive backups.
+     </para>
+    </note>
+
     <para>
      Le procédé pour une sauvegarde exclusive est majoritairement le même que
      pour la non-exclusive, mais il diffère en quelques étapes clés. Ce type
      de sauvegarde peut seulement être réalisé sur un serveur primaire et ne
-     permet pas des sauvegardes concurrentes. Avant la version 9.6 de
-     PostgreSQL,   il s'agissait de la seule méthode bas niveau disponible,
-     mais il est maintenant recommandé que tous les utilisateurs mettent à
-     jour leurs scripts pour utiliser une sauvegarde non-exclusive si
-     possible.
+     permet pas des sauvegardes concurrentes. Moreover, because it writes a backup_label file on the
+     master, it can cause the master to fail to restart automatically after
+     a crash.  On the other hand, the erroneous removal of a backup_label
+     file from a backup or standby is a common mistake which can can result
+     in serious data corruption.  If it is necessary to use this method,
+     the following steps may be used.
     </para>
     <para>
   <orderedlist>
@@ -1069,10 +1080,17 @@ SELECT pg_start_backup('label', true);
 	 prendre en compte durant cette sauvegarde.
     </para>
     <para>
-      Notez que, si le serveur s'arrête brutalement lors de la sauvegarde, il
-      pourrait ne pas être possible de recommencer tant que le fichier
-      <literal>backup_label</literal> ne soit manuellement supprimée du
-      répertoire <envar>PGDATA</envar>.
+      Comme il est déjà indiqué ci-dessus, si le serveur s'arrête brutalement
+      lors de la sauvegarde, il pourrait ne pas être possible de recommencer
+      tant que le fichier <literal>backup_label</literal> ne soit manuellement
+      supprimée du répertoire <envar>PGDATA</envar>. Note that it is very
+      important to never remove the <literal>backup_label</literal> file when
+      restoring a backup, because this will result in corruption.  Confusion
+      about when it is appropriate to remove this file is a common cause of
+      data corruption when using this method; be very certain that you remove
+      the file only on an existing master and never when building a standby or
+      restoring a backup, even if you are building a standby that will
+      subsequently be promoted to a new master.
     </para>
    </listitem>
    <listitem>
@@ -1100,12 +1118,17 @@ SELECT pg_start_backup('label', true);
      cas, c'est rapide, mais il est conseillé de surveiller le système d'archivage pour
      s'assurer qu'il n'y a pas de retard. Si le processus d'archivage a pris du retard
      en raison d'échecs de la commande d'archivage, il continuera d'essayer jusqu'à ce que
-     l'archive réussisse et que le backup soit complet. Pour
-     positionner une limite au temps d'exécution de <function>pg_stop_backup</function>,
-     il faut positionner <varname>statement_timeout</varname> à une valeur
-     appropriée,  mais il faut noter que si
-     <function>pg_stop_backup</function> est interrompu du fait de cette
-     configuration, la sauvegarde peut ne pas être correcte.
+     l'archive réussisse et que le backup soit complet.
+    </para>
+
+    <para>
+     When using exclusive backup mode, it is absolutely imperative to ensure
+     that <function>pg_stop_backup</function> completes successfully at the
+     end of the backup.  Even if the backup itself fails, for example due to
+     lack of disk space, failure to call <function>pg_stop_backup</function>
+     will leave the server in backup mode indefinitely, causing future backups
+     to fail and increasing the risk of a restart failure during the time that
+     <literal>backup_label</literal> exists.
     </para>
    </listitem>
   </orderedlist>
@@ -1296,9 +1319,11 @@ SELECT pg_start_backup('label', true);
    </listitem>
    <listitem>
     <para>
-     Créer un fichier de commandes de récupération
-     <filename>recovery.conf</filename> dans le répertoire des données du
-     cluster (voir <xref linkend="recovery-config"/>). Il peut, de
+     Set recovery configuration settings in
+     <filename>postgresql.conf</filename> (see <xref
+     linkend="runtime-config-wal-archive-recovery"/>) and create a file
+     <filename>recovery.signal</filename> in the cluster
+     data directory. Il peut, de
      plus, être judicieux de modifier temporairement le fichier
      <filename>pg_hba.conf</filename> pour empêcher les utilisateurs
      ordinaires de se connecter tant qu'il n'est pas certain que la
@@ -1311,8 +1336,8 @@ SELECT pg_start_backup('label', true);
      commence la lecture des fichiers WAL archivés dont il a besoin. Si la
      récupération se termine sur une erreur externe, le serveur peut tout
      simplement être relancé. Il continue alors la récupération. À la
-     fin du processus de récupération, le serveur renomme
-     <filename>recovery.conf</filename> en <filename>recovery.done</filename>
+     fin du processus de récupération, le serveur supprime le fichier
+     <filename>recovery.signal</filename>
      (pour éviter de retourner accidentellement en mode de récupération), puis passe en mode de
      fonctionnement normal.
     </para>
@@ -1329,11 +1354,8 @@ SELECT pg_start_backup('label', true);
    </para>
 
      <para>
-      Le point clé de tout ceci est l'écriture d'un fichier de configuration de
-      récupération qui décrit comment et jusqu'où récupérer. Le fichier
-      <filename>recovery.conf.sample</filename> (normalement présent dans le
-      répertoire d'installation <filename>share/</filename>) peut être utilisé
-      comme prototype. La seule chose qu'il faut absolument préciser dans
+      Le point clé de tout ceci est la configuration de la restauration qui
+      décrit comment et jusqu'où récupérer. La seule chose qu'il faut absolument préciser dans
       <filename>recovery.conf</filename>, c'est <varname>restore_command</varname>
       qui indique à <productname>PostgreSQL</productname> comment récupérer les
       fichiers de segment WAL archivés. À l'instar
@@ -1395,8 +1417,8 @@ SELECT pg_start_backup('label', true);
    <para>
     Pour récupérer à un moment précis (avant que le DBA junior n'ait supprimé
     la table principale), il suffit d'indiquer le <link
-    linkend="recovery-target-settings">point d'arrêt</link> requis dans
-    <filename>recovery.conf</filename>. Le point d'arrêt, aussi nommé
+    linkend="runtime-config-wal-recovery-target">point d'arrêt</link> requis.
+    Le point d'arrêt, aussi nommé
     <quote>recovery target</quote> (cible de récupération), peut être précisé
     par une combinaison date/heure, un point de récupération nommé ou par le
     dernier identifiant de transaction. Actuellement, seules les options
@@ -1507,7 +1529,7 @@ SELECT pg_start_backup('label', true);
         cours de la sauvegarde. Si l'on souhaite effectuer la récupération
         dans une timeline fille (c'est-à-dire retourner à un état enregistré
         après une tentative de récupération), il faut préciser l'identifiant de la timeline
-        dans <filename>recovery.conf</filename>. Il n'est pas possible de
+        dans <xref linkend="guc-recovery-target-timeline"/>. Il n'est pas possible de
         récupérer dans des timelines antérieures à la sauvegarde.
        </para>
       </sect2>

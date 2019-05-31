@@ -94,7 +94,7 @@
    non. La ligne <literal>CATALOG</literal> peut également être annotée,
    avec d'autres macros de propriété décrites dans <filename>genbki.h</filename>,
    pour définir d'autres propriétés du catalogue dans son ensemble, par exemple
-   s'il a des OID (ce qui est le cas par défaut).
+   s'il s'agit d'une relation partagée.
   </para>
 
   <para>
@@ -196,11 +196,10 @@
 # A comment could appear here.
 { oid =&gt; '1', oid_symbol =&gt; 'TemplateDbOid',
   descr =&gt; 'database\'s default template',
-  datname =&gt; 'template1', datdba =&gt; 'PGUID', encoding =&gt; 'ENCODING',
-  datcollate =&gt; 'LC_COLLATE', datctype =&gt; 'LC_CTYPE', datistemplate =&gt; 't',
-  datallowconn =&gt; 't', datconnlimit =&gt; '-1', datlastsysoid =&gt; '0',
-  datfrozenxid =&gt; '0', datminmxid =&gt; '1', dattablespace =&gt; '1663',
-  datacl =&gt; '_null_' },
+  datname =&gt; 'template1', encoding =&gt; 'ENCODING', datcollate =&gt; 'LC_COLLATE',
+  datctype =&gt; 'LC_CTYPE', datistemplate =&gt; 't', datallowconn =&gt; 't',
+  datconnlimit =&gt; '-1', datlastsysoid =&gt; '0', datfrozenxid =&gt; '0',
+  datminmxid =&gt; '1', dattablespace =&gt; 'pg_default', datacl =&gt; '_null_' },
 
 ]
 </programlisting>
@@ -226,17 +225,22 @@
       <replaceable>valeur</replaceable> séparées par des virgules.  Les
       <replaceable>clé</replaceable>s autorisées sont les noms des colonnes du
       catalogue, ainsi que les clés de métadonnées <literal>oid</literal>,
-      <literal>oid_symbol</literal> et <literal>descr</literal>.
-      (L'utilisation de <literal>oid</literal> et <literal>oid_symbol</literal>
-      est décrite dans <xref linkend="system-catalog-oid-assignment"/>
-      ci-dessous.  <literal>descr</literal> fournit une chaîne de texte de
-      description pour l'objet, qui sera insérée dans
-      <structname>pg_description</structname> ou
+      <literal>oid_symbol</literal>, <literal>array_type_oid</literal> et
+      <literal>descr</literal>. (L'utilisation de <literal>oid</literal> et
+      <literal>oid_symbol</literal> est décrite dans <xref
+      linkend="system-catalog-oid-assignment"/> ci-dessous, alors que
+      <literal>array_type_oid</literal> est décrite dans <xref
+      linkend="system-catalog-auto-array-types"/>. <literal>descr</literal>
+      fournit une chaîne de texte de description pour l'objet, qui sera
+      insérée dans <structname>pg_description</structname> ou
       <structname>pg_shdescription</structname> selon le cas.)
       Bien que les clés de métadonnées soient facultatives, les colonnes
       définies pour le catalogue doivent toutes être fournies, sauf pour le cas
       où le fichier <literal>.h</literal> du catalogue définit une valeur par
       défaut pour la colonne.
+      (In the example above, the <structfield>datdba</structfield> field has
+      been omitted because <filename>pg_database.h</filename> supplies a
+      suitable default value for it.)
      </para>
     </listitem>
 
@@ -275,9 +279,10 @@
 
     <listitem>
      <para>
-      Afin d'aider la lisibilité, les valeurs des champs qui sont des OID
-      d'autres entrées de catalogue peuvent être représentées par des noms
-      plutôt que des OIDs numériques.
+      Field values that are OIDs of other catalog entries should be
+      represented by symbolic names rather than actual numeric OIDs.
+      (In the example above, <structfield>dattablespace</structfield>
+      contains such a reference.)
       Cela est décrit dans <xref linkend="system-catalog-oid-references"/>
       ci-dessous.
      </para>
@@ -297,6 +302,7 @@
         <para>
          Au sein de chaque paire d'accolades, les champs de métadonnées
          <literal>oid</literal>, <literal>oid_symbol</literal>,
+         <literal>array_type_oid</literal>
          et <literal>descr</literal> (si présent) apparaissent en premier, dans
          cet ordre, puis les champs propres au catalogue apparaissent dans leur
          ordre défini.
@@ -370,8 +376,7 @@
     pré-chargées.  Un OID pré-assigné est également nécessaire si l'OID de la
     ligne doit être référencé depuis le code C.  Si aucun de ces cas ne
     s'applique, le champ de métadonnée <literal>oid</literal> peut être omis,
-    auquel cas le code de bootstrap assignera un OID automatiquement, ou le
-    laissera à zéro dans un catalogue qui n'a pas d'OID. En pratique, nous
+    auquel cas le code de bootstrap assignera un OID automatiquement. En pratique, nous
     pré-assignons généralement des OID pour soit toutes soit aucune des lignes
     d'un catalogue donné, même si seulement une partie des lignes sont vraiment
     référencées dans d'autres catalogues.
@@ -405,15 +410,52 @@
     simplement dans les en-têtes de catalogue et les fichiers
     <filename>.dat</filename> pour voir lesquels n'apparaissent pas.  Vous
     pouvez également utiliser le script <filename>duplicate_oids</filename> pour
-    trouver des erreurs.  (<filename>genbki.pl</filename> détectera également
-    les OID en doublon au moment de la compilation.)
+    trouver des erreurs.  (<filename>genbki.pl</filename> will assign OIDs for any rows that
+    didn't get one hand-assigned to them, and it will also detect duplicate
+    OIDs at compile time.)
    </para>
 
    <para>
-    Le compteur d'OID démarre à 10000 au début d'une exécution de bootstrap.
-    Si une ligne de catalogue est dans une table qui nécessite des OID, mais
-    qu'aucun OID n'a été préassigné par un champ <literal>oid</literal>, alors
-    il recevra un OID de 10000 ou plus.
+    When choosing OIDs for a patch that is not expected to be committed
+    immediately, best practice is to use a group of more-or-less
+    consecutive OIDs starting with some random choice in the range
+    8000&mdash;9999.  This minimizes the risk of OID collisions with other
+    patches being developed concurrently.  To keep the 8000&mdash;9999
+    range free for development purposes, after a patch has been committed
+    to the master git repository its OIDs should be renumbered into
+    available space below that range.  Typically, this will be done
+    near the end of each development cycle, moving all OIDs consumed by
+    patches committed in that cycle at the same time.  The script
+    <filename>renumber_oids.pl</filename> can be used for this purpose.
+    If an uncommitted patch is found to have OID conflicts with some
+    recently-committed patch, <filename>renumber_oids.pl</filename> may
+    also be useful for recovering from that situation.
+   </para>
+
+   <para>
+    Because of this convention of possibly renumbering OIDs assigned by
+    patches, the OIDs assigned by a patch should not be considered stable
+    until the patch has been included in an official release.  We do not
+    change manually-assigned object OIDs once released, however, as that
+    would create assorted compatibility problems.
+   </para>
+
+   <para>
+    If <filename>genbki.pl</filename> needs to assign an OID to a catalog
+    entry that does not have a manually-assigned OID, it will use a value in
+    the range 10000&mdash;11999.  The server's OID counter is set to 12000
+    at the start of a bootstrap run.  Thus objects created by regular SQL
+    commands during the later phases of bootstrap, such as objects created
+    while running the <filename>information_schema.sql</filename> script,
+    receive OIDs of 12000 or above.
+   </para>
+
+   <para>
+    OIDs assigned during normal database operation are constrained to be
+    16384 or higher.  This ensures that the range 10000&mdash;16383 is free
+    for OIDs assigned automatically by <filename>genbki.pl</filename> or
+    during bootstrap.  These automatically-assigned OIDs are not considered
+    stable, and may change from one installation to another.
    </para>
   </sect2>
 
@@ -421,14 +463,14 @@
    <title>Recherche de référénce d'OID</title>
 
    <para>
-    Les références inter-catalogue d'une ligne de catalogue initiale vers une
-    autre peut être écrite en écrivant simplement l'OID préassigné de la ligne
-    référencée.  Mais cela serait source d'erreur et difficile à comprendre,
-    ainsi pour les catalogues référencés fréquemment,
-    <filename>genbki.pl</filename> fournit un mécanisme pour écrire à la place
-    des références symboliques.  Pour le moment, c'est possible pour les
-    références vers des méthodes d'accès, fonctions, opérateurs, classes
-    d'opérateur, familles d'opérateur et types. Les règles sont&nbsp;:
+    In principle, cross-references from one initial catalog row to another
+    could be written just by writing the preassigned OID of the referenced
+    row in the referencing field.  However, that is against project
+    policy, because it is error-prone, hard to read, and subject to
+    breakage if a newly-assigned OID is renumbered.  Therefore
+    <filename>genbki.pl</filename> provides mechanisms to write
+    symbolic references instead.
+    The rules are as follows:
    </para>
 
    <itemizedlist>
@@ -439,9 +481,7 @@
       en particulier en attachant
       <literal>BKI_LOOKUP(<replaceable>lookuprule</replaceable>)</literal>
       à la définition de la colonne, où <replaceable>lookuprule</replaceable>
-      est <literal>pg_am</literal>, <literal>pg_proc</literal>,
-      <literal>pg_operator</literal>, <literal>pg_opclass</literal>,
-      <literal>pg_opfamily</literal>, ou <literal>pg_type</literal>.
+      est the name of the referenced catalog, e.g. <literal>pg_proc</literal>.
       <literal>BKI_LOOKUP</literal> peut être attaché aux colonnes de type
       <type>Oid</type>, <type>regproc</type>, <type>oidvector</type>,
       ou <type>Oid[]</type>&nbsp;; dans les deux derniers cas, cela implique
@@ -461,12 +501,21 @@
 
     <listitem>
      <para>
-      Les méthodes d'accès sont uniquement représentées par leur noms, tous
-      les types.  Les noms de types doivent correspondre aux
-      <structfield>typname</structfield> des entrées de
-      <structname>pg_type</structname> correspondantes&nbsp;; vous ne pouvez utiliser
-      aucun alias tel que <literal>integer</literal> pour
-      <literal>int4</literal>.
+      It's also permissible to attach <literal>BKI_LOOKUP(encoding)</literal>
+      to integer columns to reference character set encodings, which are
+      not currently represented as catalog OIDs, but have a set of values
+      known to <filename>genbki.pl</filename>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Most kinds of catalog objects are simply referenced by their names.
+      Note that type names must exactly match the
+      referenced <structname>pg_type</structname>
+      entry's <structfield>typname</structfield>; you do not get to use
+      any aliases such as <literal>integer</literal>
+      for <literal>int4</literal>.
      </para>
     </listitem>
 
@@ -509,7 +558,18 @@
      <para>
       Il n'est prévu de qualification par le schéma pour aucun de ces cas&nbsp;;
       tous les objects créés durant le bootstrap sont prévus pour être dans le
-      schéma pg_catalog.
+      schéma <literal>pg_catalog</literal>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      In addition to the generic lookup mechanisms, there is a special
+      convention that <literal>PGNSP</literal> is replaced by the OID of
+      the <literal>pg_catalog</literal> schema,
+      and <literal>PGUID</literal> is replaced by the OID of the bootstrap
+      superuser role.  These usages are somewhat historical but so far
+      there hasn't been a need to generalize them.
      </para>
     </listitem>
    </itemizedlist>
@@ -519,6 +579,41 @@
     pendant son exécution, et incrit de simples OID numériques dans les
     fichiers BKI émis.  Le processus client de bootstrap n'a donc pas besoin
     de gérer les références symboliques.
+   </para>
+  </sect2>
+
+  <sect2 id="system-catalog-auto-array-types">
+   <title>Automatic Creation of Array Types</title>
+
+   <para>
+    Most scalar data types should have a corresponding array type (that is,
+    a standard varlena array type whose element type is the scalar type, and
+    which is referenced by the <structfield>typarray</structfield> field of
+    the scalar type's <structname>pg_type</structname>
+    entry).  <filename>genbki.pl</filename> is able to generate
+    the <structname>pg_type</structname> entry for the array type
+    automatically in most cases.
+   </para>
+
+   <para>
+    To use this facility, just write an <literal>array_type_oid
+    =&gt; <replaceable>nnnn</replaceable></literal> metadata field in the
+    scalar type's <structname>pg_type</structname> entry, specifying the OID
+    to use for the array type.  You may then omit
+    the <structfield>typarray</structfield> field, since it will be filled
+    automatically with that OID.
+   </para>
+
+   <para>
+    The generated array type's name is the scalar type's name with an
+    underscore prepended.  The array entry's other fields are filled from
+    <literal>BKI_ARRAY_DEFAULT(<replaceable>value</replaceable>)</literal>
+    annotations in <filename>pg_type.h</filename>, or if there isn't one,
+    copied from the scalar type.  (There's also a special case
+    for <structfield>typalign</structfield>.)  Then
+    the <structfield>typelem</structfield>
+    and <structfield>typarray</structfield> fields of the two entries are
+    set to cross-reference each other.
    </para>
   </sect2>
 
@@ -712,7 +807,6 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
      <replaceable class="parameter">tableoid</replaceable>
      <optional><literal>bootstrap</literal></optional>
      <optional><literal>shared_relation</literal></optional>
-     <optional><literal>without_oids</literal></optional>
      <optional><literal>rowtype_oid</literal> <replaceable>oid</replaceable></optional>
      (<replaceable class="parameter">name1</replaceable> =
      <replaceable class="parameter">type1</replaceable>
@@ -764,8 +858,7 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
 
      <para>
       La table est créée partagée si <literal>shared_relation</literal> est
-      indiqué. Elle possède des OID à moins que
-      <literal>without_oids</literal> ne soit précisé. L'OID du type de ligne
+      indiqué. L'OID du type de ligne
       de la table (OID de <structname>pg_type</structname>) peut en option
       être indiquée via la clause <literal>rowtype_oid</literal>&nbsp;; dans
       le cas contraire, un OID est automatiquement généré pour lui. (La clause
@@ -805,7 +898,7 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
 
    <varlistentry>
     <term>
-     <literal>insert</literal> <optional><literal>OID =</literal> <replaceable class="parameter">valeur_oid</replaceable></optional> <literal>(</literal><replaceable class="parameter">valeur1</replaceable> <replaceable class="parameter">valeur2</replaceable> ...<literal>)</literal>
+     <literal>insert</literal> <literal>(</literal> <optional><replaceable class="parameter">valeur_oid</replaceable></optional> <replaceable class="parameter">valeur1</replaceable> <replaceable class="parameter">valeur2</replaceable> ... <literal>)</literal>
     </term>
 
     <listitem>
@@ -813,11 +906,7 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
       Insère une nouvelle ligne dans la table ouverte en utilisant
       <replaceable class="parameter">valeur1</replaceable>,
       <replaceable class="parameter">valeur2</replaceable>, etc., comme valeurs de
-      colonnes et <replaceable class="parameter">valeur_oid</replaceable>
-      comme OID. Si
-      <replaceable class="parameter">valeur_oid</replaceable> vaut zéro
-      (0) ou si la clause est omise, et que la table a des OID, alors le
-      prochain OID disponible est utilisé.
+      colonnes.
      </para>
 
      <para>
@@ -988,14 +1077,14 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
 
   <para>
    La séquence de commandes suivante crée la table
-   <literal>test_table</literal> avec l'OID 420, deux colonnes
-   <literal>cola</literal> et <literal>colb</literal> de types respectifs
-   <type>int4</type> et <type>text</type> et insère deux lignes dans la
+   <literal>test_table</literal> avec l'OID 420, trois colonnes
+   <literal>oid</literal>, <literal>cola</literal> et <literal>colb</literal> de types respectifs
+   <type>oid</type>, <type>int4</type> et <type>text</type> et insère deux lignes dans la
    table&nbsp;:
-   <programlisting>create test_table 420 (cola = int4, colb = text)
+   <programlisting>create test_table 420 (oid = oid, cola = int4, colb = text)
 open test_table
-insert OID=421 ( 1 "value1" )
-insert OID=422 ( 2 _null_ )
+insert ( 421 1 "value1" )
+insert ( 422 2 _null_ )
 close test_table
    </programlisting>
   </para>

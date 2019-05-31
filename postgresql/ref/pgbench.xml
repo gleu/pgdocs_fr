@@ -529,6 +529,13 @@ pgbench <optional> <replaceable>options</replaceable> </optional>
             de requête étendu avec instructions préparées.</para>
            </listitem>
           </itemizedlist>
+
+        Because in "prepared" mode <application>pgbench</application> reuses
+        the parse analysis result for the second and subsequent query
+        iteration, <application>pgbench</application> runs faster in the
+        prepared mode than in other modes.
+       </para>
+       <para>
         Par défaut, le protocole de requête standard est utilisé
         (voir <xref linkend="protocol"/> pour plus d'informations).
        </para>
@@ -901,6 +908,18 @@ pgbench <optional> <replaceable>options</replaceable> </optional>
  </refsect1>
 
  <refsect1>
+  <title>Exit Status</title>
+
+  <para>
+   A successful run will exit with status 0.  Exit status 1 indicates static
+   problems such as invalid command-line options.  Errors during the run such
+   as database errors or problems in the script will result in exit status 2.
+   In the latter case, <application>pgbench</application> will print partial
+   results.
+  </para>
+ </refsect1>
+
+ <refsect1>
   <title>Notes</title>
 
  <refsect2>
@@ -1014,6 +1033,8 @@ pgbench <optional> <replaceable>options</replaceable> </optional>
     <replaceable>nom_variable</replaceable>.
     S'il y a plus d'une session par client, chaque session possède son
     propre jeu de variables.
+   <application>pgbench</application> supports up to 255 variable uses in one
+   statement.
   </para>
 
    <table id="pgbench-automatic-variables">
@@ -1062,6 +1083,42 @@ pgbench <optional> <replaceable>options</replaceable> </optional>
   </para>
 
   <variablelist>
+   <varlistentry id='pgbench-metacommand-gset'>
+    <term>
+     <literal>\gset [<replaceable>prefix</replaceable>]</literal>
+    </term>
+
+    <listitem>
+     <para>
+      This command may be used to end SQL queries, taking the place of the
+      terminating semicolon (<literal>;</literal>).
+     </para>
+
+     <para>
+      When this command is used, the preceding SQL query is expected to
+      return one row, the columns of which are stored into variables named after
+      column names, and prefixed with <replaceable>prefix</replaceable> if provided.
+     </para>
+
+     <para>
+      The following example puts the final account balance from the first query
+      into variable <replaceable>abalance</replaceable>, and fills variables
+      <replaceable>p_two</replaceable> and <replaceable>p_three</replaceable>
+      with integers from the third query.
+      The result of the second query is discarded.
+<programlisting>
+UPDATE pgbench_accounts
+  SET abalance = abalance + :delta
+  WHERE aid = :aid
+  RETURNING abalance \gset
+-- compound of two queries
+SELECT 1 \;
+SELECT 2 AS two, 3 AS three \gset p_
+</programlisting>
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry>
     <term><literal>\if</literal> <replaceable class="parameter">expression</replaceable></term>
     <term><literal>\elif</literal> <replaceable class="parameter">expression</replaceable></term>
@@ -1113,6 +1170,13 @@ pgbench <optional> <replaceable>options</replaceable> </optional>
       En ce qui concerne les conditions, les valeurs numériques différentes de
       zéro valent <literal>TRUE</literal>, les valeurs numériques à zéro et
       <literal>NULL</literal> sont <literal>FALSE</literal>.
+     </para>
+
+     <para>
+      Too large or small integer and double constants, as well as
+      integer arithmetic operators (<literal>+</literal>,
+      <literal>-</literal>, <literal>*</literal> and <literal>/</literal>)
+      raise errors on overflows.
      </para>
 
      <para>
@@ -1629,30 +1693,18 @@ f(x) = PHI(2.0 * parameter * (x - mu) / (max - min + 1)) /
       l'intervalle (ou à partir de <literal>3.0 / 8.0</literal> jusqu'à
       <literal>5.0 / 8.0</literal>) et 95% depuis la moitié du milieu
       (<literal>2.0 / 4.0</literal>) de l'intervalle (deuxième et troisième
-      quartiles). Le <replaceable>parameter</replaceable> minimum est 2.0 pour
-      les performances de la transformation Box-Muller.
+      quartiles). La valeur minimale autorisée pour <replaceable>parameter</replaceable>
+      est 2.0.
      </para>
     </listitem>
     <listitem>
      <para>
-      <literal>random_zipfian</literal> génère une distribution basée sur la
-      loi de Zipf. Si <replaceable>parameter</replaceable> est dans (0, 1),
-      un algorithme approché provient de
-      "Quickly Generating Billion-Record Synthetic Databases",
-      Jim Gray et al, SIGMOD 1994. Pour <replaceable>parameter</replaceable>
-      dans (1, 1000), une méthode par rejet est utilisée, basée sur
-      "Non-Uniform Random Variate Generation", Luc Devroye, p. 550-551,
-      Springer 1986. La distribution n'est pas définie quand le paramètre
-      vaut 1.0. Les performances de la fonction est mauvaise pour des valeurs de
-      paramètre proches et au-dessus de 1.0 et sur un petit intervalle.
-     </para>
-     <para>
+      <literal>random_zipfian</literal> generates a bounded Zipfian
+      distribution.
       <replaceable>parameter</replaceable>
       définit à quel point la distribution est biaisée. Plus
       <replaceable>parameter</replaceable> est grand, plus fréquemment les
-      valeurs du début de l'intervalle seront tirées. Plus
-      <replaceable>parameter</replaceable> est proche de 0,
-      plus plate (uniforme) est la distribution en sortie.
+      valeurs du début de l'intervalle seront tirées.
       La distribution est telle que, en supposant que l'intervalle commence à
       1, le ratio de probabilité d'un jet <replaceable>k</replaceable> contre
       un jet <replaceable>k+1</replaceable> est
@@ -1662,6 +1714,13 @@ f(x) = PHI(2.0 * parameter * (x - mu) / (max - min + 1)) /
       5.66</literal> fois plus fréquemment que <literal>2</literal>, qui
       lui-même est produit <literal>(3/2)*2.5 = 2.76</literal> fois plus
       fréquemment que <literal>3</literal>, et ainsi de suite.
+     </para>
+     <para>
+      <application>pgbench</application>'s implementation is based on
+      "Non-Uniform Random Variate Generation", Luc Devroye, p. 550-551,
+      Springer 1986.  Due to limitations of that algorithm,
+      the <replaceable>parameter</replaceable> value is restricted to
+      the range [1.001, 1000].
      </para>
     </listitem>
    </itemizedlist>

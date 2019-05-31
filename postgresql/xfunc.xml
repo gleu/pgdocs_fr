@@ -2116,16 +2116,6 @@ memcpy(destination->data, buffer, 40);
        </thead>
        <tbody>
 	<row>
-	 <entry><type>abstime</type></entry>
-	 <entry><type>AbsoluteTime</type></entry>
-	 <entry><filename>utils/nabstime.h</filename></entry>
-	</row>
-  <row>
-   <entry><type>bigint</type> (<type>int8</type>)</entry>
-   <entry><type>int64</type></entry>
-   <entry><filename>postgres.h</filename></entry>
-  </row>
-	<row>
 	 <entry><type>boolean</type></entry>
 	 <entry><type>bool</type></entry>
 	 <entry><filename>postgres.h</filename> (intégration au
@@ -2227,11 +2217,6 @@ memcpy(destination->data, buffer, 40);
 	 <entry><filename>postgres.h</filename></entry>
 	</row>
 	<row>
-	 <entry><type>reltime</type></entry>
-	 <entry><type>RelativeTime</type></entry>
-	 <entry><filename>utils/nabstime.h</filename></entry>
-	</row>
-	<row>
 	 <entry><type>text</type></entry>
 	 <entry><type>text*</type></entry>
 	 <entry><filename>postgres.h</filename></entry>
@@ -2255,11 +2240,6 @@ memcpy(destination->data, buffer, 40);
 	 <entry><type>timestamp</type></entry>
 	 <entry><type>Timestamp*</type></entry>
 	 <entry><filename>datatype/timestamp.h</filename></entry>
-	</row>
-	<row>
-	 <entry><type>tinterval</type></entry>
-	 <entry><type>TimeInterval</type></entry>
-	 <entry><filename>utils/nabstime.h</filename></entry>
 	</row>
 	<row>
 	 <entry><type>varchar</type></entry>
@@ -2918,14 +2898,6 @@ c_surpaye(PG_FUNCTION_ARGS)
     uint64 max_calls;
 
     /*
-     * OPTIONAL pointer to result slot
-     *
-     * This is obsolete and only present for backwards compatibility, viz,
-     * user-defined SRFs that use the deprecated TupleDescGetSlot().
-     */
-    TupleTableSlot *slot;
-
-    /*
      * OPTIONAL pointer to miscellaneous user-provided context information
      *
      * user_fctx is for use as a pointer to your own data to retain
@@ -3318,43 +3290,6 @@ make_array(PG_FUNCTION_ARGS)
      </para>
     </sect2>
 
-    <sect2 id="xfunc-transform-functions">
-     <title>Fonctions de transformation</title>
-
-     <para>
-      Certains appels de fonctions pourraient être simplifiés lors de la
-      planification en se basant sur les propriétés spécifiques de la fonction.
-      Par exemple, <literal>int4mul(n, 1)</literal> pourrait être simplifié par
-      <literal>n</literal>. Pour définir des tels optimisations spécifiques aux
-      fonctions, écrivez une <firstterm>fonction de transformation</firstterm>
-      et placez son OID dans le champ <structfield>protransform</structfield>
-      de l'entrée <structname>pg_proc</structname> de la fonction principale.
-      La fonction de transformation doit avoir la signature SQL suivante&nbsp;:
-      <literal>protransform(internal) RETURNS internal</literal>. L'argument,
-      actuellement un <type>FuncExpr *</type>, est un nœud vide représentant
-      un appel à la fonction principale. Si l'étude de la fonction de
-      transformation sur l'arbre d'expression prouve qu'un arbre d'expression
-      simplifié peut être substitué pour tous les appels réels effectués après,
-      elle construit et renvoie l'expression simplifiée. Sinon, elle renvoie
-      un pointeur <literal>NULL</literal> (<emphasis>pas</emphasis> un NULL
-      SQL).
-     </para>
-
-     <para>
-      Nous ne donnons aucune garantie que <productname>PostgreSQL</productname>
-      n'appelera jamais la fonction principale dans les cas que la fonction de
-      transformation pourrait simplifier. Assurez-vous d'une équivalent
-      rigoureuse entre l'expression simplifiée et un appel réel de la fonction
-      principale.
-     </para>
-
-     <para>
-      Actuellement, cette fonctionnalité n'est pas offerte aux utilisateurs via
-      le niveau SQL à cause des risques de sécurité. C'est donc uniquement utilisé
-      pour optimiser les fonctions internes.
-     </para>
-    </sect2>
-
     <sect2>
      <title>Mémoire partagée et LWLocks</title>
 
@@ -3475,3 +3410,124 @@ void RequestNamedLWLockTranche(const char *tranche_name, int num_lwlocks)
     </sect2>
 
    </sect1>
+
+  <sect1 id="xfunc-optimization">
+   <title>Function Optimization Information</title>
+
+  <indexterm zone="xfunc-optimization">
+   <primary>optimization information</primary>
+   <secondary>for functions</secondary>
+  </indexterm>
+
+   <para>
+    By default, a function is just a <quote>black box</quote> that the
+    database system knows very little about the behavior of.  However,
+    that means that queries using the function may be executed much less
+    efficiently than they could be.  It is possible to supply additional
+    knowledge that helps the planner optimize function calls.
+   </para>
+
+   <para>
+    Some basic facts can be supplied by declarative annotations provided in
+    the <xref linkend="sql-createfunction"/> command.  Most important of
+    these is the function's <link linkend="xfunc-volatility">volatility
+    category</link> (<literal>IMMUTABLE</literal>, <literal>STABLE</literal>,
+    or <literal>VOLATILE</literal>); one should always be careful to
+    specify this correctly when defining a function.
+    The parallel safety property (<literal>PARALLEL
+    UNSAFE</literal>, <literal>PARALLEL RESTRICTED</literal>, or
+    <literal>PARALLEL SAFE</literal>) must also be specified if you hope
+    to use the function in parallelized queries.
+    It can also be useful to specify the function's estimated execution
+    cost, and/or the number of rows a set-returning function is estimated
+    to return.  However, the declarative way of specifying those two
+    facts only allows specifying a constant value, which is often
+    inadequate.
+   </para>
+
+   <para>
+    It is also possible to attach a <firstterm>planner support
+    function</firstterm> to a SQL-callable function (called
+    its <firstterm>target function</firstterm>), and thereby provide
+    knowledge about the target function that is too complex to be
+    represented declaratively.  Planner support functions have to be
+    written in C (although their target functions might not be), so this is
+    an advanced feature that relatively few people will use.
+   </para>
+
+   <para>
+    A planner support function must have the SQL signature
+<programlisting>
+supportfn(internal) returns internal
+</programlisting>
+    It is attached to its target function by specifying
+    the <literal>SUPPORT</literal> clause when creating the target function.
+   </para>
+
+   <para>
+    The details of the API for planner support functions can be found in
+    file <filename>src/include/nodes/supportnodes.h</filename> in the
+    <productname>PostgreSQL</productname> source code.  Here we provide
+    just an overview of what planner support functions can do.
+    The set of possible requests to a support function is extensible,
+    so more things might be possible in future versions.
+   </para>
+
+   <para>
+    Some function calls can be simplified during planning based on
+    properties specific to the function.  For example,
+    <literal>int4mul(n, 1)</literal> could be simplified to
+    just <literal>n</literal>.  This type of transformation can be
+    performed by a planner support function, by having it implement
+    the <literal>SupportRequestSimplify</literal> request type.
+    The support function will be called for each instance of its target
+    function found in a query parse tree.  If it finds that the particular
+    call can be simplified into some other form, it can build and return a
+    parse tree representing that expression.  This will automatically work
+    for operators based on the function, too &mdash; in the example just
+    given, <literal>n * 1</literal> would also be simplified to
+    <literal>n</literal>.
+    (But note that this is just an example; this particular
+    optimization is not actually performed by
+    standard <productname>PostgreSQL</productname>.)
+    We make no guarantee that <productname>PostgreSQL</productname> will
+    never call the target function in cases that the support function could
+    simplify.  Ensure rigorous equivalence between the simplified
+    expression and an actual execution of the target function.
+   </para>
+
+   <para>
+    For target functions that return boolean, it is often useful to estimate
+    the fraction of rows that will be selected by a WHERE clause using that
+    function.  This can be done by a support function that implements
+    the <literal>SupportRequestSelectivity</literal> request type.
+   </para>
+
+   <para>
+    If the target function's runtime is highly dependent on its inputs,
+    it may be useful to provide a non-constant cost estimate for it.
+    This can be done by a support function that implements
+    the <literal>SupportRequestCost</literal> request type.
+   </para>
+
+   <para>
+    For target functions that return sets, it is often useful to provide
+    a non-constant estimate for the number of rows that will be returned.
+    This can be done by a support function that implements
+    the <literal>SupportRequestRows</literal> request type.
+   </para>
+
+   <para>
+    For target functions that return boolean, it may be possible to
+    convert a function call appearing in WHERE into an indexable operator
+    clause or clauses.  The converted clauses might be exactly equivalent
+    to the function's condition, or they could be somewhat weaker (that is,
+    they might accept some values that the function condition does not).
+    In the latter case the index condition is said to
+    be <firstterm>lossy</firstterm>; it can still be used to scan an index,
+    but the function call will have to be executed for each row returned by
+    the index to see if it really passes the WHERE condition or not.
+    To create such conditions, the support function must implement
+    the <literal>SupportRequestIndexCondition</literal> request type.
+   </para>
+  </sect1>
