@@ -128,15 +128,20 @@ Author: Peter Eisentraut <peter_e@gmx.net>
 -->
 
      <para>
-      Do not allow multiple different <link
+      Do not allow multiple conflicting <link
       linkend="runtime-config-wal-recovery-target"><varname>recovery_target</varname>*</link>
       specifications (Peter Eisentraut)
      </para>
 
      <para>
-      Previously, multiple different <varname>recovery_target</varname>*
-      variables could be specified, and the last one specified was
-      honored.  Now, only one can be specified, though the same one can
+      Specifically, only allow one of <xref
+      linkend="guc-recovery-target"/>, <xref
+      linkend="guc-recovery-target-lsn"/>,
+      <xref linkend="guc-recovery-target-name"/>,
+      <xref linkend="guc-recovery-target-time"/>, <xref
+      linkend="guc-recovery-target-xid"/>.  Previously, multiple different
+      instances of the variables above could be specified, and the last one
+      was honored.  Now, only one can be specified, though the same one can
       be specified multiple times and the last specification is honored.
      </para>
     </listitem>
@@ -153,7 +158,7 @@ Author: Peter Eisentraut <peter@eisentraut.org>
      </para>
 
      <para>
-      Specifically, <xref linkend="guc-recovery-target-time"/> now
+      Specifically, <xref linkend="guc-recovery-target-timeline"/> now
       defaults to <literal>latest</literal>.  Previously, it defaulted
       to <literal>current</literal>.
      </para>
@@ -208,18 +213,16 @@ Author: Andrew Gierth <rhodiumtoad@postgresql.org>
 -->
 
      <para>
-      Avoid performing unnecessary rounding of <link
-      linkend="datatype-float"><type>REAL</type></link> and <type>DOUBLE
-      PRECISION</type> values (Andrew Gierth)
+      Improve performance by changing the default number of trailing digits
+      output for <link linkend="datatype-float"><type>REAL</type></link>
+      and <type>DOUBLE PRECISION</type> values (Andrew Gierth)
      </para>
 
      <para>
-      This dramatically speeds up processing of floating-point
-      values but causes additional trailing digits to
-      potentially be displayed.  Users wishing to have output
-      that is rounded to match the previous behavior can set <link
-      linkend="guc-extra-float-digits"><literal>extra_float_digits=0</literal></link>,
-      which is no longer the default.
+      Previously, float values were output rounded to 6 or 15 decimals
+      by default.  Now, only the number of digits required to preserve
+      the exact binary value is output.  The previous  behavior can be
+      restored by setting <xref linkend="guc-extra-float-digits"/> to zero.
      </para>
     </listitem>
 
@@ -516,38 +519,25 @@ Author: Robert Haas <rhaas@postgresql.org>
 <!--
 Author: Michael Paquier <michael@paquier.xyz>
 2019-02-08 [3677a0b26] Add pg_partition_root to display top-most parent of a pa
--->
-
-       <para>
-        Add function <link
-        linkend="functions-info-partition"><function>pg_partition_root()</function></link>
-        to return top-most parent of a partition tree (Michaël Paquier)
-       </para>
-      </listitem>
-
-      <listitem>
-<!--
 Author: Alvaro Herrera <alvherre@alvh.no-ip.org>
 2019-03-04 [b96f6b194] pg_partition_ancestors
--->
-
-       <para>
-        Add function <link
-        linkend="functions-info-partition"><function>pg_partition_ancestors()</function></link>
-        to report all ancestors of a partition (Álvaro Herrera)
-       </para>
-      </listitem>
-
-      <listitem>
-<!--
 Author: Michael Paquier <michael@paquier.xyz>
 2018-10-30 [d5eec4eef] Add pg_partition_tree to display information about parti
 -->
 
        <para>
-        Add function <link
+        Add partition introspection functions (Michaël Paquier, Álvaro
+        Herrera, Amit Langote)
+       </para>
+
+       <para>
+        New function <link
+        linkend="functions-info-partition"><function>pg_partition_root()</function></link>
+        returns the top-most parent of a partition tree, <link
+        linkend="functions-info-partition"><function>pg_partition_ancestors()</function></link>
+        reports all ancestors of a partition, and <link
         linkend="functions-info-partition"><function>pg_partition_tree()</function></link>
-        to display information about partitions (Amit Langote)
+        displays information about partitions.
        </para>
       </listitem>
 
@@ -600,12 +590,9 @@ Author: Tom Lane <tgl@sss.pgh.pa.us>
 -->
 
        <para>
-        Improve handling of partition dependency (Tom Lane)
-       </para>
-
-       <para>
-        This prevents the creation of inconsistent partition hierarchies
-        in rare cases.
+        Fix bugs that could cause <command>ALTER TABLE DETACH
+        PARTITION</command> to not drop objects that should be dropped,
+        such as automatically-created child indexes (Tom Lane)
        </para>
       </listitem>
 
@@ -620,22 +607,64 @@ Author: Tom Lane <tgl@sss.pgh.pa.us>
 
       <listitem>
 <!--
-Author: Alexander Korotkov <akorotkov@postgresql.org>
-2018-07-28 [d2086b08b] Reduce path length for locking leaf B-tree pages during 
+Author: Peter Geoghegan <pg@bowt.ie>
+2019-03-20 [dd299df81] Make heap TID a tiebreaker nbtree index column.
+Author: Peter Geoghegan <pg@bowt.ie>
+2019-03-20 [fab250243] Consider secondary factors during nbtree splits.
 Author: Peter Geoghegan <pg@bowt.ie>
 2019-03-25 [f21668f32] Add "split after new tuple" nbtree optimization.
 -->
 
        <para>
-        Improve speed of btree index insertions (Peter Geoghegan,
-        Alexander Korotkov)
+        Improve performance and space utilization of btree indexes with
+        many duplicates (Peter Geoghegan, Heikki Linnakangas)
        </para>
 
        <para>
-        The new code improves the space-efficiency of page splits,
-        reduces locking overhead, and gives better performance for
-        <command>UPDATE</command>s and <command>DELETE</command>s on
-        indexes with many duplicates.
+        Previously, duplicate index entries were stored unordered within
+        their duplicate groups.  This caused overhead during index
+        inserts, wasted space due to excessive page splits, and reduced
+        <command>VACUUM</command>'s ability to recycle entire pages.
+        Duplicate index entries are now sorted in heap-storage order.
+       </para>
+
+       <para>
+        Indexes <application>pg_upgraded</application> from previous
+        releases will not have these benefits.
+       </para>
+      </listitem>
+
+      <listitem>
+<!--
+see commits above
+-->
+
+       <para>
+        Allow multi-column btree indexes to be smaller (Peter Geoghegan,
+        Heikki Linnakangas)
+       </para>
+
+       <para>
+        Internal pages and min/max leaf page indicators now only store
+        index keys until the change key, rather than all indexed keys.
+        This also improves the locality of index access.
+       </para>
+
+       <para>
+        Indexes <application>pg_upgraded</application> from previous
+        releases will not have these benefits.
+       </para>
+      </listitem>
+
+      <listitem>
+<!--
+Author: Alexander Korotkov <akorotkov@postgresql.org>
+2018-07-28 [d2086b08b] Reduce path length for locking leaf B-tree pages during 
+-->
+
+       <para>
+        Improve speed of btree index insertions by reducing locking
+        overhead (Alexander Korotkov)
        </para>
       </listitem>
 
@@ -689,25 +718,6 @@ Author: Tom Lane <tgl@sss.pgh.pa.us>
        <para>
         Allow index-only scans to be more efficient on indexes with many
         columns (Konstantin Knizhnik)
-       </para>
-      </listitem>
-
-      <listitem>
-<!--
-Author: Peter Geoghegan <pg@bowt.ie>
-2019-03-20 [dd299df81] Make heap TID a tiebreaker nbtree index column.
-Author: Peter Geoghegan <pg@bowt.ie>
-2019-03-20 [fab250243] Consider secondary factors during nbtree splits.
--->
-
-       <para>
-        Have new btree indexes sort duplicate index entries in heap-storage
-        order (Peter Geoghegan, Heikki Linnakangas)
-       </para>
-
-       <para>
-        Indexes <application>pg_upgraded</application> from previous
-        releases will not have this ordering.
        </para>
       </listitem>
 
@@ -826,38 +836,19 @@ Author: Tom Lane <tgl@sss.pgh.pa.us>
 -->
 
        <para>
-        Improve optimization of self-joins (Tom Lane)
+        Improve optimization of self-joins involving columns of type tid (Tom Lane)
        </para>
       </listitem>
 
       <listitem>
 <!--
 Author: Tom Lane <tgl@sss.pgh.pa.us>
-2019-02-09 [1fb57af92] Create the infrastructure for planner support functions.
+2019-03-25 [8edd0e794] Suppress Append and MergeAppend plan nodes that have a s
 -->
 
        <para>
-        Add support for <link linkend="sql-createfunction">function
-        selectivity</link> (Tom Lane)
-       </para>
-      </listitem>
-
-      <listitem>
-<!--
-Author: Tom Lane <tgl@sss.pgh.pa.us>
-2019-02-09 [a391ff3c3] Build out the planner support function infrastructure.
--->
-
-       <para>
-        Use the new support function capability to improve optimizer
-        estimates for some functions (Tom Lane)
-       </para>
-
-       <para>
-        Specifically, improve them for
-        <function>generate_series()</function>,
-        <function>unnest()</function>, and functions that return boolean
-        values.
+        Improve optimization of partition and <literal>UNION ALL</literal>
+        queries that have only a single child (David Rowley)
        </para>
       </listitem>
 
@@ -983,8 +974,6 @@ Author: Bruce Momjian <bruce@momjian.us>
 <!--
 Author: Tomas Vondra <tomas.vondra@postgresql.org>
 2019-01-29 [36a1281f8] Separate per-batch and per-tuple memory contexts in COPY
-Author: Heikki Linnakangas <heikki.linnakangas@iki.fi>
-2019-01-25 [9556aa01c] Use single-byte Boyer-Moore-Horspool search even with mu
 Author: Andres Freund <andres@anarazel.de>
 2019-01-26 [a9c35cf85] Change function call information to be variable length.
 -->
@@ -1518,11 +1507,12 @@ Author: Michael Paquier <michael@paquier.xyz>
 
        <para>
         Prevent <xref linkend="sql-truncate"/> from requesting a lock on
-        tables for which it lacks permission (Michaël Paquier)
+        tables for which the user lacks permission (Michaël Paquier)
        </para>
 
        <para>
-        This prevents unauthorized locking delays.
+        This prevents unauthorized locking, which could interfere with
+        user queries.
        </para>
       </listitem>
 
@@ -1539,7 +1529,8 @@ Author: Michael Paquier <michael@paquier.xyz>
        </para>
 
        <para>
-        This prevents unauthorized locking delays.
+        This prevents unauthorized locking, which could interfere with
+        user queries.
        </para>
       </listitem>
 
@@ -1822,7 +1813,7 @@ Author: Peter Eisentraut <peter@eisentraut.org>
 
       <para>
        Add an explicit value of <literal>current</literal> for <xref
-       linkend="guc-recovery-target-time"/> (Peter Eisentraut)
+       linkend="guc-recovery-target-timeline"/> (Peter Eisentraut)
       </para>
      </listitem>
 
@@ -1883,9 +1874,10 @@ Author: Peter Eisentraut <peter@eisentraut.org>
       </para>
 
       <para>
-       Rather than storing a value only at row creation time, generated
-       columns are also modified during updates, and can reference other
-       table columns.
+       The content of generated columns are computed from expressions
+       (including references to other columns in the same table)
+       rather than being specified by <command>INSERT</command> or
+       <command>UPDATE</command> commands.
       </para>
      </listitem>
 
@@ -2016,8 +2008,8 @@ Author: Robert Haas <rhaas@postgresql.org>
 -->
 
       <para>
-       Allow <command>VACUUM</command> to take optional boolean argument
-       specifications (Masahiko Sawada)
+       Allow <command>VACUUM</command> and <command>ANALYZE</command>
+       to take optional boolean argument specifications (Masahiko Sawada)
       </para>
      </listitem>
 
@@ -2062,7 +2054,7 @@ Author: Peter Eisentraut <peter@eisentraut.org>
 -->
 
       <para>
-       Allow modifications of system tables using <xref
+       Allow modifications of system table options using <xref
        linkend="sql-altertable"/> (Peter Eisentraut)
       </para>
 
@@ -2079,13 +2071,10 @@ Author: Tom Lane <tgl@sss.pgh.pa.us>
 -->
 
       <para>
-       Allow <type>RECORD</type> and <type>RECORD[]</type> to be specified
-       as a function <link linkend="sql-createfunction">return-value
-       record</link> (Elvis Pranskevichus)
-      </para>
-
-      <para>
-       DETAIL?
+       Allow <type>RECORD</type> and <type>RECORD[]</type> to be used
+       as column types in a query's column definition list for a <link
+       linkend="sql-createfunction">table function</link> that is declared
+       to return <type>RECORD</type> (Elvis Pranskevichus)
       </para>
      </listitem>
 
@@ -2126,8 +2115,8 @@ Author: Tom Lane <tgl@sss.pgh.pa.us>
       </para>
 
       <para>
-       This adds additional stemming languages to <link
-       linkend="textsearch">full text search</link>.
+       This adds stemming for Arabic, Indonesian, Irish, Lithuanian, Nepali,
+       and Tami to <link linkend="textsearch">full text search</link>.
       </para>
      </listitem>
 
@@ -2466,6 +2455,23 @@ Author: Peter Eisentraut <peter_e@gmx.net>
 
      <listitem>
 <!--
+Author: Michael Paquier <michael@paquier.xyz>
+2019-01-31 [00d1e88d3] Add - -min-xid-age and - -min-mxid-age options to vacuumdb
+-->
+
+      <para>
+       Allow <xref linkend="app-vacuumdb"/> to select tables for vacuum
+       based on their wraparound horizon (Nathan Bossart)
+      </para>
+
+      <para>
+       The options are <option>--min-xid-age</option> and
+       <option>--min-mxid-age</option>.
+      </para>
+     </listitem>
+
+     <listitem>
+<!--
 Author: Peter Eisentraut <peter@eisentraut.org>
 2019-04-01 [cc8d41511] Unified logging system for command-line programs
 -->
@@ -2596,8 +2602,8 @@ Author: Tom Lane <tgl@sss.pgh.pa.us>
 -->
 
        <para>
-        Compute behavior based on pgbench's <option>--rate</option>
-        value more precisely (Tom Lane)
+        Improve precision of pgbench's <option>--rate</option>
+        option (Tom Lane)
        </para>
       </listitem>
 
@@ -2626,28 +2632,11 @@ Author: Peter Eisentraut <peter_e@gmx.net>
      <listitem>
 <!--
 Author: Michael Paquier <michael@paquier.xyz>
-2019-01-31 [00d1e88d3] Add - -min-xid-age and - -min-mxid-age options to vacuumdb
--->
-
-      <para>
-       Allow <xref linkend="app-vacuumdb"/> to select tables for vacuum
-       based on their wraparound horizon (Nathan Bossart)
-      </para>
-
-      <para>
-       The options are <option>--min-xid-age</option> and
-       <option>--min-mxid-age</option>.
-      </para>
-     </listitem>
-
-     <listitem>
-<!--
-Author: Michael Paquier <michael@paquier.xyz>
 2019-01-08 [354e95d1f] Add - -disable-page-skipping and - -skip-locked to vacuumd
 -->
 
       <para>
-       Add vacuumdb to disable waiting for locks or skipping all-visible
+       Allow vacuumdb to disable waiting for locks or skipping all-visible
        pages (Nathan Bossart)
       </para>
 
@@ -2728,24 +2717,6 @@ Author: Tom Lane <tgl@sss.pgh.pa.us>
 
      <listitem>
 <!--
-Author: Tom Lane <tgl@sss.pgh.pa.us>
-2018-09-13 [23bd3cec6] Attempt to identify system timezone by reading /etc/loca
--->
-
-      <para>
-       Have <xref linkend="app-initdb"/> determine the local timezone
-       from the <filename>/etc/localtime</filename> symbolic link,
-       if it exists (Tom Lane)
-      </para>
-
-      <para>
-       This is more likely to produce the desired time zone string when
-       multiple identical time zones exist.
-      </para>
-     </listitem>
-
-     <listitem>
-<!--
 Author: Michael Paquier <michael@paquier.xyz>
 2019-03-23 [e0090c869] Add option -N/- -no-sync to pg_checksums
 -->
@@ -2817,11 +2788,12 @@ Author: Thomas Munro <tmunro@postgresql.org>
 -->
 
        <para>
-        Allow restoration of an <command>INSERT</command>-statement dump
-        to skip rows which would cause conflicts (Surafel Temesgen)
+        Allow pg_dump to emit <command>INSERT ... ON CONFLICT DO
+        NOTHING</command> (Surafel Temesgen)
        </para>
 
        <para>
+        This avoids conflict failures during restore.
         The <application>pg_dump</application> option is
         <option>--on-conflict-do-nothing</option>.
        </para>
@@ -2876,6 +2848,8 @@ Author: Andrew Dunstan <andrew@dunslane.net>
      <listitem>
 <!--
 Author: Andres Freund <andres@anarazel.de>
+2018-11-16 [4da597edf] Make TupleTableSlots extensible, finish split of
+Author: Andres Freund <andres@anarazel.de>
 2019-03-06 [8586bf7ed] tableam: introduce table AM infrastructure.
 Author: Andres Freund <andres@anarazel.de>
 2019-03-06 [3b925e905] tableam: Add pg_dump support.
@@ -2891,14 +2865,44 @@ Author: Andres Freund <andres@anarazel.de>
 2019-03-31 [73c954d24] tableam: sample scan.
 Author: Andres Freund <andres@anarazel.de>
 2019-03-31 [bfbcad478] tableam: bitmap table scan.
+existin
 -->
 
       <para>
        Add <xref linkend="sql-create-access-method"/> command to create
-       new table types (Haribabu Kommi, Andres Freund, Álvaro Herrera,
-       Dimitri Dolgov)
+       new table types (Andres Freund, Haribabu Kommi, Álvaro Herrera,
+       Alexander Korotkov, Dmitry Dolgov)
+      </para>
+
+      <para>
+       This enables the development of new <link linkend="tableam">table
+       access methods</link>, which can optimize storage for different
+       use-cases.  The existing <literal>heap</literal> access method
+       remains the default.
       </para>
      </listitem>
+
+      <listitem>
+<!--
+Author: Tom Lane <tgl@sss.pgh.pa.us>
+2019-02-09 [1fb57af92] Create the infrastructure for planner support functions.
+Author: Tom Lane <tgl@sss.pgh.pa.us>
+2019-02-09 [a391ff3c3] Build out the planner support function infrastructure.
+-->
+
+       <para>
+        Add support function capability to improve optimizer estimates,
+        inlining, and indexing for functions (Tom Lane)
+       </para>
+
+       <para>
+        This allows extensions to create planner support functions that
+        can provide function-specific selectivity, cost, and row-count
+        estimates that can depend on the function's arguments.  Support
+        functions can also supply simplified representations and index
+        conditions, greatly expanding optimization possibilities.
+       </para>
+      </listitem>
 
      <listitem>
 <!--
