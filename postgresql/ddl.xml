@@ -2849,9 +2849,10 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
       </listitem>
     </itemizedlist>
 
-    Ces déficiences seront probablement corrigées dans une version future,
-    mais, en attendant, il est obligatoire de réfléchir consciencieusement à l'utilité
-    de l'héritage pour une application donnée.
+    Certaines fonctionnalités non implémentées pour les hiérarchies d'héritage
+    sont disponibles pour le partitionnement déclaratif. Il est de ce fait
+    nécessaire de réfléchir consciencieusement à l'utilité de l'héritage pour
+    une application donnée.
   </para>
 
    </sect2>
@@ -3373,6 +3374,47 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
      EXCLUSIVE</literal> sur la table parente. Vous pouvez alors supprimer
      la contrainte après que <command>ATTACH PARTITION</command> soit fini, car
      elle n'est plus nécessaire.
+    </para>
+
+    <para>
+     Comme expliqué ci-dessus, il est possible de créer des index sur les
+     tables partitionnées, et ils seront automatiquement appliqués à la
+     hiérarchie complète. Ceci est très pratique car, non seulement les
+     partitions existantes seront indexées, mais aussi toute nouvelle
+     partition le sera. La seule limitation est qu'il n'est pas possible
+     d'utiliser la clause <literal>CONCURRENTLY</literal> lors de la création
+     d'un tel index partitionné. Pour éviter de longues périodes de verrous,
+     il est possible d'utiliser <command>CREATE INDEX ON ONLY</command> sur la
+     table partitionnée&nbsp;; un tel index est marqué invalide et les
+     partitions l'obtiennent pas automatiquement l'index. Les index sur les
+     partitions peuvent être créés séparément en utilisant
+     <literal>CONCURRENTLY</literal>, puis être
+     <firstterm>attachés</firstterm> à l'index sur le parent en utilisant
+     <command>ALTER INDEX .. ATTACH PARTITION</command>. Une fois que les
+     index des partitions sont attachés à l'index parent, l'index parent est
+     marqué valide automatiquement. Par exemple&nbsp;:
+<programlisting>
+CREATE INDEX measurement_usls_idx ON ONLY measurement (unitsales);
+
+CREATE INDEX measurement_usls_200602_idx
+    ON measurement_y2006m02 (unitsales);
+ALTER INDEX measurement_usls_idx
+    ATTACH PARTITION measurement_usls_200602_idx;
+...
+</programlisting>
+
+     Cette technique peut aussi être utilisée avec les contraintes
+     <literal>UNIQUE</literal> et <literal>PRIMARY KEY</literal>&nbsp;; les
+     index sont créés implicitement quand la contrainte est créer. Par
+     exemple&nbsp;:
+<programlisting>
+ALTER TABLE ONLY measurement ADD UNIQUE (city_id, logdate);
+
+ALTER TABLE measurement_y2006m02 ADD UNIQUE (city_id, logdate);
+ALTER INDEX measurement_city_id_logdate_key
+    ATTACH PARTITION measurement_y2006m02_city_id_logdate_key;
+...
+</programlisting>
     </para>
    </sect3>
 
@@ -4092,6 +4134,92 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
   </itemizedlist>
  </para>
 </sect2>
+  
+  <sect2 id="ddl-partitioning-declarative-best-practices">
+   <title>Bonnes pratiques pour le partitionnement déclaratif</title>
+
+   <para>
+    Le choix de la méthode de partitionnement d'une table doit être fait avec
+    beaucoup d'attention car les performances de l'optimisation des requêtes
+    et leur exécution peuvent être fortement affectées négativement par un
+    mauvais design.
+   </para>
+
+   <para>
+    Une des décisions les plus critiques au niveau du design est le choix de
+    la clé (ou des clés) de partitionnement. Souvent, le meilleur choix
+    revient à partitionner par la (ou les) colonne(s) qui apparaissent le plus
+    fréquemment dans les clauses <literal>WHERE</literal> des requêtes en
+    cours d'exécution sur la table partitionnée. Les éléments de la clause
+    <literal>WHERE</literal> qui correspondent ou sont compatibles avec la clé
+    de partitionnement peuvent être utilisés pour ignorer les partitions
+    inutiles. La suppression des données inutiles est aussi un facteur à
+    considérer lors de la conception de votre stratégie de partitionnement.
+    Une partition entière peut être détachée rapidement, donc il peut être
+    bénéfique de concevoir la stratégie de partitionnement d'une telle façon
+    que tout les données à supprimer d'un coup soient concentrées sur une
+    seule partition.
+   </para>
+
+   <para>
+    Choisir le nombre cible de partitions pour la table est aussi une décision
+    critique à prendre. Ne pas avoir suffisamment de partitions pourrait avoir
+    pour conséquence des index trop gros, et un emplacement des données pauvre
+    qui résulterait en un ratio bas de lecture en cache. Néanmoins, diviser la
+    table en trop de partitions pourrait aussi causer des problèmes. Trop de
+    partitions pourrait signifier une optimisation plus longue des requêtes et
+    une consommation mémoire plus importante durant l'optimisation et
+    l'exécution. Lors de la conception du partitionnement de votre table, il
+    est aussi important de prendre compte les changements pouvant survenir
+    dans le futur. Par exemple, si vous choisissez d'avoir une partition par
+    client et que vous avez un petit nombre de gros clients, il est important
+    de réfléchir aux implications si, dans quelques années, vous vous trouvez
+    avec un grand nombre de petits clients. Dans ce cas, il serait mieux de
+    choisir de partitionner par <literal>RANGE</literal> et de choisir un
+    nombre raisonnable de partitions, chacune contenant un nombre fixe de
+    clients, plutôt que d'essayer de partitionner par <literal>LIST</literal>
+    en espérant que le nombre de clients ne dépasse pas ce qui est possible au
+    niveau du partitionnement des données.
+   </para>
+
+   <para>
+    Le sous-partitionnement peut aussi être utile pour diviser encore plus
+    les partitions pour lesquelles on s'attend à ce qu'elles deviennent bien
+    plus grosses que les autres partitions. Un sous-partitionnement excessif
+    peut facilement amener à un grand nombre de partitions et peut causer les
+    problèmes mentionnés dans le paragraphe précédent.
+   </para>
+
+   <para>
+    Il est aussi important de considérer la surcharge du partitionnement lors
+    de l'optimisation et de l'exécution. L'optimiseur est généralement capble
+    de gérer les hiérarchies de partitions qui montent à quelques centaines de
+    partitions. Les durées d'optimisation deviennent plus longues et la
+    consommation de mémoire devient plus importante au fur et à mesure de
+    l'ajout de partitions. Ceci est tout particulièrement vrai pour les
+    commandes <command>UPDATE</command> et <command>DELETE</command>. Une
+    autre raison de se soucier d'un grand nombre de partitions est que la
+    consommation mémoire du serveur pourrait grossir de façon significative
+    sur une période de temps, et tout spécialement si beaucoup de sessions
+    touchent un grand nombre de partitions. Ceci est dû au chargement des
+    métadonnées nécessaires pour chaque partition en mémoire locale.
+   </para>
+
+   <para>
+    Avec une charge de type entrepôt de données, il peut être sensé d'utiliser
+    un plus grand nombre de partitions que pour une charge de type
+    <acronym>OLTP</acronym>. En général, dans les entrepôts de données, le
+    temps d'optimisation d'une requête est peu importante parce que la
+    majorité du temps de traitement est passée sur l'exécution de la requête.
+    Avec l'une de ces deux types de charges, il est important de prendre les
+    bonnes décisions dès le début, car le re-partitionnement de grosses
+    quantités de données peut être très lent. Les simulations de la charge
+    attendue sont souvent bénéfiques pour optimiser la stratégie de
+    partitionnement. Ne jamais supposer qu'un plus grand nombre de partitions
+    est toujours mieux qu'un petit nombre de partitions, et vice-versa.
+   </para>
+  </sect2>
+
 </sect1>
 
 <sect1 id="ddl-foreign-data">
