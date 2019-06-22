@@ -239,6 +239,130 @@ DROP TABLE produits;</programlisting>
   </para>
  </sect1>
 
+ <sect1 id="ddl-generated-columns">
+  <title>Colonnes générées</title>
+
+  <indexterm zone="ddl-generated-columns">
+   <primary>generated column</primary>
+  </indexterm>
+
+  <para>
+   Une colonne générée est une colonne spéciale, toujours calculée à partir
+   d'autres colonnes. Elle est donc aux colonnes ce qu'une vue est aux tables.
+   Il y a deux types de colonnes générées&nbsp;: stockée et virtuelle.
+   Une colonne générée stockée est calculée quand elle est écrite (insérée ou mise à jour)
+   et occupe de l'espace de stockage comme si elle était une colonne normale.
+   Une colonne virtuelle générée n'occupe pas d'espace et est calculée à la lecture.
+   Une colonne générée virtuelle est donc équivalente à une vue, et une colonne
+   générée stockée à une vue matérialisée (sauf qu'elle sera toujours mise à jour
+   automatiquement).
+   PostgreSQL n'implémente actuellement que les colonnes générées stockées.
+  </para>
+
+  <para>
+   Pour créer une colonne générée, utilisez la clause
+   <literal>GENERATED ALWAYS AS</literal> de la commande
+    <command>CREATE TABLE</command>, par exemple&nbsp;:
+<programlisting>
+CREATE TABLE people (
+    ...,
+    height_cm numeric,
+    height_in numeric <emphasis>GENERATED ALWAYS AS (height_cm / 2.54) STORED</emphasis>
+);
+</programlisting>
+   Le mot-clé <literal>STORED</literal> doit être spécifié pour choisir le
+   type de colonne générée. Voir <xref linkend="sql-createtable"/> pour plus de
+   détails.
+  </para>
+
+  <para>
+   On ne peut écrire directement dans une colonne générée.
+   Une valeur ne peut pas y être affectée dans les commandes
+   <command>INSERT</command> ou <command>UPDATE</command>, mais le
+   mot-clé <literal>DEFAULT</literal> peut l'être.
+  </para>
+
+  <para>
+   Voyons les différences entre une colonne avec une valeur par défaut et
+   une colonne générée. La colonne par défaut est calculée une seule fois
+   à la première insertion de la ligne si aucune autre valeur n'est fournie&nbsp;;
+   une colonne générée est mise à jour à chaque fois que la ligne change et on
+   ne peut y déroger. Une valeur par défaut d'une colonne ne peut se référer à d'autres
+   colonnes de la table&nbsp;; mais c'est ce que fait normalement une
+   expression générée. Une valeur par défaut d'une colonne peut utiliser des fonctions
+   volatiles, par exemple <literal>random()</literal> ou des fonctions se
+   référant au temps actuel&nbsp;; ce n'est pas permis pour les colonnes
+   générées.
+  </para>
+
+  <para>
+   Il existe plusieurs restrictions dans la définition des colonnes générées
+   et des tables qui les utilisent&nbsp;:
+
+   <itemizedlist>
+    <listitem>
+     <para>
+      L'expression pour générer les valeurs ne peut utiliser que des fonctions
+      immutables, ne peut utiliser de sous-requêtes, ni référencer d'aucune
+      manière quoi que ce soit hors de la ligne en cours.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Une expression ne peut référencer une autre colonne générée.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Une expression ne peut référencer une colonne système, sauf
+      <varname>tableoid</varname>.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Une colonne générée ne peut avoir une valeur par défaut ou être
+      définie comme colonne identité.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Une colonne générée ne peut faire partie d'une clé de partitionnement.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Les tables distantes peuvent porter des colonnes générées.
+      Voir <xref linkend="sql-createforeigntable"/> pour les détails.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+
+  <para>
+   D'autres considérations s'appliquent à l'utilisation des colonnes générées.
+   <itemizedlist>
+    <listitem>
+     <para>
+      Les colonnes générées maintiennent les privilèges d'accès séparément
+      des colonnes sur lesquelles elles sont basées. On peut donc s'arranger
+      pour qu'un rôle défini puisse lire une colonne générée mais pas la
+      colonne de base sous-jacente.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Conceptuellement, les colonnes générées sont mises à jour après le
+      déclenchement des triggers <literal>BEFORE</literal>.
+      Les changements dans les colonnes de base au sein d'un trigger
+      <literal>BEFORE</literal> seront donc répercutés dans les colonnes générées.
+      Mais à l'inverse il n'est pas permis d'accéder aux colonnes générées
+      dans les triggers <literal>BEFORE</literal>.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+ </sect1>
+
  <sect1 id="ddl-constraints">
   <title>Contraintes</title>
 
@@ -407,6 +531,65 @@ DROP TABLE produits;</programlisting>
     contient pas de valeurs NULL, la contrainte NOT NULL décrite
     dans la section suivante peut être utilisée.
    </para>
+
+   <note>
+    <para>
+     <productname>PostgreSQL</productname> ne supporte pas les contraintes
+     <literal>CHECK</literal> référençant des données situées ailleurs
+     que dans la ligne vérifiée, nouvelle ou mise à jour.
+     Bien qu'une contrainte <literal>CHECK</literal> violant cette règle
+     puisse sembler fonctionner dans des tests simples, on ne peut garantir
+     que la base de données n'atteindra pas un état dans lequel la
+     condition de contrainte serait fausse (suite à des changements sur
+     d'autres lignes impliquées). Cela entraînerait l'échec d'une restauration
+     de sauvegarde logique. Elle échouerait même si l'état de la
+     base entière était cohérent avec la contrainte, à cause des lignes non
+     encore chargées dans un ordre qui satisferait la contrainte. Si
+     possible, utilisez les contraintes <literal>UNIQUE</literal>,
+     <literal>EXCLUDE</literal> ou <literal>FOREIGN KEY</literal>
+     pour exprimer des restrictions entre lignes ou entre tables.
+    </para>
+
+    <para>
+     Si vous recherchez une vérification uniquement à l'insertion de la ligne
+     par rapport à d'autres lignes, et non une garantie de cohérence
+     à maintenir en permanence, vous pouvez utiliser un
+     <link linkend="triggers">trigger</link> personnalisé. (Cette approche
+     évite le problème de la restauration logique car
+     <application>pg_dump</application> ne réinstalle pas les triggers
+     avant d'avoir fini de recharger les données&nbsp;; ainsi la vérification
+     ne sera pas appliquée à la restauration.)
+    </para>
+   </note>
+
+   <note>
+    <para>
+     <productname>PostgreSQL</productname>
+     suppose que les conditions des contraintes <literal>CHECK</literal>
+     sont immutables, c'est-à-dire qu'elles donneront toujours le même
+     résultat pour la même ligne en entrée. Ainsi on s'autorise à n'examiner
+     les contraintes <literal>CHECK</literal> qu'à l'insertion ou la
+     suppression des lignes, et pas à d'autres moments. (L'avertissement
+     ci-dessus sur la référence aux données d'autres tables n'est qu'un cas
+     particulier de cette restriction.)
+    </para>
+
+    <para>
+     Un exemple d'une manière courante de passer outre cette supposition
+     est de faire référence à une fonction utilisateur dans l'expression
+     d'un <literal>CHECK</literal>, puis de changer le comportement
+     de cette fonction.
+     <productname>PostgreSQL</productname> ne l'interdit pas, mais il
+     ne remarquera pas qu'il y a des lignes dans la table qui violent à présent la
+     contrainte <literal>CHECK</literal>. Cela provoquerait l'échec d'une
+     sauvegarde/restauration logique subséquente.
+     La manière recommandée pour traiter un tel changement est de
+     supprimer la contrainte (avec <command>ALTER TABLE</command>),
+     d'ajuster la définition de la fonction et de ré-appliquer la
+     contrainte, la revalidant ainsi sur toutes les lignes de la
+     table.
+    </para>
+   </note>
   </sect2>
 
   <sect2>
@@ -937,24 +1120,6 @@ CREATE TABLE cercles (
 
      <variablelist>
       <varlistentry>
-       <term><structfield>oid</structfield></term>
-       <listitem>
-        <para>
-         <indexterm>
-          <primary>OID</primary>
-          <secondary>colonne</secondary>
-         </indexterm>
-         L'identifiant objet (<foreignphrase>object ID</foreignphrase>) d'une
-         ligne. Cette colonne n'est présente que si la table a été créée en précisant
-         <literal>WITH OIDS</literal> ou si la variable de configuration
-         <xref linkend="guc-default-with-oids"/> était activée à ce moment-là.
-         Cette colonne est de type oid (même nom que la colonne)&nbsp;; voir la
-         <xref linkend="datatype-oid"/> pour obtenir plus d'informations sur ce type.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
        <term><structfield>tableoid</structfield></term>
        <listitem>
         <indexterm>
@@ -962,11 +1127,11 @@ CREATE TABLE cercles (
         </indexterm>
 
         <para>
-         L' OID de la table contenant la ligne. Cette colonne est
+         L'OID de la table contenant la ligne. Cette colonne est
          particulièrement utile pour les requêtes qui utilisent des hiérarchies
          d'héritage (voir <xref linkend="ddl-inherit"/>). Il est, en effet,
          difficile, en son absence, de savoir de quelle table provient une ligne.
-         <structfield>tableoid</structfield> 
+         <structfield>tableoid</structfield>
          peut être joint à la colonne <structfield>oid</structfield> de
          <structname>pg_class</structname> pour obtenir le nom de la table.
         </para>
@@ -1048,53 +1213,12 @@ CREATE TABLE cercles (
          <structfield>ctid</structfield>  d'une ligne change si
          la ligne est actualisée ou déplacée par un <command>VACUUM FULL</command>.
          <structfield>ctid</structfield> est donc inutilisable comme
-         identifiant de ligne sur le long terme. Il est préférable d'utiliser l'OID,
-         ou, mieux encore, un numéro
-         de série utilisateur, pour identifier les lignes logiques.
+         identifiant de ligne sur le long terme. Il est préférable d'utiliser
+         la clé primaire pour identifier les lignes logiques.
         </para>
        </listitem>
       </varlistentry>
      </variablelist>
-
-     <para>
-      Les OID sont des nombres de 32 bits et sont attribués à partir d'un
-      compteur unique sur le cluster. Dans une base de données volumineuse ou
-      âgée, il est possible que le compteur boucle. Il est de ce fait peu
-      pertinent de considérer que les OID puissent être uniques&nbsp;; pour
-      identifier les lignes d'une table, il est fortement recommandé d'utiliser
-      un générateur de séquence. Néanmoins, les OID peuvent également être
-      utilisés sous réserve que quelques précautions soient prises&nbsp;:
-
-      <itemizedlist>
-       <listitem>
-        <para>
-         une contrainte d'unicité doit être ajoutée sur la colonne OID de chaque
-         table dont l'OID est utilisé pour identifier les lignes.
-         Dans ce cas (ou dans celui d'un index d'unicité), le système
-         n'engendre pas d'OID qui puisse correspondre à celui d'une ligne
-         déjà présente. Cela n'est évidemment possible que si la table contient
-         moins de 2<superscript>32</superscript> (4 milliards) lignes&nbsp;; en pratique, la
-         taille de la table a tout intérêt à être bien plus petite que ça, dans
-         un souci de performance&nbsp;;
-        </para>
-       </listitem>
-       <listitem>
-        <para>
-         l'unicité intertables des OID ne doit jamais être envisagée&nbsp;;
-         pour obtenir un identifiant unique sur l'ensemble de la base, il faut
-         utiliser la combinaison du <structfield>tableoid</structfield> et de l'OID de
-         ligne&nbsp;;
-        </para>
-       </listitem>
-       <listitem>
-        <para>
-         les tables en question doivent être créées avec l'option
-         <literal>WITH OIDS</literal>. Depuis <productname>PostgreSQL</productname> 8.1,
-         <literal>WITHOUT OIDS</literal> est l'option par défaut.
-        </para>
-       </listitem>
-      </itemizedlist>
-     </para>
 
      <para>
       Les identifiants de transaction sont aussi des nombres de 32 bits. Dans
@@ -1404,6 +1528,10 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
    <primary>REVOKE</primary>
   </indexterm>
 
+  <indexterm zone="ddl-priv">
+   <primary>ACL</primary>
+  </indexterm>
+
   <para>
    Quand un objet est créé, il se voit affecter un propriétaire. Le propriétaire
    est normalement le rôle qui a exécuté la requête de création. Pour la
@@ -1419,12 +1547,10 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
    <literal>TRUNCATE</literal>, <literal>REFERENCES</literal>, <literal>TRIGGER</literal>,
    <literal>CREATE</literal>, <literal>CONNECT</literal>, <literal>TEMPORARY</literal>,
    <literal>EXECUTE</literal> et <literal>USAGE</literal>.
-   Les droits applicables à un objet particulier varient
-   selon le type d'objet (table, fonction...). La page de référence
-   <xref linkend="sql-grant"/> fournit une
-   information complète sur les différents types de droits gérés par
-   <productname>PostgreSQL</productname>.  La section et
-   les chapitres suivants présentent l'utilisation de ces droits.
+   Les droits applicables à un objet particulier varient selon le type d'objet
+   (table, fonction...). Plus de détails sur la signification de ces droits
+   sont donnés ci-dessous. La section et les chapitres suivants présentent
+   l'utilisation de ces droits.
   </para>
 
   <para>
@@ -1433,15 +1559,18 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
 
   <para>
    Un objet peut se voir affecter un nouveau propriétaire avec la commande
-   <command>ALTER</command> correspondant à l'objet, par exemple <xref
-   linkend="sql-altertable"/>. Les superutilisateurs peuvent toujours le
-   faire. Les rôles ordinaires peuvent seulement le faire s'ils sont le
+   <command>ALTER</command> correspondant à l'objet, par exemple
+<programlisting>
+ALTER TABLE <replaceable>nom_table</replaceable> OWNER TO <replaceable>nouveau_propriétaire</replaceable>;
+</programlisting>
+   Les superutilisateurs peuvent toujours le
+   faire. Les rôles ordinaires ne peuvent le faire que s'ils sont le
    propriétaire actuel de l'objet (ou un membre du rôle propriétaire) et un
    membre du nouveau rôle propriétaire.
   </para>
 
   <para>
-   La commande <command>GRANT</command> est
+   La commande <xref linkend="sql-grant"/> est
    utilisée pour accorder des privilèges.
    Par exemple, si <literal>joe</literal>
    est un rôle et <literal>comptes</literal> une table, le
@@ -1462,7 +1591,7 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
 
   <para>
    Pour révoquer un privilège, on utilise la commande bien nommée
-   <command>REVOKE</command>, comme dans l'exemple ci-dessous&nbsp;:
+   <xref linkend="sql-revoke"/>, comme dans l'exemple ci-dessous&nbsp;:
 <programlisting>REVOKE ALL ON comptes FROM PUBLIC;</programlisting>
    Les privilèges spéciaux du propriétaire de l'objet (c'est-à-dire le droit
    d'exécuter <command>DROP</command>, <command>GRANT</command>,
@@ -1484,6 +1613,524 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
    Pour les détails, voir les pages de références
    <xref linkend="sql-grant"/> et
    <xref linkend="sql-revoke"/>.
+  </para>
+
+  <para>
+   Les privilèges disponibles sont&nbsp;:
+
+   <variablelist>
+    <varlistentry>
+     <term><literal>SELECT</literal></term>
+     <listitem>
+      <para>
+       Autorise <xref linkend="sql-select"/> de n'importe quelle colonne,
+       ou colonnes, désignée(s) d'une table, vue, vue matérialisée ou
+       tout autre objet utilisable comme une table.
+       Permet aussi l'utilisation de <xref linkend="sql-copy"/> TO.
+       Ce privilège est aussi nécessaire pour référencer les valeurs
+       actuelles d'une colonne dans <xref linkend="sql-update"/> ou
+       <xref linkend="sql-delete"/>.
+       Pour les séquences, ce privilège permet aussi d'utiliser la
+       fonction <function>currval</function>.
+       Pour les large objects, ce privilège permet de lire l'objet.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>INSERT</literal></term>
+     <listitem>
+      <para>
+       Permet l'<xref linkend="sql-insert"/> d'une nouvelle ligne dans
+       une table, vue, etc. Peut être accordé sur des colonnes spécifiques,
+       auquel cas seules ces colonnes pourront être affectées dans
+       l'ordre <command>INSERT</command> (les autres commandes recevront
+       alors les valeurs par défaut).
+       Permet aussi d'utiliser <xref linkend="sql-copy"/> FROM.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>UPDATE</literal></term>
+     <listitem>
+      <para>
+       Autorise l'<xref linkend="sql-update"/> de n'importe quelle colonne,
+       ou colonnes, désignée(s) d'une table, vue, etc.
+       (En pratique, toute commande <command>UPDATE</command> non triviale
+       requerra aussi le privilège <literal>SELECT</literal> puisqu'il faut
+       se référer aux colonnes de la table pour déterminer quelles lignes
+       mettre à jour et/ou calculer les nouvelles valeurs des colonnes.)
+       <literal>SELECT ... FOR UPDATE</literal>
+       et <literal>SELECT ... FOR SHARE</literal> requièrent aussi ce
+       privilège sur au moins une colonne, en plus du privilège <literal>SELECT</literal>.
+       Pour les séquences, ce privilège autorise l'usage des fonctions
+       <function>nextval</function> et <function>setval</function>.
+       Pour les large objects, ce privilège permet d'écrire dans l'objet
+       ou de le tronquer.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>DELETE</literal></term>
+     <listitem>
+      <para>
+       Permet le <xref linkend="sql-delete"/> d'une ligne dans une table, vue,
+       etc. (En pratique, toute commande <command>DELETE</command> non
+       triviale requerra aussi le privilège <literal>SELECT</literal>,
+       puisqu'il faut lire les colonnes de la table pour déterminer quelles
+       lignes supprimer.)
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>TRUNCATE</literal></term>
+     <listitem>
+      <para>
+       Permet <xref linkend="sql-truncate"/> sur une table, vue, etc.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>REFERENCES</literal></term>
+     <listitem>
+      <para>
+       Permet la création de clés étrangères référençant une table, ou des
+       colonnes spécifiques d'une table.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>TRIGGER</literal></term>
+     <listitem>
+      <para>
+       Permet la création d'un trigger sur une table, vue, etc.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>CREATE</literal></term>
+     <listitem>
+      <para>
+       Pour les bases de données, autorise la création de nouveaux schémas
+       et publications dans la base.
+      </para>
+      <para>
+       Pour les schémas, autorise la création de nouveaux objets dans le
+       schéma.
+       Pour renommer un objet existant, vous devez posséder l'objet
+       <emphasis>et</emphasis> posséder ce privilège pour le schéma de
+       l'objet.
+      </para>
+      <para>
+       Pour les tablespaces, permet de créer des tables, index et fichiers
+       temporaires dans le tablespace, et de créer des bases de données
+       ayant ce tablespace comme tablespace par défaut. (Notez que révoquer
+       ce privilège ne modifiera pas l'emplacement des objets.)
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>CONNECT</literal></term>
+     <listitem>
+      <para>
+       Permet au bénéficiaire de ce privilège de se connecter à la
+       base de données. Ce privilège est vérifié au démarrage de la connexion
+       (en plus de la vérification de toute restriction imposée par
+       <filename>pg_hba.conf</filename>).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>TEMPORARY</literal></term>
+     <listitem>
+      <para>
+       Permet aux tables temporaires d'être créées dans la base de données.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>EXECUTE</literal></term>
+     <listitem>
+      <para>
+       Permet d'appeler une fonction ou procédure, y compris en utilisant des
+       opérateurs implémentés par-dessus la fonction. C'est le seul type de
+       privilège applicable aux fonctions et procédures.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>USAGE</literal></term>
+     <listitem>
+      <para>
+       Pour les langages procéduraux, permet d'utiliser le langage pour la
+       création de fonctions. C'est le seul type de privilège applicable
+       aux langages procéduraux.
+      </para>
+      <para>
+       Pour les schémas, permet l'accès aux objets contenus dans le schéma
+       (à supposer que les privilèges d'accès requis par les objets soient aussi
+       respectés).
+       Cela autorise essentiellement le bénéficiaire à <quote>rechercher</quote>
+       des objets dans le schéma. Sans cette permission, il reste possible de
+       voir les noms des objets, par exemple en consultant les catalogues
+       système.
+       Après révocation de ce privilège, les sessions existantes peuvent avoir
+       des ordres ayant précédemment effectué cette recherche, donc ce n'est pas
+       une manière totalement sûre d'interdire l'accès à un objet.
+      </para>
+      <para>
+       Pour les séquences, permet l'utilisation des fonctions
+       <function>currval</function> et <function>nextval</function>.
+      </para>
+      <para>
+       Pour les types et domaines, permet l'utilisation du type ou domaine
+       dans la création de tables, fonctions et autres objets. (Notez que ce
+       privilège ne contrôle pas l'<quote>utilisation</quote> de ce type,
+       comme les valeurs apparaissant dans les requêtes. Il se limite à
+       interdire la création d'objets qui dépendent de ce type. Le but
+       principal de ce privilège est de contrôler quels utilisateurs
+       peuvent créer des dépendances envers un type, qui pourraient
+       empêcher le propriétaire de modifier le type plus tard.)
+      </para>
+      <para>
+       Pour les foreign data wrappers, permet la création de nouveaux
+       serveurs avec ce wrapper.
+      </para>
+      <para>
+       Pour les serveurs distants (<foreignphrase>foreign servers</foreignphrase>),
+       permet la création de tables distantes utilisant le serveur.
+       Les bénéficiaires du privilège peuvent créer, modifier, supprimer leurs
+       propres correspondances d'utilisateurs (<foreignphrase>user mappings</foreignphrase>)
+       associées à ce serveur.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+
+   Les privilèges requis par d'autres commandes sont listés sur la page de
+   référence de la commande.
+  </para>
+
+  <para>
+   Par défaut, PostgreSQL accorde des privilèges sur certains types d'objets
+   à <literal>PUBLIC</literal> dès la création des objets.
+   Aucun privilège n'est accordé à <literal>PUBLIC</literal> par défaut sur les
+   tables,
+   colonnes de table,
+   séquences,
+   foreign data wrappers,
+   serveurs distants,
+   large objects,
+   schémas
+   et tablespaces.
+   Pour les autres types d'objets, les privilèges par défaut accordés à
+   <literal>PUBLIC</literal> sont les suivants&nbsp;:
+   sur les bases de données&nbsp;: les privilèges
+   <literal>CONNECT</literal> et <literal>TEMPORARY</literal>
+   (création de table temporaire)&nbsp;;
+   sur les fonctions et procédures&nbsp;: le privilège <literal>EXECUTE</literal> &nbsp;;
+   et sur les langages et types de données (y compris les domaines)&nbsp;:
+   le privilège  <literal>USAGE</literal>.
+   Bien sûr, le propriétaire de l'objet peut révoquer, à l'aide de la commande
+   <command>REVOKE</command>, les
+   privilèges par défaut comme ceux expressément accordés. (Pour une sécurité
+   maximum, ordonnez <command>REVOKE</command> dans la même transaction que
+   celle qui crée l'objet&nbsp;; il n'y a alors aucune fenêtre où un autre
+   utilisateur peut utiliser l'objet.)
+   Ces privilèges par défaut peuvent aussi être remplacés avec la commande
+   <xref linkend="sql-alterdefaultprivileges"/>.
+  </para>
+
+  <para>
+   <xref linkend="privilege-abbrevs-table"/> liste les abréviations à une
+   lettre utilisées pour les types de privilèges dans les valeurs des
+   <firstterm>ACL</firstterm> (listes de contrôle d'accès).
+   Vous verrez ces lettres dans la sortie des commandes <xref linkend="app-psql"/>
+   plus bas, ou en consultant les colonnes ACL des catalogues système.
+  </para>
+
+  <table id="privilege-abbrevs-table">
+   <title>Abréviations des privilèges dans les ACL</title>
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>Privilège</entry>
+      <entry>Abréviation</entry>
+      <entry>Types d'objets concernés</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><literal>SELECT</literal></entry>
+      <entry><literal>r</literal> (<quote>read</quote>)</entry>
+      <entry>
+       <literal>LARGE OBJECT</literal>,
+       <literal>SEQUENCE</literal>,
+       <literal>TABLE</literal> (et objets similaires à des tables),
+       colonne de table
+      </entry>
+     </row>
+     <row>
+      <entry><literal>INSERT</literal></entry>
+      <entry><literal>a</literal> (<quote>append</quote>)</entry>
+      <entry><literal>TABLE</literal>, colonne de table</entry>
+     </row>
+     <row>
+      <entry><literal>UPDATE</literal></entry>
+      <entry><literal>w</literal> (<quote>write</quote>)</entry>
+      <entry>
+       <literal>LARGE OBJECT</literal>,
+       <literal>SEQUENCE</literal>,
+       <literal>TABLE</literal>,
+       colonne de table
+      </entry>
+     </row>
+     <row>
+      <entry><literal>DELETE</literal></entry>
+      <entry><literal>d</literal></entry>
+      <entry><literal>TABLE</literal></entry>
+     </row>
+     <row>
+      <entry><literal>TRUNCATE</literal></entry>
+      <entry><literal>D</literal></entry>
+      <entry><literal>TABLE</literal></entry>
+     </row>
+     <row>
+      <entry><literal>REFERENCES</literal></entry>
+      <entry><literal>x</literal></entry>
+      <entry><literal>TABLE</literal>, colonne de table</entry>
+     </row>
+     <row>
+      <entry><literal>TRIGGER</literal></entry>
+      <entry><literal>t</literal></entry>
+      <entry><literal>TABLE</literal></entry>
+     </row>
+     <row>
+      <entry><literal>CREATE</literal></entry>
+      <entry><literal>C</literal></entry>
+      <entry>
+       <literal>DATABASE</literal>,
+       <literal>SCHEMA</literal>,
+       <literal>TABLESPACE</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>CONNECT</literal></entry>
+      <entry><literal>c</literal></entry>
+      <entry><literal>DATABASE</literal></entry>
+     </row>
+     <row>
+      <entry><literal>TEMPORARY</literal></entry>
+      <entry><literal>T</literal></entry>
+      <entry><literal>DATABASE</literal></entry>
+     </row>
+     <row>
+      <entry><literal>EXECUTE</literal></entry>
+      <entry><literal>X</literal></entry>
+      <entry><literal>FUNCTION</literal>, <literal>PROCEDURE</literal></entry>
+     </row>
+     <row>
+      <entry><literal>USAGE</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry>
+       <literal>DOMAIN</literal>,
+       <literal>FOREIGN DATA WRAPPER</literal>,
+       <literal>FOREIGN SERVER</literal>,
+       <literal>LANGUAGE</literal>,
+       <literal>SCHEMA</literal>,
+       <literal>SEQUENCE</literal>,
+       <literal>TYPE</literal>
+      </entry>
+     </row>
+     </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   <xref linkend="privileges-summary-table"/> résume les privilèges
+   disponibles pour chaque objet SQL, avec les abréviations ci-dessus.
+   Il affiche aussi la commande <application>psql</application>
+   à utiliser pour consulter les valeurs des privilèges de chaque type
+   d'objet.
+  </para>
+
+  <table id="privileges-summary-table">
+   <title>Résumé des privilèges d'accès</title>
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Type d'objet</entry>
+      <entry>Tous les privilèges</entry>
+      <entry>Privilèges par défaut pour <literal>PUBLIC</literal></entry>
+      <entry>Commande <application>psql</application></entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><literal>DATABASE</literal></entry>
+      <entry><literal>CTc</literal></entry>
+      <entry><literal>Tc</literal></entry>
+      <entry><literal>\l</literal></entry>
+     </row>
+     <row>
+      <entry><literal>DOMAIN</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry><literal>\dD+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>FUNCTION</literal> ou <literal>PROCEDURE</literal></entry>
+      <entry><literal>X</literal></entry>
+      <entry><literal>X</literal></entry>
+      <entry><literal>\df+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>FOREIGN DATA WRAPPER</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry>aucun</entry>
+      <entry><literal>\dew+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>FOREIGN SERVER</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry>aucun</entry>
+      <entry><literal>\des+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>LANGUAGE</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry><literal>\dL+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>LARGE OBJECT</literal></entry>
+      <entry><literal>rw</literal></entry>
+      <entry>aucun</entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry><literal>SCHEMA</literal></entry>
+      <entry><literal>UC</literal></entry>
+      <entry>aucun</entry>
+      <entry><literal>\dn+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>SEQUENCE</literal></entry>
+      <entry><literal>rwU</literal></entry>
+      <entry>aucun</entry>
+      <entry><literal>\dp</literal></entry>
+     </row>
+     <row>
+      <entry><literal>TABLE</literal> (et objets similaires)</entry>
+      <entry><literal>arwdDxt</literal></entry>
+      <entry>aucun</entry>
+      <entry><literal>\dp</literal></entry>
+     </row>
+     <row>
+      <entry>Colonne de table</entry>
+      <entry><literal>arwx</literal></entry>
+      <entry>aucun</entry>
+      <entry><literal>\dp</literal></entry>
+     </row>
+     <row>
+      <entry><literal>TABLESPACE</literal></entry>
+      <entry><literal>C</literal></entry>
+      <entry>aucun</entry>
+      <entry><literal>\db+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>TYPE</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry><literal>\dT+</literal></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   <indexterm>
+    <primary><type>aclitem</type></primary>
+   </indexterm>
+   Les privilèges accordés à un objet particulier sont affichés comme une
+   liste d'entrées <type>aclitem</type>, où chaque <type>aclitem</type>
+   décrit les permissions d'un bénéficiaire à qui des droits ont été
+   octroyés par un utilisateur différent.
+   Par exemple, <literal>calvin=r*w/hobbes</literal> indique que le rôle
+   <literal>calvin</literal> a le privilège <literal>SELECT</literal>
+   (<literal>r</literal>) avec possibilité de transmission
+   (<foreignphrase><quote>with grant option</quote></foreignphrase>)
+   ainsi que le privilège <literal>UPDATE</literal> (<literal>w</literal>),
+   sans retransmission possible&nbsp;; privilèges accordés tous les deux
+   par le rôle <literal>hobbes</literal>. Si <literal>calvin</literal>
+   a aussi des privilèges sur le même objet accordés par un autre utilisateur,
+   ils apparaîtraient comme une entrée <type>aclitem</type> séparée.
+   Un champ vide dans un <type>aclitem</type> indique <literal>PUBLIC</literal>.
+  </para>
+
+  <para>
+   Par exemple, supposons que l'utilisateur <literal>miriam</literal> crée
+   une table <literal>mytable</literal> et fasse&nbsp;:
+<programlisting>
+GRANT SELECT ON mytable TO PUBLIC;
+GRANT SELECT, UPDATE, INSERT ON mytable TO admin;
+GRANT SELECT (col1), UPDATE (col1) ON mytable TO miriam_rw;
+</programlisting>
+
+   alors dans <application>psql</application> la commande <literal>\dp</literal>
+   afficherait&nbsp;:
+
+<programlisting>
+=&gt; \dp mytable
+                                        Droits d'accès
+ Schéma |   Nom   | Type  |     Droits d'accès    | Droits d'accès à la colonne | Politiques
+--------+---------+-------+-----------------------+-----------------------------+------------
+ public | mytable | table | miriam=arwdDxt/miriam+| col1:                      +|
+        |         |       | =r/miriam            +|   miriam_rw=rw/miriam       |
+        |         |       | admin=arw/miriam      |                             |
+(1 ligne)
+</programlisting>
+  </para>
+
+  <para>
+   Si la colonne <quote>Droits d'accès</quote> est vide pour
+   un objet donné, cela signifie que l'objet a les privilèges par défaut
+   (c'est-à-dire que l'entrée des privilèges dans les catalogues système
+   est NULL). Les privilèges par défaut incluent toujours tous les
+   privilèges pour le propriétaire, et peuvent inclure certains privilèges
+   pour <literal>PUBLIC</literal> en fonction du type d'objet commme
+   expliqué plus haut.
+   La première commande <command>GRANT</command> ou <command>REVOKE</command>
+   sur un objet va instancier les privilèges par défaut (en produisant,
+   par exemple, <literal>miriam=arwdDxt/miriam</literal>) puis les modifier
+   selon la requête.
+   De manière similaire, des entrées ne sont affichées dans
+   <quote>Droits d'accès à la colonne</quote> que pour les colonnes qui n'ont
+   pas les privilèges par défaut.
+   (Note&nbsp;: dans ce contexte, on entend par
+   <quote>privilèges par défaut</quote> les privilèges par défaut
+   intégrés à PostgreSQL pour le type d'objet.
+   Un objet dont les privilèges auront été affectés par une
+   commande <command>ALTER DEFAULT PRIVILEGES</command> montrera toujours
+   une entrée de privilèges explicite qui inclue les effets du
+    <command>ALTER</command>.)
+  </para>
+
+  <para>
+   Notez que les droits de transmission (<foreignphrase>grant
+   option</foreignphrase>) implicites ne sont pas indiqués dans l'affichage des
+   droits d'accès. Un <literal>*</literal> n'apparaîtra que si la
+   transmission a été explicitement accordée à quelqu'un.
   </para>
  </sect1>
 
@@ -1663,7 +2310,6 @@ CREATE POLICY user_sel_policy ON users
 CREATE POLICY user_mod_policy ON users
     USING (user_name = current_user);
  </programlisting>
- 
   <para>
    Pour une commande <command>SELECT</command>, ces deux politique sont combinées
    à l'aide de <literal>OR</literal>, ayant pour effet que toutes les lignes
@@ -2849,9 +3495,10 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
       </listitem>
     </itemizedlist>
 
-    Ces déficiences seront probablement corrigées dans une version future,
-    mais, en attendant, il est obligatoire de réfléchir consciencieusement à l'utilité
-    de l'héritage pour une application donnée.
+    Certaines fonctionnalité non implémentées pour l'héritage le
+    sont pour le partitionnement déclaratif.
+    Réfléchissez soigneusement avant de décider de l'utilité de
+    l'ancien partitionnement par héritage pour votre application.
   </para>
 
    </sect2>
@@ -3030,7 +3677,7 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
     table standard ou une table partitionnée contenant des données comme une
     partition d'une table partitionnée, ou de supprimer une partition d'une
     table partitionnée, la transformant en table standard; voir <xref
-        linkend="sql-altertable"/> pour en apprendre plus sur les sous-commandes 
+        linkend="sql-altertable"/> pour en apprendre plus sur les sous-commandes
         <command>ATTACH PARTITION</command> et <command>DETACH
         PARTITION</command>.
    </para>
@@ -3087,13 +3734,12 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
       <para>
        Les partitions ne peuvent pas avoir de colonnes qui ne sont pas
        présentes dans le parent. Il n'est pas non plus possible de spécifier
-       des colonnes quand une partition est créée avec <command>CREATE 
+       des colonnes quand une partition est créée avec <command>CREATE
        TABLE</command>, pas plus qu'il n'est possible d'ajouter des colonnes
-       aux partitions une fois celles-ci créées en utilisant <command>ALTER 
-       TABLE</command>. Des tables peuvent être ajoutées comme des
+       aux partitions par la suite  avec <command>ALTER
+       TABLE</command>. Des tables ne peuvent être ajoutées en tant que
        partitions avec <command>ALTER TABLE ... ATTACH PARTITION</command>
-       seulement si leurs colonnes correspondent exactement à celles du parent,
-       en incluant toutes les colonnes <literal>oid</literal>.
+       que si leurs colonnes correspondent exactement à celles du parent.
       </para>
      </listitem>
 
@@ -3320,12 +3966,12 @@ ALTER TABLE measurement DETACH PARTITION measurement_y2006m02;
 </programlisting>
 
      Cela permet d'effectuer ensuite d'autres opérations sur les données avant
-     de la supprimer. Par exemple, il s'agit souvent du moment idéal pour
+     la suppression. Par exemple, il s'agit souvent du moment idéal pour
      sauvegarder les données en utilisant <command>COPY</command>,
      <application>pg_dump</application>, ou des outils similaires.  Cela
      pourrait également être le bon moment pour agréger les données dans un
      format moins volumineux, effectuer d'autres manipulations de données ou
-     exécuter des rapports.
+     lancer des rapports.
    </para>
 
    <para>
@@ -3340,9 +3986,9 @@ CREATE TABLE measurement_y2008m02 PARTITION OF measurement
     TABLESPACE fasttablespace;
 </programlisting>
 
-     De manière alternative, il est parfois plus utile de créer la nouvelle
+     De manière alternative, il est parfois plus pratique de créer la nouvelle
      table en dehors de la structure de la partition, et d'en faire une
-     partition plus tard.  Cela permet de charger des données, les vérifier et
+     vraie partition plus tard.  Cela permet de charger des données, les vérifier et
      effectuer des transformations avant que les données apparaissent dans la
      table partitionnée&nbsp;:
 
@@ -3355,7 +4001,7 @@ ALTER TABLE measurement_y2008m02 ADD CONSTRAINT y2008m02
    CHECK ( logdate &gt;= DATE '2008-02-01' AND logdate &lt; DATE '2008-03-01' );
 
 \copy measurement_y2008m02 from 'measurement_y2008m02'
--- possibly some other data preparation work
+-- et éventuellement d'autres étapes de préparation
 
 ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
     FOR VALUES FROM ('2008-02-01') TO ('2008-03-01' );
@@ -3365,14 +4011,98 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
     <para>
      Avant d'exécuter une commande <command>ATTACH PARTITION</command>, il est
      recommandé de créer une contrainte <literal>CHECK</literal> sur la table
-     qui doit être attachée décrivant la contrainte de partition désirée.  De
+     à attacher décrivant la contrainte de partition désirée. De
      cette manière, le système n'aura pas besoin d'effectuer un parcours de la
-     table pour valider la contrainte de partition implicite. Sans une telle
+     table pour valider la contrainte de partitionnement implicite. Sans une telle
      contrainte, la table sera parcourue pour valider la contrainte de
      partition tout en ayant un verrou de niveau <literal>ACCESS
-     EXCLUSIVE</literal> sur la table parente. Vous pouvez alors supprimer
-     la contrainte après que <command>ATTACH PARTITION</command> soit fini, car
-     elle n'est plus nécessaire.
+     EXCLUSIVE</literal> sur la partition et un verrou de niveau
+     <literal>SHARE UPDATE EXCLUSIVE</literal> sur la table parente.
+     On pourra ensuite supprimer la contrainte après que <command>ATTACH
+     PARTITION</command> a fini, car elle n'est plus nécessaire.
+    </para>
+
+    <para>
+     Comme expliqué ci-dessus, il est possible de créer des index sur des
+     tables partitionnées, et ceux-ci sont appliqués automatiquement sur la
+     hiérarchie entière. C'est très pratique, car non seulement les partitions
+     déjà créées seront indexées, mais aussi toutes les partitions créées dans
+     le futur.
+     Une limitation est qu'il n'est pas possible d'utiliser <literal>CONCURRENTLY</literal>
+     pour créer un index partitionné. Pour éviter des verrous trop longs,
+     il est possible d'utiliser <command>CREATE INDEX ON ONLY</command> sur la
+     table partitionnée&nbsp;; un tel index sera marqué invalide, et il ne
+     sera pas appliqué automatiquement sur les partitions.
+     Les index sur les partitions peuvent être créés séparément avec
+     <literal>CONCURRENTLY</literal>, et plus tard rattachés (<firstterm>attached</firstterm>)
+     à l'index sur le parent avec <command>ALTER INDEX .. ATTACH PARTITION</command>.
+     Une fois les index de toutes les partitions attachés à l'index parent,
+     celui-ci sera automatiquement marqué comme valide. Exemple&nbsp;:
+
+<programlisting>
+CREATE INDEX measurement_usls_idx ON ONLY measurement (unitsales);
+
+CREATE INDEX measurement_usls_200602_idx
+    ON measurement_y2006m02 (unitsales);
+ALTER INDEX measurement_usls_idx
+    ATTACH PARTITION measurement_usls_200602_idx;
+...
+</programlisting>
+
+      Cette technique peut aussi être utilisée avec des contraintes
+      <literal>UNIQUE</literal> et <literal>PRIMARY KEY</literal>&nbsp;;
+      les index sont créés implicitement quand la contrainte est créée.
+      Exemple&nbsp;:
+
+<programlisting>
+ALTER TABLE ONLY measurement ADD UNIQUE (city_id, logdate);
+
+ALTER TABLE measurement_y2006m02 ADD UNIQUE (city_id, logdate);
+ALTER INDEX measurement_city_id_logdate_key
+    ATTACH PARTITION measurement_y2006m02_city_id_logdate_key;
+...
+</programlisting>
+    </para>
+
+    <para>
+     Comme expliqué ci-dessus, il est possible de créer des index sur les
+     tables partitionnées, et ils seront automatiquement appliqués à la
+     hiérarchie complète. Ceci est très pratique car, non seulement les
+     partitions existantes seront indexées, mais aussi toute nouvelle
+     partition le sera. La seule limitation est qu'il n'est pas possible
+     d'utiliser la clause <literal>CONCURRENTLY</literal> lors de la création
+     d'un tel index partitionné. Pour éviter de longues périodes de verrous,
+     il est possible d'utiliser <command>CREATE INDEX ON ONLY</command> sur la
+     table partitionnée&nbsp;; un tel index est marqué invalide et les
+     partitions l'obtiennent pas automatiquement l'index. Les index sur les
+     partitions peuvent être créés séparément en utilisant
+     <literal>CONCURRENTLY</literal>, puis être
+     <firstterm>attachés</firstterm> à l'index sur le parent en utilisant
+     <command>ALTER INDEX .. ATTACH PARTITION</command>. Une fois que les
+     index des partitions sont attachés à l'index parent, l'index parent est
+     marqué valide automatiquement. Par exemple&nbsp;:
+<programlisting>
+CREATE INDEX measurement_usls_idx ON ONLY measurement (unitsales);
+
+CREATE INDEX measurement_usls_200602_idx
+    ON measurement_y2006m02 (unitsales);
+ALTER INDEX measurement_usls_idx
+    ATTACH PARTITION measurement_usls_200602_idx;
+...
+</programlisting>
+
+     Cette technique peut aussi être utilisée avec les contraintes
+     <literal>UNIQUE</literal> et <literal>PRIMARY KEY</literal>&nbsp;; les
+     index sont créés implicitement quand la contrainte est créer. Par
+     exemple&nbsp;:
+<programlisting>
+ALTER TABLE ONLY measurement ADD UNIQUE (city_id, logdate);
+
+ALTER TABLE measurement_y2006m02 ADD UNIQUE (city_id, logdate);
+ALTER INDEX measurement_city_id_logdate_key
+    ATTACH PARTITION measurement_y2006m02_city_id_logdate_key;
+...
+</programlisting>
     </para>
    </sect3>
 
@@ -3393,37 +4123,8 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
 
      <listitem>
       <para>
-       Alors que les clés primaires sont prises en charge sur les tables
-       partitionnées, les clés étrangères faisant référence à des tables
-       partitionnées ne sont pas prises en charge. (Les références de clés
-       étrangères d'une table partitionnée vers une autre table sont supportées.)
-
-      </para>
-     </listitem>
-
-     <listitem>
-      <para>
-       Lorsqu'un <command>UPDATE</command> fait déplacer une ligne d'une partition
-       à une autre, il y a un risque qu'un autre <command>UPDATE</command> ou
-       <command>DELETE</command> simultanée obtient une erreur de sérialisation.
-       Supposons que la session 1 effectue un <command>UPDATE</command> sur une
-       clé de partition, et qu'une session concurrente 2 pour laquelle cette
-       ligne est visible effectue sur elle une opération d'<command>UPDATE</command>
-       ou <command>DELETE</command>. Dans un tel cas, le <command>UPDATE</command> ou
-       le <command>DELETE</command> de la session détectera le mouvement de ligne et
-       lèvera une erreyr de sérialisation (qui renvoie toujours le code SQLSTATE
-       '40001'). Les applications pourraient souhaiter retenter la transaction si cela
-       arrive. Dans le cas habituel où la table n'est pas partitionnée ou qu'il n'y
-       a pas de mouvement de ligne, la session 2 aura identifié la ligne nouvellement
-       mise à jour et réalisé le <command>UPDATE</command>/<command>DELETE</command>
-       sur cette nouvelle ligne.
-      </para>
-     </listitem>
-
-     <listitem>
-      <para>
        en cas de besoin, les triggers <literal>BEFORE ROW</literal> doivent
-       être définies sur des partitions individuelles, et non sur la table
+       être définis sur les partitions individuelles, et non sur la table
        partitionnée.
       </para>
      </listitem>
@@ -3817,7 +4518,15 @@ ALTER TABLE mesure_a2008m02 INHERIT mesure;
 
       <listitem>
        <para>
-        les schémas montrés ici supposent que les colonnes clés du
+        Les contraintes d'index et de clés étrangères s'appliquent à des
+        tables seules et non à leurs enfants par héritage, il y a donc des
+        <link linkend="ddl-inherit-caveats">limitations</link> à connaître.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Les schémas montrés ici supposent que les colonnes clés du
         partitionnement d'une ligne ne changent jamais ou, tout du moins, ne
         changent pas suffisamment pour nécessiter un déplacement vers une autre
         partition. Une commande  <command>UPDATE</command> qui tente de le
@@ -3938,21 +4647,21 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
     Il est à noter que l'élagage des partitions n'est piloté que par les
     contraintes définies implicitement par les clés de partition, et non par
     la présence d'index&nbsp;: il n'est donc pas nécessaire de définir des index
-    sur les colonnes clés. Si un index doit être créé pour une partition donnée,
-    ceci dépendra du fait que vous vous attendez à ce que les requêtes qui
-    parcourent la partition parcourent généralement une grande partie de la
-    partition ou seulement une petite partie. Un index sera utile dans ce dernier
+    sur les colonnes clés. Pour savoir si un index doit être créé pour une partition donnée,
+    il vous faut juger si les requêtes sur
+    cette partition en parcourent généralement une grande
+    ou seulement une petite partie. Un index sera utile dans ce dernier
     cas, mais pas dans le premier.
    </para>
 
    <para>
-    L'élagage des partitions peut être effectuée non seulement lors de la
+    L'élagage des partitions peut être effectué non seulement lors de la
     planification d'une requête, mais aussi lors de son exécution. Ceci est
     utile car cela peut permettre d'élaguer plus de partitions lorsque les
     clauses contiennent des expressions dont les valeurs ne sont pas connues
-    au moment de la planification de la requête&nbsp;; par exemple, des paramètres
+    au moment de la planification de la requête, par exemple des paramètres
     définis dans une instruction <command>PREPARE</command>, utilisant une
-    valeur obtenue d'une sous-requête ou utilisant une valeur paramétrée sur
+    valeur obtenue d'une sous-requête, ou utilisant une valeur paramétrée sur
     la partie interne du n&oelig;ud de boucle imbriqué (<literal>nested loop join</literal>.
     L'élagage de la partition pendant l'exécution peut être réalisé à l'un des
     moments suivant&nbsp;:
@@ -3960,12 +4669,12 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
     <itemizedlist>
      <listitem>
       <para>
-       Lors de l'initialisation du plan d'exécution, l'élagage de partition peut
-       être effectué pour les valeurs de paramètres qui sont connues pendant
-       cette phase. Les partitions qui ont été élaguées pendant cette étape
+       Lors de l'initialisation du plan d'exécution. L'élagage de partition peut
+       être effectué pour les valeurs de paramètres déjà connues à
+       cette phase. Les partitions élaguées pendant cette étape
        n'apparaîtront pas dans l'<command>EXPLAIN</command> ou l'<command>EXPLAIN
-       ANALYZE</command> de la requête. Il est tout de même possible de
-       déterminer le nombre de partitions qui ont été supprimées pendant cette
+       ANALYZE</command> de la requête. Il est même possible de
+       déterminer le nombre de partitions supprimées pendant cette
        phase en observant la propriété <quote>Subplans Removed</quote>
        (sous-plans supprimés) dans la sortie d'<command>EXPLAIN</command>.
       </para>
@@ -3980,15 +4689,15 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
        pendant la recherche comme lors des n&oelig;uds de boucle imbriqué
        (<literal>nested loop join</literal>).
        Comme la valeur de ces paramètres peut changer plusieurs fois pendant
-       l'exécution de la requête, l'élagage de la partition est effectué chaque
+       l'exécution de la requête, l'élagage de partitions est effectué chaque
        fois que l'un des paramètres d'exécution utilisés pour celui-ci change.
        Déterminer si les partitions ont été élaguées pendant cette phase nécessite
-       une inspection minutieuse de la propriété <literal>nloops</literal> de la
+       une inspection minutieuse de la propriété <literal>loops</literal> de la
        sortie d'<command>EXPLAIN ANALYZE</command>. Les sous-plans correspondant
-       aux différentes partitions pourraient avoir différentes valeurs dépendant
-       du nombre de fois chacun d'entre eux a été évité lors de l'exécution.
-       Certains pourraient être affichés comme <literal>(never executed)</literal>
-       (littéralement, <literal>jamais exécuté</literal>) s'ils sont évités à
+       aux différentes partitions peuvent avoir différentes valeurs dépendant
+       du nombre de fois où chacun d'eux a été élagué lors de l'exécution.
+       Certains peuvent être affichés comme <literal>(never executed)</literal>
+       (littéralement, <literal>jamais exécuté</literal>) s'ils sont élagués à
        chaque fois.
       </para>
      </listitem>
@@ -4002,24 +4711,11 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
 
    <note>
     <para>
-      Actuellement, l'élagage des partitions pendant la planification d'une
-      commande <command>UPDATE</command> ou <command>DELETE</command> est
-      implémenté en utilisant la méthode d'exclusion par contraintes
-      (cependant, il est contrôlé par le paramètre
-      <literal>enable_partition_pruning</literal>
-      plutôt que <literal>constraint_exclusion</literal>)
-      -- voir la section suivante pour plus de détails et d'avertissements.
-    </para>
-
-    <para>
-     De plus, l'élagage des partitions pendant l'exécution ne se produit
-     actuellement que pour le type de n&oelig;ud <literal>Append</literal>, et non
-     pour le type de n&oelig;ud <literal>MergeAppend</literal>.
-    </para>
-
-    <para>
-     Ces deux comportements sont susceptibles d'être modifiés dans une prochaine
-     version de <productname>PostgreSQL</productname>.
+      L'élagage de partitions au moment de l'exécution survient seulement pour
+      les types de n&oelig;ud <literal>Append</literal> et
+      <literal>MergeAppend</literal>. Ce n'est pas encore implémenté pour
+      <literal>ModifyTable</literal> mais ceci pourrait changer dans une
+      prochaine version de <productname>PostgreSQL</productname>.
     </para>
    </note>
   </sect2>
@@ -4072,15 +4768,14 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
    </para>
 
  <para>
-  Les restrictions suivantes s'appliquent à l'exclusion de contraintes&nbsp;:
+  Les avertissement suivants s'appliquent à l'exclusion de contraintes&nbsp;:
 
   <itemizedlist>
    <listitem>
     <para>
      Les contraintes d'exclusion ne sont appliquées que lors de la phase de
-     planification de la requête&nbsp;; contrairement à l'élagage de partition,
-     elles ne peuvent pas être appliquées lors de la phase d'exécution de la
-     requête.
+     planification de la requête, contrairement à l'élagage de partition,
+     qui peut être appliqué lors de la phase d'exécution de la requête.
     </para>
    </listitem>
 
@@ -4125,6 +4820,98 @@ EXPLAIN SELECT count(*) FROM mesure WHERE date_trace &gt;= DATE '2008-01-01';
   </itemizedlist>
  </para>
 </sect2>
+
+
+<sect2 id="ddl-partitioning-declarative-best-practices">
+    <title>Bonnes pratiques avec le partitionnement déclaratif</title>
+
+   <para>
+    Il faut choisir avec soin le partitionnement d'une table car les
+    performances en planification et à l'exécution peuvent pâtir d'une
+    mauvaise conception.
+   </para>
+
+   <para>
+    Un des choix les plus cruciaux portera sur la ou les colonnes par
+    lesquelles vous partitionnerez. Souvent le meilleur choix sera la
+    colonne ou l'ensemble de colonnes qui apparaissent le plus souvent
+    dans les clauses <literal>WHERE</literal> des requêtes exécutées sur
+    la table.
+    Les clauses <literal>WHERE</literal> portant sur la clé de partitionnement
+    et compatibles avec elle peuvent être utilisées pour élaguer les
+    partitions inutiles. Cependant, le choix peut vous être imposé par
+    des exigences sur la <literal>PRIMARY KEY</literal> ou une contrainte
+    <literal>UNIQUE</literal>. La suppression de données indésirables est
+    aussi un facteur à considérer pour préparer votre
+    stratégie de partitionnement.
+    Une partition entière peut être détachée assez vite, et cela peut
+    valoir le coup de concevoir votre partitionnement pour que
+    toutes les données à supprimer en même temps soient situées dans la
+    même partition.
+   </para>
+
+   <para>
+    Choisir le nombre cible de partitions par lequel la table sera divisée
+    est aussi une décision critique à prendre.
+    Ne pas avoir assez de partitions peut signifier que les index resteront
+    trop gros et que la localité des données restera faible, ce qui entraînera
+    de mauvais <foreignphrase>hit ratios</foreignphrase>.
+    Cependant, diviser la table en trop de partitions a aussi ses inconvénients.
+    Trop de partitions peuvent entraîner des temps de planification plus longs
+    et une plus grande consommation de mémoire pendant la planification comme
+    pendant l'exécution.
+    Lors du choix du partitionnement de votre table, il est aussi important de
+    considérer ce qui va changer dans le futur.
+    Par exemple, si vous choisissez d'avoir une partition par client alors que vous n'avez
+    actuellement qu'un petit nombre de gros clients, considérez les implications
+    si, dans quelques années, vous vous retrouvez avec un grand nombre de
+    petits clients. Dans ce cas, il serait meilleur de choisir une partition par
+    <literal>HASH</literal> et de choisir un nombre raisonnable de partitions
+    plutôt que d'essayer de partitionner par <literal>LIST</literal> et d'espérer
+    que le nombre de clients n'augmente pas au-delà de ce qu'il est en pratique
+    possible de partitionner.
+   </para>
+
+   <para>
+    Sous-partitionner peut être utile pour diviser encore des partitions qui
+    devraient devenir plus grandes que d'autres partitions, bien qu'un
+    sous-partitionnement excessif puisse facilement mener à un grand nombre
+    de partitions et puisse causer les mêmes problèmes que mentionnés au
+    paragraphe précédent.
+   </para>
+
+   <para>
+    Il est aussi important de considérer le surcroît de travail pour la
+    planification et l'exécution dû au partitionnement. Le planificateur de
+    requêtes est généralement capable de manipuler correctement des hiérarchies jusqu'à
+    plusieurs milliers de partitions, pourvu que les requêtes
+    courantes lui permettent d'élaguer toutes les partitions à l'exception d'un
+    petit nombre.
+    Les temps de planification s'allongent et la consommation
+    de mémoire grandit s'il reste beaucoup de partitions
+    une fois que le planificateur a fait l'élagage.
+    C'est particulièrement vrai pour les commandes <command>UPDATE</command>
+    et <command>DELETE</command>.
+    Une autre raison de se méfier d'un grand nombre de partitions est que la
+    consommation mémoire du serveur peut augmenter significativement au fil du temps,
+    particulièrement si beaucoup de sessions touchent de nombreuses partitions.
+    La cause en est que chaque partition a besoin que ses métadonnées soient
+    chargées dans la mémoire locale d'une session qui y touche.
+   </para>
+
+   <para>
+    Avec une charge de type entrepôt de données, il y a plus de sens à utiliser
+    un grand nombre de partitions que pour une charge de type <acronym>OLTP</acronym>.
+    Généralement, en décisionnel, le temps de planification est moins un souci
+    puisque la majorité du temps de traitement est dépensé pendant l'exécution.
+    Avec l'un comme l'autre de ces types de charge, il est important de prendre tôt
+    la bonne décision, car re-partitionner de grandes quantités de données peut
+    être douloureusement long. Des simulation de la charge attendue sont souvent
+    souhaitables pour optimiser la stratégie de partitionnement. Ne supposez
+    jamais que plus de partitions valent mieux que moins de partitions et vice-versa.
+   </para>
+  </sect2>
+
 </sect1>
 
 <sect1 id="ddl-foreign-data">

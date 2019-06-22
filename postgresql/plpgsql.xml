@@ -1510,14 +1510,6 @@ EXECUTE format('UPDATE tbl SET %I = $1 WHERE cle = $2', nom_colonne)
           <acronym>SQL</acronym> la plus récente</entry>
         </row>
         <row>
-         <entry><varname>RESULT_OID</varname></entry>
-         <entry><type>oid</type></entry>
-         <entry>l'OID de la dernière ligne insérée par la commande
-          <acronym>SQL</acronym> la plus récente (seulement utile
-          après une commande <command>INSERT</command> dans une table
-          ayant des OID)</entry>
-        </row>
-        <row>
          <entry><literal>PG_CONTEXT</literal></entry>
          <entry><type>text</type></entry>
          <entry>ligne(s) de texte décrivant la pile d'appels actuelle
@@ -3473,6 +3465,20 @@ END LOOP <optional> <replaceable>label</replaceable> </optional>;
   <sect1 id="plpgsql-transactions">
    <title>Gestion des transactions</title>
 
+   <indexterm zone="plpgsql-transaction-chain">
+    <primary>chained transactions</primary>
+    <secondary>in PL/pgSQL</secondary>
+   </indexterm>
+
+   <para id="plpgsql-transaction-chain">
+    A new transaction starts out with default transaction characteristics such
+    as transaction isolation level.  In cases where transactions are committed
+    in a loop, it might be desirable to start new transactions automatically
+    with the same characteristics as the previous one.  The commands
+    <command>COMMIT AND CHAIN</command> and <command>ROLLBACK AND
+    CHAIN</command> accomplish this.
+   </para>
+
    <para>
     Dans les procédures appelées par la commande <command>CALL</command> ainsi
     que dans les blocs de code anonymes (commande <command>DO</command>), il
@@ -5073,7 +5079,7 @@ then return '$$  || referrer_keys.referrer_type
 </sect2>
 
 <sect2 id="plpgsql-extra-checks">
- <title>Vérifications supplémentaires à la compilation</title>
+ <title>Vérifications supplémentaires à la compilation et à l'exécution</title>
 
  <para>
   Pour aider l'utilisateur à trouver les problèmes simples mais fréquents
@@ -5087,25 +5093,61 @@ then return '$$  || referrer_keys.referrer_type
   séparé.
  </para>
 
- <para>
-  Ces vérifications supplémentaires sont activées via les variables de
-  configuration <varname>plpgsql.extra_warnings</varname> pour les messages
-  d'avertissement et <varname>plpgsql.extra_errors</varname> pour les erreurs.
-  Les deux peuvent être configurés soit avec une liste de vérifications séparées
-  par des virgules, soit pour aucune (<literal>"none"</literal>), soit pour
-  toutes (<literal>"all"</literal>). La valeur par défaut est
-  <literal>"none"</literal>. La liste actuelle des vérifications disponibles ne
-  contient qu'un membre&nbsp;:
-  <variablelist>
-   <varlistentry>
-    <term><varname>shadowed_variables</varname></term>
-    <listitem>
-     <para>
-      Vérifie si une déclaration cache une variable définie précédemment.
-     </para>
-    </listitem>
-   </varlistentry>
-  </variablelist>
+   <para>
+    Setting <varname>plpgsql.extra_warnings</varname>, or
+    <varname>plpgsql.extra_errors</varname>, as appropriate, to <literal>"all"</literal>
+    is encouraged in development and/or testing environments.
+   </para>
+
+   <para>
+    These additional checks are enabled through the configuration variables
+    <varname>plpgsql.extra_warnings</varname> for warnings and
+    <varname>plpgsql.extra_errors</varname> for errors. Both can be set either to
+    a comma-separated list of checks, <literal>"none"</literal> or
+    <literal>"all"</literal>. The default is <literal>"none"</literal>. Currently
+    the list of available checks includes:
+    <variablelist>
+     <varlistentry>
+      <term><varname>shadowed_variables</varname></term>
+      <listitem>
+       <para>
+        Checks if a declaration shadows a previously defined variable.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><varname>strict_multi_assignment</varname></term>
+      <listitem>
+       <para>
+        Some <application>PL/PgSQL</application> commands allow assigning
+        values to more than one variable at a time, such as
+        <command>SELECT INTO</command>.  Typically, the number of target
+        variables and the number of source variables should match, though
+        <application>PL/PgSQL</application> will use <literal>NULL</literal>
+        for missing values and extra variables are ignored.  Enabling this
+        check will cause <application>PL/PgSQL</application> to throw a
+        <literal>WARNING</literal> or <literal>ERROR</literal> whenever the
+        number of target variables and the number of source variables are
+        different.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><varname>too_many_rows</varname></term>
+      <listitem>
+       <para>
+        Enabling this check will cause <application>PL/PgSQL</application> to
+        check if a given query returns more than one row when an
+        <literal>INTO</literal> clause is used.  As an <literal>INTO</literal>
+        statement will only ever use one row, having a query return multiple
+        rows is generally either inefficient and/or nondeterministic and
+        therefore is likely an error.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
 
   L'exemple suivant montre l'effet de <varname>plpgsql.extra_warnings</varname>
   configuré à <varname>shadowed_variables</varname>&nbsp;:
@@ -5124,8 +5166,42 @@ LINE 3: f1 int;
         ^
 CREATE FUNCTION
   </programlisting>
- </para>
-</sect2>
+
+    The below example shows the effects of setting
+    <varname>plpgsql.extra_warnings</varname> to
+    <varname>strict_multi_assignment</varname>:
+<programlisting>
+SET plpgsql.extra_warnings TO 'strict_multi_assignment';
+
+CREATE OR REPLACE FUNCTION public.foo()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $$
+DECLARE
+  x int;
+  y int;
+BEGIN
+  SELECT 1 INTO x, y;
+  SELECT 1, 2 INTO x, y;
+  SELECT 1, 2, 3 INTO x, y;
+END;
+$$;
+
+SELECT foo();
+WARNING:  number of source and target fields in assignment does not match
+DETAIL:  strict_multi_assignment check of extra_warnings is active.
+HINT:  Make sure the query returns the exact list of columns.
+WARNING:  number of source and target fields in assignment does not match
+DETAIL:  strict_multi_assignment check of extra_warnings is active.
+HINT:  Make sure the query returns the exact list of columns.
+
+ foo 
+-----
+ 
+(1 row)
+</programlisting>
+   </para>
+  </sect2>
 </sect1>
 
 <!-- **** Porting from Oracle PL/SQL **** -->

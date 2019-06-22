@@ -285,6 +285,13 @@ SELECT * FROM places ORDER BY location <-> point '(101,456)' LIMIT 10;
   </para>
 
   <para>
+   Like GiST, SP-GiST supports <quote>nearest-neighbor</quote> searches.
+   For SP-GiST operator classes that support distance ordering, the
+   corresponding operator is specified in the <quote>Ordering Operators</quote>
+   column in <xref linkend="spgist-builtin-opclasses-table"/>.
+  </para>
+
+  <para>
    <indexterm>
     <primary>index</primary>
     <secondary>GIN</secondary>
@@ -506,7 +513,8 @@ SELECT * FROM places ORDER BY location <-> point '(101,456)' LIMIT 10;
 
   <para>
    Par défaut, les index B-tree stockent leurs entrées dans l'ordre ascendant,
-   valeurs NULL en dernier. Cela signifie que le parcours avant
+   valeurs NULL en dernier (table TID is treated as a tiebreaker column among
+   otherwise equal entries). Cela signifie que le parcours avant
    d'un index sur une colonne <literal>x</literal> produit une sortie
    satisfaisant <literal>ORDER BY x</literal> (ou en plus verbeux
    <literal>ORDER BY x ASC NULLS LAST</literal>). L'index peut aussi être
@@ -818,10 +826,12 @@ CREATE INDEX test3_desc_index ON test3 (id DESC NULLS LAST);
 <programlisting>SELECT *
 FROM access_log
 WHERE url = '/index.html' AND client_ip = inet '212.78.10.32';</programlisting>
-    Une requête qui ne peut pas l'utiliser est&nbsp;:
+    Here the query's IP address is covered by the partial index.  The
+    following query cannot use the partial index, as it uses an IP address
+    that is excluded from the index:
 <programlisting>SELECT *
 FROM access_log
-WHERE client_ip = inet '192.168.100.23';</programlisting>
+WHERE url = '/index.html' AND client_ip = inet '192.168.100.23';</programlisting>
    </para>
 
    <para>
@@ -1153,7 +1163,7 @@ CREATE UNIQUE INDEX tab_x_y ON tab(x) INCLUDE (y);
    table. Si la ligne de la table doit être visitée, cela ne coûte rien de
    récupérer la valeur de la colonne dans la table. Les autres restrictions
    sont que les expressions ne sont actuellement pas supportées dans les
-   colonnes incluses, et que seuls les index B-tree supportent actuellement
+   colonnes incluses, et que seuls les index B-tree et GiST supportent actuellement
    les colonnes incluses.
   </para>
 
@@ -1171,10 +1181,21 @@ CREATE INDEX tab_x_y ON tab(x, y);
    est déconseillé de les ajouter comme premières colonnes pour les raisons
    expliquées dans <xref linkend="indexes-multicolumn"/>. Néanmoins, cette
    méthode ne supporte pas le cas où vous voulez que l'index assure l'unicité
-   des colonnes clés. De plus, utiliser la clause <literal>INCLUDE</literal>
-   pour les colonnes qui ne feront pas partie d'une recherche rend l'index
-   plus petit car ces colonnes n'ont pas besoin d'être enregistrés dans les
-   niveaux supérieurs du B-tree.
+   des colonnes clés.
+  </para>
+
+  <para>
+   <firstterm>Suffix truncation</firstterm> always removes non-key
+   columns from upper B-Tree levels.  As payload columns, they are
+   never used to guide index scans.  The truncation process also
+   removes one or more trailing key column(s) when the remaining
+   prefix of key column(s) happens to be sufficient to describe tuples
+   on the lowest B-Tree level.  In practice, covering indexes without
+   an <literal>INCLUDE</literal> clause often avoid storing columns
+   that are effectively payload in the upper levels.  However,
+   explicitly defining payload columns as non-key columns
+   <emphasis>reliably</emphasis> keeps the tuples in upper levels
+   small.
   </para>
 
   <para>

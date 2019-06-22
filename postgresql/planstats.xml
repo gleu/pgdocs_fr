@@ -1,9 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Dernière modification
-     le       $Date$
-     par      $Author$
-     révision $Revision$ -->
-
 <chapter id="planner-stats-details">
  <title>Comment le planificateur utilise les statistiques</title>
 
@@ -458,7 +453,7 @@ rows = (outer_cardinality * inner_cardinality) * selectivity
    <secondary>multivariée</secondary>
   </indexterm>
 
-  <sect2>
+  <sect2 id="functional-dependencies">
    <title>Dépendances fonctionnelles</title>
 
    <para>
@@ -547,7 +542,7 @@ EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 1;
    </para>
   </sect2>
 
-  <sect2>
+  <sect2 id="multivariate-ndistinct-counts">
    <title>Nombre N-Distinct Multivarié</title>
 
    <para>
@@ -591,6 +586,124 @@ EXPLAIN (ANALYZE, TIMING OFF) SELECT COUNT(*) FROM t GROUP BY a, b;
    </para>
  
   </sect2>
+
+  <sect2 id="mcv-lists">
+   <title>Listes MCV</title>
+
+   <para>
+    Comme expliqué dans <xref linkend="functional-dependencies"/>, les
+    dépendances fonctionnelles sont un type de statistiques peu coûteux et
+    très efficace, mais leur limitation principale est leur nature globale
+    (traquer les dépendances uniquement au niveau de la colonne, pas entre les
+    valeurs des colonnes individuelles).
+   </para>
+
+   <para>
+    Cette section introduit la variante des listes <acronym>MCV</acronym>
+    (valeurs les plus communes), une extension directe de la statistique par
+    colonne décrite dans <xref linkend="row-estimation-examples"/>. Ces
+    statistiques adressent la limitation du sockage de valeurs individuelles
+    mais elles sont naturellement plus coûteuses, à la fois pour la
+    construction des statistiques lors du <command>ANALYZE</command>, pour le
+    stockage et pour le temps de planification.
+   </para>
+
+   <para>
+    Étudions cette requête à partir de <xref
+    linkend="functional-dependencies"/>, mais cette fois avec une liste
+    <acronym>MCV</acronym> crée à partir du même ensemble de colonnes
+    (assurez-vous de supprimer les dépendances fonctionnelles, pour s'assurer
+    que le planificateur utilise les statistiques nouvellement créées).
+
+<programlisting>
+DROP STATISTICS stts;
+CREATE STATISTICS stts2 (mcv) ON a, b FROM t;
+ANALYZE t;
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 1;
+                                   QUERY PLAN
+-------------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=100 width=8) (actual rows=100 loops=1)
+   Filter: ((a = 1) AND (b = 1))
+   Rows Removed by Filter: 9900
+</programlisting>
+
+    L'estimation est aussi précise qu'avec les dépendances fonctionnelles
+    grâce à la petite volumétrie de la table et à une distribution simple avec
+    un petit nombre de valeurs distinctes. Avant de regarder les deuxième
+    requête, qui n'était pas géré particulièrement bien par les dépendances
+    fonctionnelles, inspectons un peu la liste <acronym>MCV</acronym>.
+   </para>
+
+   <para>
+    Inspecter la liste <acronym>MCV</acronym> est possible en utilisant la
+    fonction <function>pg_mcv_list_items</function>.
+
+<programlisting>
+SELECT m.* FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid),
+                pg_mcv_list_items(stxdmcv) m WHERE stxname = 'stts2';
+ index |  values  | nulls | frequency | base_frequency 
+-------+----------+-------+-----------+----------------
+     0 | {0, 0}   | {f,f} |      0.01 |         0.0001
+     1 | {1, 1}   | {f,f} |      0.01 |         0.0001
+   ...
+    49 | {49, 49} | {f,f} |      0.01 |         0.0001
+    50 | {50, 50} | {f,f} |      0.01 |         0.0001
+   ...
+    97 | {97, 97} | {f,f} |      0.01 |         0.0001
+    98 | {98, 98} | {f,f} |      0.01 |         0.0001
+    99 | {99, 99} | {f,f} |      0.01 |         0.0001
+(100 rows)
+</programlisting>
+
+    Ceci confirme qu'il y a 100 combinaisons distinctes dans les deux
+    colonnes, et que leur fréquence est pratiquement identique (fréquence de
+    1% frequency pour les deux). La fréquence de base est la fréquence
+    calculée par les statistiques par colonne, comme si il n'y avait pas de
+    statistiques multi-colonnes. S'il y avait des valeurs NULL dans une des
+    colonnes, cela se serait vu dans la colonne
+    <structfield>nulls</structfield>.
+   </para>
+
+   <para>
+    Lors de l'estimation de la sélectivité, le planificateur applique toutes
+    les conditions sur les éléments de la liste <acronym>MCV</acronym>, puis
+    additionne les fréquences de celles qui correspondent. Voir
+    <function>mcv_clauselist_selectivity</function> dans
+    <filename>src/backend/statistics/mcv.c</filename> pour les détails.
+   </para>
+
+   <para>
+    Comparé aux dépendances fonctionnelles, les listes <acronym>MCV</acronym>
+    ont deux avantages majeurs. Tout d'abord, la liste enregistre les valeurs
+    réelles, rendant possible la décision des combinaisons compatibles.
+
+<programlisting>
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 10;
+                                 QUERY PLAN
+---------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=1 width=8) (actual rows=0 loops=1)
+   Filter: ((a = 1) AND (b = 10))
+   Rows Removed by Filter: 10000
+</programlisting>
+
+    Ensuite, les listes <acronym>MCV</acronym> gèrent un plus grand nombre de
+    types de clause, pas uniquement les clauses d'égalité comme les
+    dépendances fonctionnelles. Voir par exemple la requête d'intervalle,
+    présentée précédemment&nbsp;:
+
+<programlisting>
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a &lt;= 49 AND b &gt; 49;
+                                QUERY PLAN
+---------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=1 width=8) (actual rows=0 loops=1)
+   Filter: ((a &lt;= 49) AND (b &gt; 49))
+   Rows Removed by Filter: 10000
+</programlisting>
+
+   </para>
+
+  </sect2>
+
  </sect1>
 
  <sect1 id="planner-stats-security">
