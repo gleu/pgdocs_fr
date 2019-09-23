@@ -519,21 +519,23 @@
    <foreignphrase>checkpoints</foreignphrase>) sont des
    points qui garantissent que les fichiers de données table et index ont été mis à
    jour avec toutes les informations enregistrées dans le journal avant le
-   point de contrôle.  Au moment du point de contrôle, toutes les
-   pages de données non propres sont écrites sur le disque et une
-   entrée spéciale, pour le point de contrôle, est écrite dans le
+   checkpoint. Au moment du checkpoint, toutes les
+   pages de données modifiées (<foreignphrase>dirty</foreignphrase>)
+   sont écrites sur le disque et une
+   entrée spéciale, pour le checkpoint est écrite dans le
    journal. (Les modifications étaient déjà envoyées dans les journaux de
    transactions.)
    En cas de défaillance, la procédure de récupération recherche le
-   dernier enregistrement d'un point de vérification dans les traces
-   (enregistrement connus sous le nom de <quote>redo log</quote>) à partir
-   duquel il devra lancer l'opération
-   REDO. Toute modification effectuée sur les fichiers de données avant ce point
-   est garantie d'avoir été enregistrée sur disque. Du coup, après un point de
-   vérification, tous les segments représentant des journaux de
+   dernier enregistrement d'un checkpoint
+   pour déterminer le point des journaux
+   (enregistrement connus sous le nom de <quote>redo log</quote>)
+   à partir duquel il devra lancer l'opération de REDO.
+   Toute modification effectuée sur les fichiers de données avant ce point
+   a la garantie d'avoir été enregistrée sur disque. Du coup, après un
+   checkpoint, tous les segments représentant des journaux de
    transaction précédant celui
    contenant le <quote>redo record</quote> ne sont plus nécessaires et peuvent
-   être soit recyclés soit supprimés (quand l'archivage des journaux de
+   être soit recyclés, soit supprimés (quand l'archivage des journaux de
    transaction est activé, ces derniers doivent être archivés avant d'être
    recyclés ou supprimés).
   </para>
@@ -548,17 +550,18 @@
   </para>
 
   <para>
-   Le processus checkpointer lance automatiquement un point de
-   contrôle de temps en temps&nbsp;: toutes les <xref
-   linkend="guc-checkpoint-timeout"/> secondes ou si <xref
-   linkend="guc-max-wal-size"/> risque d'être dépassé, suivant ce qui arrive
-   en premier. La configuration par défaut de ces deux paramètres est,
-   respectivement, 5 minutes et 1 Go.
-   Si aucun enregistrement WAL n'a été écrit depuis le dernier checkpoint, les
-   nouveaux checkpoint ne seront pas effectués même si la durée
+   Le processus checkpointer lance automatiquement un checkpoint
+   de temps en temps. Il démarre toutes les
+   <xref linkend="guc-checkpoint-timeout"/> secondes
+   ou si <xref linkend="guc-max-wal-size"/> risque d'être dépassé,
+   suivant ce qui arrive en premier.
+   La configuration par défaut de ces deux paramètres est,
+   respectivement, 5&nbsp;minutes et 1&nbsp;Go.
+   Si aucun enregistrement WAL n'a été écrit depuis le dernier checkpoint,
+   il n'y en aura pas de nouveaux, même si la durée
    <varname>checkpoint_timeout</varname> est dépassée.
-   (Si l'archivage des WAL est utilisé et que vous voulez définir une limite
-   basse correspondant à la fréquence à laquelle les fichiers sont archivés de
+   (Si l'archivage des WAL est en place et que vous voulez définir une limite
+   basse correspondant à la fréquence d'archivage des fichiers de
    manière à limiter la perte potentielle de données, vous devez ajuster le
    paramètre <xref linkend="guc-archive-timeout"/> plutôt que les paramètres
    affectant les checkpoints.)
@@ -568,131 +571,129 @@
 
   <para>
    La réduction de <varname>checkpoint_timeout</varname> et/ou
-   <varname>max_wal_size</varname> implique
-   des points de contrôle plus fréquents.  Cela permet une récupération
-   plus rapide après défaillance puisqu'il y a moins d'écritures à
-   synchroniser. Cependant, il faut équilibrer cela avec
-   l'augmentation du coût d'écriture des pages de données modifiées.
-   Si <xref linkend="guc-full-page-writes"/> est configuré (ce qui est la
-   valeur par
+   <varname>max_wal_size</varname> provoque
+   des checkpoints plus fréquents. Cela permet une récupération
+   plus rapide après arrêt brutal puisqu'il y aura moins d'écritures à
+   refaire. Cependant, il faut équilibrer cela avec
+   le coût d'écritures plus fréquentes des pages modifiées.
+   Si <xref linkend="guc-full-page-writes"/> est configuré (ce qui est le
    défaut), il reste un autre facteur à considérer. Pour s'assurer de la
    cohérence des pages de données, la première modification d'une page de
-   données après chaque point de vérification résulte dans le traçage du contenu
-   entier de la page. Dans ce cas, un intervalle de points de vérification
-   plus petit augmentera le volume en sortie des journaux de transaction,
-   diminuant légèrement l'intérêt d'utiliser un intervalle plus petit et
-   impliquant
-   de toute façon plus d'entrées/sorties au niveau disque.
+   données après chaque checkpoint résulte dans la journalisation du
+   contenu de la page en entier. Dans ce cas, un intervalle de checkpoints
+   plus petit augmentera le volume d'écriture des journaux de transaction,
+   annulant en partie l'intérêt d'utiliser cet intervalle plus petit et
+   générant de toute façon plus d'entrées/sorties au niveau disque.
   </para>
 
   <para>
-   Les points de contrôle sont assez coûteux, tout d'abord parce qu'ils
-   écrivent tous les tampons utilisés, et ensuite parce que cela suscite un
+   Les checkpoints sont assez coûteux, tout d'abord parce qu'ils
+   écrivent tous les tampons modifiés jusqu'à ce moment,
+   et ensuite parce qu'ils génèrent un
    trafic supplémentaire dans les journaux de transaction, comme indiqué
    ci-dessus. Du coup, il est conseillé
-   de configurer les paramètres en relation assez haut pour que ces points de
-   contrôle ne surviennent pas trop fréquemment. Pour une vérification
+   de configurer les paramètres des checkpoints assez haut pour qu'ils
+   ne surviennent pas trop fréquemment. Pour une vérification
    rapide de l'adéquation de vos paramètres, vous pouvez configurer le
-   paramètre <xref
-   linkend="guc-checkpoint-warning"/>. Si les points de contrôle arrivent plus
-   rapidement que <varname>checkpoint_warning</varname> secondes, un message
+   paramètre <xref linkend="guc-checkpoint-warning"/>.
+   Si les checkpoints se déclenchent à moins de <varname>checkpoint_warning</varname> secondes d'intervalle, un message
    est affiché dans les journaux applicatifs du serveur recommandant d'accroître
-   <varname>max_wal_size</varname>. Une apparition occasionnelle d'un
+   <varname>max_wal_size</varname>. L'apparition occasionnelle d'un tel
    message ne doit pas vous alarmer mais, s'il apparaît souvent, alors les
    paramètres de contrôle devraient être augmentés. Les opérations en masse,
    comme les transferts importants de données via <command>COPY</command>,
-   pourraient être la cause
-   de l'apparition d'un tel nombre de messages d'avertissements si
+   peuvent faire apparaître nombre de ces messages d'avertissement si
    vous n'avez pas configuré <varname>max_wal_size</varname> avec une valeur
    suffisamment haute.
   </para>
 
   <para>
-   Pour éviter de remplir le système disque avec de très nombreuses
-   écritures de pages, l'écriture des pages modifiés pendant un point de
-   vérification est étalée sur une période de temps. Cette période est
-   contrôlée par <xref linkend="guc-checkpoint-completion-target"/>, qui
-   est donné comme une fraction de l'intervalle des points de vérification.
-   Le taux d'entrées/sorties est ajusté pour que le point de vérification
-   se termine quand la fraction donnée de
-   <varname>checkpoint_timeout</varname> secondes s'est écoulée ou quand la
-   fraction donnée de <varname>max_wal_size</varname> a été consommée (la
-   condition que se verra vérifiée la première). Avec une valeur par
-   défaut de 0,5, <productname>PostgreSQL</productname> peut s'attendre à
-   terminer chaque point de vérification en moitié moins de temps qu'il ne
-   faudra pour lancer le prochain point de vérification. Sur un système
-   très proche du taux maximum en entrée/sortie pendant des opérations
-   normales, vous pouvez augmenter
-   <varname>checkpoint_completion_target</varname> pour réduire le chargement
-   en entrée/sortie dû aux points de vérification. L'inconvénient de ceci
-   est que prolonger les points de vérification affecte le temps de
-   récupération parce qu'il faudra conserver plus de journaux de transaction
+   Pour éviter de saturer les entrées/sorties avec de très nombreuses
+   écritures de pages modifiées, leur écriture pendant le checkpoint
+   est étalée sur une période de temps. Elle est
+   contrôlée par <xref linkend="guc-checkpoint-completion-target"/>,
+   donné comme une fraction de l'intervalle des points de vérification.
+   Le taux d'entrées/sorties est ajusté pour que le checkpoint
+   se termine quand la fraction indiquée de
+   <varname>checkpoint_timeout</varname> secondes s'est écoulée,
+   ou avant que <varname>max_wal_size</varname> soit dépassé,
+   selon ce qui arrivera en premier. Avec la valeur par
+   défaut de 0,5, on peut s'attendre à ce que
+   <productname>PostgreSQL</productname> termine chaque checkpoint
+   dans la moitié du temps avant le démarrage du suivant.
+   Sur un système
+   très proche de son débit maximal d'entrées/sorties en fonctionnement
+   normal, vous pouvez augmenter
+   <varname>checkpoint_completion_target</varname> pour réduire la charge
+   due aux checkpoints. L'inconvénient
+   de prolonger les checkpoints est d'impacter le temps de
+   récupération, car il faudra conserver plus de journaux de transaction
    si une récupération est nécessaire. Bien que
-   <varname>checkpoint_completion_target</varname> puisse valoir 1.0, il
-   est bien mieux de la configurer à une valeur plus basse que ça (au
-   maximum 0,9) car les points de vérification incluent aussi d'autres
+   <varname>checkpoint_completion_target</varname> puisse monter à 1.0, il
+   le mieux est de la configurer à une valeur plus basse (au
+   plus 0,9), car les checkpoints incluent d'autres
    activités en dehors de l'écriture des pages modifiées. Une valeur de 1,0
-   peut avoir pour résultat des points de vérification qui ne se terminent
-   pas à temps, ce qui aurait pour résultat des pertes de performance à
-   cause de variation inattendue dans le nombre de journaux nécessaires.
+   peut résulter en checkpoints qui ne se terminent
+   pas à temps, ce qui entraînerait des baisses de performance à
+   cause de variations inattendues dans le nombre de journaux nécessaires.
   </para>
 
   <para>
    Sur les plateformes Linux et POSIX, <xref linkend="guc-checkpoint-flush-after"/>
-   permet de forcer le système d'exploitation à ce que les pages écrites par un
-   checkpoint soient enregistrées sur disque après qu'un nombre configurable
-   d'octets soit écrit. Dans le cas contraire, ces pages pourraient rester dans
-   le cache disque du système d'exploitation, pouvant provoquer des
-   ralentissements lorsque <literal>fsync</literal> est exécuté à la fin d'un
+   permet de forcer le système d'exploitation à vider sur disque
+   les pages écrites par un checkpoint après qu'un nombre configurable
+   d'octets soit écrit. Sinon ces pages pourraient rester dans
+   le cache disque du système d'exploitation, provoquant
+   un blocage quand <literal>fsync</literal> est exécuté à la fin d'un
    checkpoint. Cette configuration aide souvent à réduire la latence des
    transactions mais il peut aussi avoir un effet inverse sur les performances,
-   tout particulièrement lorsque le volume de données traitées dépasse la taille
-   indiquée par le paramètre <xref linkend="guc-shared-buffers"/>, tout en
-   restant plus petite que la taille du cache disque du système d'exploitation.
+   particulièrement pour des charges supérieures à
+   <xref linkend="guc-shared-buffers"/> mais 
+   plus petites que le cache disque du système d'exploitation.
   </para>
 
   <para>
    Le nombre de fichiers de segments WAL dans le répertoire
    <filename>pg_wal</filename> dépend des paramètres
-   <varname>min_wal_size</varname>, <varname>max_wal_size</varname> et du
-   contenu des WAL générés par les cycles de checkpoints précédents. Quand les
+   <varname>min_wal_size</varname>, <varname>max_wal_size</varname> et de la
+   quantité de WAL générée lors des cycles de checkpoints précédents. Quand les
    anciens fichiers de segments ne sont plus nécessaires, ils sont supprimés
-   ou recyclés (autrement dit, renommés pour devenir les segments futurs dans
-   une séquence numérotée). Si, à cause d'un pic rapide sur le taux de sortie
+   ou recyclés (c'est-à-dire renommés pour devenir les segments suivants selon
+   les numéros de la séquence). Si, à cause d'un bref pic du débit
    des WAL, <varname>max_wal_size</varname> est dépassé, les fichiers inutiles
-   de segments seront supprimés jusqu'à ce que le système revienne sous cette
-   limite. En dessous de cette limite, le système recycle suffisamment de
+   seront supprimés jusqu'à ce que le système revienne sous cette
+   limite. En-dessous de cette limite, le système recycle suffisamment de
    fichiers WAL pour couvrir le besoin estimé jusqu'au checkpoint suivant, et
-   supprime le reste. L'estimation est basée sur une moyenne changeante du
+   supprime le reste. L'estimation est basée sur une moyenne glissante du
    nombre de fichiers WAL utilisés dans les cycles de checkpoint précédents.
-   La moyenne changeante est augmentée immédiatement si l'utilisation actuelle
-   dépasse l'estimation, pour qu'il corresponde mieux à l'utilisation en pic
-   plutôt qu'à l'utilisation en moyenne, jusqu'à un certain point.
-   <varname>min_wal_size</varname> place un minimum sur le nombre de fichiers
-   WAL recyclés pour une utilisation future même si le système est inutilisé
-   temporairement et que l'estimation de l'utilisation des WAL suggère que peu
+   Elle est augmentée immédiatement si l'utilisation en cours
+   dépasse l'estimation, pour correspondre aux pics d'utilisation
+   plutôt qu'à l'utilisation moyenne, jusqu'à un certain point.
+   <varname>min_wal_size</varname> définit un nombre minimum de fichiers
+   WAL recyclés pour une utilisation future, même si le système est inutilisé
+   et que l'estimation suggère que peu
    de WAL sont nécessaires.
   </para>
 
   <para>
    Indépendamment de <varname>max_wal_size</varname>, les <xref
-   linkend="guc-wal-keep-segments"/> + 1 plus récents fichiers WAL sont conservés en
+   linkend="guc-wal-keep-segments"/> +&nbsp;1 plus récents fichiers WAL sont conservés en
    permanence. De plus, si l'archivage est activé, les anciens segments ne
    sont ni supprimés ni recyclés jusqu'à la réussite de leur archivage. Si
-   l'archivage des WAL n'est pas assez rapide pour tenir le rythme soutenu de
-   la génération des WAL ou si la commande indiquée par
+   l'archivage des WAL n'est pas assez rapide pour tenir le rythme de
+   la génération des WAL, ou si la commande indiquée par
    <varname>archive_command</varname> échoue de manière répétée, les anciens
    fichiers WAL s'accumuleront dans le répertoire <filename>pg_wal</filename>
-   jusqu'à ce que ce problème soit résolu. Un serveur standby lent ou en échec
-   qui utilise un slot de réplication aura le même effet (voir <xref
+   jusqu'à ce que ce problème soit résolu. Un serveur standby lent ou en échec,
+   et qui utilise un slot de réplication, aura le même effet (voir <xref
    linkend="streaming-replication-slots"/>).
   </para>
 
   <para>
-   Dans le mode de restauration d'archive et dans le mode standby, le serveur
+   En mode de restauration d'archive et en mode standby, le serveur
    réalise périodiquement des <firstterm>restartpoints</firstterm>
    <indexterm><primary>restartpoint</primary></indexterm> (points de
-   redémarrage). C'est similaire aux checkpoints lors du fonctionnement
+   redémarrage), qui sont similaire aux checkpoints lors du fonctionnement
    normal&nbsp;: le serveur force l'écriture de son état sur disque, met à
    jour le fichier <filename>pg_control</filename> pour indiquer que les
    données déjà traitées des journaux de transactions n'ont plus besoin d'être
@@ -704,12 +705,12 @@
    Un restartpoint est déclenché lorsqu'un enregistement de checkpoint est
    atteint si un minimum de <varname>checkpoint_timeout</varname> secondes se
    sont écoulées depuis le dernier restartpoint, ou si la taille totale des
-   journaux de transactions a dépassé <varname>max_wal_size</varname>.
-   Néanmoins, à cause des limitations lors de la réalisation d'un
-   restartpoint, <varname>max_wal_size</varname> est souvent dépassé lors
+   journaux de transactions va dépasser <varname>max_wal_size</varname>.
+   Néanmoins, à cause de ces limitations sur quand un restartpoint peut
+   être effectué, <varname>max_wal_size</varname> est souvent dépassé lors
    d'une restauration jusqu'à au plus un cycle de checkpoint de journaux
    (<varname>max_wal_size</varname> n'est de toute façon jamais une limite en
-   dur donc vous devriez toujours laisser plein d'espace pour éviter de
+   dur, vous devriez donc toujours laisser plein d'espace pour éviter de
    manquer d'espace disque).
   </para>
 
@@ -720,106 +721,110 @@
    <function>XLogInsertRecord</function> est utilisée pour placer une
    nouvelle entrée à l'intérieur des tampons <acronym>WAL</acronym> en mémoire
    partagée. S'il n'y a plus
-   d'espace pour une nouvelle entrée, <function>XLogInsertRecord</function>
+   d'espace pour la nouvelle entrée, <function>XLogInsertRecord</function>
    devra écrire (autrement dit, déplacer dans le cache du noyau) quelques
-   tampons <acronym>WAL</acronym> remplis.  Ceci n'est pas désirable parce que
-   <function>XLogInsertRecord</function> est utilisée lors de chaque
+   tampons <acronym>WAL</acronym> remplis. Ceci n'est pas souhaitable parce que
+   <function>XLogInsertRecord</function> est utilisée à chaque
    modification bas niveau de la base (par exemple, lors de l'insertion d'une
-   ligne) quand un verrou exclusif est posé sur des pages de données
-   affectées. À cause de ce verrou, l'opération doit être aussi rapide
-   que possible.  Pire encore, écrire des tampons <acronym>WAL</acronym>
-   peut forcer la création d'un nouveau journal, ce qui
-   peut prendre beaucoup plus de temps.  Normalement, les tampons
-   <acronym>WAL</acronym> doivent être écrits et vidés par une requête
-   de <function>XLogFlush</function> qui est faite, la plupart du
+   ligne) quand un verrou exclusif est posé sur les pages de données
+   affectées, et l'opération doit donc être aussi rapide que possible.
+   Pire encore, écrire des tampons <acronym>WAL</acronym>
+   peut aussi forcer la création d'un nouveau journal, ce qui
+   prend encore plus de temps. Normalement, les tampons
+   <acronym>WAL</acronym> doivent être écrits et vidés par un appel
+   à <function>XLogFlush</function> fait, la plupart du
    temps, au moment de la validation d'une transaction pour assurer
    que les entrées de la transaction sont écrites vers un stockage
-   permanent.  Sur les systèmes avec une importante écriture de journaux,
+   permanent. Sur les systèmes avec une importante écriture de journaux,
    les requêtes de <function>XLogFlush</function> peuvent ne pas
-   arriver assez souvent pour empêcher <function>LogInsert</function> d'avoir
-   à écrire lui-même sur disque.  Sur de tels systèmes, on devrait augmenter le
+   arriver assez souvent pour empêcher <function>XLogInsert</function> d'avoir
+   à écrire lui-même. Sur de tels systèmes, on devrait augmenter le
    nombre de tampons
-   <acronym>WAL</acronym> en modifiant le paramètre de configuration <xref
+   <acronym>WAL</acronym> en modifiant le paramètre <xref
    linkend="guc-wal-buffers"/>. Quand <xref linkend="guc-full-page-writes"/> est configuré
    et que le système est très occupé, configurer <varname>wal_buffers</varname> avec une valeur
-   plus importante aide à avoir des temps de réponse plus réguliers
-   lors de la période suivant chaque point de vérification.
+   plus importante aide à lisser les temps de réponse
+   dans la période suivant immédiatement chaque checkpoint.
   </para>
 
   <para>
-   Le paramètre <xref linkend="guc-commit-delay"/> définit la durée
-   d'endormissement en micro-secondes qu'un processus maître du groupe de commit
+   Le paramètre <xref linkend="guc-commit-delay"/> définit combien de
+   micro-secondes un processus maître d'un groupe de commit
    va s'endormir après avoir obtenu un verrou avec <function>XLogFlush</function>,
-   tandis que les autres processus du groupe de commit vont compléter la file
-   d'attente derrière le maître. Ce délai permet aux processus des autres serveurs
-   d'ajouter leurs enregistrements de commit aux buffers WAL de manière à ce
-   qu'ils soient tous mis à jour par l'opération de synchronisation éventuelle du
+   pendant que les autres processus du groupe vont s'ajouter à la queue
+   derrière le maître. Ce délai permet aux autres processus serveur
+   d'ajouter leurs enregistrements de commit aux buffers WAL, pour
+   qu'ils soient tous écrits par un éventuel vidage sur disque du
    maître. Il n'y aura pas d'endormissement si <xref linkend="guc-fsync"/> n'est
-   pas activé et si le nombre de sessions disposant actuellement de transactions
-   actives est inférieur à <xref linkend="guc-commit-siblings"/>&nbsp;; ce
-   mécanisme évite l'endormissement lorsqu'il est improbable que d'autres sessions
-   valident leur transactions peu de temps après. Il est à noter que, sur
+   pas activé, ou si moins de <xref linkend="guc-commit-siblings"/> autres
+   sessions sont actuellement dans une transaction active&nbsp;; ce
+   mécanisme évite l'endormissement quand il est improbable que d'autres sessions
+   valident bientôt leur transactions. Il est à noter que, sur 
    certaines plateformes, la résolution d'une requête d'endormissement est de dix
    millisecondes, ce qui implique que toute valeur comprise entre 1 et 10000 pour
    le paramètre <varname>commit_delay</varname> aura le même effet. Notez aussi
-   que les opérations d'endormissement peuvent être légérement plus longues que
-   ce qui a été demandé par ce paramètre sur certaines plateformes.
+   que,sur certaines plateformes, les opérations d'endormissement
+   peuvent être légèrement plus longues que ce qui a été demandé par le paramètre.
   </para>
 
   <para>
    Comme l'objet de <varname>commit_delay</varname> est de permettre d'amortir
-   le coût de chaque opération de vidage sur disque des transactions concurrentes
-   (potentiellement au coût de la latence des transactions), il est nécessaire de
-   quantifier ce coût pour choisir une bonne valeur pour ce paramètre. Plus ce
-   coût est élevé, plus il est probable que <varname>commit_delay</varname> soit
-   optimal dans un contexte où les transactions sont de plus en plus nombreuses,
+   le coût de chaque opération de vidage sur disque sur plusieurs transactions concurrentes
+   (potentiellement au prix de la latence des transactions), il est nécessaire de
+   quantifier ce coût pour choisir intelligemment la valeur de ce paramètre. Plus le
+   coût est élevé, plus <varname>commit_delay</varname> sera efficace
+   au sein d'un débit de transactions croissant,
    jusqu'à un certain point. Le programme <xref linkend="pgtestfsync"/> peut être
-   utilisé pour mesurer le temps moyen en microsecondes qu'une seule mise à jour
-   WAL prends. Définir le paramètre à la moitié du temps moyen rapporté par ce
-   programme après une mise à jour d'une simple opération d'écriture de 8&nbsp;Ko
-   est la valeur la plus souvent recommandée pour démarrer l'optimisation d'une
-   charge particulière. Alors que l'ajustement de la valeur de
-   <varname>commit_delay</varname> est particulièrement nécessaire lorsque les
-   journaux WAL sont stockés sur des disques à latence élevée, le gain pourrait
+   utilisé pour mesurer le temps moyen en microsecondes que prend une seule
+   opération de vidage de WAL.
+   La moitié du temps moyen rapporté par ce
+   programme pour une mise à jour d'une simple opération d'écriture de 8&nbsp;ko
+   est la valeur la plus souvent recommandée comme point de départ de
+   l'optimisation d'une
+   charge particulière. Bien que l'ajustement de la valeur de
+   <varname>commit_delay</varname> soit particulièrement utile lorsque les
+   journaux WAL sont stockés sur des disques à latence élevée, le gain peut
    aussi être significatif sur les supports de stockage avec des temps de
-   synchronisation très rapides, comme ceux s'appuyant sur de la mémoire flash
-   ou RAID avec des caches d'écriture dotés de batterie, mais dans tous les cas,
-   cela doit être testé avec un fonctionnement représentatif de la réalité. Des
+   synchronisation très rapides, comme les SSD ou les grappes RAID
+   avec des caches en écriture dotés de batterie&nbsp;; mais dans tous les cas,
+   cela doit être testé avec une charge représentative de la réalité. Des
    valeurs plus élevées de <varname>commit_siblings</varname> peuvent être
-   utilisées dans ce cas, alors que de plus petites valeurs de
-   <varname>commit_siblings</varname> sont plutôt utiles sur des supports de
-   plus grande latence. À noter qu'il est possible qu'une valeur trop élevée de
-   <varname>commit_delay</varname> puisse augmenter la latence des transactions
-   à tel point que l'ensemble des transactions pourraient en souffrir.
+   utilisées dans ce cas, alors que de petites valeurs de
+   <varname>commit_siblings</varname> sont souvent utiles sur des supports de
+   grande latence. À noter qu'il est possible qu'une valeur trop élevée de
+   <varname>commit_delay</varname> augmente la latence des transactions
+   à un tel point que le débit des transactions en souffre.
   </para>
 
   <para>
    Lorsque <varname>commit_delay</varname> est défini à zéro (il s'agit de la
-   valeur par défaut), il est toujours possible qu'un groupement de commit se
-   produise, mais chaque groupe ne consistera qu'en les sessions qui ont atteint
-   le point où il leur est nécessaire de mettre à jour leur enregistrement de
-   commit alors que la précédente opération de mise à jour opère. Avec un plus
-   grand nombre de clients, l'apparition d'un <quote>effet tunnel</quote> se
-   profile, car l'effet d'un groupement de commit devient plus lourd même
+   valeur par défaut), il est toujours possible qu'un regroupement de commits se
+   produise, mais chaque groupe ne consistera qu'en sessions atteignant
+   le moment de l'enregistrement de commit pendant le laps de temps
+   où la précédente opération de vidage (s'il y en a) opère.
+   Avec un grand nombre de clients, un <quote>effet tunnel</quote>
+   (<foreignphrase>gangway effect</foreignphrase>) a tendance à se produire,
+   et ainsi les effets du regroupement de commits deviennent significatifs même
    lorsque <varname>commit_delay</varname> est à zéro, et dans ce cas
    <varname>commit_delay</varname> devient inutile. Définir
-   <varname>commit_delay</varname> n'est alors réellement utile que quand
-   il existe des transactions concurrentes, et que le flux est limité en
-   fréquence par commit. Ce paramètre peut aussi être efficace avec une latence
-   élevée en augmentant le flux de transaction avec un maximum de deux clients
-   (donc un unique client avec une unique transaction en cours).
+   <varname>commit_delay</varname> n'est utile que quand
+   (1)&nbsp;il existe des transactions concurrentes, et
+   (2)&nbsp;le débit est limité dans une certaine mesure
+   par la vitesse de commit&nbsp;; mais, dans le cas d'un temps de latence
+   du disque élevé, ce paramètre peut augmenter efficacement le flux de transaction
+   avec seulement deux clients
+   (c'est-à-dire un unique client qui valide, et une transaction sœur).
   </para>
 
   <para>
-   Le paramètre <xref linkend="guc-wal-sync-method"/> détermine la façon dont
+   Le paramètre <xref linkend="guc-wal-sync-method"/> détermine comment
    <productname>PostgreSQL</productname> demande au noyau de forcer les mises
-   à jour des journaux de transaction sur le disque. Toutes les options
-   ont un même comportement avec une exception,
+   à jour des journaux de transaction sur le disque. Toutes les différentes
+   options devraient être identiques en terme de fiabilité, à l'exception de
    <literal>fsync_writethrough</literal>, qui peut parfois forcer une écriture
    du cache disque même quand d'autres options ne le font pas. Néanmoins,
-   dans la mesure où la fiabilité ne disparaît pas, c'est avec des options
-   spécifiques à la plate-forme que la rapidité la plus importante sera
-   observée. Vous pouvez tester l'impact sur la vitesse provoquée par différentes
+   savoir quelle est l'option la plus rapide est assez dépendant de la plateforme.
+   Vous pouvez tester les vitesses des différentes
    options en utilisant le programme <xref
    linkend="pgtestfsync"/>. Notez que ce paramètre est ignoré si
    <varname>fsync</varname> a été désactivé.
@@ -844,19 +849,22 @@
   </indexterm>
 
   <para>
-   Le mécanisme <acronym>WAL</acronym> est automatiquement disponible&nbsp;;
-   aucune action n'est requise de la part de l'administrateur excepté
-   de s'assurer que l'espace disque requis par les journaux de transaction
-   soit présent et que tous les réglages soient faits (regardez
+   Le mécanisme <acronym>WAL</acronym> est automatiquement activé&nbsp;;
+   aucune action n'est requise de la part de l'administrateur, sauf
+   s'assurer que l'espace disque requis par les journaux de transaction
+   est présent et que tous les réglages nécessaires sont faits (voir
    la <xref linkend="wal-configuration"/>).
   </para>
 
   <para>
-   Des enregistrements <acronym>WAL</acronym> sont ajoutés aux journaux
+   Les enregistrements <acronym>WAL</acronym> sont ajoutés aux journaux
    <acronym>WAL</acronym>, enregistrement après enregistrement. La position
-   d'insertion est donnée par le Log Sequence Number (<acronym>LSN</acronym>)
-   qui est un décalage d'octet dans les journaux de transactions, décalage
-   s'incrémentant de manière monotone à chaque enregistrement. Les valeurs du
+   d'insertion est donnée par le
+   <foreignphrase>Log Sequence Number</foreignphrase> (<acronym>LSN</acronym>,
+   pour numéro de séquence de journal)
+   qui est un décalage d'octets (<foreignphrase>offset</foreignphrase>)
+   au sein des journaux de transactions,
+   qui s'incrémente de manière monotone à chaque enregistrement. Les valeurs du
    <acronym>LSN</acronym> sont renvoyées en tant que type de données <link
    linkend="datatype-pg-lsn"><type>pg_lsn</type></link>. Les valeurs peuvent
    être comparées pour calculer le volume de données <acronym>WAL</acronym>
@@ -865,19 +873,19 @@
   </para>
 
   <para>
-   Les journaux de transaction sont stockés dans le répertoire
-   <filename>pg_wal</filename> sous le répertoire de données, comme un
-   ensemble de fichiers, chacun d'une taille de 16&nbsp;Mo généralement (cette
-   taille pouvant être modifiée en précisant une valeur pour l'option
-   <option>--wal-segsize</option> de initdb). Chaque fichier est divisé en
-   pages de généralement 8&nbsp;Ko (cette taille pouvant être modifiée en
-   précisant une valeur pour l'option <option>--with-wal-blocksize</option> de
-   configure). Les en-têtes de l'entrée du journal sont décrites dans
-   <filename>access/xlogrecord.h</filename>&nbsp;; le contenu de l'entrée
-   dépend du type de l'événement qui est enregistré.  Les fichiers sont nommés
-   suivant un nombre qui est toujours incrémenté et qui commence à
-   <filename>000000010000000000000000</filename>.  Les nombres ne bouclent
-   pas, mais cela prendra beaucoup de temps pour épuiser le stock de nombres
+   Les journaux de transaction sont un ensemble de fichiers stockés dans le répertoire
+   <filename>pg_wal</filename> sous celui des données,
+   chacun d'une taille de 16&nbsp;Mo normalement (cette
+   taille pouvant être modifiée en modifiant l'option
+   <option>--wal-segsize</option> d'initdb). Chaque fichier est divisé en
+   pages de généralement 8&nbsp;ko (cette taille pouvant être modifiée en
+   avec l'option <option>--with-wal-blocksize</option> de
+   configure). Les en-têtes d'une entrée de journal sont décrites dans
+   <filename>access/xlogrecord.h</filename>&nbsp;; le contenu d'une entrée
+   dépend du type de l'événement qui est enregistré. Les fichiers sont nommés
+   suivant des nombres continûment incrémentés, commençant par
+   <filename>000000010000000000000000</filename>. Les nombres ne bouclent
+   pas, mais cela prendra beaucoup, beaucoup de temps pour épuiser le stock de nombres
    disponibles.
   </para>
 
@@ -885,19 +893,19 @@
    Il est avantageux que les journaux soient situés sur un autre disque que
    celui des fichiers principaux de la base de données.  Cela peut
    se faire en déplaçant le répertoire
-   <filename>pg_wal</filename> vers un autre emplacement (alors que
-   le serveur est arrêté) et en créant un lien
-   symbolique de l'endroit d'origine dans le répertoire principal de
-   données au nouvel emplacement.
+   <filename>pg_wal</filename> vers un autre emplacement
+   (serveur arrêté, bien sûr) et en créant dans le répertoire principal de
+   données un lien symbolique de l'emplacement original vers le nouveau.
   </para>
 
   <para>
    Le but de <acronym>WAL</acronym> est de s'assurer que le journal est écrit
-   avant l'altération des entrées dans la base, mais cela peut être mis en échec par
-   les disques<indexterm><primary>disques durs</primary></indexterm> qui
+   avant de modifier les enregistrements de la base,
+   mais cela peut être mis en échec par
+   des disques<indexterm><primary>disques durs</primary></indexterm> qui
    rapportent une écriture
    réussie au noyau quand, en fait, ils ont seulement mis en cache
-   les données et ne les ont pas encore stockés sur le disque.  Une
+   les données et ne les ont pas encore stockées sur le disque. Une
    coupure de courant dans ce genre de situation peut mener à
    une corruption irrécupérable des données.  Les administrateurs
    devraient s'assurer que les disques contenant les journaux de
@@ -907,30 +915,30 @@
   </para>
 
   <para>
-   Après qu'un point de contrôle ait été fait et que le journal ait été
-   écrit, la position du point de contrôle est sauvegardée dans le
+   Après qu'un checkpoint a été fait et le journal vidé sur disque,
+   la position du checkpoint est sauvegardée dans le
    fichier <filename>pg_control</filename>.  Donc, au début de la
    récupération, le serveur lit en premier
-   <filename>pg_control</filename> et ensuite l'entrée du point de
-   contrôle&nbsp;; ensuite, il exécute l'opération REDO en parcourant vers
-   l'avant à partir de la position du journal indiquée dans l'entrée du
-   point de contrôle. Parce que l'ensemble du contenu des pages de
+   <filename>pg_control</filename> et ensuite l'entrée du
+   checkpoint&nbsp;; ensuite, il opère le REDO en progressant
+   à partir de la position du journal indiquée dans l'entrée du
+   checkpoint. Parce que l'ensemble du contenu des pages de
    données est sauvegardé dans le journal à la première modification de
-   page après un point de contrôle (en supposant que <xref
+   page après un checkpoint (en supposant que <xref
    linkend="guc-full-page-writes"/> n'est pas désactivé), toutes les pages
-   changées depuis le point de contrôle seront restaurées dans un état cohérent.
+   modifiées depuis le checkpoint seront restaurées dans un état cohérent.
   </para>
 
   <para>
    Pour gérer le cas où <filename>pg_control</filename> est corrompu, nous
-   devons permettre le parcours des segments de journaux
+   devrions permettre le parcours des segments de journaux
    existants en ordre inverse &mdash; du plus récent au plus ancien &mdash; pour
-   trouver le dernier point de vérification. Ceci n'a pas encore été implémenté.
+   trouver le dernier checkpoint. Ceci n'a pas encore été implémenté.
    <filename>pg_control</filename> est assez petit (moins d'une page disque)
    pour ne pas être sujet aux problèmes d'écriture partielle et, au moment où
-   ceci est écrit, il n'y a eu aucun rapport d'échecs de la base de données
-   uniquement à cause de son incapacité à lire <filename>pg_control</filename>.
-   Donc, bien que cela soit théoriquement un point faible,
+   ceci est écrit, il n'y a eu aucun rapport de défaillance d'une base
+   due uniquement à l'incapacité à lire <filename>pg_control</filename>.
+   Donc, bien qu'étant théoriquement un point faible,
    <filename>pg_control</filename> ne semble pas être un problème en pratique.
   </para>
  </sect1>
