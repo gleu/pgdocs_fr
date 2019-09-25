@@ -1527,7 +1527,84 @@ SELECT 1/0;
     façon de vérifier l'authentification.
    </para>
   </sect2>
- </sect1>
+
+  <sect2>
+   <title>Chiffrement <acronym>GSSAPI</acronym> de la session</title>
+
+   <para>
+    Si <productname>PostgreSQL</productname> a été compilé avec le support
+    de <acronym>GSSAPI</acronym>, les communications client/serveur
+    peuvent être chiffrées en utilisant <acronym>GSSAPI</acronym>.
+    Cela fournit une sécurité des communications dans des environnements
+    où des attaquants pourraient être capables de capturer le trafic
+    de session. Pour plus d'information sur le chiffrement des
+    sessions <productname>PostgreSQL</productname> avec
+    <acronym>GSSAPI</acronym>, voir <xref linkend="gssapi-enc"/>.
+   </para>
+
+   <para>
+    Pour initier une connexion chiffrée avec <acronym>GSSAPI</acronym>,
+    le client envoie initialement un message GSSENCRequest plutôt
+    qu'un StartupMessage. Le serveur répond alors avec un seul octet
+    contenant <literal>G</literal> ou <literal>N</literal>, indiquant
+    respectivement qu'il est d'accord ou non pour mettre en oeuvre
+    un chiffrement <acronym>GSSAPI</acronym>.
+    Le client peut à ce moment fermer la connexion s'il n'est pas satisfait
+    de la réponse.  Pour continuer après <literal>G</literal>,
+    en utilisant les appels en C de GSSAPI tel que mentionnés dans la
+    RFC2744 ou équivalent, il faut faire une initialisation <acronym>GSSAPI</acronym>
+    en appelant <function>gss_init_sec_context()</function> en boucle, avec un
+    premier paramètre vide, puis avec le résultat du serveur, jusqu'à ce que
+    ce dernier ne renvoie plus de résultat.
+
+    L'envoi des résultats de <function>gss_init_sec_context()</function>
+    au serveur doit être préfixé par la longueur du message, exprimée en un entier de
+    quatre octets dans l'ordre du réseau. Après le succès de l'initialisation,
+    utiliser <function>gss_wrap()</function> pour chiffrer le
+    StartupMessage normal et toutes les données qui suivent, toujours
+    préfixées par leur longueur exprimée en entier de quatre octets
+    dans l'ordre du réseau.
+    Il est à noter que le serveur acceptera uniquement du client des
+    paquets chiffrés dont la longueur est inférieure à 16&nbsp;Ko&nbsp;;
+    <function>gss_wrap_size_limit()</function> devrait être utilisée
+    par le client pour déterminer quelle taille de message non chiffré
+    n'excède pas cette limite, et découper les messages plus grands
+    pour les passer en plusieurs appels à
+    <function>gss_wrap()</function>.
+
+    La taille typique des segments non chiffrées est de 8&nbsp;Ko, donnant des paquets
+    chiffrés légèrement plus grands que 8&nbsp;Ko mais bien en-dessous du maximum de
+    16&nbsp;Ko.
+    Le serveur n'est pas censé envoyer des paquets chiffrés plus grands que 16&nbsp;Ko
+    au client. Pour continuer après la réception du <literal>N</literal>,
+    envoyer le StartupMessage usuel et continuer sans chiffrement.
+   </para>
+
+   <para>
+    La partie cliente doit aussi être prête à gérer une réponse ErrorMessage
+    du serveur à GSSENCRequest. Elle peut se produire uniquement si le
+    serveur date d'avant le support du chiffrement <acronym>GSSAPI</acronym>
+    dans <productname>PostgreSQL</productname>. Dans ce cas, la connexion
+    doit être fermée, mais le client peut choisir d'ouvrir une nouvelle
+    connexion et continuer sans demander le chiffrement <acronym>GSSAPI</acronym>.
+    Etant donné les limites de tailles spécifiées ci-dessus, la réponse
+    ErrorMessage ne peut être confondue avec une réponse correcte du serveur
+    d'une longueur appropriée.
+   </para>
+
+   <para>
+    Un GSSENCRequest initial peut aussi être utilisé dans une connexion en
+    train d'être ouverte pour envoyer un message CancelRequest.
+   </para>
+
+   <para>
+    Bien que le protocole lui-même n'offre pas de moyen pour le serveur
+    de forcer le chiffrement <acronym>GSSAPI</acronym>, l'administrateur
+    peut configurer le serveur pour rejeter les sessions non chiffrées
+    via le contrôle d'authentification.
+   </para>
+  </sect2>
+</sect1>
 
 <sect1 id="protocol-logical-replication">
  <title>Protocole de réplication logique en flux</title>
@@ -1728,74 +1805,6 @@ SELECT 1/0;
    </variablelist>
   </para>
 
-  <sect2>
-   <title><acronym>GSSAPI</acronym> Session Encryption</title>
-
-   <para>
-    If <productname>PostgreSQL</productname> was built with
-    <acronym>GSSAPI</acronym> support, frontend/backend communications
-    can be encrypted using <acronym>GSSAPI</acronym>.  This provides
-    communication security in environments where attackers might be
-    able to capture the session traffic. For more information on
-    encrypting <productname>PostgreSQL</productname> sessions with
-    <acronym>GSSAPI</acronym>, see <xref linkend="gssapi-enc"/>.
-   </para>
-
-   <para>
-    To initiate a <acronym>GSSAPI</acronym>-encrypted connection, the
-    frontend initially sends a GSSENCRequest message rather than a
-    StartupMessage.  The server then responds with a single byte
-    containing <literal>G</literal> or <literal>N</literal>, indicating that it
-    is willing or unwilling to perform <acronym>GSSAPI</acronym> encryption,
-    respectively.  The frontend might close the connection at this point
-    if it is dissatisfied with the response.  To continue after
-    <literal>G</literal>, using the GSSAPI C bindings as discussed in RFC2744
-    or equivalent, perform a <acronym>GSSAPI</acronym> initialization by
-    calling <function>gss_init_sec_context()</function> in a loop and sending
-    the result to the server, starting with an empty input and then with each
-    result from the server, until it returns no output.  When sending the
-    results of <function>gss_init_sec_context()</function> to the server,
-    prepend the length of the message as a four byte integer in network byte
-    order.  If this is successful, then use <function>gss_wrap()</function> to
-    encrypt the usual StartupMessage and all subsequent data, prepending the
-    length of the result from <function>gss_wrap()</function> as a four byte
-    integer in network byte order to the actual encrypted payload.  Note that
-    the server will only accept encrypted packets from the client which are less
-    than 16kB; <function>gss_wrap_size_limit()</function> should be used by the
-    client to determine the size of the unencrypted message which will fit
-    within this limit and larger messages should be broken up into multiple
-    <function>gss_wrap()</function> calls.  Typical segments are 8kB of
-    unencrypted data, resulting in encrypted packets of slightly larger than 8kB
-    but well within the 16kB maximum.  The server can be expected to not send
-    encrypted packets of larger than 16kB to the client.  To continue after
-    <literal>N</literal>, send the usual StartupMessage and proceed without
-    encryption.
-   </para>
-
-   <para>
-    The frontend should also be prepared to handle an ErrorMessage
-    response to GSSENCRequest from the server.  This would only occur if
-    the server predates the addition of <acronym>GSSAPI</acronym> encryption
-    support to <productname>PostgreSQL</productname>.  In this case the
-    connection must be closed, but the frontend might choose to open a fresh
-    connection and proceed without requesting <acronym>GSSAPI</acronym>
-    encryption.  Given the length limits specified above, the ErrorMessage can
-    not be confused with a proper response from the server with an appropriate
-    length.
-   </para>
-
-   <para>
-    An initial GSSENCRequest can also be used in a connection that is being
-    opened to send a CancelRequest message.
-   </para>
-
-   <para>
-    While the protocol itself does not provide a way for the server to
-    force <acronym>GSSAPI</acronym> encryption, the administrator can
-    configure the server to reject unencrypted sessions as a byproduct
-    of authentication checking.
-   </para>
-  </sect2>
  </sect1>
 
 <sect1 id="sasl-authentication">
@@ -4012,9 +4021,9 @@ Bind (F)
           <replaceable>lignes</replaceable> est le nombre de lignes insérées.
           <replaceable>oid</replaceable> était l'id de l'objet de la ligne insérée
           si <replaceable>lignes</replaceable> vaut 1 et que la table cible a des
-          OID, but OIDs system columns are
-          not supported anymore; therefore <replaceable>oid</replaceable>
-          is always 0
+          OID, mais les colonnes systèmes OIDs ne sont plus
+          supportées; par conséquent <replaceable>oid</replaceable>
+          vaut toujours 0.
          </para>
 
          <para>
@@ -4987,52 +4996,51 @@ Bind (F)
 
    <varlistentry>
     <term>
-GSSResponse (F)
-</term>
-<listitem>
-<para>
+     GSSResponse (F)
+    </term>
+    <listitem>
+     <para>
+      <variablelist>
+       <varlistentry>
+	<term>
+         Byte1('p')
+	</term>
+	<listitem>
+	 <para>
+          Identifie le message comme une réponse GSSAPI ou SSPI. Notez
+          que ceci peut aussi être utilisé comme message de réponse SASL
+          et password. Le type de message exact se déduit du contexte.
+	 </para>
+	</listitem>
+       </varlistentry>
+       <varlistentry>
+	<term>
+         Int32
+	</term>
+	<listitem>
+	 <para>
+          Longueur du contenu du message en octets, incluant lui-même.
+	 </para>
+	</listitem>
+       </varlistentry>
+       <varlistentry>
+	<term>
+         Byte<replaceable>n</replaceable>
+	</term>
+	<listitem>
+	 <para>
+          Données spécifiques du message GSSAPI/SSPI.
+	 </para>
+	</listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+    </listitem>
+   </varlistentry>
 
-<variablelist>
-<varlistentry>
-<term>
-        Byte1('p')
-</term>
-<listitem>
-<para>
-                Identifie le message comme une réponse GSSAPI ou SSPI. Notez
-                que ceci peut aussi être utilisé comme message de réponse SASL
-                et password. Le type de message exact se déduit du contexte.
-</para>
-</listitem>
-</varlistentry>
-<varlistentry>
-<term>
-        Int32
-</term>
-<listitem>
-<para>
-                Longueur du contenu du message en octets, incluant lui-même.
-</para>
-</listitem>
-</varlistentry>
-<varlistentry>
-<term>
-        Byte<replaceable>n</replaceable>
-</term>
-<listitem>
-<para>
-                Données spécifiques du message GSSAPI/SSPI.
-</para>
-</listitem>
-</varlistentry>
-</variablelist>
-</para>
-</listitem>
-</varlistentry>
 
-
-<varlistentry>
-<term>
+   <varlistentry>
+    <term>
      NoData (B)
     </term>
     <listitem>
@@ -5896,7 +5904,8 @@ GSSResponse (F)
         </term>
         <listitem>
          <para>
-          Length of message contents in bytes, including self.
+          Longueur du contenu du message en octets, incluant sa propre
+	  longueur.
          </para>
         </listitem>
        </varlistentry>
@@ -5906,10 +5915,12 @@ GSSResponse (F)
         </term>
         <listitem>
          <para>
-          The <acronym>GSSAPI</acronym> Encryption request code.  The value is chosen to contain
-          <literal>1234</literal> in the most significant 16 bits, and <literal>5680</literal> in the
-          least significant 16 bits.  (To avoid confusion, this code
-          must not be the same as any protocol version number.)
+          Le code de demande de chiffrement <acronym>GSSAPI</acronym>.
+	  La valeur est choisie pour contenir
+          <literal>1234</literal> dans les 16 bits les plus significatifs,
+	  et <literal>5680</literal> dans les 16 bits les moins significatifs.
+          (Pour éviter toute confusion, ce code doit être différent de n'importe
+	  quel numéro de version de protocole.)
          </para>
         </listitem>
        </varlistentry>
@@ -6662,7 +6673,7 @@ Relation
 </varlistentry>
 </variablelist>
         Ensuite, la partie suivante du message apparaît pour chaque
-        colonne (except generated columns)&nbsp;:
+        colonne (excepté les colonnes générées)&nbsp;:
 <variablelist>
 <varlistentry>
 <term>
@@ -7096,7 +7107,7 @@ TupleData
 </varlistentry>
 </variablelist>
         Ensuite, un des sous-messages suivants apparaît pour chaque
-        colonne (except generated columns)&nbsp;:
+        colonne (excepté les colonnes générées)&nbsp;:
 <variablelist>
 <varlistentry>
 <term>
@@ -7117,7 +7128,7 @@ TupleData
 </term>
 <listitem>
 <para>
-                Identifies une valeur TOAST non modifiée (la valeur réelle
+                Identifie une valeur TOAST non modifiée (la valeur réelle
                 n'est pas envoyée).
 </para>
 </listitem>
