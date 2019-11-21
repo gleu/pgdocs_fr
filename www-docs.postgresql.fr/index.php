@@ -30,6 +30,7 @@ $version['905'] = '9.5';
 $version['906'] = '9.6';
 $version['100'] = '10';
 $version['110'] = '11';
+$version['110'] = '12';
 ?>
 <!DOCTYPE html SYSTEM "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -133,6 +134,34 @@ $version['110'] = '11';
     Lelarge</a>.</p>
     <p>Certaines vieilles versions, non maintenues, sont disponibles sur
     l'<a href="index_obsoletes.php">index des version obsolètes</a>.</p>
+
+    <div id="pg12">
+      <h2>Documentation PostgreSQL, version 12</h2>
+      <div class="listes">
+        <ul>
+            <li>Manuel au format HTML&nbsp;:
+                <a href="12/">Consultation en ligne</a>,
+                t&eacute;l&eacute;chargement en
+                <a onclick="pageTracker._trackPageview('/pg12.zip');"
+                href="http://docs.postgresql.fr/12/pg12.zip">ZIP</a> ou
+                <a onclick="pageTracker._trackPageview('/pg96.tar.gz');"
+                href="http://docs.postgresql.fr/12/pg12.tar.gz">TAR.GZ</a>
+            </li>
+            <li>Manuel au format <a onclick="pageTracker._trackPageview('/pg12.pdf');"
+              href="http://docs.postgresql.fr/12/pg12.pdf">PDF</a>
+            </li>
+            <li>Document d'installation au format <a
+              onclick="pageTracker._trackPageview('/INSTALL12.html');"
+              href="http://docs.postgresql.fr/12/INSTALL.html">HTML</a> et
+              <a onclick="pageTracker._trackPageview('/INSTALL12.txt');"
+              href="http://docs.postgresql.fr/12/INSTALL.txt">texte</a>
+            </li>
+            <li><a onclick="pageTracker._trackPageview('/pg12.man.tar.gz');"
+              href="http://docs.postgresql.fr/12/pg12.man.tar.gz">Pages
+              man</a></li>
+        </ul>
+      </div>
+    </div>
 
     <div id="pg11">
       <h2>Documentation PostgreSQL, version 11</h2>
