@@ -270,20 +270,25 @@ ALTER TABLE ALL IN TABLESPACE <replaceable class="PARAMETER">nom</replaceable> [
        syntaxe identique à <xref linkend="sql-createtable"/>, plus
        l'option <literal>NOT VALID</literal>, qui est actuellement
        seulement autorisée pour les contraintes de type clé étrangère et les
-       contraintes CHECK. Si
-       la contrainte est marquée <literal>NOT VALID</literal>, la
-       vérification initiale, potentiellement lente, permettant de
-       s'assurer que toutes les lignes de la table satisfont la contrainte,
-       est ignorée. La contrainte sera toujours assurée pour les insertions
-       et mises à jour suivantes (autrement dit, elles échoueront sauf
-       s'il existe une ligne correspondante dans la table référencée
-       par
-       la clé étrangère, ou elles échoueront sauf si la nouvelle ligne correspond aux
-       contraintes de vérification spécifiées)
-       Par contre, la base de données ne supposera pas que la contrainte
-       est valable pour toutes les lignes dans la table, tant que la
-       contrainte n'a pas été validée en utilisant l'option <literal>VALIDATE
-        CONSTRAINT</literal>.
+       contraintes CHECK.
+      </para>
+
+      <para>
+       Normalement, cette syntaxe provoquera un parcours de la table pour
+       vérifier que toutes les lignes existantes de la table satisfont la
+       nouvelle contrainte. Mais si l'option <literal> NOT VALID</literal> est
+       utilisée, ce parcours potentiellement long est ignoré. La contrainte
+       sera toujours appliquée pour les insertions ou mises à jour ultérieures
+       (c'est-à-dire qu'elles échoueront sauf s'il existe une ligne
+       correspondante dans la table référencée, dans le cas de clés
+       étrangères, ou elles échoueront à moins que les nouvelles lignes
+       correspondent à la condition de vérification spécifiée). Mais le la
+       base de données ne supposera pas que la contrainte est valable pour
+       toutes les lignes de la table, jusqu'à ce qu'elle soit validée à l'aide
+       de la clause <literal>VALIDATE CONTRAINTE</literal>. Voir <xref
+       linkend="sql-altertable-notes" endterm="sql-altertable-notes-title"/>
+       ci-dessous pour plus d'informations sur l'utilisation de l'option
+       <literal>NOT VALID</literal>.
       </para>
      </listitem>
     </varlistentry>
@@ -352,26 +357,13 @@ ALTER TABLE ALL IN TABLESPACE <replaceable class="PARAMETER">nom</replaceable> [
      <listitem>
       <para>
        Cette forme valide une contrainte de type clé étrangère ou une
-       contrainte CHECK qui a été
-       précédemment créée avec la clause <literal>NOT VALID</literal>.
-       Elle le fait en parcourant la table pour s'assurer qu'il n'existe
-       aucune ligne pour laquelle la contrainte n'est pas satisfaite. Si
-       la contrainte est déjà marquée valide, cette clause ne fait rien.
-      </para>
-      <para>
-       La validation peut être un long processus sur des tables volumineuses.
-       L'intérêt de séparer la validation de la création initiale est que vous
-       pouvez déférer la validation à un moment plus calme, ou peut être utilisé
-       pour donner un temps supplémentaire pour corriger les erreurs existantes
-       tout en évitant de nouvelles erreurs.  À noter également que la
-       validation en elle-même n'empêche pas les écritures normales sur la table
-       pendant qu'elle est en cours.
-      </para>
-      <para>
-       La validation ne nécessite qu'un verrou <literal>SHARE UPDATE EXCLUSIVE</literal>
-       sur la table en cours de modification.  Si la contrainte est une clé
-       étrangère, alors un verrou <literal>ROW SHARE</literal> est également
-       nécessaire sur la table référencée par la contrainte.
+       contrainte CHECK qui a été précédemment créée avec la clause
+       <literal>NOT VALID</literal>. Elle le fait en parcourant la table pour
+       s'assurer qu'il n'existe aucune ligne pour laquelle la contrainte n'est
+       pas satisfaite. Si la contrainte est déjà marquée valide, cette clause
+       ne fait rien. (Voir <xref linkend="sql-altertable-notes"
+       endterm="sql-altertable-notes-title"/> ci-dessous pour une explication
+       de l'utilité de cette commande.)
       </para>
      </listitem>
     </varlistentry>
@@ -910,8 +902,8 @@ ALTER TABLE ALL IN TABLESPACE <replaceable class="PARAMETER">nom</replaceable> [
   </variablelist>
  </refsect1>
 
- <refsect1>
-  <title>Notes</title>
+ <refsect1 id="sql-altertable-notes">
+  <title id="sql-altertable-notes-title">Notes</title>
 
   <para>
    Le mot clé <literal>COLUMN</literal> n'est pas nécessaire. Il peut
@@ -953,6 +945,34 @@ ALTER TABLE ALL IN TABLESPACE <replaceable class="PARAMETER">nom</replaceable> [
    La raison principale de la possibilité de spécifier des changements multiples
    à l'aide d'une seule commande <command>ALTER TABLE</command> est la combinaison
    en une seule passe sur la table de plusieurs parcours et réécritures.
+  </para>
+
+  <para>
+   Parcourir une grosse table pour vérifier une nouvelle clé étrangère ou une
+   nouvelle contrainte de vérification peut prendre beaucoup de temps, alors
+   que d'autres mises à jour de la table sont verrouillées le temps que la
+   commande <command>ALTER TABLE ADD CONSTRAINT</command> ne soit validée. Le
+   but principal de l'option de contrainte <literal>NOT VALID</literal> est de
+   réduire l'impact de l'ajout d'une constrainte sur les mises à jour
+   concurrentes. Avec <literal>NOT VALID</literal>, la commande <command>ADD
+   CONSTRAINT</command> ne parcourt pas la table et peut être validée
+   immédiatement. Après cela, une commande <literal>VALIDATE
+   CONSTRAINT</literal> peut être exécutée pour vérifier que les lignes
+   existantes satisfont la contrainte. L'étape de validation n'a pas besoin de
+   verrouiller les mises à jour concurrentes car PostgreSQL sait que les
+   autres transactions seront forcées de respecter la contrainte pour les
+   lignes qu'elles insèrent ou mettent à jour. Seules les lignes
+   pré-existantes doivent être vérifiées. De ce fait, la validation récupère
+   seulement un verrou <literal>SHARE UPDATE EXCLUSIVE</literal> sur la table
+   en cours de modification. (Si la contrainte est une clé étrangère, alors un
+   verrou <literal>ROW SHARE</literal> est aussi requis sur la table
+   référencée par la contrainte.) De plus, pour améliorer les accès
+   concurrents, il peut être utile d'utiliser <literal>NOT VALID</literal> et
+   <literal>VALIDATE CONSTRAINT</literal> pour les cas où la table est connue
+   pour contenir des violations pré-existantes. Une fois la contrainte en
+   place, aucune ligne en violation ne peut être insérée, et les problèmes
+   existants peuvent être corrigés à loisir jusqu'à ce que <literal>VALIDATE
+   CONSTRAINT</literal> réussisse enfin.
   </para>
 
   <para>
