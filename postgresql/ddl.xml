@@ -406,6 +406,63 @@ DROP TABLE produits;</programlisting>
     contient pas de valeurs NULL, la contrainte NOT NULL décrite
     dans la section suivante peut être utilisée.
    </para>
+
+   <note>
+    <para>
+     <productname>PostgreSQL</productname> ne supporte pas les contraintes
+     <literal>CHECK</literal> qui référencent les données d'autres tables que
+     celle contenant la nouvelle ligne ou la ligne mise à jour en cours de
+     vérification. Alors qu'une contrainte <literal>CHECK</literal> qui viole
+     cette règle pourrait apparaitre fonctionner dans des tests simples, il
+     est possible que la base de données atteigne un état dans lequel la
+     condiction de la contrainte est fausse (à cause de changements
+     supplémentaires en dehors de la ligne impliquée). Ceci sera la cause d'un
+     échec du rechargement de la sauvegarde d'une base. La restauration
+     pourrait échouer même quand l'état complet de la base est cohérent avec
+     la contrainte, à cause de lignes chargées dans un autre différent qui
+     satisferait la contrainte. Si possible, utilisez les contraintes
+     <literal>UNIQUE</literal>, <literal>EXCLUDE</literal>, et
+     <literal>FOREIGN KEY</literal> pour exprimer des restrictions
+     inter-lignes et inter-tables.
+    </para>
+
+    <para>
+     Si ce que vous désirez est une vérification unique avec certaines lignes
+     au moment de l'insertion, plutôt qu'une garantie de cohérence maintenue
+     en permanence, un <link linkend="triggers">trigger</link> personnalisé
+     peut être utilisé pour l'implémenter. (Cette approche évite le problème
+     de sauvegarde/restauration car <application>pg_dump</application> ne
+     réinstalle les triggers qu'après chargement des données, donc cette
+     vérification ne sera pas effectuée pendant une sauvegarde/restauration.)
+    </para>
+   </note>
+
+   <note>
+    <para>
+     <productname>PostgreSQL</productname> suppose que les conditions des
+     contraintes <literal>CHECK</literal> sont immutables, c'est-à-dire
+     qu'elles donneront toujours le même résultat pour la même ligne en
+     entrée. Cette supposition est ce qui justifie l'examen des contraintes
+     <literal>CHECK</literal> uniquement quand les lignes sont insérées ou
+     mises à jour, et non pas à d'autres moments. (Cet avertissement sur la
+     non référence aux données d'autres tables est en fait un cas particulier
+     de cette restriction.)
+    </para>
+
+    <para>
+     Un exemple d'une façon habituelle de casser cette supposition est de
+     référencer une fonction utilisateur dans une expression
+     <literal>CHECK</literal>, puis de changer le comportement de cette
+     fonction. <productname>PostgreSQL</productname> n'interdit pas cela, mais
+     il ne notera pas qu'il y a des lignes dans la table qui violent
+     maintenant la contrainte <literal>CHECK</literal>. Ceci sera la cause
+     d'un échec de la restauration d'une sauvegarde de cette base. La façon
+     recommandée de gérer de tels changements revient à supprimer la
+     contrainte (en utilisant <command>ALTER TABLE</command>), d'ajuster la
+     définition de la fonction, et d'ajouter de nouveau la contrainte, ce qui
+     causera une nouvelle vérification des lignes de la table.
+    </para>
+   </note>
   </sect2>
 
   <sect2>
@@ -2378,62 +2435,62 @@ SELECT * FROM information WHERE groupe_id = 2 FOR UPDATE;
 
    <para>
     Les schémas peuvent être utilisés de différentes façons pour organiser les
-    données. Il existe quelques méthodes facilement supportées par la
-    configuration par défaut, dont une seule est suffisante lorsque les
-    utilisateurs de l'instance ne font pas confiance aux autres
-    utilisateurs&nbsp;:
+    données. Un <firstterm>modèle d'utilisation de schéma sécurisé</firstterm>
+    empêche tous les utilisateurs pour lesquels nous n'avons pas confiance de
+    modifier le comportement des requêtes des autres utilisateurs. Quand une
+    base de données n'utilise pas de modèle d'utilisation de schéma sécurisé,
+    les utilisateurs souhaitant interroger cette base de données en toute
+    sécurité devront prendre des mesures de protection au début de chaque
+    session. Plus précisément, ils commenceraient chaque session par la
+    configuration du paramètre <varname>search_path</varname> en une chaîne
+    vide ou en supprimant de leur <varname>search_path</varname> les schémas
+    accessibles en écriture par des utilisateurs standards. Il existe quelques
+    modèles d'utilisation facilement pris en charge par la configuration par
+    défaut&nbsp;:
+
     <itemizedlist>
      <!-- "DROP SCHEMA public" is inferior to this REVOKE, because pg_dump
-          doesn't preserve that DROP. -->
+           doesn't preserve that DROP.
+ 
+           A database owner can attack the database's users via "CREATE SCHEMA
+           trojan; ALTER DATABASE $mydb SET search_path = trojan, public;".  A
+           CREATEROLE user can issue "GRANT $dbowner TO $me" and then use the
+           database owner attack. -->
      <listitem>
       <para>
        Contraindre les utilisateurs ordinaires aux schémas privés des
        utilisateurs. Pour cela, exécutez <literal>REVOKE CREATE ON SCHEMA
        public FROM PUBLIC</literal>, et créez un schéma pour chaque
-       utilisateur, du nom de cet utilisateur. Si les utilisateurs affectés se
-       sont déjà connectés avant cette opération, pensez à réaliser un audit
-       du schéma public en recherchant des objets de même nom que ceux du
-       schéma <literal>pg_catalog</literal>. Rappelez-vous que le chemin de
-       recherche par défaut commence avec <literal>$user</literal>, qui est
-       remplacé par le nom de l'utilisateur. De ce fait, si chaque utilisateur
-       a un schéma séparé, ils accèdent à leur propre schéma par défaut.
+       utilisateur, du nom de cet utilisateur.
+       Rappelez-vous que le chemin de recherche par défaut commence avec
+       <literal>$user</literal>, qui se résout avec le nom de l'utilisateur.
+       Par conséquent, si chaque utilisateur a un schéma distinct, ils
+       accèdent à leur propres schémas par défaut. Après avoir adopté ce
+       modèle dans une base de données où des utilisateurs non fiables se sont
+       déjà connectés, pensez à vérifier dans le schéma public l'existence
+       d'objets nommés comme des objets du schéma
+       <literal>pg_catalog</literal>. Ce modèle est sécurisé sauf si un
+       utilisateur non fiable est le propriétaire de la base de données ou
+       détient l'attribut <literal>CREATEROLE</literal>, auquel cas aucun
+       modèle d'utilisation de schéma sécurisé n'existe.
       </para>
      </listitem>
 
      <listitem>
       <para>
-       Supprimer le schéma public de chaque chemin de recherche par défaut des
-       utilisateurs en exécutant <literal>ALTER ROLE
-       <replaceable>utilisateur</replaceable> SET search_path =
-       "$utilisateur"</literal>. Tous conservent la possibilité de créer des
+       Supprimer le schéma public du chemin de recherche par défaut, en
+       modifiant le fichier  <link
+       linkend="config-setting-configuration-file"><filename>postgresql.conf</filename></link>
+       ou en exécutant <literal>ALTER ROLE ALL SET search_path =
+       "$user"</literal>. Tout le monde conserve la possibilité de créer des
        objets dans le schéma public, mais seuls les noms qualifiés choisiront
-       ces objets. Bien que les références qualifiées aux tables sont
-       correctes, les appels aux fonctions du schéma public <link
-       linkend="typeconv-func">ne seront pas sûrs ou fiables</link>.  De plus,
-       un utilisateur disposant de l'attribut <literal>CREATEROLE</literal>
-       peut enlever cette configuration et exécuter n'importe quel requête
-       sous l'identité des utilisateurs se basant sur cette configuration. Si
-       vous créez des fonctions ou extensions dans le schéma public ou si vous
-       donnez l'attribut <literal>CREATEROLE</literal> à des utilisateurs sans
-       garantie sur cette capacité pratiquement équivalente à l'attribut
-       superutilisateur, utilisez plutôt la première méthode.
-      </para>
-     </listitem>
-
-     <listitem>
-      <para>
-       Supprimer le schéma public du <varname>search_path</varname> dans <link
-       linkend="config-setting-configuration-file"><filename>postgresql.conf</filename></link>.
-       La conséquence pour l'utilisateur correspond à celle de la méthode
-       précédente. En plus des implications pour les fonctions et pour le
-       <literal>CREATEROLE</literal>, cela demande de faire confiance aux
-       propriétaires des bases de données comme pour les utilisateurs ayant
-       l'attribut <literal>CREATEROLE</literal>. Si vous créez des fonctions
-       ou des extensions dans le schéma public ou si vous affectez l'attribut
-       <literal>CREATEROLE</literal>, l'attribut <literal>CREATEDB</literal>
-       ou la propriété d'une base de données à des utilisateurs sans garantie
-       sur cette capacité pratiquement équivalente à l'attribut
-       superutilisateur, utilisez plutôt la première méthode.
+       ces objets. Bien que les références de table qualifiées soient
+       correctes, les appels aux fonctions dans le le schéma public <link
+       linkend="typeconv-func">seront dangereux ou peu fiables</link>. Si vous
+       créez des fonctions ou des extensions dans le schéma public, utilisez
+       le premier modèle à la place. Sinon, tout comme le premier modèle,
+       c'est sécurisé sauf si un utilisateur non fiable est le propriétaire de
+       la base de données ou détient l'attribut <literal>CREATEROLE</literal>.
       </para>
      </listitem>
 
@@ -2442,11 +2499,10 @@ SELECT * FROM information WHERE groupe_id = 2 FOR UPDATE;
        Conserver la valeur par défaut. Tous les utilisateurs ont accès au
        schéma public implicitement. Ceci simule la situation où les schémas ne
        sont pas du tout disponibles, réalisant ainsi une transition tranquille
-       vers un monde qui ne connait pas les schémas. Néanmoins, tout
-       utilisateur peut exécuter des requêtes arbitraires sous l'identité
-       d'un utilisateur qui ne se protège pas individuellement. Cette méthode est
-       seulement acceptable quand la base de données n'a qu'un seul
-       utilisateur ou peu d'utilisateurs, mais qui se font confiance.
+       vers un monde qui ne connait pas les schémas. Néanmoins, ceci ne sera
+       jamais un modèle sécursé. C'est uniquement acceptable si la base de
+       données ne contient qu'un seul utilisateur ou quelques utilisateurs qui
+       se font mutuellement confiance.
       </para>
      </listitem>
     </itemizedlist>
@@ -2763,7 +2819,15 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
    sont accédées via la table <structname>villes</structname>. Ceci préserve
    l'apparence que les données proviennent (aussi) de la table parent. Mais la
    table <structname>capitales</structname> ne pouvait pas être mise à jour
-   directement sans droit supplémentaire. De façon similaire, les politiques
+   directement sans droit supplémentaire. Deux exceptions à
+   cette règle sont <command>TRUNCATE</command> et <command>LOCK
+   TABLE</command>, où les droits sur les tables filles sont toujours
+   vérifiées qu'elles soient traitées directement ou par récursivité via les
+   commandes réalisées sur la table parent.
+  </para>
+
+  <para>
+   De façon similaire, les politiques
    de sécurité au niveau ligne de la table parent (voir <xref
    linkend="ddl-rowsecurity"/>) sont appliquées aux lignes provenant des
    tables filles avec une requête héritée. Les politiques de tables enfant
