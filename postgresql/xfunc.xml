@@ -2307,10 +2307,10 @@ memcpy(destination->data, buffer, 40);
      <para>
       Dans une fonction version-1, chaque argument existant est traité par une
       macro <function>PG_GETARG_<replaceable>xxx</replaceable>()</function>
-      correspondant au type de donnée de l'argument. Dans les fonctions non
+      correspondant au type de donnée de l'argument. (Dans les fonctions non
       strictes, il est nécessaire d'avoir une vérification précédente sur la
       possibilité que l'argument soit NULL en utilisant
-      <function>PG_ARGNULL_<replaceable>xxx</replaceable>()</function>.
+      <function>PG_ARGISNULL()</function>&nbsp;; voir ci-dessous.)
       Le résultat est renvoyé par une macro
       <function>PG_RETURN_<replaceable>xxx</replaceable>()</function>
       correspondant au type renvoyé.
@@ -2470,15 +2470,6 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
     </para>
 
     <para>
-     Au premier coup d'&oelig;ud, les conventions de codage version-1
-     pourraient ressembler à de l'obscurantisme sans raison. Il pourrait
-     sembler préférable d'utiliser les conventions d'appel
-     <literal>C</literal>. Néanmoins, elles permettent de gérer des valeurs
-     NULL pour les arguments et la valeur de retour calling, ainsi que des
-     valeurs TOAST (compressées ou hors-ligne).
-    </para>
-
-    <para>
      La macro
      <function>PG_ARGISNULL(<replaceable>n</replaceable>)</function> permet à une fonction
      de tester si chaque entrée est NULL (évidemment, ceci n'est nécessaire que
@@ -2491,6 +2482,15 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
      résultat NULL, exécutez la fonction
      <function>PG_RETURN_NULL()</function>&nbsp;; ceci convient aussi bien dans
      les fonctions STRICT que non STRICT.
+    </para>
+
+    <para>
+     Au premier coup d'&oelig;ud, les conventions de codage version-1
+     pourraient ressembler à de l'obscurantisme sans raison. Il pourrait
+     sembler préférable d'utiliser les conventions d'appel
+     <literal>C</literal>. Néanmoins, elles permettent de gérer des valeurs
+     NULL pour les arguments et la valeur de retour calling, ainsi que des
+     valeurs TOAST (compressées ou hors-ligne).
     </para>
 
     <para>
@@ -2880,24 +2880,54 @@ c_surpaye(PG_FUNCTION_ARGS)
      <title>Renvoi d'ensembles</title>
 
      <para>
-      Il existe aussi une API spéciale procurant le moyen de renvoyer des
-      ensembles (lignes multiples) depuis une fonction en langage C. Une fonction
-      renvoyant un ensemble doit suivre les conventions d'appel de la version-1.
-      Aussi, les fichiers source doivent inclure l'en-tête
-      <filename>funcapi.h</filename>, comme ci-dessus.
+      Les fonctions en langage C ont deux options pour renvoyer des ensembles
+      (plusieurs lignes). Dans la première méthode, appelée mode
+      <firstterm>ValuePerCall</firstterm>,  une fonction renvoyant un ensemble
+      de lignes est appelée de façon répétée (en passant les mêmes arguments à
+      chaque fois) et elle renvoit une nouvelle ligne pour chaque appel,
+      jusqu'à ce qu'il n'y ait plus de lignes à renvoyer et qu'elle le signale
+      en renvoyant NULL. La fonction <acronym>SRF</acronym> doit de ce fait
+      sauvegarder l'état entre appels pour se rappeler ce qu'elle faisait et
+      renvoyer le bon prochain élément à chaque appel. Dans l'autre méthode,
+      appelée mode <firstterm>Materialize</firstterm>, une SRF remplit et
+      renvoit un objet <foreignphrase>tuplestore</foreignphrase> contenant le
+      résultat entier. Un seul appel survient pour le résultat complet, et il
+      n'est pas nécessaire de conserver l'état entre appels.
      </para>
 
      <para>
-      Une fonction renvoyant un ensemble (<acronym>SRF</acronym> : <quote>set
-       returning function</quote>) est appelée une fois pour chaque élément
-      qu'elle renvoie. La <acronym>SRF</acronym> doit donc sauvegarder suffisamment
-      l'état pour se rappeler ce qu'elle était en train de faire et renvoyer le
-      prochain élément à chaque appel. La structure
-      <structname>FuncCallContext</structname> est offerte pour assister le contrôle de ce
-      processus. À l'intérieur d'une fonction,
-      <literal>fcinfo-&gt;flinfo-&gt;fn_extra</literal> est utilisée pour conserver un
-      pointeur vers <structname>FuncCallContext</structname> au cours des appels
-      successifs.
+      Lors de l'utilisation du mode ValuePerCall, il est important de se
+      rappeler que la requête n'est pas garantie de se terminer&nbsp;;
+      c'est-à-dire, avec des options telles que <literal>LIMIT</literal>,
+      l'exécuteur pourrait stopper les appels à la fonction SRF avant que
+      toutes les lignes ne soient récupérées. Ceci signifie qu'il ne faut pas
+      utiliser le dernier appel pour nettoyer l'activité réalisée, car ce
+      dernier appel pourrait bien ne jamais survenir. Il est recommandé
+      d'utiliser le mode Materialize pour les fonctions ayant besoin d'accéder
+      aux ressources externes, tels que des descripteurs de fichiers.
+     </para>
+
+     <para>
+      Le reste de cette section documente un ensemble de macros d'aide qui
+      sont communément utilisées (bien que non requis pour être utilisés) pour
+      les SRF utilisant le mode ValuePerCall. Des détails supplémentaires sur
+      le mode Materialize peuvent être trouvés dans
+      <filename>src/backend/utils/fmgr/README</filename>. De plus, les modules
+      <filename>contrib</filename> dans la distribution des sources de the
+      <productname>PostgreSQL</productname> contiennent de nombreux exemples
+      de SRF utilisant à la fois les modes ValuePerCall et Materialize.
+     </para>
+
+     <para>
+      Pour utiliser les macros de support ValuePerCall décrites ici, inclure
+      <filename>funcapi.h</filename>. Ces macros fonctionnent avec une
+      structure <structname>FuncCallContext</structname> qui contient l'état
+      devant être sauvegardé au travers des appels. À l'intérieur de la SRF
+      appelante, <literal>fcinfo-&gt;flinfo-&gt;fn_extra</literal> est utilisé
+      pour détenir un pointeur vers <structname>FuncCallContext</structname>
+      entre les appels. Les macros remplissent automatiquement ce champ à la
+      première utilisation et s'attendent à y trouver le même pointeur lors
+      des prochains appels.
 
       <programlisting>typedef struct FuncCallContext
 {
@@ -2970,27 +3000,25 @@ c_surpaye(PG_FUNCTION_ARGS)
      </para>
 
      <para>
-      Une <acronym>SRF</acronym> utilise plusieurs fonctions et macros qui manipulent
-      automatiquement la structure <structname>FuncCallContext</structname> (et s'attendent
-      à la trouver via <literal>fn_extra</literal>). Utilisez&nbsp;:
+      Les macros à utiliser par une <acronym>SRF</acronym> utilisant cette
+      infrastructure sont&nbsp;:
       <programlisting>SRF_IS_FIRSTCALL()
       </programlisting>
-      pour déterminer si votre fonction est appelée pour la première fois. Au
-      premier appel, utilisez&nbsp;:
+      Utilisez ceci pour déterminer si votre fonction est appelée pour la
+      première fois ou la prochaine fois. Au premier appel (seulement),
+      utilisez&nbsp;:
       <programlisting>SRF_FIRSTCALL_INIT()
       </programlisting>
-      pour initialiser la structure <structname>FuncCallContext</structname>. À chaque
-      appel de fonction, y compris le premier, utilisez&nbsp;:
+      pour initialiser la structure <structname>FuncCallContext</structname>.
+      À chaque appel de fonction, y compris le premier, utilisez&nbsp;:
       <programlisting>SRF_PERCALL_SETUP()
       </programlisting>
-      pour une mise à jour correcte en vue de l'utilisation de
-      <structname>FuncCallContext</structname> et pour nettoyer toutes les données
-      renvoyées précédemment et conservées depuis le dernier passage de la
-      fonction.
+      pour configurer l'utilisation de <structname>FuncCallContext</structname>.
      </para>
 
      <para>
-      Si votre fonction a des données à renvoyer, utilisez&nbsp;:
+      Si votre fonction a des données à renvoyer dans l'appel courant,
+      utilisez&nbsp;:
       <programlisting>SRF_RETURN_NEXT(funcctx, result)
       </programlisting>
       pour les renvoyer à l'appelant. (<literal>result</literal> doit être de type
@@ -3014,7 +3042,12 @@ c_surpaye(PG_FUNCTION_ARGS)
       donnée devant survivre jusqu'à l'achèvement de la fonction <acronym>SRF</acronym>.
       Dans la plupart des cas, cela signifie que vous devrez basculer vers
       <structfield>multi_call_memory_ctx</structfield> au moment de la préparation du
-      premier appel.
+      premier appel. Utilisez <literal>funcctx-&gt;user_fctx</literal> pour
+      récupérer un pointeur vers de telles structures de données inter-appels
+      (les données que vous allouez dans
+      <structfield>multi_call_memory_ctx</structfield> partiront
+      automatiquement à la fin de la requête, donc il n'est pas nécessaire de
+      libérer cette donnée manuellement).
      </para>
 
      <warning>
@@ -3071,8 +3104,8 @@ my_set_returning_function(PG_FUNCTION_ARGS)
     }
     else
     {
-        /* Here we are done returning items and just need to clean up: */
-        <replaceable>user code</replaceable>
+        /* Here we are done returning items, so just report that fact. */
+        /* (Resist the temptation to put cleanup code here.) */
         SRF_RETURN_DONE(funcctx);
     }
 }
@@ -3191,11 +3224,6 @@ CREATE OR REPLACE FUNCTION retcomposite(integer, integer)
       Notez que dans cette méthode le type en sortie de la fonction est du type
       <structname>record</structname> anonyme.
      </para>
-
-     <para>
-      Le module <link linkend="tablefunc"><filename>contrib/tablefunc</filename></link> situé dans les fichiers source
-      de la distribution contient d'autres exemples de fonctions renvoyant des
-      ensembles.</para>
     </sect2>
 
     <sect2>
