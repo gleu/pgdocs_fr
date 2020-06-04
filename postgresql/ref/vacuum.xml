@@ -36,6 +36,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     SKIP_LOCKED [ <replaceable class="parameter">boolean</replaceable> ]
     INDEX_CLEANUP [ <replaceable class="parameter">boolean</replaceable> ]
     TRUNCATE [ <replaceable class="parameter">boolean</replaceable> ]
+    PARALLEL <replaceable class="parameter">integer</replaceable>
 
 <phrase>et <replaceable class="parameter">table_et_colonnes</replaceable> est&nbsp;:</phrase>
 
@@ -81,11 +82,14 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    normales de lecture et d'écriture de la table, car elle n'utilise pas de
    verrou exclusif. Néanmoins, l'espace récupéré n'est pas renvoyé au système
    de fichiers dans la plupart des cas&nbsp;; il est conservé pour être
-   réutilisé dans la même table. <command>VACUUM FULL</command> ré-écrit le
-   contenu complet de la table dans un nouveau fichier sur disque sans
-   perte d'espace, permettant à l'espace inutilisé d'être retourné au système
-   d'exploitation. Cette forme est bien plus lente et nécessite un verrou
-   exclusif sur chaque table le temps de son traitement.
+   réutilisé dans la même table. It also allows us to leverage multiple CPUs in order to process
+   indexes.  This feature is known as <firstterm>parallel vacuum</firstterm>.
+   To disable this feature, one can use <literal>PARALLEL</literal> option and
+   specify parallel workers as zero.  <command>VACUUM FULL</command> rewrites
+   the entire contents of the table into a new disk file with no extra space,
+   allowing unused space to be returned to the operating system.  This form is
+   much slower and requires an exclusive lock on each table while it is being
+   processed.
   </para>
 
   <para>
@@ -237,6 +241,33 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    </varlistentry>
 
    <varlistentry>
+    <term><literal>PARALLEL</literal></term>
+    <listitem>
+     <para>
+      Perform index vacuum and index cleanup phases of <command>VACUUM</command>
+      in parallel using <replaceable class="parameter">integer</replaceable>
+      background workers (for the details of each vacuum phase, please
+      refer to <xref linkend="vacuum-phases"/>).  In plain <command>VACUUM</command>
+      (without <literal>FULL</literal>), if the <literal>PARALLEL</literal> option
+      is omitted, then the number of workers is determined based on the number of
+      indexes on the relation that support parallel vacuum operation and is further
+      limited by <xref linkend="guc-max-parallel-workers-maintenance"/>.  An index
+      can participate in parallel vacuum if and only if the size of the index is
+      more than <xref linkend="guc-min-parallel-index-scan-size"/>.  Please note
+      that it is not guaranteed that the number of parallel workers specified in
+      <replaceable class="parameter">integer</replaceable> will be used during
+      execution.  It is possible for a vacuum to run with fewer workers than
+      specified, or even with no workers at all.  Only one worker can be used per
+      index.  So parallel workers are launched only when there are at least
+      <literal>2</literal> indexes in the table.  Workers for vacuum are launched
+      before the start of each phase and exit at the end of the phase.  These
+      behaviors might change in a future release.  This option can't be used with
+      the <literal>FULL</literal> option.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">boolean</replaceable></term>
     <listitem>
      <para>
@@ -246,6 +277,15 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
       <literal>OFF</literal> ou <literal>0</literal> pour la désactiver. La
       valeur <replaceable class="parameter">boolean</replaceable> peut aussi
       être omise, auquel cas <literal>TRUE</literal> est supposé.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">integer</replaceable></term>
+    <listitem>
+     <para>
+      Specifies a non-negative integer value passed to the selected option.
      </para>
     </listitem>
    </varlistentry>
@@ -334,12 +374,20 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
   </para>
 
   <para>
+    The <option>PARALLEL</option> option is used only for vacuum purposes.
+    If this option is specified with the <option>ANALYZE</option> option,
+    it does not affect <option>ANALYZE</option>.
+  </para>
+
+  <para>
    <command>VACUUM</command> peut engendrer une
    augmentation substantielle du trafic en entrées/sorties pouvant causer
    des performances diminuées pour les autres sessions actives. Du coup,
    il est quelque fois conseillé d'utiliser la fonctionnalité du délai du
-   vacuum basé sur le coût. Voir <xref
-   linkend="runtime"/>
+   vacuum basé sur le coût. For
+   parallel vacuum, each worker sleeps in proportion to the work done by that
+   worker.  Voir <xref
+   linkend="runtime-config-resource-vacuum-cost"/>
    pour des informations supplémentaires.
   </para>
 

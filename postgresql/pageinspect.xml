@@ -234,6 +234,11 @@ test=# SELECT * FROM heap_page_items(get_raw_page('pg_class', 0));
       <filename>src/include/access/htup_details.h</filename> pour des explications sur
       les champs renvoyés.
      </para>
+     <para>
+      The <function>heap_tuple_infomask_flags</function> function can be
+      used to unpack the flag bits of <structfield>t_infomask</structfield>
+      and <structfield>t_infomask2</structfield> for heap tuples.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -286,6 +291,42 @@ test=# SELECT * FROM heap_page_item_attrs(get_raw_page('pg_class', 0), 'pg_class
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term>
+     <function>heap_tuple_infomask_flags(t_infomask integer, t_infomask2 integer) returns record</function>
+     <indexterm>
+      <primary>heap_tuple_infomask_flags</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      <function>heap_tuple_infomask_flags</function> decodes the
+      <structfield>t_infomask</structfield> and
+      <structfield>t_infomask2</structfield> returned by
+      <function>heap_page_items</function> into a human-readable
+      set of arrays made of flag names, with one column for all
+      the flags and one column for combined flags. For example:
+<screen>
+test=# SELECT t_ctid, raw_flags, combined_flags
+         FROM heap_page_items(get_raw_page('pg_class', 0)),
+           LATERAL heap_tuple_infomask_flags(t_infomask, t_infomask2)
+         WHERE t_infomask IS NOT NULL OR t_infomask2 IS NOT NULL;
+</screen>
+      This function should be called with the same arguments as the return
+      attributes of <function>heap_page_items</function>.
+     </para>
+     <para>
+      Combined flags are displayed for source-level macros that take into
+      account the value of more than one raw bit, such as
+      <literal>HEAP_XMIN_FROZEN</literal>.
+     </para>
+     <para>
+      See <filename>src/include/access/htup_details.h</filename> for
+      explanations of the flag names returned.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
  </sect2>
 
@@ -311,13 +352,14 @@ test=# SELECT * FROM heap_page_item_attrs(get_raw_page('pg_class', 0), 'pg_class
 test=# SELECT * FROM bt_metap('pg_cast_oid_index');
 -[ RECORD 1 ]-----------+-------
 magic                   | 340322
-version                 | 3
+version                 | 4
 root                    | 1
 level                   | 0
 fastroot                | 1
 fastlevel               | 0
 oldest_xact             | 582
 last_cleanup_num_tuples | 1000
+allequalimage           | f
      </screen>
     </listitem>
    </varlistentry>
@@ -340,11 +382,11 @@ test=# SELECT * FROM bt_page_stats('pg_cast_oid_index', 1);
 -[ RECORD 1 ]-+-----
 blkno         | 1
 type          | l
-live_items    | 256
+live_items    | 224
 dead_items    | 0
-avg_item_size | 12
+avg_item_size | 16
 page_size     | 8192
-free_size     | 4056
+free_size     | 3668
 btpo_prev     | 0
 btpo_next     | 0
 btpo          | 0
@@ -367,24 +409,57 @@ btpo_flags    | 3
       sur tous les éléments d'une page d'index btree. Par exemple&nbsp;:
      </para>
      <screen>
-test=# SELECT * FROM bt_page_items('pg_cast_oid_index', 1);
- itemoffset |  ctid   | itemlen | nulls | vars |    data
-------------+---------+---------+-------+------+-------------
-          1 | (0,1)   |      12 | f     | f    | 23 27 00 00
-          2 | (0,2)   |      12 | f     | f    | 24 27 00 00
-          3 | (0,3)   |      12 | f     | f    | 25 27 00 00
-          4 | (0,4)   |      12 | f     | f    | 26 27 00 00
-          5 | (0,5)   |      12 | f     | f    | 27 27 00 00
-          6 | (0,6)   |      12 | f     | f    | 28 27 00 00
-          7 | (0,7)   |      12 | f     | f    | 29 27 00 00
-          8 | (0,8)   |      12 | f     | f    | 2a 27 00 00
+test=# SELECT itemoffset, ctid, itemlen, nulls, vars, data, dead, htid, tids[0:2] AS some_tids
+        FROM bt_page_items('tenk2_hundred', 5);
+ itemoffset |   ctid    | itemlen | nulls | vars |          data           | dead |  htid  |      some_tids
+------------+-----------+---------+-------+------+-------------------------+------+--------+---------------------
+          1 | (16,1)    |      16 | f     | f    | 30 00 00 00 00 00 00 00 |      |        |
+          2 | (16,8292) |     616 | f     | f    | 24 00 00 00 00 00 00 00 | f    | (1,6)  | {"(1,6)","(10,22)"}
+          3 | (16,8292) |     616 | f     | f    | 25 00 00 00 00 00 00 00 | f    | (1,18) | {"(1,18)","(4,22)"}
+          4 | (16,8292) |     616 | f     | f    | 26 00 00 00 00 00 00 00 | f    | (4,18) | {"(4,18)","(6,17)"}
+          5 | (16,8292) |     616 | f     | f    | 27 00 00 00 00 00 00 00 | f    | (1,2)  | {"(1,2)","(1,19)"}
+          6 | (16,8292) |     616 | f     | f    | 28 00 00 00 00 00 00 00 | f    | (2,24) | {"(2,24)","(4,11)"}
+          7 | (16,8292) |     616 | f     | f    | 29 00 00 00 00 00 00 00 | f    | (2,17) | {"(2,17)","(11,2)"}
+          8 | (16,8292) |     616 | f     | f    | 2a 00 00 00 00 00 00 00 | f    | (0,25) | {"(0,25)","(3,20)"}
+          9 | (16,8292) |     616 | f     | f    | 2b 00 00 00 00 00 00 00 | f    | (0,10) | {"(0,10)","(0,14)"}
+         10 | (16,8292) |     616 | f     | f    | 2c 00 00 00 00 00 00 00 | f    | (1,3)  | {"(1,3)","(3,9)"}
+         11 | (16,8292) |     616 | f     | f    | 2d 00 00 00 00 00 00 00 | f    | (6,28) | {"(6,28)","(11,1)"}
+         12 | (16,8292) |     616 | f     | f    | 2e 00 00 00 00 00 00 00 | f    | (0,27) | {"(0,27)","(1,13)"}
+         13 | (16,8292) |     616 | f     | f    | 2f 00 00 00 00 00 00 00 | f    | (4,17) | {"(4,17)","(4,21)"}
+(13 rows)
      </screen>
      <para>
-      Dans un bloc feuille d'un index B-tree, <structfield>ctid</structfield>
-      pointe vers un enregistrement de la table. Dans une page interne, la
-      partie du numéro de bloc du <structfield>ctid</structfield> pointe vers
-      une autre page de l'index lui-même alors que la partie décalage (le
-      deuxième nombre) est ignoré et vaut généralement 1.
+      This is a B-tree leaf page.  All tuples that point to the table
+      happen to be posting list tuples (all of which store a total of
+      100 6 byte TIDs).  There is also a <quote>high key</quote> tuple
+      at <literal>itemoffset</literal> number 1.
+      <structfield>ctid</structfield> is used to store encoded
+      information about each tuple in this example, though leaf page
+      tuples often store a heap TID directly in the
+      <structfield>ctid</structfield> field instead.
+      <structfield>tids</structfield> is the list of TIDs stored as a
+      posting list.
+     </para>
+     <para>
+      In an internal page (not shown), the block number part of
+      <structfield>ctid</structfield> is a <quote>downlink</quote>,
+      which is a block number of another page in the index itself.
+      The offset part (the second number) of
+      <structfield>ctid</structfield> stores encoded information about
+      the tuple, such as the number of columns present (suffix
+      truncation may have removed unneeded suffix columns).  Truncated
+      columns are treated as having the value <quote>minus
+       infinity</quote>.
+     </para>
+     <para>
+      <structfield>htid</structfield> shows a heap TID for the tuple,
+      regardless of the underlying tuple representation.  This value
+      may match <structfield>ctid</structfield>, or may be decoded
+      from the alternative representations used by posting list tuples
+      and tuples from internal pages.  Tuples in internal pages
+      usually have the implementation level heap TID column truncated
+      away, which is represented as a NULL
+      <structfield>htid</structfield> value.
      </para>
      <para>
       Notez que le premier élément une page (autre que la dernière, toute page
@@ -392,13 +467,19 @@ test=# SELECT * FROM bt_page_items('pg_cast_oid_index', 1);
       <structfield>btpo_next</structfield>) est la <quote>clé haute</quote> du
       bloc, ce qui signifie que ces données (<structfield>data</structfield>)
       serve comme limite haute de tous les éléments apparaissant sur la page,
-      alors que son champ <structfield>ctid</structfield> n'a aucune
-      signification. De plus, sur les blocs qui ne sont pas des feuilles, le
-      premier élément contenant de vraies données (autrement dit le premier
-      élément qui n'est pas une clé haute) est un élément <quote>moins
-      infinité</quote> sans valeur réelle dans son champ
-      <structfield>data</structfield>. Néanmoins, un tel élément doit avoir un
-      lien valide dans son champ <structfield>ctid</structfield>.
+      alors que its <structfield>ctid</structfield> field does not point to
+      another block.  Also, on internal pages, the first real data
+      item (the first item that is not a high key) reliably has every
+      column truncated away, leaving no actual value in its
+      <structfield>data</structfield> field.  Such an item does have a
+      valid downlink in its <structfield>ctid</structfield> field,
+      however.
+     </para>
+     <para>
+      For more details about the structure of B-tree indexes, see
+      <xref linkend="btree-structure"/>.  For more details about
+      deduplication and posting lists, see <xref
+       linkend="btree-deduplication"/>.
      </para>
     </listitem>
    </varlistentry>
@@ -419,17 +500,24 @@ test=# SELECT * FROM bt_page_items('pg_cast_oid_index', 1);
       <function>get_raw_page</function> devrait être passé en argument.  Ainsi
       le précédent exemple pourrait également être réécrit ainsi :
 <screen>
-test=# SELECT * FROM bt_page_items(get_raw_page('pg_cast_oid_index', 1));
- itemoffset |  ctid   | itemlen | nulls | vars |    data
-------------+---------+---------+-------+------+-------------
-          1 | (0,1)   |      12 | f     | f    | 23 27 00 00
-          2 | (0,2)   |      12 | f     | f    | 24 27 00 00
-          3 | (0,3)   |      12 | f     | f    | 25 27 00 00
-          4 | (0,4)   |      12 | f     | f    | 26 27 00 00
-          5 | (0,5)   |      12 | f     | f    | 27 27 00 00
-          6 | (0,6)   |      12 | f     | f    | 28 27 00 00
-          7 | (0,7)   |      12 | f     | f    | 29 27 00 00
-          8 | (0,8)   |      12 | f     | f    | 2a 27 00 00
+test=# SELECT itemoffset, ctid, itemlen, nulls, vars, data, dead, htid, tids[0:2] AS some_tids
+        FROM bt_page_items(get_raw_page('tenk2_hundred', 5));
+ itemoffset |   ctid    | itemlen | nulls | vars |          data           | dead |  htid  |      some_tids
+------------+-----------+---------+-------+------+-------------------------+------+--------+---------------------
+          1 | (16,1)    |      16 | f     | f    | 30 00 00 00 00 00 00 00 |      |        |
+          2 | (16,8292) |     616 | f     | f    | 24 00 00 00 00 00 00 00 | f    | (1,6)  | {"(1,6)","(10,22)"}
+          3 | (16,8292) |     616 | f     | f    | 25 00 00 00 00 00 00 00 | f    | (1,18) | {"(1,18)","(4,22)"}
+          4 | (16,8292) |     616 | f     | f    | 26 00 00 00 00 00 00 00 | f    | (4,18) | {"(4,18)","(6,17)"}
+          5 | (16,8292) |     616 | f     | f    | 27 00 00 00 00 00 00 00 | f    | (1,2)  | {"(1,2)","(1,19)"}
+          6 | (16,8292) |     616 | f     | f    | 28 00 00 00 00 00 00 00 | f    | (2,24) | {"(2,24)","(4,11)"}
+          7 | (16,8292) |     616 | f     | f    | 29 00 00 00 00 00 00 00 | f    | (2,17) | {"(2,17)","(11,2)"}
+          8 | (16,8292) |     616 | f     | f    | 2a 00 00 00 00 00 00 00 | f    | (0,25) | {"(0,25)","(3,20)"}
+          9 | (16,8292) |     616 | f     | f    | 2b 00 00 00 00 00 00 00 | f    | (0,10) | {"(0,10)","(0,14)"}
+         10 | (16,8292) |     616 | f     | f    | 2c 00 00 00 00 00 00 00 | f    | (1,3)  | {"(1,3)","(3,9)"}
+         11 | (16,8292) |     616 | f     | f    | 2d 00 00 00 00 00 00 00 | f    | (6,28) | {"(6,28)","(11,1)"}
+         12 | (16,8292) |     616 | f     | f    | 2e 00 00 00 00 00 00 00 | f    | (0,27) | {"(0,27)","(1,13)"}
+         13 | (16,8292) |     616 | f     | f    | 2f 00 00 00 00 00 00 00 | f    | (4,17) | {"(4,17)","(4,21)"}
+(13 rows)
 </screen>
       Tous les autres étails sont les même qu'expliqué au point précédent.
      </para>

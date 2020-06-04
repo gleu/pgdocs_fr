@@ -340,7 +340,47 @@ EXPLAIN SELECT * FROM tenk1 WHERE unique1 = 42;
     requêtes qui ne récupèrent qu'une seule ligne, ou pour les requêtes qui
     ont une condition <literal>ORDER BY</literal> qui correspond à l'ordre
     de l'index, car cela ne nécessite aucune étape supplémentaire pour satisfaire
-    l'<literal>ORDER BY</literal>.
+    l'<literal>ORDER BY</literal>. In this example, adding
+    <literal>ORDER BY unique1</literal> would use the same plan because the
+    index already implicitly provides the requested ordering.
+   </para>
+
+   <para>
+     The planner may implement an <literal>ORDER BY</literal> clause in several
+     ways.  The above example shows that such an ordering clause may be
+     implemented implicitly.  The planner may also add an explicit
+     <literal>sort</literal> step:
+
+<screen>
+EXPLAIN SELECT * FROM tenk1 ORDER BY unique1;
+                            QUERY PLAN
+-------------------------------------------------------------------
+ Sort  (cost=1109.39..1134.39 rows=10000 width=244)
+   Sort Key: unique1
+   ->  Seq Scan on tenk1  (cost=0.00..445.00 rows=10000 width=244)
+</screen>
+
+    If a part of the plan guarantees an ordering on a prefix of the
+    required sort keys, then the planner may instead decide to use an
+    <literal>incremental sort</literal> step:
+
+<screen>
+EXPLAIN SELECT * FROM tenk1 ORDER BY four, ten LIMIT 100;
+                                              QUERY PLAN
+-------------------------------------------------------------------&zwsp;-----------------------------------
+ Limit  (cost=521.06..538.05 rows=100 width=244)
+   ->  Incremental Sort  (cost=521.06..2220.95 rows=10000 width=244)
+         Sort Key: four, ten
+         Presorted Key: four
+         ->  Index Scan using index_tenk1_on_four on tenk1  (cost=0.29..1510.08 rows=10000 width=244)
+</screen>
+
+    Compared to regular sorts, sorting incrementally allows returning tuples
+    before the entire result set has been sorted, which particularly enables
+    optimizations with <literal>LIMIT</literal> queries.  It may also reduce
+    memory usage and the likelihood of spilling sorts to disk, but it comes at
+    the cost of the increased overhead of splitting the result set into multiple
+    sorting batches.
     </para>
 
     <para>
@@ -1259,7 +1299,8 @@ SELECT stxname, stxkeys, stxddependencies
      <para>
       Les dépendances fonctionnelles sont pour le moment uniquement appliquées
       pour les conditions sur une simple égalité entre une colonne et une
-      valeur constante. Elles ne sont pas utilisées pour améliorer
+      valeur constante and <literal>IN</literal> clauses with constant values.
+      Elles ne sont pas utilisées pour améliorer
       l'estimation sur les conditions d'égalité entre deux colonnes ou la
       comparaison d'une colonne avec une expression ni pour les clauses
       d'intervalle, <literal>LIKE</literal> ou tout autre type de condition.
@@ -1671,9 +1712,9 @@ WHERE quelquechosedautre;</programlisting>
     transactions ne sont pas impactés, car, en cas d'erreur, les fichiers
     contenant les données nouvellement chargées seront supprimés de toute
     façon. Néanmoins, cette considération ne s'applique que quand <xref
-    linkend="guc-wal-level"/> vaut <literal>minimal</literal> pour les tables
-    non partitionnées, car toutes les commandes doivent écrire dans les
-    journaux de transaction dans les autres cas.
+    linkend="guc-wal-level"/> vaut <literal>minimal</literal> car toutes les
+    commandes doivent écrire dans les journaux de transaction dans les autres
+    cas.
    </para>
 
   </sect2>
@@ -1784,41 +1825,13 @@ WHERE quelquechosedautre;</programlisting>
    <para>
     En dehors d'éviter le temps de traitement des données des journaux de
     transactions par l'archiveur ou l'émetteur des journaux de transactions,
-    le faire rendrait certaines commandes plus rapides parce qu'elles sont
-    conçues pour ne pas écrire du tout dans les journaux de transactions si
-    <varname>wal_level</varname> vaut <literal>minimal</literal>. (Elles
-    peuvent garantir la sûreté des données de façon moins coûteuse en exécutant
-    un <function>fsync</function> à la fin plutôt qu'en écrivant les journaux
-    de transactions&nbsp;:
-    <itemizedlist>
-     <listitem>
-      <para>
-       <command>CREATE TABLE AS SELECT</command>
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       <command>CREATE INDEX</command> (et les variantes telles que
-       <command>ALTER TABLE ADD PRIMARY KEY</command>)
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       <command>ALTER TABLE SET TABLESPACE</command>
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       <command>CLUSTER</command>
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       <command>COPY FROM</command>, quand la table cible vient d'être créée
-       ou vidée auparavant dans la transaction
-      </para>
-     </listitem>
-    </itemizedlist>
+    le faire rendrait certaines commandes plus rapides parce qu'elles
+    n'écrivent pas du tout dans les journaux de transactions si
+    <varname>wal_level</varname> vaut <literal>minimal</literal> and the
+    current subtransaction (or top-level transaction) created or truncated the
+    table or index they change. (Elles peuvent garantir la sûreté des données
+    de façon moins coûteuse en exécutant un <function>fsync</function> à la
+    fin plutôt qu'en écrivant les journaux de transactions).
    </para>
   </sect2>
 

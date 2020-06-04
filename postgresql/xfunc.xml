@@ -396,11 +396,15 @@ $$ LANGUAGE SQL;
     </para>
 
     <para>
-     Une fonction <acronym>SQL</acronym> doit retourner exactement le type de
-     donnée présent dans sa définition.  Cela peut nécessiter d'insérer un
-     transtypage explicite.  Par exemple, supposons que nous voulions que la
+     If the final <literal>SELECT</literal> or <literal>RETURNING</literal>
+     clause in a <acronym>SQL</acronym> function does not return exactly
+     the function's declared result
+     type, <productname>PostgreSQL</productname> will automatically cast
+     the value to the required type, if that is possible with an implicit
+     or assignment cast.  Otherwise, you must write an explicit cast.
+     Par exemple, supposons que nous voulions que la
      précédente fonction <function>add_em</function> retourne un type
-     <type>float8</type> à la place.  Ceci ne fonctionne pas&nbsp;:
+     <type>float8</type> à la place. Il suffit d'écrire&nbsp;:
 
 <programlisting>
 CREATE FUNCTION add_em(integer, integer) RETURNS float8 AS $$
@@ -408,16 +412,10 @@ CREATE FUNCTION add_em(integer, integer) RETURNS float8 AS $$
 $$ LANGUAGE SQL;
 </programlisting>
 
-     bien que dans d'autres contextes, <productname>PostgreSQL</productname>
-     serait prêt à insérer un transtypage explicite pour convertir
-     le type <type>integer</type> en type <type>float8</type>.
-     Nous devons l'écrire ainsi&nbsp;;
-
-<programlisting>
-CREATE FUNCTION add_em(integer, integer) RETURNS float8 AS $$
-    SELECT ($1 + $2)::float8;
-$$ LANGUAGE SQL;
-   </programlisting>
+     since the <type>integer</type> sum can be implicitly cast
+     to <type>float8</type>.
+     (See <xref linkend="typeconv"/> or <xref linkend="sql-createcast"/>
+     for more about casts.)
   </para>
 
  </sect2>
@@ -509,7 +507,7 @@ $$ LANGUAGE SQL;
     <listitem>
      <para>
       L'ordre de la liste du SELECT doit être exactement le même que celui
-      dans lequel les colonnes apparaissent dans la table associée au type
+      dans lequel les colonnes apparaissent dans le type
       composite (donner des noms aux colonnes dans le corps de la fonction,
       comme nous l'avons
       fait dans l'exemple, n'a aucune interaction avec le système).
@@ -517,12 +515,12 @@ $$ LANGUAGE SQL;
     </listitem>
     <listitem>
      <para>
-      Il faut s'assurer que le type de chaque expression concorde avec la
-      colonne correspondante du type composite, en insérant un transtypage si
-      nécessaire.  Sinon, une erreur telle que :
-      <screen><computeroutput>ERROR:  function declared to return emp returns varchar instead of text at column 1</computeroutput></screen>
-      sera renvoyée.  Comme pour le cas du type de base, la fonction
-      n'insèrera aucun transtypage automatiquement.
+      Il faut s'assurer que le type de chaque expression can be cast to that of la
+      colonne correspondante du type composite.  Sinon, une erreur telle que :
+      <screen><computeroutput>+ERROR:  return type mismatch in function declared to return emp
+DETAIL:  Final statement returns text instead of point at column 4.</computeroutput></screen>
+      sera renvoyée. As with the base-type case, the system will not insert explicit
+      casts automatically, only implicit or assignment casts.
      </para>
       </listitem>
      </itemizedlist>
@@ -1236,16 +1234,13 @@ $$ LANGUAGE SQL;
      </para>
     </sect2>
 
-    <sect2>
+    <sect2 id="xfunc-sql-polymorphic-functions">
      <title>Fonctions <acronym>SQL</acronym> polymorphes</title>
 
      <para>
       Les fonctions <acronym>SQL</acronym> peuvent être déclarées pour accepter
-      et renvoyer les types <quote>polymorphe</quote> <type>anyelement</type>,
-      <type>anyarray</type>, <type>anynonarray</type>, <type>anyenum</type>
-      et <type>anyrange</type>.
-      Voir la <xref linkend="extend-types-polymorphic"/> pour une
-      explication plus approfondie. Voici une fonction polymorphe
+      et renvoyer les types described in <xref
+      linkend="extend-types-polymorphic"/>. Voici une fonction polymorphe
       <function>cree_tableau</function> qui construit un tableau à partir de
       deux éléments de type arbitraire&nbsp;:
 
@@ -1270,7 +1265,45 @@ tableau_texte;
       <type>unknown</type> n'est pas un type valide. Sans le transtypage, vous
       obtiendrez ce genre d'erreur&nbsp;:
 
-      <screen><computeroutput>ERROR:  could not determine polymorphic type because input is UNKNOWN</computeroutput></screen>
+      <screen>
+ERROR:  could not determine polymorphic type because input has type unknown
+</screen>
+    </para>
+
+    <para>
+     With <function>make_array</function> declared as above, you must
+     provide two arguments that are of exactly the same data type; the
+     system will not attempt to resolve any type differences.  Thus for
+     example this does not work:
+<screen>
+SELECT make_array(1, 2.5) AS numericarray;
+ERROR:  function make_array(integer, numeric) does not exist
+</screen>
+     An alternative approach is to use the <quote>common</quote> family of
+     polymorphic types, which allows the system to try to identify a
+     suitable common type:
+<screen>
+CREATE FUNCTION make_array2(anycompatible, anycompatible)
+RETURNS anycompatiblearray AS $$
+    SELECT ARRAY[$1, $2];
+$$ LANGUAGE SQL;
+
+SELECT make_array2(1, 2.5) AS numericarray;
+ numericarray
+--------------
+ {1,2.5}
+(1 row)
+</screen>
+     Because the rules for common type resolution default to choosing
+     type <type>text</type> when all inputs are of unknown types, this
+     also works:
+<screen>
+SELECT make_array2('a', 'b') AS textarray;
+ textarray 
+-----------
+ {a,b}
+(1 row)
+      </screen>
     </para>
 
     <para>
@@ -1291,8 +1324,7 @@ CREATE FUNCTION fonction_invalide() RETURNS anyelement AS $$
     SELECT 1;
 $$ LANGUAGE SQL;
 ERROR:  cannot determine result datatype
-DETAIL:  A function returning a polymorphic type must have at least one
-polymorphic argument.
+DETAIL:  A result of type anyelement requires at least one input of type anyelement, anyarray, anynonarray, anyenum, or anyrange.
       </screen>
      </para>
 
@@ -2099,9 +2131,9 @@ memcpy(destination->data, buffer, 40);
     <table tocentry="1" id="xfunc-c-type-table">
       <title>Équivalence des types C et des types SQL intégrés</title>
       <tgroup cols="3">
-       <colspec colnum="1" colwidth="0.7*"/>
-       <colspec colnum="2" colwidth="0.5*"/>
-       <colspec colnum="3" colwidth="1.8*"/>
+       <colspec colnum="1" colwidth="1*"/>
+       <colspec colnum="2" colwidth="1*"/>
+       <colspec colnum="3" colwidth="2*"/>
        <thead>
 	<row>
 	 <entry>
@@ -3203,10 +3235,8 @@ CREATE OR REPLACE FUNCTION retcomposite(integer, integer)
 
      <para>
       Les fonctions en langage C peuvent être déclarées pour accepter et renvoyer
-      les types <quote>polymorphes</quote> <type>anyelement</type>,
-      <type>anyarray</type>, <type>anynonarray</type>, <type>anyenum</type> et
-      <type>anyrange</type>. Voir la <xref linkend="extend-types-polymorphic"/> pour une
-      explication plus détaillée des fonctions polymorphes. Si les types des
+      les types <quote>polymorphes</quote> described in <xref
+      linkend="extend-types-polymorphic"/>. Si les types des
       arguments ou du renvoi de la fonction sont définis comme polymorphes,
       l'auteur de la fonction ne peut pas savoir à l'avance quel type de données
       sera appelé ou bien quel type doit être renvoyé. Il y a deux routines
@@ -3319,7 +3349,7 @@ make_array(PG_FUNCTION_ARGS)
      </para>
     </sect2>
 
-    <sect2>
+    <sect2 id="xfunc-shared-addin">
      <title>Mémoire partagée et LWLocks</title>
 
      <para>

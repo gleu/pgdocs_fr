@@ -47,17 +47,16 @@
   </para>
 
   <para>
-   Le résultat est le même que lorsqu'on remplace le répertoire de données
-   cible avec celui de la source. Seuls les blocs modifiés des fichiers des
-   relations déjà existants sont copiés, tous les autres fichiers sont copiés
-   intégralement, fichiers de configurations compris. L'avantage de
-   <application>pg_rewind</application> par rapport à la réalisation d'une
-   nouvelle sauvegarde de base, ou l'utilisation d'un outil tel que
-   <application>rsync</application>, est que
-   <application>pg_rewind</application> n'a pas besoin de lire tous les blocs
-   non modifiés des fichiers de l'ancienne instance. Cela rend l'opération
-   éminement plus rapide lorsqu'on est face à une volumétrie conséquente et
-   qu'il a peu de différences entre les deux instances.
+   After a successful rewind, the state of the target data directory is
+   analogous to a base backup of the source data directory. Unlike taking
+   a new base backup or using a tool like <application>rsync</application>,
+   <application>pg_rewind</application> does not require comparing or copying
+   unchanged relation blocks in the cluster. Only changed blocks from existing
+   relation files are copied; all other files, including new relation files,
+   configuration files, and WAL segments, are copied in full. As such the
+   rewind operation is significantly faster than other approaches when the
+   database is large and only a small fraction of blocks differ between the
+   clusters.
   </para>
 
   <para>
@@ -73,26 +72,26 @@
    fichiers WAL peuvent ne plus être présents dans le répertoire
    <filename>pg_wal</filename>. Dans ce cas, ils peuvent être copiés à la main
    depuis les fichiers WAL archivés vers le répertoire
-   <filename>pg_wal</filename> ou récupérés au démarrage en configurant <xref
-   linkend="guc-primary-conninfo"/> ou <xref linkend="guc-restore-command"/>.
+   <filename>pg_wal</filename> or run
+   <application>pg_rewind</application> with the <literal>-c</literal> option to
+   automatically retrieve them from the WAL archive.
    L'utilisation de <application>pg_rewind</application> n'est pas limitée au
    failover&nbsp;: un serveur standby peut être promu, écrire quelques
    transactions, puis transformé de nouveau en standby avec cet outil.
   </para>
 
   <para>
-   Lorsque l'instance cible est démarrée pour la première fois après avoir
-   utilisé <application>pg_rewind</application>, elle va se mettre en mode de
-   restauration (<foreignphrase>recovery</foreignphrase>) et va rejouer tous
-   les fichiers WAL générés par l'instance source depuis la bascule. Si
-   certains fichiers WAL ne sont plus disponibles sur la source lorsque
-   <application>pg_rewind</application> est en cours, ils ne peuvent donc plus
-   être copiés par la session <application>pg_rewind</application>. Il est
-   alors nécessaire de faire en sorte qu'ils puissent être disponibles lorsque
-   le serveur cible sera démarré. Cela est possible en créant un fichier
-   <filename>recovery.signal</filename> dans le répertoire des données cible
-   et en configurant correctement le paramètre <xref
-   linkend="guc-restore-command"/> dans le fichier
+   After running <application>pg_rewind</application>, WAL replay needs to
+   complete for the data directory to be in a consistent state. When the
+   target server is started again it will enter archive recovery and replay
+   all WAL generated in the source server from the last checkpoint before
+   the point of divergence. If some of the WAL was no longer available in the
+   source server when <application>pg_rewind</application> was run, and
+   therefore could not be copied by the <application>pg_rewind</application>
+   session, it must be made available when the target server is started.
+   This can be done by creating a <filename>recovery.signal</filename> file
+   in the target data directory and by configuring a suitable
+   <xref linkend="guc-restore-command"/> in
    <filename>postgresql.conf</filename>.
   </para>
 
@@ -113,6 +112,15 @@
     répertoire des données de la cible est très probablement dans un état
     inutilisable. Dans ce cas, réaliser une nouvelle sauvegarde est
     recommandé.
+   </para>
+
+   <para>
+    As <application>pg_rewind</application> copies configuration files
+    entirely from the source, it may be required to correct the configuration
+    used for recovery before restarting the target server, especially if
+    the target is reintroduced as a standby of the source. If you restart
+    the server after the rewind operation has finished but without configuring
+    recovery, the target may again diverge from the primary.
    </para>
 
    <para>
@@ -177,6 +185,36 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>--no-ensure-shutdown</option></term>
+      <listitem>
+       <para>
+        <application>pg_rewind</application> requires that the target server
+        is cleanly shut down before rewinding. By default, if the target server
+        is not shut down cleanly, <application>pg_rewind</application> starts
+        the target server in single-user mode to complete crash recovery first,
+        and stops it.
+        By passing this option, <application>pg_rewind</application> skips
+        this and errors out immediately if the server is not cleanly shut
+        down. Users are expected to handle the situation themselves in that
+        case.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-R</option></term>
+      <term><option>--write-recovery-conf</option></term>
+      <listitem>
+       <para>
+        Create <filename>standby.signal</filename> and append connection
+        settings to <filename>postgresql.auto.conf</filename> in the output
+        directory.  <literal>--source-server</literal> is mandatory with
+        this option.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-n</option></term>
       <term><option>--dry-run</option></term>
       <listitem>
@@ -210,6 +248,19 @@
         Permet d'activer les traces. Activer cette option vous fournira les
         informations au fil de l'eau sur l'avancée de la copie des données
         depuis l'instance source.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-c</option></term>
+      <term><option>--restore-target-wal</option></term>
+      <listitem>
+       <para>
+        Use <varname>restore_command</varname> defined in the target cluster
+        configuration to retrieve WAL files from the WAL archive if these
+        files are no longer available in the <filename>pg_wal</filename>
+        directory.
        </para>
       </listitem>
      </varlistentry>
@@ -314,7 +365,10 @@ GRANT EXECUTE ON function pg_catalog.pg_read_binary_file(text, bigint, bigint, b
       chaque enregistrement dans les journaux de transactions, enregistrer
       chaque bloc de données modifié. Ceci a pour résultat une liste de tous
       les blocs de données modifiés dans l'instance cible, après la séparation
-      avec l'instance source.
+      avec l'instance source. If some of the WAL files are no longer
+      available, try re-running <application>pg_rewind</application> with
+      the <option>-c</option> option to search for the missing files in
+      the WAL archive.
      </para>
     </step>
 
@@ -324,37 +378,48 @@ GRANT EXECUTE ON function pg_catalog.pg_read_binary_file(text, bigint, bigint, b
       cible, soit en utilisant un accès direct au système de fichiers
       (<option>--source-pgdata</option>) soit en SQL
       (<option>--source-server</option>).
+      Relation files are now in a state equivalent to the moment of the last
+      completed checkpoint prior to the point at which the WAL timelines of the
+      source and target diverged plus the current state on the source of any
+      blocks changed on the target after that divergence.
      </para>
     </step>
 
     <step>
      <para>
-      Copier tous les autres fichiers, tels que <filename>pg_xact</filename>
-      et les fichiers de configuration de l'instance source vers l'instance
-      cible (sauf les fichiers des relations). De façon similaire aux
-      sauvegardes de base, le contenu des répertoires
-      <filename>pg_dynshmem/</filename>, <filename>pg_notify/</filename>,
-      <filename>pg_replslot/</filename>, <filename>pg_serial/</filename>,
-      <filename>pg_snapshots/</filename>, <filename>pg_stat_tmp/</filename>et
-      <filename>pg_subtrans/</filename> sont omis des données copiées à partir
-      de l'instance source. Tout fichier ou répertoire commençant par
-      <filename>pgsql_tmp</filename> est omis, ainsi que
-      <filename>backup_label</filename>, <filename>tablespace_map</filename>,
+      Copy all other files, including new relation files, WAL segments,
+      <filename>pg_xact</filename>, and configuration files from the source
+      cluster to the target cluster. Similarly to base backups, the contents
+      of the directories <filename>pg_dynshmem/</filename>,
+      <filename>pg_notify/</filename>, <filename>pg_replslot/</filename>,
+      <filename>pg_serial/</filename>, <filename>pg_snapshots/</filename>,
+      <filename>pg_stat_tmp/</filename>, and <filename>pg_subtrans/</filename>
+      are omitted from the data copied from the source cluster. The files
+      <filename>backup_label</filename>,
+      <filename>tablespace_map</filename>,
       <filename>pg_internal.init</filename>,
-      <filename>postmaster.opts</filename> et
-      <filename>postmaster.pid</filename>.
+      <filename>postmaster.opts</filename>, and
+      <filename>postmaster.pid</filename>, as well as any file or directory
+      beginning with <filename>pgsql_tmp</filename>, are omitted.
      </para>
     </step>
 
     <step>
      <para>
-      Appliquer les enregistrements des journaux de transactions provenant de
-      l'instance source, en commençant à partir du checkpoint créé au moment
-      du failover. (En fait, <application>pg_rewind</application> n'applique
-      pas les journaux de transactions. Il crée simplement un fichier
-      backup_label qui fera en sorte que <productname>PostgreSQL</productname>
-      démarre en rejouant les enregistrements des journaux de transactions à
-      partir de ce checkpoint.)
+      Create a <filename>backup_label</filename> file to begin WAL replay at
+      the checkpoint created at failover and configure the
+      <filename>pg_control</filename> file with a minimum consistency LSN
+      defined as the result of <literal>pg_current_wal_insert_lsn()</literal>
+      when rewinding from a live source or the last checkpoint LSN when
+      rewinding from a stopped source.
+     </para>
+    </step>
+
+    <step>
+     <para>
+      When starting the target, <productname>PostgreSQL</productname> replays
+      all the required WAL, resulting in a data directory in a consistent
+      state.
      </para>
     </step>
    </procedure>
