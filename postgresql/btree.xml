@@ -220,7 +220,7 @@
 
  <para>
   Comme montré dans <xref linkend="xindex-btree-support-table"/>, btree définit
-  une fonction de support obligatoire et trois facultatives. Les quatre
+  une fonction de support obligatoire et quatre facultatives. Les cinq
   méthodes définies par l'utilisateur sont&nbsp;:
  </para>
 
@@ -557,6 +557,40 @@ equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
     </para>
    </listitem>
   </varlistentry>
+
+  <varlistentry>
+   <term><function>options</function></term>
+   <listitem>
+    <para>
+     Optionally, a B-tree operator family may provide
+     <function>options</function> (<quote>operator class specific
+     options</quote>) support functions, registered under support
+     function number 5.  These functions define a set of user-visible
+     parameters that control operator class behavior.
+    </para>
+    <para>
+     An <function>options</function> support function must have the
+     signature
+<synopsis>
+options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns void
+</synopsis>
+     The function is passed a pointer to a <replaceable>local_relopts</replaceable>
+     struct, which needs to be filled with a set of operator class
+     specific options.  The options can be accessed from other support
+     functions using the <literal>PG_HAS_OPCLASS_OPTIONS()</literal> and
+     <literal>PG_GET_OPCLASS_OPTIONS()</literal> macros.
+    </para>
+    <para>
+     Currently, no B-Tree operator class has an <function>options</function>
+     support function.  B-tree doesn't allow flexible representation of keys
+     like GiST, SP-GiST, GIN and BRIN do.  So, <function>options</function>
+     probably doesn't have much application in the current B-tree index
+     access method.  Nevertheless, this support function was added to B-tree
+     for uniformity, and will probably find uses during further
+     evolution of B-tree in <productname>PostgreSQL</productname>.
+    </para>
+   </listitem>
+  </varlistentry>
  </variablelist>
 </sect1>
 
@@ -616,7 +650,7 @@ equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
    Un doublon est un tuple de page feuille (un tuple qui pointe sur un
    enregistrement en table) où <emphasis>toutes</emphasis> les valeurs des
    colonnes clés de l'index correspondent aux valeurs de colonnes respectives
-   d'au moins un autre tuple de page feuille à proximité dans le même index.
+   d'au moins un autre tuple de page feuille dans le même index.
    Les tuples doublons sont assez communs en pratique. Les index B-Tree
    peuvent utiliser une représentation spéciale gérant efficacement l'espace
    pour les doublons lorsqu'une fonctionalité est activée : le
@@ -639,13 +673,13 @@ equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
 
   <note>
    <para>
-    Alors que NULL n'est généralement pas considéré comme égal à n'importe
-    quelle autre valeur, NULL inclus, NULL est cependant traité juste comme
-    une autre valeur pour le périmètre des valeurs indexées dans
-    l'implémentation B-Tree (sauf dans le cas où la contrainte d'unicité est
-    appliquée dans un index unique). Le dédoublement B-Tree est par conséquent
-    tout autant efficace avec les <quote>doublons</quote> qui contiennent une
-    valeur NULL.
+    B-Tree deduplication is just as effective with
+    <quote>duplicates</quote> that contain a NULL value, even though
+    NULL values are never equal to each other according to the
+    <literal>=</literal> member of any B-Tree operator class.  As far
+    as any part of the implementation that understands the on-disk
+    B-Tree structure is concerned, NULL is just another value from the
+    domain of indexed values.
    </para>
   </note>
 
@@ -661,6 +695,21 @@ equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
    lecture-écriture. La plupart des applications clientes verront un bénéfice
    modéré sur les performances en utilisant le dédoublement. Le dédoublement
    est activé par défaut.
+  </para>
+
+  <para>
+   <command>CREATE INDEX</command> and <command>REINDEX</command>
+   apply deduplication to create posting list tuples, though the
+   strategy they use is slightly different.  Each group of duplicate
+   ordinary tuples encountered in the sorted input taken from the
+   table is merged into a posting list tuple
+   <emphasis>before</emphasis> being added to the current pending leaf
+   page.  Individual posting list tuples are packed with as many
+   <acronym>TID</acronym>s as possible.  Leaf pages are written out in
+   the usual way, without any separate deduplication pass.  This
+   strategy is well-suited to <command>CREATE INDEX</command> and
+   <command>REINDEX</command> because they are once-off batch
+   operations.
   </para>
 
   <para>
@@ -680,17 +729,22 @@ equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
    Pour les index B-Tree, sous MVCC, il peut y avoir plusieurs versions
    existantes du même enregistrement logique en table&nbsp;; pour un index,
    chaque tuple est un objet indépendant qui nécessite sa propre entrée dans
-   l'index. Ainsi, la mise à jour d'un enregistrement crée toujours de
-   nouvelles entrées pour l'enregistrement, même si les valeurs des clés ne
-   changent pas. Certains types de charges de travail peuvent être impactées
-   par l'inflation d'index causée par les doublons de version causés par cette
-   implémentation (c'est un problème typique pour les charges de travail
-   majoritairement dues aux <command>UPDATE</command> ne pouvant pas appliquer
-   l'optimisation <acronym>HOT</acronym> car elles modifient au moins une
-   colonne d'index). Le dédoublement B-Tree ne distingue pas entre les
-   doublons de version dus à l'implémentation MVCC et les doublons
-   conventionnels. Le dédoublement peut cependant aider au contrôle de
-   l'inflation d'index causée par l'implémentation du versionement.
+   l'index. <quote>Version duplicates</quote> may sometimes accumulate
+   and adversely affect query latency and throughput.  This typically
+   occurs with <command>UPDATE</command>-heavy workloads where most
+   individual updates cannot apply the <acronym>HOT</acronym>
+   optimization (often because at least one indexed column gets
+   modified, necessitating a new set of index tuple versions &mdash;
+   one new tuple for <emphasis>each and every</emphasis> index).  In
+   effect, B-Tree deduplication ameliorates index bloat caused by
+   version churn.  Note that even the tuples from a unique index are
+   not necessarily <emphasis>physically</emphasis> unique when stored
+   on disk due to version churn.  The deduplication optimization is
+   selectively applied within unique indexes.  It targets those pages
+   that appear to have version duplicates.  The high level goal is to
+   give <command>VACUUM</command> more time to run before an
+   <quote>unnecessary</quote> page split caused by version churn can
+   take place.
   </para>
 
   <tip>
