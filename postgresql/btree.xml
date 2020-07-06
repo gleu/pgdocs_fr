@@ -1,848 +1,858 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- doc/src/sgml/btree.sgml -->
 
 <chapter id="btree">
-<title>Index B-Tree</title>
+ <title>Index B-Tree</title>
 
-   <indexterm>
-    <primary>index</primary>
-    <secondary>B-Tree</secondary>
-   </indexterm>
+ <indexterm>
+  <primary>index</primary>
+  <secondary>B-Tree</secondary>
+ </indexterm>
 
-<sect1 id="btree-intro">
- <title>Introduction</title>
+ <sect1 id="btree-intro">
+  <title>Introduction</title>
 
- <para>
-  <productname>PostgreSQL</productname> inclut une implémentation de la
-  structure standard d'index <acronym>btree</acronym> (<foreignphrase>multi-way balanced tree</foreignphrase>)
-  N'importe quel type de données pouvant être trié dans un ordre linéaire
-  clairement défini peut être indexé par un index btree.  La seule limitation
-  est qu'une entrée d'index ne peut dépasser approximativement un tiers de page
-  (après la compression TOAST si cela est possible).
- </para>
+  <para>
+   <productname>PostgreSQL</productname> inclut une implémentation de la
+   structure standard d'index <acronym>btree</acronym>
+   (<foreignphrase>multi-way balanced tree</foreignphrase>) N'importe quel
+   type de données pouvant être trié dans un ordre linéaire clairement défini
+   peut être indexé par un index btree. La seule limitation est qu'une entrée
+   d'index ne peut dépasser approximativement un tiers de page (après la
+   compression TOAST si cela est possible).
+  </para>
 
- <para>
-  Puisque chaque classe d'opérateur btree impose un ordre de tri sur son type de
-  données, les classes d'opérateur btree (ou, en réalité, les familles
-  d'opérateur) ont finies par être utilisées par
-  <productname>PostgreSQL</productname> comme représentation et connaissance
-  générale des sémantiques de tri.  En conséquence, elles ont acquis certaines
-  fonctionnalités qui vont au délà de ce qui serait nécessaire pour simplement
-  supporter les index btree, et des parties du systèmes qui sont éloignées des
-  méthodes d'accès btree les utilisant.
- </para>
+  <para>
+   Puisque chaque classe d'opérateur btree impose un ordre de tri sur son type
+   de données, les classes d'opérateur btree (ou, en réalité, les familles
+   d'opérateur) ont finies par être utilisées par
+   <productname>PostgreSQL</productname> comme représentation et connaissance
+   générale des sémantiques de tri. En conséquence, elles ont acquis certaines
+   fonctionnalités qui vont au délà de ce qui serait nécessaire pour
+   simplement supporter les index btree, et des parties du systèmes qui sont
+   éloignées des méthodes d'accès btree les utilisant.
+  </para>
+ </sect1>
 
-</sect1>
+ <sect1 id="btree-behavior">
+  <title>Comportement des classes d'opérateur B-Tree</title>
 
-<sect1 id="btree-behavior">
- <title>Comportement des classes d'opérateur B-Tree</title>
+  <para>
+   Comme montré dans <xref linkend="xindex-btree-strat-table"/>, une classe
+   d'opérateur btree doit fournir cinq opérateurs de comparaison,
+   <literal>&lt;</literal>,
+   <literal>&lt;=</literal>,
+   <literal>=</literal>,
+   <literal>&gt;=</literal> et
+   <literal>&gt;</literal>.
+   On pourrait supposer que <literal>&lt;&gt;</literal> devraient également
+   faire partie de la classe d'opérateur, mais ce n'est pas le cas car cela ne
+   serait presque jamais utile d'utiliser une clause WHERE
+   <literal>&lt;&gt;</literal> dans une recherche d'index. (Dans certains
+   cas, le planificateur traite <literal>&lt;&gt;</literal> comme s'il était
+   associé avec une classe d'opérateur btree&nbsp;; mais il trouve cet
+   opérateur via le lien du négateur de l'opérateur <literal>=</literal>,
+   plutôt que depuis <structname>pg_amop</structname>.)
+  </para>
 
- <para>
-  Comme montré dans <xref linkend="xindex-btree-strat-table"/>, une classe d'opérateur
-  btree doit fournir cinq opérateurs de comparaison,
-  <literal>&lt;</literal>,
-  <literal>&lt;=</literal>,
-  <literal>=</literal>,
-  <literal>&gt;=</literal> et
-  <literal>&gt;</literal>.
-  On pourrait supposer que <literal>&lt;&gt;</literal> devraient également faire
-  partie de la classe d'opérateur, mais ce n'est pas le cas car cela ne serait
-  presque jamais utile d'utiliser une clause WHERE <literal>&lt;&gt;</literal>
-  dans une recherche d'index.  (Dans certains cas, le planificateur traite
-  <literal>&lt;&gt;</literal> comme s'il était associé avec une classe
-  d'opérateur btree&nbsp;; mais il trouve cet opérateur via le lien du négateur de
-  l'opérateur <literal>=</literal>, plutôt que depuis
-  <structname>pg_amop</structname>.)
- </para>
+  <para>
+   Quand plusieurs types de données partagent des sémantiques de tri presque
+   identiques, leurs classes d'opérateurs peuvent être regroupées dans une
+   famille d'opérateur. Il est avantageux de procéder ainsi car cela permet
+   au planificateur de faire des déductions quant aux comparaisons entre
+   plusieurs types. Chaque classe d'opérateur au sein d'une famille devrait
+   contenir les opérateurs concernant un seul type (et les fonctions de
+   support associées), tandis que les opérateurs de comparaison inter-types et
+   les fonctions de support sont <quote>libres</quote> dans la famille. Il
+   est recommandé qu'un ensemble complet d'opérateurs inter-types soit inclus
+   dans la famille, afin d'assurer que le planificateur puisse représenter
+   n'importe quelle condition de comparaison qu'il pourrait déduire depuis la
+   transitivité.
+  </para>
 
- <para>
-  Quand plusieurs types de données partagent des sémantiques de tri presque
-  identiques, leurs classes d'opérateurs peuvent être regroupées dans une famille
-  d'opérateur.  Il est avantageux de procéder ainsi car cela permet au
-  planificateur de faire des déductions quant aux comparaisons entre plusieurs
-  types.  Chaque classe d'opérateur au sein d'une famille devrait contenir les
-  opérateurs concernant un seul type (et les fonctions de support associées),
-  tandis que les opérateurs de comparaison inter-types et les fonctions de
-  support sont <quote>libres</quote> dans la famille.  Il est recommandé
-  qu'un ensemble complet d'opérateurs inter-types soit inclus dans la famille,
-  afin d'assurer que le planificateur puisse représenter n'importe quelle
-  condition de comparaison qu'il pourrait déduire depuis la transitivité.
- </para>
+  <para>
+   Il y a des supposition basiques qu'une famille d'opérateur btree doit
+   satisfaire&nbsp;:
+  </para>
 
- <para>
-  Il y a des supposition basiques qu'une famille d'opérateur btree doit
-  satisfaire&nbsp;:
- </para>
-
- <itemizedlist>
-  <listitem>
-   <para>
-    Un opérateur <literal>=</literal> doit être une relation d'équivalence&nbsp;;
-    c'est-à-dire que pour toutes les valeurs non nulles
-    <replaceable>A</replaceable>,
-    <replaceable>B</replaceable>, <replaceable>C</replaceable> du type de
-    données&nbsp;:
-
-    <itemizedlist>
-     <listitem>
-      <para>
-       <replaceable>A</replaceable> <literal>=</literal>
-       <replaceable>A</replaceable> est vrai
-       (<firstterm>loi de réflexivité</firstterm>)
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       si <replaceable>A</replaceable> <literal>=</literal>
-       <replaceable>B</replaceable>,
-       alors <replaceable>B</replaceable> <literal>=</literal>
-       <replaceable>A</replaceable>
-       (<firstterm>loi de symétrie</firstterm>)
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       si <replaceable>A</replaceable> <literal>=</literal>
-       <replaceable>B</replaceable> et <replaceable>B</replaceable>
-       <literal>=</literal> <replaceable>C</replaceable>,
-       alors <replaceable>A</replaceable> <literal>=</literal>
-       <replaceable>C</replaceable>
-       (<firstterm>loi de transitivité</firstterm>)
-      </para>
-     </listitem>
-    </itemizedlist>
-   </para>
-  </listitem>
-
-  <listitem>
-   <para>
-    Un opérateur <literal>&lt;</literal> doit être une relation de tri forte&nbsp;;
-    c'est-à-dire, pour toutes les valeurs non nulles
-    <replaceable>A</replaceable>, <replaceable>B</replaceable>,
-    <replaceable>C</replaceable>&nbsp;:
-
-    <itemizedlist>
-     <listitem>
-      <para>
-       <replaceable>A</replaceable> <literal>&lt;</literal>
-       <replaceable>A</replaceable> est faux
-       (<firstterm>loi d'antiréflexivité</firstterm>)
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       si <replaceable>A</replaceable> <literal>&lt;</literal>
-       <replaceable>B</replaceable>
-       et <replaceable>B</replaceable> <literal>&lt;</literal>
-       <replaceable>C</replaceable>,
-       alors <replaceable>A</replaceable> <literal>&lt;</literal>
-       <replaceable>C</replaceable>
-       (<firstterm>loi de transitivité</firstterm>)
-      </para>
-     </listitem>
-    </itemizedlist>
-   </para>
-  </listitem>
-
-  <listitem>
-   <para>
-    De plus, le tri est total&nbsp;; c'est-à-dire, pour toutes les valeurs non nulles
-    <replaceable>A</replaceable>, <replaceable>B</replaceable>&nbsp;:
-
-    <itemizedlist>
-     <listitem>
-      <para>
-       exactement une seule des expressions
-       <replaceable>A</replaceable> <literal>&lt;</literal>
-       <replaceable>B</replaceable>, <replaceable>A</replaceable>
-       <literal>=</literal> <replaceable>B</replaceable>, et
-       <replaceable>B</replaceable> <literal>&lt;</literal>
-       <replaceable>A</replaceable> est vraie
-       (<firstterm>loi de trichotomie</firstterm>)
-      </para>
-     </listitem>
-    </itemizedlist>
-
-    (Bien entendu, la loi de trichotomie justifie la définition de la fonction
-    de support de comparaison).
-   </para>
-  </listitem>
- </itemizedlist>
-
- <para>
-  Les trois autres opérateurs sont définis avec <literal>=</literal>
-  et <literal>&lt;</literal> de manière évidente, et doivent se comporter de
-  manière cohérentes avec ceux-ci.
- </para>
-
- <para>
-  Pour une famille d'opérateur supportant plusieurs types de données, les lois
-  définies auparavant doivent continuer à s'appliquer quand
-  <replaceable>A</replaceable>, <replaceable>B</replaceable>,
-  <replaceable>C</replaceable> sont pris de n'importe quel type de données
-  de la famille.  Les lois de transitivité sont les plus délicates à garantir,
-  car, dans des situations inter-types, elles représentent des déclarations comme
-  quoi les comportements de deux ou trois différents opérateurs sont cohérents.
-  Comme exemple, mettre <type>float8</type> et <type>numeric</type> dans la
-  même famille d'opérateur ne fonctionnerait pas, du moins pas avec les
-  sémantiques actuelles qui définissent que les valeurs de type
-  <type>numeric</type> sont converties en <type>float8</type> pour la
-  comparaison vers un <type>float8</type>.  Du fait de la précision limitée du
-  type <type>float8</type>, cela veut dire que des valeurs
-  <type>numeric</type> distinctes seraient considérées par la comparaison
-  comme égales à la même valeur <type>float8</type>, et par conséquent la loi
-  de transitivé échouerait.
- </para>
-
- <para>
-  Une autre exigence pour les familles contenant plusieurs types est que les
-  transtypages implicites ou de coercition binaire qui sont définis entre les
-  types de données inclus dans la famille d'opérateur ne doivent pas changer
-  l'ordre de tri associé.
- </para>
-
- <para>
-  La raison pour laquelle les index btree nécessitent que ces lois soient
-  vérifiées pour un même type de données devraient être tout à fait claires&nbsp;:
-  sans celles-ci, il n'y a pas d'ordre avec lequel organiser les clés.  En outre,
-  les recherches d'index utilisant une clé de comparaison d'un type de données
-  différent nécessitent que la comparaison se comporte sainement à travers deux
-  types de données.  Les extensions à trois types de données ou plus au sein
-  d'une famille ne sont pas strictement requis par le mécanisme d'index btree
-  lui-même, mais le planificateur se repose sur eux pour des besoins
-  d'optimisation.
- </para>
-
-</sect1>
-
-<sect1 id="btree-support-funcs">
- <title>Fonctions de support B-Tree</title>
-
- <para>
-  Comme montré dans <xref linkend="xindex-btree-support-table"/>, btree définit
-  une fonction de support obligatoire et quatre facultatives. Les cinq
-  méthodes définies par l'utilisateur sont&nbsp;:
- </para>
-
- <variablelist>
-  <varlistentry>
-   <term><function>order</function></term>
+  <itemizedlist>
    <listitem>
     <para>
-     Pour chaque combinaison de types de données pour laquelle une famille
-     d'opérateur btree fournit des opérateurs de comparaison, elle doit fournir une
-     fonction de support de comparaison inscrite dans
-     <structname>pg_amproc</structname> avec la fonction de support 1 et
-     <structfield>amproclefttype</structfield>/<structfield>amprocrighttype</structfield>
-     égaux aux types de données gauche et droit pour la comparaison (c'est-à-dire
-     les même types de données que l'opérateur correspondant a inscrit dans
-     <structname>pg_amop</structname>).
-     La fonction de comparaison doit prendre en entrée deux valeurs non nulles
-     <replaceable>A</replaceable> et <replaceable>B</replaceable> et retourner une
-     valeur <type>int32</type> qui est
-     <literal>&lt;</literal> <literal>0</literal>, <literal>0</literal>,
-     ou <literal>&gt;</literal> <literal>0</literal>
-     quand, respectivement <replaceable>A</replaceable> <literal>&lt;</literal>
-     <replaceable>B</replaceable>, <replaceable>A</replaceable>
-     <literal>=</literal> <replaceable>B</replaceable>,
-     ou <replaceable>A</replaceable> <literal>&gt;</literal>
-     <replaceable>B</replaceable>. Une valeur de retour NULL est également
-     interdite&nbsp;: toutes les valeurs du type de données doivent être
-     comparables. Voir
-     <filename>src/backend/access/nbtree/nbtcompare.c</filename> pour plus
-     d'exemples.
-    </para>
+     Un opérateur <literal>=</literal> doit être une relation
+     d'équivalence&nbsp;; c'est-à-dire que pour toutes les valeurs non nulles
+     <replaceable>A</replaceable>, <replaceable>B</replaceable>,
+     <replaceable>C</replaceable> du type de données&nbsp;:
 
-    <para>
-     Si les valeurs comparées sont d'un type avec collation, l'identifiant de
-     collation approprié sera passé à la fonction de support de comparaison, en
-     utilisant le mécanisme standard <function>PG_GET_COLLATION()</function>.
+     <itemizedlist>
+      <listitem>
+       <para>
+        <replaceable>A</replaceable> <literal>=</literal>
+        <replaceable>A</replaceable> est vrai
+        (<firstterm>loi de réflexivité</firstterm>)
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+        si <replaceable>A</replaceable> <literal>=</literal>
+        <replaceable>B</replaceable>,
+        alors <replaceable>B</replaceable> <literal>=</literal>
+        <replaceable>A</replaceable>
+        (<firstterm>loi de symétrie</firstterm>)
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+        si <replaceable>A</replaceable> <literal>=</literal>
+        <replaceable>B</replaceable> et <replaceable>B</replaceable>
+        <literal>=</literal> <replaceable>C</replaceable>,
+        alors <replaceable>A</replaceable> <literal>=</literal>
+        <replaceable>C</replaceable>
+        (<firstterm>loi de transitivité</firstterm>)
+       </para>
+      </listitem>
+     </itemizedlist>
     </para>
    </listitem>
-  </varlistentry>
 
-  <varlistentry>
-   <term><function>sortsupport</function></term>
    <listitem>
     <para>
-     De manière facultative, une famille d'opérateur btree peut fournir une ou
-     plusieurs fonctions <firstterm>sort support</firstterm>, inscrites comme
-     fonctions de support numéro 2.  Ces fonctions permettent d'implémenter des
-     comparaisons dans l'optique de tri de manière plus efficace qu'appeler
-     naivement la fonction de support de comparaison.  Les API impliquées pour
-     cela sont définies dans <filename>src/include/utils/sortsupport.h</filename>.
+     Un opérateur <literal>&lt;</literal> doit être une relation de tri
+     forte&nbsp;; c'est-à-dire, pour toutes les valeurs non nulles
+     <replaceable>A</replaceable>, <replaceable>B</replaceable>,
+     <replaceable>C</replaceable>&nbsp;:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+        <replaceable>A</replaceable> <literal>&lt;</literal>
+        <replaceable>A</replaceable> est faux
+        (<firstterm>loi d'antiréflexivité</firstterm>)
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+        si <replaceable>A</replaceable> <literal>&lt;</literal>
+        <replaceable>B</replaceable>
+        et <replaceable>B</replaceable> <literal>&lt;</literal>
+        <replaceable>C</replaceable>,
+        alors <replaceable>A</replaceable> <literal>&lt;</literal>
+        <replaceable>C</replaceable>
+        (<firstterm>loi de transitivité</firstterm>)
+       </para>
+      </listitem>
+     </itemizedlist>
     </para>
    </listitem>
-  </varlistentry>
 
-  <varlistentry>
-   <term><function>inrange</function></term>
    <listitem>
-    <indexterm>
-     <primary>fonctions de support in_range</primary>
-    </indexterm>
-    <indexterm>
-     <primary>fonctions de support</primary>
-     <secondary>in_range</secondary>
-    </indexterm>
-
     <para>
-     De manière facultative, une famille d'opérateur btree peut fournir une ou
-     plusieurs fonctions de support <firstterm>in_range</firstterm> inscrites comme
-     fonction de support numéro 3.  Celles-ci ne sont pas utilisées durant les
-     opérations d'index btree&nbsp;; mais plutôt, elles étendent les sémantiques de la
-     famille d'opérateur de telle manière qu'elles puissent supporter les clauses de
-     fenêtrage contenant les types de limite de cadre
-     <literal>RANGE</literal> <replaceable>décalage</replaceable>
-     <literal>PRECEDING</literal>
-     et <literal>RANGE</literal> <replaceable>décalage</replaceable>
-     <literal>FOLLOWING</literal> (voir
-     <xref linkend="syntax-window-functions"/>).  Fondamentalement, les
-     informations supplémentaires fournies sont comment additionner et soustraire
-     une valeur d'un <replaceable>décalage</replaceable> d'une manière qui est
-     compatible avec le tri de données de la famille.
+     De plus, le tri est total&nbsp;; c'est-à-dire, pour toutes les valeurs
+     non nulles <replaceable>A</replaceable>,
+     <replaceable>B</replaceable>&nbsp;:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+        exactement une seule des expressions
+        <replaceable>A</replaceable> <literal>&lt;</literal>
+        <replaceable>B</replaceable>, <replaceable>A</replaceable>
+        <literal>=</literal> <replaceable>B</replaceable>, et
+        <replaceable>B</replaceable> <literal>&lt;</literal>
+        <replaceable>A</replaceable> est vraie
+        (<firstterm>loi de trichotomie</firstterm>)
+       </para>
+      </listitem>
+     </itemizedlist>
+
+     (Bien entendu, la loi de trichotomie justifie la définition de la
+     fonction de support de comparaison).
     </para>
+   </listitem>
+  </itemizedlist>
 
-    <para>
-     Une fonction <function>in_range</function> doit avoir la signature
+  <para>
+   Les trois autres opérateurs sont définis avec <literal>=</literal> et
+   <literal>&lt;</literal> de manière évidente, et doivent se comporter de
+   manière cohérentes avec ceux-ci.
+  </para>
+
+  <para>
+   Pour une famille d'opérateur supportant plusieurs types de données, les
+   lois définies auparavant doivent continuer à s'appliquer quand
+   <replaceable>A</replaceable>, <replaceable>B</replaceable>,
+   <replaceable>C</replaceable> sont pris de n'importe quel type de données de
+   la famille. Les lois de transitivité sont les plus délicates à garantir,
+   car, dans des situations inter-types, elles représentent des déclarations
+   comme quoi les comportements de deux ou trois différents opérateurs sont
+   cohérents. Comme exemple, mettre <type>float8</type> et
+   <type>numeric</type> dans la même famille d'opérateur ne fonctionnerait
+   pas, du moins pas avec les sémantiques actuelles qui définissent que les
+   valeurs de type <type>numeric</type> sont converties en <type>float8</type>
+   pour la comparaison vers un <type>float8</type>. Du fait de la précision
+   limitée du type <type>float8</type>, cela veut dire que des valeurs
+   <type>numeric</type> distinctes seraient considérées par la comparaison
+   comme égales à la même valeur <type>float8</type>, et par conséquent la loi
+   de transitivé échouerait.
+  </para>
+
+  <para>
+   Une autre exigence pour les familles contenant plusieurs types est que les
+   transtypages implicites ou de coercition binaire qui sont définis entre les
+   types de données inclus dans la famille d'opérateur ne doivent pas changer
+   l'ordre de tri associé.
+  </para>
+
+  <para>
+   La raison pour laquelle les index btree nécessitent que ces lois soient
+   vérifiées pour un même type de données devraient être tout à fait
+   claires&nbsp;: sans celles-ci, il n'y a pas d'ordre avec lequel organiser
+   les clés. En outre, les recherches d'index utilisant une clé de
+   comparaison d'un type de données différent nécessitent que la comparaison
+   se comporte sainement à travers deux types de données. Les extensions à
+   trois types de données ou plus au sein d'une famille ne sont pas
+   strictement requis par le mécanisme d'index btree lui-même, mais le
+   planificateur se repose sur eux pour des besoins d'optimisation.
+  </para>
+ </sect1>
+
+ <sect1 id="btree-support-funcs">
+  <title>Fonctions de support B-Tree</title>
+
+  <para>
+   Comme montré dans <xref linkend="xindex-btree-support-table"/>, btree
+   définit une fonction de support obligatoire et quatre facultatives. Les
+   cinq méthodes définies par l'utilisateur sont&nbsp;:
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term><function>order</function></term>
+    <listitem>
+     <para>
+      Pour chaque combinaison de types de données pour laquelle une famille
+      d'opérateur btree fournit des opérateurs de comparaison, elle doit
+      fournir une fonction de support de comparaison inscrite dans
+      <structname>pg_amproc</structname> avec la fonction de support 1 et
+      <structfield>amproclefttype</structfield>/<structfield>amprocrighttype</structfield>
+      égaux aux types de données gauche et droit pour la comparaison
+      (c'est-à-dire les même types de données que l'opérateur correspondant a
+      inscrit dans <structname>pg_amop</structname>). La fonction de
+      comparaison doit prendre en entrée deux valeurs non nulles
+      <replaceable>A</replaceable> et <replaceable>B</replaceable> et
+      retourner une valeur <type>int32</type> qui est <literal>&lt;</literal>
+      <literal>0</literal>, <literal>0</literal>, ou <literal>&gt;</literal>
+      <literal>0</literal> quand, respectivement <replaceable>A</replaceable>
+      <literal>&lt;</literal> <replaceable>B</replaceable>,
+      <replaceable>A</replaceable> <literal>=</literal>
+      <replaceable>B</replaceable>, ou <replaceable>A</replaceable>
+      <literal>&gt;</literal> <replaceable>B</replaceable>. Une valeur de
+      retour NULL est également interdite&nbsp;: toutes les valeurs du type de
+      données doivent être comparables. Voir
+      <filename>src/backend/access/nbtree/nbtcompare.c</filename> pour plus
+      d'exemples.
+     </para>
+
+     <para>
+      Si les valeurs comparées sont d'un type avec collation, l'identifiant de
+      collation approprié sera passé à la fonction de support de comparaison,
+      en utilisant le mécanisme standard
+      <function>PG_GET_COLLATION()</function>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>sortsupport</function></term>
+    <listitem>
+     <para>
+      De manière facultative, une famille d'opérateur btree peut fournir une
+      ou plusieurs fonctions <firstterm>sort support</firstterm>, inscrites
+      comme fonctions de support numéro 2. Ces fonctions permettent
+      d'implémenter des comparaisons dans l'optique de tri de manière plus
+      efficace qu'appeler naivement la fonction de support de comparaison. 
+      Les API impliquées pour cela sont définies dans
+      <filename>src/include/utils/sortsupport.h</filename>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>inrange</function></term>
+    <listitem>
+     <indexterm>
+      <primary>fonctions de support in_range</primary>
+     </indexterm>
+     <indexterm>
+      <primary>fonctions de support</primary>
+      <secondary>in_range</secondary>
+     </indexterm>
+
+     <para>
+      De manière facultative, une famille d'opérateur btree peut fournir une
+      ou plusieurs fonctions de support <firstterm>in_range</firstterm>
+      inscrites comme fonction de support numéro 3. Celles-ci ne sont pas
+      utilisées durant les opérations d'index btree&nbsp;; mais plutôt, elles
+      étendent les sémantiques de la famille d'opérateur de telle manière
+      qu'elles puissent supporter les clauses de fenêtrage contenant les types
+      de limite de cadre <literal>RANGE</literal>
+      <replaceable>décalage</replaceable> <literal>PRECEDING</literal> et
+      <literal>RANGE</literal> <replaceable>décalage</replaceable>
+      <literal>FOLLOWING</literal> (voir <xref
+      linkend="syntax-window-functions"/>). Fondamentalement, les
+      informations supplémentaires fournies sont comment additionner et
+      soustraire une valeur d'un <replaceable>décalage</replaceable> d'une
+      manière qui est compatible avec le tri de données de la famille.
+     </para>
+
+     <para>
+      Une fonction <function>in_range</function> doit avoir la signature
 <synopsis>
 in_range(<replaceable>val</replaceable> type1, <replaceable>base</replaceable> type1, <replaceable>offset</replaceable> type2, <replaceable>sub</replaceable> bool, <replaceable>less</replaceable> bool)
 returns bool
 </synopsis>
-     <replaceable>val</replaceable> et <replaceable>base</replaceable> doivent
-     être du même type, qui est un des types supportés par la famille d'opérateur
-     (c'est-à-dire un type pour lequel elle fournit un tri).  Cependant,
-     <replaceable>offset</replaceable> peut être d'un type de données différent,
-     qui peut par ailleurs ne pas être supporté par la famille.  Un exemple est
-     que la famille <literal>time_ops</literal> incluse par défaut fournit une
-     fonction <function>in_range</function> qui a un
-     <replaceable>offset</replaceable> de type <type>interval</type>.
-     Une famille peut fournir des fonctions <function>in_range</function> pour
-     n'importe lesquels des types de données qu'elle supporte, et un ou plusieurs types
-     <replaceable>offset</replaceable>.  Chaque fonction
-     <function>in_range</function> devrait être inscrite dans
-     <structname>pg_amproc</structname>
-     avec <structfield>amproclefttype</structfield> égal à <type>type1</type>
-     et <structfield>amprocrighttype</structfield> égal à <type>type2</type>.
-    </para>
+      <replaceable>val</replaceable> et <replaceable>base</replaceable>
+      doivent être du même type, qui est un des types supportés par la famille
+      d'opérateur (c'est-à-dire un type pour lequel elle fournit un tri). 
+      Cependant, <replaceable>offset</replaceable> peut être d'un type de
+      données différent, qui peut par ailleurs ne pas être supporté par la
+      famille. Un exemple est que la famille <literal>time_ops</literal>
+      incluse par défaut fournit une fonction <function>in_range</function>
+      qui a un <replaceable>offset</replaceable> de type
+      <type>interval</type>. Une famille peut fournir des fonctions
+      <function>in_range</function> pour n'importe lesquels des types de
+      données qu'elle supporte, et un ou plusieurs types
+      <replaceable>offset</replaceable>. Chaque fonction
+      <function>in_range</function> devrait être inscrite dans
+      <structname>pg_amproc</structname> avec
+      <structfield>amproclefttype</structfield> égal à <type>type1</type> et
+      <structfield>amprocrighttype</structfield> égal à <type>type2</type>.
+     </para>
 
-    <para>
-     Les sémantiques essentielles pour une fonction <function>in_range</function>
-     dépendent des deux paramètres de drapeau booléens.  Elle devrait ajouter ou
-     soustraire <replaceable>base</replaceable> et
-     <replaceable>offset</replaceable>, puis comparer
-     <replaceable>val</replaceable> au résultat, comme ceci&nbsp;:
-     <itemizedlist>
-      <listitem>
-       <para>
-        si <literal>!</literal><replaceable>sub</replaceable> et
-        <literal>!</literal><replaceable>less</replaceable>,
-        renvoyer <replaceable>val</replaceable> <literal>&gt;=</literal>
-        (<replaceable>base</replaceable> <literal>+</literal>
-        <replaceable>offset</replaceable>)
-       </para>
-      </listitem>
-      <listitem>
-       <para>
-        si <literal>!</literal><replaceable>sub</replaceable>
-        et <replaceable>less</replaceable>,
-        renvoyer <replaceable>val</replaceable> <literal>&lt;=</literal>
-        (<replaceable>base</replaceable> <literal>+</literal>
-        <replaceable>offset</replaceable>)
-       </para>
-      </listitem>
-      <listitem>
-       <para>
-        si <replaceable>sub</replaceable>
-        et <literal>!</literal><replaceable>less</replaceable>,
-        renvoyer <replaceable>val</replaceable> <literal>&gt;=</literal>
-        (<replaceable>base</replaceable> <literal>-</literal>
-        <replaceable>offset</replaceable>)
-       </para>
-      </listitem>
-      <listitem>
-       <para>
-        si <replaceable>sub</replaceable> et <replaceable>less</replaceable>,
-        renvoyer <replaceable>val</replaceable> <literal>&lt;=</literal>
-        (<replaceable>base</replaceable> <literal>-</literal>
-        <replaceable>offset</replaceable>)
-       </para>
-      </listitem>
-     </itemizedlist>
-     Avant de procéder, la fonction devrait vérifier le signe d'<replaceable>
-     offset</replaceable>&nbsp;: s'il est inférieur à zéro, lever l'erreur
-     <literal>ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE</literal> (22013)
-     avec un message d'erreur tel que <quote>taille précédente ou suivante invalide
-     dans la fonction de fenêtrage</quote>.  (Cela est requis par le standard SQL,
-     bien que des familles d'opérateur non standards pourraient peut être choisir
-     d'ignorer cette restriction, puisqu'il n'y a pas vraiment de nécessité de
-     sémantique dans ce cas.)  Cette exigence est déléguée à la fonction
-     <function>in_range</function> si bien que le code du moteur n'a pas besoin de
-     comprendre ce que <quote>inférieur à zéro</quote> signifie pour un type de
-     données particulier.
-    </para>
+     <para>
+      Les sémantiques essentielles pour une fonction
+      <function>in_range</function> dépendent des deux paramètres de drapeau
+      booléens. Elle devrait ajouter ou soustraire
+      <replaceable>base</replaceable> et <replaceable>offset</replaceable>,
+      puis comparer <replaceable>val</replaceable> au résultat, comme
+      ceci&nbsp;:
 
-    <para>
-     Une autre attente est que les fonctions <function>in_range</function>
-     devraient, si applicable, éviter de générer une erreur si
-     <replaceable>base</replaceable> <literal>+</literal>
-     <replaceable>offset</replaceable>
-     ou <replaceable>base</replaceable> <literal>-</literal>
-     <replaceable>offset</replaceable> devait causer un débordement.
-     Le résultat de comparaison correct peut être déterminé même si cette valeur
-     devait être en dehors de l'intervalle des valeurs du type de données.
-     Notez que si le type de données inclut des concepts tels que
-     <quote>infinity</quote> ou <quote>NaN</quote>, des précautions supplémentaires
-     pourraient être nécessaires pour s'assurer que les resultats de
-     <function>in_range</function> soient en accord avec l'ordre de tri normal de la
-     famille d'opérateur.
-    </para>
+      <itemizedlist>
+       <listitem>
+        <para>
+         si <literal>!</literal><replaceable>sub</replaceable> et
+         <literal>!</literal><replaceable>less</replaceable>,
+         renvoyer <replaceable>val</replaceable> <literal>&gt;=</literal>
+         (<replaceable>base</replaceable> <literal>+</literal>
+         <replaceable>offset</replaceable>)
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         si <literal>!</literal><replaceable>sub</replaceable>
+         et <replaceable>less</replaceable>,
+         renvoyer <replaceable>val</replaceable> <literal>&lt;=</literal>
+         (<replaceable>base</replaceable> <literal>+</literal>
+         <replaceable>offset</replaceable>)
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         si <replaceable>sub</replaceable>
+         et <literal>!</literal><replaceable>less</replaceable>,
+         renvoyer <replaceable>val</replaceable> <literal>&gt;=</literal>
+         (<replaceable>base</replaceable> <literal>-</literal>
+         <replaceable>offset</replaceable>)
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         si <replaceable>sub</replaceable> et <replaceable>less</replaceable>,
+         renvoyer <replaceable>val</replaceable> <literal>&lt;=</literal>
+         (<replaceable>base</replaceable> <literal>-</literal>
+         <replaceable>offset</replaceable>)
+        </para>
+       </listitem>
+      </itemizedlist>
 
-    <para>
-     Les résultats de la fonction <function>in_range</function> doivent être
-     cohérents avec l'ordre de tri imposé par la famille d'opérateur.  Pour être
-     précis, pour n'importe quelles valeurs fixées de
-     <replaceable>offset</replaceable> et <replaceable>sub</replaceable>, alors&nbsp;:
-     <itemizedlist>
-      <listitem>
-       <para>
-        Si <function>in_range</function> avec <replaceable>less</replaceable> =
-        true est vrai pour certains <replaceable>val1</replaceable>
-        et <replaceable>base</replaceable>, il doit être vrai pour chaque
-        <replaceable>val2</replaceable> <literal>&lt;=</literal>
-        <replaceable>val1</replaceable> avec le même
-        <replaceable>base</replaceable>.
-       </para>
-      </listitem>
-      <listitem>
-       <para>
-        Si <function>in_range</function> avec <replaceable>less</replaceable> =
-        true est faux pour certains <replaceable>val1</replaceable>
-        et <replaceable>base</replaceable>, il doit être faux pour chaque
-        <replaceable>val2</replaceable> <literal>&gt;=</literal>
-        <replaceable>val1</replaceable> avec le même
-        <replaceable>base</replaceable>.
-       </para>
-      </listitem>
-      <listitem>
-       <para>
-        Si <function>in_range</function> avec <replaceable>less</replaceable> =
-        true est vrai pour certains <replaceable>val</replaceable>
-        et <replaceable>base1</replaceable>, il doit être vrai pour chaque
-        <replaceable>base2</replaceable> <literal>&gt;=</literal>
-        <replaceable>base1</replaceable> avec le même
-        <replaceable>val</replaceable>.
-       </para>
-      </listitem>
-      <listitem>
-       <para>
-        Si <function>in_range</function> avec <replaceable>less</replaceable> =
-        true est faux pour certains <replaceable>val</replaceable>
-        et <replaceable>base1</replaceable>, il doit être faux pour chaque
-        <replaceable>base2</replaceable> <literal>&lt;=</literal>
-        <replaceable>base1</replaceable> avec le même
-        <replaceable>val</replaceable>.
-       </para>
-      </listitem>
-     </itemizedlist>
-     Des déclarations similaires avec des conditions inversées continuent à
-     s'appliquer quand <replaceable>less</replaceable> = false.
-    </para>
+      Avant de procéder, la fonction devrait vérifier le signe d'<replaceable>
+      offset</replaceable>&nbsp;: s'il est inférieur à zéro, lever l'erreur
+      <literal>ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE</literal> (22013)
+      avec un message d'erreur tel que <quote>taille précédente ou suivante
+      invalide dans la fonction de fenêtrage</quote>. (Cela est requis par le
+      standard SQL, bien que des familles d'opérateur non standards pourraient
+      peut être choisir d'ignorer cette restriction, puisqu'il n'y a pas
+      vraiment de nécessité de sémantique dans ce cas.)  Cette exigence est
+      déléguée à la fonction <function>in_range</function> si bien que le code
+      du moteur n'a pas besoin de comprendre ce que <quote>inférieur à
+      zéro</quote> signifie pour un type de données particulier.
+     </para>
 
-    <para>
-     Si le type est trié (<type>type1</type>) par rapport à une collation, l'OID de collation
-     approprié sera passé à la fonction <function>in_range</function> en utilisant
-     le mécanisme standard <function>PG_GET_COLLATION()</function>.
-    </para>
+     <para>
+      Une autre attente est que les fonctions <function>in_range</function>
+      devraient, si applicable, éviter de générer une erreur si
+      <replaceable>base</replaceable> <literal>+</literal>
+      <replaceable>offset</replaceable> ou <replaceable>base</replaceable>
+      <literal>-</literal> <replaceable>offset</replaceable> devait causer un
+      débordement. Le résultat de comparaison correct peut être déterminé même
+      si cette valeur devait être en dehors de l'intervalle des valeurs du
+      type de données. Notez que si le type de données inclut des concepts
+      tels que <quote>infinity</quote> ou <quote>NaN</quote>, des précautions
+      supplémentaires pourraient être nécessaires pour s'assurer que les
+      resultats de <function>in_range</function> soient en accord avec l'ordre
+      de tri normal de la famille d'opérateur.
+     </para>
 
-    <para>
-     Les fonctions <function>in_range</function> n'ont pas besoin de gérer les
-     valeurs en entrée NULL, et typiquement elles seront marquées comme strict.
-    </para>
-   </listitem>
-  </varlistentry>
+     <para>
+      Les résultats de la fonction <function>in_range</function> doivent être
+      cohérents avec l'ordre de tri imposé par la famille d'opérateur. Pour
+      être précis, pour n'importe quelles valeurs fixées de
+      <replaceable>offset</replaceable> et <replaceable>sub</replaceable>,
+      alors&nbsp;:
 
-  <varlistentry>
-   <term><function>equalimage</function></term>
-   <listitem>
-    <para>
-     Une famille d'opérateurs btree facultative peut fournir les fonctions de
-     support <function>equalimage</function> (<quote>l'égalité implique une
-     égalité d'image</quote>), inscrites comme fonctions de support numéro 4.
-     Ces fonctions permettent au code du moteur de déterminer quand il est sûr
-     d'appliquer l'optimisation de dédoublonnage btree. Actuellement, les
-     fonctions <function>equalimage</function> sont seulement appelées lors de
-     la construction ou reconstruction d'un index.
-    </para>
+      <itemizedlist>
+       <listitem>
+        <para>
+         Si <function>in_range</function> avec <replaceable>less</replaceable> =
+         true est vrai pour certains <replaceable>val1</replaceable>
+         et <replaceable>base</replaceable>, il doit être vrai pour chaque
+         <replaceable>val2</replaceable> <literal>&lt;=</literal>
+         <replaceable>val1</replaceable> avec le même
+         <replaceable>base</replaceable>.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Si <function>in_range</function> avec <replaceable>less</replaceable> =
+         true est faux pour certains <replaceable>val1</replaceable>
+         et <replaceable>base</replaceable>, il doit être faux pour chaque
+         <replaceable>val2</replaceable> <literal>&gt;=</literal>
+         <replaceable>val1</replaceable> avec le même
+         <replaceable>base</replaceable>.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Si <function>in_range</function> avec <replaceable>less</replaceable> =
+         true est vrai pour certains <replaceable>val</replaceable>
+         et <replaceable>base1</replaceable>, il doit être vrai pour chaque
+         <replaceable>base2</replaceable> <literal>&gt;=</literal>
+         <replaceable>base1</replaceable> avec le même
+         <replaceable>val</replaceable>.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Si <function>in_range</function> avec <replaceable>less</replaceable> =
+         true est faux pour certains <replaceable>val</replaceable>
+         et <replaceable>base1</replaceable>, il doit être faux pour chaque
+         <replaceable>base2</replaceable> <literal>&lt;=</literal>
+         <replaceable>base1</replaceable> avec le même
+         <replaceable>val</replaceable>.
+        </para>
+       </listitem>
+      </itemizedlist>
 
-    <para>
-     Une fonction <function>equalimage</function> doit avoir comme signature
+      Des déclarations similaires avec des conditions inversées continuent à
+      s'appliquer quand <replaceable>less</replaceable> = false.
+     </para>
+
+     <para>
+      Si le type est trié (<type>type1</type>) par rapport à une collation,
+      l'OID de collation approprié sera passé à la fonction
+      <function>in_range</function> en utilisant le mécanisme standard
+      <function>PG_GET_COLLATION()</function>.
+     </para>
+
+     <para>
+      Les fonctions <function>in_range</function> n'ont pas besoin de gérer
+      les valeurs en entrée NULL, et typiquement elles seront marquées comme
+      strict.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>equalimage</function></term>
+    <listitem>
+     <para>
+      Une famille d'opérateurs btree facultative peut fournir les fonctions de
+      support <function>equalimage</function> (<quote>l'égalité implique une
+      égalité d'image</quote>), inscrites comme fonctions de support numéro 4.
+      Ces fonctions permettent au code du moteur de déterminer quand il est
+      sûr d'appliquer l'optimisation de dédoublonnage btree. Actuellement, les
+      fonctions <function>equalimage</function> sont seulement appelées lors
+      de la construction ou reconstruction d'un index.
+     </para>
+
+     <para>
+      Une fonction <function>equalimage</function> doit avoir comme signature
 <synopsis>
 equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
 </synopsis>
-     La valeur retournée est une information statique relative à une classe
-     d'opérateur et une collation. Retourner <literal>true</literal> indique
-     que la fonction <function>order</function> pour la classe d'opérateur est
-     garantie de retourner seulement <literal>0</literal> (<quote>les
-     arguments sont égaux</quote>) quand ses arguments
-     <replaceable>A</replaceable> et <replaceable>B</replaceable> sont aussi
-     interchangeables sans aucune perte d'information sémantique. Ne pas
-     inscrire une fonction <function>equalimage</function> ou retourner
-     <literal>false</literal> indique que cette condition ne peut être tenue.
-    </para>
+      La valeur retournée est une information statique relative à une classe
+      d'opérateur et une collation. Retourner <literal>true</literal> indique
+      que la fonction <function>order</function> pour la classe d'opérateur
+      est garantie de retourner seulement <literal>0</literal> (<quote>les
+      arguments sont égaux</quote>) quand ses arguments
+      <replaceable>A</replaceable> et <replaceable>B</replaceable> sont aussi
+      interchangeables sans aucune perte d'information sémantique. Ne pas
+      inscrire une fonction <function>equalimage</function> ou retourner
+      <literal>false</literal> indique que cette condition ne peut être tenue.
+     </para>
 
-    <para>
-     L'argument <replaceable>opcintype</replaceable> est le
-     <literal><structname>pg_type</structname>.oid</literal> du type de
-     données que la classe d'opérateur indexe. Ceci est une commodité qui
-     permet de réutiliser la même fonction <function>equalimage</function>
-     sous-jacente entre plusieurs classes d'opérateurs. Si
-     <replaceable>opcintype</replaceable> est un type de données collationné,
-     l'identifiant de collation appropriée sera passé à la fonction
-     <function>equalimage</function>, par le mécanisme standard
-     <function>PG_GET_COLLATION()</function>.
-    </para>
+     <para>
+      L'argument <replaceable>opcintype</replaceable> est le
+      <literal><structname>pg_type</structname>.oid</literal> du type de
+      données que la classe d'opérateur indexe. Ceci est une commodité qui
+      permet de réutiliser la même fonction <function>equalimage</function>
+      sous-jacente entre plusieurs classes d'opérateurs. Si
+      <replaceable>opcintype</replaceable> est un type de données collationné,
+      l'identifiant de collation appropriée sera passé à la fonction
+      <function>equalimage</function>, par le mécanisme standard
+      <function>PG_GET_COLLATION()</function>.
+     </para>
 
-    <para>
-     Tant que la classe d'opérateur est concernée, retourner
-     <literal>true</literal> indique que le dédoublement est sûr (ou sûr pour
-     la collation dont l'identifiant a été passé à sa fonction
-     <function>equalimage</function>). Cependant, le code du moteur
-     considérera le dédoublonnage sécurisé pour un index, si
-     <emphasis>chaque</emphasis> colonne indexée utilise une classe
-     d'opérateur ayant inscrit une fonction <function>equalimage</function>,
-     et si chaque fonction retourne <literal>true</literal> par appel.
-    </para>
+     <para>
+      Tant que la classe d'opérateur est concernée, retourner
+      <literal>true</literal> indique que le dédoublement est sûr (ou sûr pour
+      la collation dont l'identifiant a été passé à sa fonction
+      <function>equalimage</function>). Cependant, le code du moteur
+      considérera le dédoublonnage sécurisé pour un index, si
+      <emphasis>chaque</emphasis> colonne indexée utilise une classe
+      d'opérateur ayant inscrit une fonction <function>equalimage</function>,
+      et si chaque fonction retourne <literal>true</literal> par appel.
+     </para>
 
-    <para>
-     L'égalité d'image est <emphasis>presque</emphasis> la même condition
-     qu'une simple égalité bit à bit. Il n'y a qu'une seule et subtile
-     différence&nbsp;: en indexant un type de données <quote>varlena</quote>,
-     la représentation sur disque de deux images de données égales peuvent ne
-     pas être identiques bit à bit, à cause des incohérences lors de
-     l'application de la compression <acronym>TOAST</acronym> sur les données
-     en entrée. Dans les règles, quand une fonction
-     <function>equalimage</function> d'une classe d'opérateur retourne
-     <literal>true</literal>, on peut présumer sans se tromper que la fonction
-     C <literal>datum_image_eq()</literal> correspondra avec la fonction
-     <function>order</function> de la classe d'opérateur (sous réserve que le
-     même identifiant de collation soit passé aux fonctions
-     <function>equalimage</function> et <function>order</function>).
-    </para>
+     <para>
+      L'égalité d'image est <emphasis>presque</emphasis> la même condition
+      qu'une simple égalité bit à bit. Il n'y a qu'une seule et subtile
+      différence&nbsp;: en indexant un type de données <quote>varlena</quote>,
+      la représentation sur disque de deux images de données égales peuvent ne
+      pas être identiques bit à bit, à cause des incohérences lors de
+      l'application de la compression <acronym>TOAST</acronym> sur les données
+      en entrée. Dans les règles, quand une fonction
+      <function>equalimage</function> d'une classe d'opérateur retourne
+      <literal>true</literal>, on peut présumer sans se tromper que la
+      fonction C <literal>datum_image_eq()</literal> correspondra avec la
+      fonction <function>order</function> de la classe d'opérateur (sous
+      réserve que le même identifiant de collation soit passé aux fonctions
+      <function>equalimage</function> et <function>order</function>).
+     </para>
 
-    <para>
-     Le code du moteur est fondamentalement incapable de déduire quoi que ce soit
-     au sujet du statut <quote>l'égalité implique l'égalité d'image</quote> d'une
-     classe d'opérateur incluse dans une famille de types de données multiples
-     en se basant sur les détails d'autres classes d'opérateur de la même famille.
-     Aussi, il n'est pas pertinent pour une famille d'opérateurs d'inscrire une
-     fonction <function>equalimage</function> inter-type, et essayer
-     déclenchera une error. En effet, le statut de <quote>l'égalité implique
-     l'égalité d'image</quote> ne dépend pas juste de la sémantique de l'ordre/égalité,
-     qui est plus ou moins définie au niveau de la famille d'opérateur. En général,
-     les sémantiques d'un type particulier de données doivent être considérées
-     séparément.
-    </para>
+     <para>
+      Le code du moteur est fondamentalement incapable de déduire quoi que ce
+      soit au sujet du statut <quote>l'égalité implique l'égalité
+      d'image</quote> d'une classe d'opérateur incluse dans une famille de
+      types de données multiples en se basant sur les détails d'autres classes
+      d'opérateur de la même famille. Aussi, il n'est pas pertinent pour une
+      famille d'opérateurs d'inscrire une fonction
+      <function>equalimage</function> inter-type, et essayer déclenchera une
+      error. En effet, le statut de <quote>l'égalité implique l'égalité
+      d'image</quote> ne dépend pas juste de la sémantique de l'ordre/égalité,
+      qui est plus ou moins définie au niveau de la famille d'opérateur. En
+      général, les sémantiques d'un type particulier de données doivent être
+      considérées séparément.
+     </para>
+ 
+     <para>
+      La convention suivie par les classes d'opérateur incluses avec la
+      distribution principale <productname>PostgreSQL</productname> est
+      d'inscrire une fonction générique <function>equalimage</function>. La
+      plupart des classes d'opérateur inscrivent
+      <function>btequalimage()</function>, qui indique que le dédoublonnage
+      est sécurisé sans conditions. Les classes d'opérateur pour les types de
+      données collationnés comme <type>text</type> inscrivent
+      <function>btvarstrequalimage()</function>, qui indique que le
+      dédoublonnage est sécurisé avec les collations déterministes. La bonne
+      pratique pour une extension tierce est d'inscrire leur propre fonction
+      personnalisée pour garder le contrôle.
+     </para>
+    </listitem>
+   </varlistentry>
 
-    <para>
-     La convention suivie par les classes d'opérateur incluses avec la
-     distribution principale <productname>PostgreSQL</productname> est d'inscrire
-     une fonction générique <function>equalimage</function>. La plupart
-     des classes d'opérateur inscrivent <function>btequalimage()</function>, qui indique
-     que le dédoublonnage est sécurisé sans conditions. Les classes d'opérateur pour
-     les types de données collationnés comme <type>text</type> inscrivent
-     <function>btvarstrequalimage()</function>, qui indique que le dédoublonnage est sécurisé
-     avec les collations déterministes. La bonne pratique pour une extension tierce est
-     d'inscrire leur propre fonction personnalisée pour garder le contrôle.
-    </para>
-   </listitem>
-  </varlistentry>
+   <varlistentry>
+    <term><function>options</function></term>
+    <listitem>
+     <para>
+      En option, une famille d'opérateur B-tree peut fournir des fonctions de
+      support des <function>options</function> (<quote>options spécifiques à
+      la classe d'opérateur</quote>), enregistrées sous le numéro 5 des
+      fonctions de support. Ces fonctions définissent un ensemble de
+      paramètres visibles à l'utilisateur et contrôlant le comportement de la
+      classe d'opérateur.
+     </para>
 
-  <varlistentry>
-   <term><function>options</function></term>
-   <listitem>
-    <para>
-     Optionally, a B-tree operator family may provide
-     <function>options</function> (<quote>operator class specific
-     options</quote>) support functions, registered under support
-     function number 5.  These functions define a set of user-visible
-     parameters that control operator class behavior.
-    </para>
-    <para>
-     An <function>options</function> support function must have the
-     signature
+     <para>
+      Une fonction de support <function>options</function> doit avoir cette
+      signature&nbsp;
 <synopsis>
 options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns void
 </synopsis>
-     The function is passed a pointer to a <replaceable>local_relopts</replaceable>
-     struct, which needs to be filled with a set of operator class
-     specific options.  The options can be accessed from other support
-     functions using the <literal>PG_HAS_OPCLASS_OPTIONS()</literal> and
-     <literal>PG_GET_OPCLASS_OPTIONS()</literal> macros.
-    </para>
+      La fonction se voit fournie un pointeur vers une structure
+      <replaceable>local_relopts</replaceable> qui doit être remplie avec un
+      ensemble d'options spécifiques à une classe d'opérateur. Les options
+      sont accessibles à partir des autres fonctions de support en utilisant
+      les macros <literal>PG_HAS_OPCLASS_OPTIONS()</literal> et
+      <literal>PG_GET_OPCLASS_OPTIONS()</literal>.
+     </para>
+
+     <para>
+      Actuellement, aucune classe d'opérateur B-Tree n'a de fonction de
+      support <function>options</function>. B-tree n'autorise pas une
+      représentation flexible des clés comme GiST, SP-GiST, GIN et BRIN le
+      font. Donc, <function>options</function> n'a probablement pas beaucoup
+      d'intérêt pour la méthode d'accès aux index B-tree actuellement.
+      Néanmoins, cette fonction de support a été ajouté au B-tree par
+      cohérence, et trouvera probablement son utilité lors des prochaines
+      évolutions du B-tree dans <productname>PostgreSQL</productname>.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </sect1>
+
+ <sect1 id="btree-implementation">
+  <title>Implémentation</title>
+
+  <para>
+   Cette section couvre les détails de l'implémentation des index B-Tree qui
+   peuvent être utiles pour les utilisateurs avancés. Voir
+   <filename>src/backend/access/nbtree/README</filename> dans les sources de
+   la distribution pour une description plus en détails de l'implémentation du
+   B-Tree.
+  </para>
+
+  <sect2 id="btree-structure">
+   <title>Structure B-Tree</title>
+
+   <para>
+    Les index B-Tree de <productname>PostgreSQL</productname> sont des
+    structures arborescentes multi-niveaux, où chaque niveau de l'arbre peut
+    être utilisé comme une liste doublement chaînée de pages. Une seule
+    métapage est stockée à une position fixe au début du premier segment de
+    fichier de l'index. Toutes les autres pages sont soit des pages feuilles,
+    soit des pages internes. Les pages feuilles sont les pages de plus bas
+    niveau de l'arbre. Tous les autres niveaux consistent en des pages
+    internes. Chaque page feuille contient des tuples qui pointent sur les
+    enregistrements en table. Chaque page interne contient des tuples qui
+    pointent vers le niveau inférieur suivant dans l'arbre. En général, 99%
+    des pages sont des pages feuilles. Aussi bien les pages internes que les
+    pages feuilles emploient le format standard de page décrit dans <xref
+    linkend="storage-page-layout"/>.
+   </para>
+
+   <para>
+    Des nouvelles pages feuilles sont ajoutées à un index B-Tree quand un
+    tuple entrant ne peut pas tenir dans une page feuille existante. Une
+    opération de <firstterm>fractionnement de page</firstterm> a alors lieu et
+    libère de la place pour les éléments qui appartiennent à la page
+    surchargée en déplaçant une portion de ces éléments dans une nouvelle
+    page. Le fractionnement de page doit aussi insérer un <firstterm>lien
+    descendant</firstterm> vers la nouvelle page dans la page parente, ce qui
+    peut causer à son tour le fractionnement du parent. Le fractionnement de
+    page se produit en <quote>cascade vers les niveaux supérieurs</quote> de
+    façon récursive. Si la page racine ne peut finallement pas porter le lien
+    descendant, une opération de <firstterm>fractionnement de page
+    racine</firstterm> se produit. Elle ajoute un nouveau niveau dans la
+    structure arborescente en créant une nouvelle page racine un niveau au
+    dessus de la page racine d'origine.
+   </para>
+  </sect2>
+
+  <sect2 id="btree-deduplication">
+   <title>Dédoublement</title>
+
+   <para>
+    Un doublon est un tuple de page feuille (un tuple qui pointe sur un
+    enregistrement en table) où <emphasis>toutes</emphasis> les valeurs des
+    colonnes clés de l'index correspondent aux valeurs de colonnes respectives
+    d'au moins un autre tuple de page feuille dans le même index. Les tuples
+    doublons sont assez communs en pratique. Les index B-Tree peuvent utiliser
+    une représentation spéciale gérant efficacement l'espace pour les doublons
+    lorsqu'une fonctionalité est activée : le
+    <firstterm>dédoublement</firstterm>.
+   </para>
+
+   <para>
+    Le dédoublement fonctionne en fusionnant périodiquement les groupes de
+    tuples doublons ensemble, formant une liste d'affectation unique pour
+    chaque groupe. Le ou les valeurs de colonnes clés n'apparaissent qu'une
+    fois dans cette représentation. Elles sont suivies par un tableau trié des
+    <acronym>TID</acronym> pointant sur les lignes en table. Ceci réduit
+    significativement la taille de stockage des index où chaque valeur (ou
+    chaque combinaison distincte de valeur de colonne) apparait plusieurs fois
+    en moyenne. La latence des requêtes peut sensiblement diminuer. Le débit
+    général des requêtes peut augmenter sensiblement. Le coût supplémentaire
+    de la routine de vacuum d'index peut aussi être notablement réduite.
+   </para>
+
+   <note>
     <para>
-     Currently, no B-Tree operator class has an <function>options</function>
-     support function.  B-tree doesn't allow flexible representation of keys
-     like GiST, SP-GiST, GIN and BRIN do.  So, <function>options</function>
-     probably doesn't have much application in the current B-tree index
-     access method.  Nevertheless, this support function was added to B-tree
-     for uniformity, and will probably find uses during further
-     evolution of B-tree in <productname>PostgreSQL</productname>.
+     La déduplication B-Tree est tout aussi efficace avec des
+     <quote>duplicats</quote> contenant une valeur NULL, même si les valeurs
+     NULL ne sont jamais égales d'après l'opérateur <literal>=</literal> de
+     toute classe d'opérateur B-Tree. Pour toute implémentation comprenant la
+     structure disque B-Tree, NULL est simplement une autre valeur du domaine
+     des valeurs indexées.
     </para>
-   </listitem>
-  </varlistentry>
- </variablelist>
-</sect1>
+   </note>
 
-<sect1 id="btree-implementation">
- <title>Implémentation</title>
-
- <para>
-  Cette section couvre les détails de l'implémentation des index B-Tree qui
-  peuvent être utiles pour les utilisateurs avancés. Voir
-  <filename>src/backend/access/nbtree/README</filename> dans les sources de la
-  distribution pour une description plus en détails de l'implémentation du
-  B-Tree.
-
- </para>
-
- <sect2 id="btree-structure">
-  <title>Structure B-Tree</title>
-
-  <para>
-   Les index B-Tree de <productname>PostgreSQL</productname> sont des
-   structures arborescentes multi-niveaux, où chaque niveau de l'arbre peut
-   être utilisé comme une liste doublement chaînée de pages. Une seule
-   métapage est stockée à une position fixe au début du premier segment de
-   fichier de l'index. Toutes les autres pages sont soit des pages feuilles,
-   soit des pages internes. Les pages feuilles sont les pages de plus bas
-   niveau de l'arbre. Tous les autres niveaux consistent en des pages
-   internes. Chaque page feuille contient des tuples qui pointent sur les
-   enregistrements en table. Chaque page interne contient des tuples qui
-   pointent vers le niveau inférieur suivant dans l'arbre. En général, 99% des
-   pages sont des pages feuilles. Aussi bien les pages internes que les pages
-   feuilles emploient le format standard de page décrit dans <xref
-   linkend="storage-page-layout"/>.
-  </para>
-
-  <para>
-   Des nouvelles pages feuilles sont ajoutées à un index B-Tree quand un tuple
-   entrant ne peut pas tenir dans une page feuille existante. Une opération de
-   <firstterm>fractionnement de page</firstterm> a alors lieu et libère de la
-   place pour les éléments qui appartiennent à la page surchargée en déplaçant
-   une portion de ces éléments dans une nouvelle page. Le fractionnement de
-   page doit aussi insérer un <firstterm>lien descendant</firstterm> vers la
-   nouvelle page dans la page parente, ce qui peut causer à son tour le
-   fractionnement du parent. Le fractionnement de page se produit en
-   <quote>cascade vers les niveaux supérieurs</quote> de façon récursive. Si
-   la page racine ne peut finallement pas porter le lien descendant, une
-   opération de <firstterm>fractionnement de page racine</firstterm> se
-   produit. Elle ajoute un nouveau niveau dans la structure arborescente en
-   créant une nouvelle page racine un niveau au dessus de la page racine
-   d'origine.
-  </para>
- </sect2>
-
- <sect2 id="btree-deduplication">
-  <title>Dédoublement</title>
-
-  <para>
-   Un doublon est un tuple de page feuille (un tuple qui pointe sur un
-   enregistrement en table) où <emphasis>toutes</emphasis> les valeurs des
-   colonnes clés de l'index correspondent aux valeurs de colonnes respectives
-   d'au moins un autre tuple de page feuille dans le même index.
-   Les tuples doublons sont assez communs en pratique. Les index B-Tree
-   peuvent utiliser une représentation spéciale gérant efficacement l'espace
-   pour les doublons lorsqu'une fonctionalité est activée : le
-   <firstterm>dédoublement</firstterm>.
-
-  </para>
-
-  <para>
-   Le dédoublement fonctionne en fusionnant périodiquement les groupes de
-   tuples doublons ensemble, formant une liste d'affectation unique pour
-   chaque groupe. Le ou les valeurs de colonnes clés n'apparaissent qu'une
-   fois dans cette représentation. Elles sont suivies par un tableau trié des
-   <acronym>TID</acronym> pointant sur les lignes en table. Ceci réduit
-   significativement la taille de stockage des index où chaque valeur (ou
-   chaque combinaison distincte de valeur de colonne) apparait plusieurs fois
-   en moyenne. La latence des requêtes peut sensiblement diminuer. Le débit
-   général des requêtes peut augmenter sensiblement. Le coût supplémentaire de
-   la routine de vacuum d'index peut aussi être notablement réduite.
-  </para>
-
-  <note>
    <para>
-    B-Tree deduplication is just as effective with
-    <quote>duplicates</quote> that contain a NULL value, even though
-    NULL values are never equal to each other according to the
-    <literal>=</literal> member of any B-Tree operator class.  As far
-    as any part of the implementation that understands the on-disk
-    B-Tree structure is concerned, NULL is just another value from the
-    domain of indexed values.
+    Le procesus de dédoublement se déroule avec le moins d'effort possible,
+    quand un nouveau élément est inséré et ne peut rentrer dans une page
+    feuille existante. Cela permet (ou au moins repousse) le fractionnement de
+    page feuille. Contrairement à la liste chainée de tuples GIN, la liste
+    chainée de tuples B-Tree n'a pas besoin de s'étendre à chaque fois qu'un
+    nouveau doublon est inséré&nbsp;; ils sont simplement une représentation
+    physique différente du contenu logique de la page feuille. Ce concept
+    priorise l'uniformité des performances sur des charges de travail mixte en
+    lecture-écriture. La plupart des applications clientes verront un bénéfice
+    modéré sur les performances en utilisant le dédoublement. Le dédoublement
+    est activé par défaut.
    </para>
-  </note>
-
-  <para>
-   Le procesus de dédoublement se déroule avec le moins d'effort possible,
-   quand un nouveau élément est inséré et ne peut rentrer dans une page
-   feuille existante. Cela permet (ou au moins repousse) le fractionnement de
-   page feuille. Contrairement à la liste chainée de tuples GIN, la liste
-   chainée de tuples B-Tree n'a pas besoin de s'étendre à chaque fois qu'un
-   nouveau doublon est inséré&nbsp;; ils sont simplement une représentation
-   physique différente du contenu logique de la page feuille. Ce concept
-   priorise l'uniformité des performances sur des charges de travail mixte en
-   lecture-écriture. La plupart des applications clientes verront un bénéfice
-   modéré sur les performances en utilisant le dédoublement. Le dédoublement
-   est activé par défaut.
-  </para>
-
-  <para>
-   <command>CREATE INDEX</command> and <command>REINDEX</command>
-   apply deduplication to create posting list tuples, though the
-   strategy they use is slightly different.  Each group of duplicate
-   ordinary tuples encountered in the sorted input taken from the
-   table is merged into a posting list tuple
-   <emphasis>before</emphasis> being added to the current pending leaf
-   page.  Individual posting list tuples are packed with as many
-   <acronym>TID</acronym>s as possible.  Leaf pages are written out in
-   the usual way, without any separate deduplication pass.  This
-   strategy is well-suited to <command>CREATE INDEX</command> and
-   <command>REINDEX</command> because they are once-off batch
-   operations.
-  </para>
-
-  <para>
-   Les charges de travail majoritaires en écriture et qui ne bénéficient pas
-   du dédoublement du fait qu'il y a peu ou pas de doublons dans les index,
-   encoureront une pénalité stable et légère de performance (sauf si le
-   dédoublement est explicitement désactivé). Le paramètre de stockage
-   <literal>deduplicate_items</literal> peut être utilisé pour désactiver le
-   dédoublement au niveau de chaque index. Il n'y a jamais de pénalité de
-   performance avec des charges de travail en lecture seule, puisque la
-   lecture de liste chainée des tuples est au moins aussi efficace que la
-   lecture de la représentation standard des tuples. Désactiver le
-   dédoublement n'est en général pas utile.
-  </para>
-
-  <para>
-   Pour les index B-Tree, sous MVCC, il peut y avoir plusieurs versions
-   existantes du même enregistrement logique en table&nbsp;; pour un index,
-   chaque tuple est un objet indépendant qui nécessite sa propre entrée dans
-   l'index. <quote>Version duplicates</quote> may sometimes accumulate
-   and adversely affect query latency and throughput.  This typically
-   occurs with <command>UPDATE</command>-heavy workloads where most
-   individual updates cannot apply the <acronym>HOT</acronym>
-   optimization (often because at least one indexed column gets
-   modified, necessitating a new set of index tuple versions &mdash;
-   one new tuple for <emphasis>each and every</emphasis> index).  In
-   effect, B-Tree deduplication ameliorates index bloat caused by
-   version churn.  Note that even the tuples from a unique index are
-   not necessarily <emphasis>physically</emphasis> unique when stored
-   on disk due to version churn.  The deduplication optimization is
-   selectively applied within unique indexes.  It targets those pages
-   that appear to have version duplicates.  The high level goal is to
-   give <command>VACUUM</command> more time to run before an
-   <quote>unnecessary</quote> page split caused by version churn can
-   take place.
-  </para>
-
-  <tip>
+ 
    <para>
-    Une heuristique particulière est utilisée pour déterminer si une passe de
-    dédoublement peut prendre place dans un index unique. Elle peut souvent
-    directement passer au fractionnement de page feuille, évitant ainsi une
-    pénalité de performance par gaspillage de cycles de dédoublement inutiles.
-    Si vous êtes préoccupés par le coût additionnel du dédoublement, veuillez
-    considérer le paramètre <literal>deduplicate_items = off</literal> de
-    manière sélective. Conserver le dédoublement activé par index distinct n'a
-    guère d'impacts uniques.
+    <command>CREATE INDEX</command> et <command>REINDEX</command> appliquent
+    la déduplication pour créer les listes de lignes, bien que la stratégie
+    utilisée soit un peu différente. Chaque groupe de lignes ordinaires
+    dupliquées rencontré dans l'entrée triée prise à partir de la table est
+    assemblé en une liste <emphasis>avant</emphasis> d'être ajouté à la page
+    feuille en cours. Les listes individuelles sont assemblées avec autant de
+    <acronym>TID</acronym> que possible. Les pages feuilles sont écrites de la
+    façon habituelle, sans passe de déduplication séparée. Cette stratégie
+    convient bien à <command>CREATE INDEX</command> et
+    <command>REINDEX</command> car ce sont des opérations de groupe en lot
+    unique.
    </para>
-  </tip>
+ 
+   <para>
+    Les charges de travail majoritaires en écriture et qui ne bénéficient pas
+    du dédoublement du fait qu'il y a peu ou pas de doublons dans les index,
+    encoureront une pénalité stable et légère de performance (sauf si le
+    dédoublement est explicitement désactivé). Le paramètre de stockage
+    <literal>deduplicate_items</literal> peut être utilisé pour désactiver le
+    dédoublement au niveau de chaque index. Il n'y a jamais de pénalité de
+    performance avec des charges de travail en lecture seule, puisque la
+    lecture de liste chainée des tuples est au moins aussi efficace que la
+    lecture de la représentation standard des tuples. Désactiver le
+    dédoublement n'est en général pas utile.
+   </para>
 
-  <para>
-   Le dédoublement ne peut pas être utilisé dans tous les cas à cause des
-   restrictions au niveau de l'implémentation. L'innocuité du dédoublement est
-   déterminé quand <command>CREATE INDEX</command> ou
-   <command>REINDEX</command> est exécutée.
-  </para>
+   <para>
+    Pour les index B-Tree, sous MVCC, il peut y avoir plusieurs versions
+    existantes du même enregistrement logique en table&nbsp;; pour un index,
+    chaque tuple est un objet indépendant qui nécessite sa propre entrée dans
+    l'index. Les <quote>duplicatats de version</quote> peuvent parfois
+    s'accumuler et affecter négativement la latence et le débit des requêtes.
+    Ceci survient typiquement avec les charges de travail lourdes en
+    <command>UPDATE</command> où la plupart des mises à jours individuelles ne
+    peuvent pas utilisées l'optimisation <acronym>HOT</acronym> (souvent parce
+    qu'au moins une colonne indexée est modifiée, nécessitant ainsi un nouvel
+    ensemble de versions de lignes d'index &mdash; une nouvelle ligne pour
+    <emphasis>chacun</emphasis> des index). En fait, la déduplication B-Tree
+    améliore la fragmentation des index causée par le versionnement. Notez que
+    même les lignes d'un index unique ne sont pas nécessairement
+    <emphasis>physiquement</emphasis> uniques lors du stockage sur disque à
+    cause du versionnement. L'optimisation de la déduplication est appliquée
+    sélectivement dans les index uniques. Elle cible les pages qui semblent
+    avoir des duplicatas de versions. Le but principal est de donner plus de
+    temps pour l'exécution du <command>VACUUM</command> avant qu'une division
+    de page <quote>inutile</quote> causée par le versionnement puisse se
+    faire.
+   </para>
 
-  <para>
-   Notez que le dédoublement est considéré comme non sécurisé et ne peut être
-   utilisé dans les cas suivants qui impliquent des différences significatives
-   au niveau sémantique parmi des données identiques&nbsp;:
-  </para>
+   <tip>
+    <para>
+     Une heuristique particulière est utilisée pour déterminer si une passe de
+     dédoublement peut prendre place dans un index unique. Elle peut souvent
+     directement passer au fractionnement de page feuille, évitant ainsi une
+     pénalité de performance par gaspillage de cycles de dédoublement
+     inutiles. Si vous êtes préoccupés par le coût additionnel du
+     dédoublement, veuillez considérer le paramètre <literal>deduplicate_items
+     = off</literal> de manière sélective. Conserver le dédoublement activé
+     par index distinct n'a guère d'impacts uniques.
+    </para>
+   </tip>
 
-  <para>
-   <itemizedlist>
-    <listitem>
-     <para>
-      <type>text</type>, <type>varchar</type>, et <type>char</type> ne peuvent
-      être dédoublonnés quand une collation <emphasis>non
-      déterministique</emphasis> est utilisée. La différence de casse et des
-      accents doit être préservée parmi les données égales.
-     </para>
-    </listitem>
+   <para>
+    Le dédoublement ne peut pas être utilisé dans tous les cas à cause des
+    restrictions au niveau de l'implémentation. L'innocuité du dédoublement
+    est déterminé quand <command>CREATE INDEX</command> ou
+    <command>REINDEX</command> est exécutée.
+   </para>
 
-    <listitem>
-     <para>
-      <type>numeric</type> ne peut pas utilisé le dédoublonnement. La
-      précision des nombres doit être préservée parmi les données identiques.
-     </para>
-    </listitem>
+   <para>
+    Notez que le dédoublement est considéré comme non sécurisé et ne peut être
+    utilisé dans les cas suivants qui impliquent des différences
+    significatives au niveau sémantique parmi des données identiques&nbsp;:
+   </para>
 
-    <listitem>
-     <para>
-      <type>jsonb</type> ne peut être dédoublonné, depuis que la classe
-      d'opérateur B-Tree pour le type <type>jsonb</type> utilise en interne un
-      type <type>numeric</type>.
-     </para>
-    </listitem>
+   <para>
+    <itemizedlist>
+     <listitem>
+      <para>
+       <type>text</type>, <type>varchar</type>, et <type>char</type> ne
+       peuvent être dédoublonnés quand une collation <emphasis>non
+       déterministique</emphasis> est utilisée. La différence de casse et des
+       accents doit être préservée parmi les données égales.
+      </para>
+     </listitem>
 
-    <listitem>
-     <para>
-      <type>float4</type> et <type>float8</type> ne peuvent être dédoublonnés.
-      Ces types ont une représentation distincte pour <literal>-0</literal> et
-      <literal>0</literal>, qui sont cependant considérés égaux. Cette
-      différence doit être préservée.
-     </para>
-    </listitem>
-   </itemizedlist>
-  </para>
+     <listitem>
+      <para>
+       <type>numeric</type> ne peut pas utilisé le dédoublonnement. La
+       précision des nombres doit être préservée parmi les données identiques.
+      </para>
+     </listitem>
 
-  <para>
-   Une autre restriction au niveau de l'implémentation existe et pourra être
-   levée dans une version future de <productname>PostgreSQL</productname>:
-  </para>
+     <listitem>
+      <para>
+       <type>jsonb</type> ne peut être dédoublonné, depuis que la classe
+       d'opérateur B-Tree pour le type <type>jsonb</type> utilise en interne
+       un type <type>numeric</type>.
+      </para>
+     </listitem>
 
-  <para>
-   <itemizedlist>
-    <listitem>
-     <para>
-      Les types conteneur (tel que les types compostes, tableaux ou
-      intervalle) ne peuvent être dédoublonnés.
-     </para>
-    </listitem>
-   </itemizedlist>
-  </para>
+     <listitem>
+      <para>
+       <type>float4</type> et <type>float8</type> ne peuvent être
+       dédoublonnés. Ces types ont une représentation distincte pour
+       <literal>-0</literal> et <literal>0</literal>, qui sont cependant
+       considérés égaux. Cette différence doit être préservée.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
 
-  <para>
-   Une autre restriction au niveau de l'implémentation s'applique quel que
-   soient les classes d'opérateur ou collations employées&nbsp;:
-  </para>
+   <para>
+    Une autre restriction au niveau de l'implémentation existe et pourra être
+    levée dans une version future de <productname>PostgreSQL</productname>:
+   </para>
 
-  <para>
-   <itemizedlist>
-    <listitem>
-     <para>
-      Les index <literal>INCLUDE</literal> ne peuvent pas être dédoublonnés.
-     </para>
-    </listitem>
-   </itemizedlist>
-  </para>
+   <para>
+    <itemizedlist>
+     <listitem>
+      <para>
+       Les types conteneur (tel que les types compostes, tableaux ou
+       intervalle) ne peuvent être dédoublonnés.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
 
- </sect2>
+   <para>
+    Une autre restriction au niveau de l'implémentation s'applique quel que
+    soient les classes d'opérateur ou collations employées&nbsp;:
+   </para>
 
-</sect1>
-
+   <para>
+    <itemizedlist>
+     <listitem>
+      <para>
+       Les index <literal>INCLUDE</literal> ne peuvent pas être dédoublonnés.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+  </sect2>
+ </sect1>
 </chapter>

@@ -1,531 +1,515 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- doc/src/sgml/brin.sgml -->
 
 <chapter id="brin">
-<title>Index BRIN</title>
+ <title>Index BRIN</title>
 
-   <indexterm>
-    <primary>index</primary>
-    <secondary>BRIN</secondary>
-   </indexterm>
+ <indexterm>
+  <primary>index</primary>
+  <secondary>BRIN</secondary>
+ </indexterm>
 
-<sect1 id="brin-intro">
- <title>Introduction</title>
-
- <para>
-  <acronym>BRIN</acronym> signifie Block Range Index, soit index par intervalles de bloc.
-  <acronym>BRIN</acronym> est concu pour gérer de grosses tables
-  dont certaines ont des colonnes ayant une corrélation naturelle avec
-  leur stockage physique.
-
-  Un <firstterm>intervalle de bloc</firstterm>
-  est un groupe de pages physiquement adjacentes dans la table&nbsp;;
-  Pour chaque gamme de bloc, un résumé des informations est stocké par
-  l'index.
-
-  Un exemple courant est une table avec une colonne date, contenant les références
-  des ventes d'un magasin. Chaque commande y serait enregistrée chronologiquement.
-  Dans la plupart des cas, les données seront donc insérées dans le même
-  ordre où elles apparaîtront par la suite.
-  De la même manière, une table, avec une colonne code postal, pourrait
-  avoir tous les codes d'une même ville rassemblés naturellement au
-  même endroit.
- </para>
-
- <para>
-  Les index <acronym>BRIN</acronym> peuvent répondre à des requêtes via un
-  parcours d'index bitmap classique, et retourneront toutes les lignes de
-  toutes les pages dans chaque intervalle si le résumé des informations
-  contenues dans l'index est cohérent avec les conditions de la requête.
-
-  L'exécuteur de la requête doit revérifier ces lignes et annuler celles
-  qui ne répondent pas aux conditions initiales de la requête.
-  En d'autres termes, on parle d'index à perte (<foreignphrase>lossy</foreignphrase>).
-
-  Comme l'index <acronym>BRIN</acronym> est un petit index, parcourir cet
-  index ajoute une légère surcharge par rapport à un parcours séquentiel
-  mais permet d'éviter de parcourir des grandes parties de la table où
-  on sait qu'on ne trouvera pas de lignes à remonter.
-
- </para>
-
- <para>
-  Les données spécifiques qu'un index <acronym>BRIN</acronym> va stocker,
-  de même que les requêtes spécifiques auquel l'index va pouvoir répondre
-  dépendent de la classe d'opérateur choisie pour chaque colonne de l'index.	
-	
-  Les types de données possédant un ordre de tri linéaire peuvent utiliser
-  une classe d'opérateur qui ne conserve que la valeur minimale et la valeur
-  maximale dans chaque intervalle de bloc. Par exemple, un type géométrique
-  peut stocker une <foreignphrase>bounding box</foreignphrase> pour tous les
-  objets de l'intervalle de bloc.
- </para>
-
- <para>
-  La taille de l'intervalle de bloc est déterminée à la création de l'index
-  par le paramètre <literal>pages_per_range</literal>
-
-  Le nombre des entrées de l'index sera égal à la taille de la relation
-  en page, divisée par la valeur sélectionnée dans <literal>pages_per_range</literal>.
-  De ce fait, plus ce nombre est bas, plus l'index sera volumineux
-  (il y a plus d'entrées d'index à stocker) mais, en même temps, le résumé
-  des informations stockées pourra être plus précis, et un nombre plus important
-  de blocs de données pourront être ignorés pendant le parcours d'index.
- </para>
-
- <sect2 id="brin-operation">
-  <title>Maintenance de l'index</title>
+ <sect1 id="brin-intro">
+  <title>Introduction</title>
 
   <para>
-   Lors de la création de l'index, toutes les pages de la table sont
-   parcourues et un résumé des lignes de l'index est créé pour chaque
-   intervalle, incluant certainement aussi un intervalle incomplet à la fin.
-
-   Lors de l'ajout de nouvelles données dans des pages déja incluses
-   dans des résumés, cela va entrainer la mise à jour du résumé, avec les
-   informations sur les nouvelles lignes insérées.
-
-   Lorsqu'une nouvelle page est créée et qu'elle ne correspond à aucun
-   des derniers intervalles résumés, l'intervalle ne crée pas automatiquement
-   un résumé. Ces lignes restent non catégorisées jusqu'à ce qu'un processus
-   soit lancé pour le faire, créant alors les résumés initiaux.
-
-   Ce processus peut être appelé manuellement en exécutant la fonction
-   <function>brin_summarize_range(regclass, bigint)</function> ou la fonction
-   <function>brin_summarize_new_values(regclass)</function>&nbsp;;
-   automatiquement lorsque <command>VACUUM</command> va inspecter la
-   table&nbsp;;
-   ou par un résumé automatique effectué par autovacuum, au fur et à mesure que
-   des insertions sont effectuées.  (Ce dernier déclencheur est désactivé par
-   défaut, et peut être activé avec le paramètre
-   <literal>autosummarize</literal>.)  Inversement, le résumé d'un intervalle peut être
-   supprimé en utilisant la fonction <function>brin_desummarize_range(regclass,
-   bigint)</function>, ce qui peut être utile quand la ligne de l'index n'est
-   plue une bonne représentation du fait des changements des valeurs
-   existantes.
+   <acronym>BRIN</acronym> signifie Block Range Index, soit index par
+   intervalles de bloc. <acronym>BRIN</acronym> est concu pour gérer de grosses
+   tables dont certaines ont des colonnes ayant une corrélation naturelle avec
+   leur stockage physique. Un <firstterm>intervalle de bloc</firstterm> est un
+   groupe de pages physiquement adjacentes dans la table&nbsp;; Pour chaque
+   gamme de bloc, un résumé des informations est stocké par l'index. Un exemple
+   courant est une table avec une colonne date, contenant les références des
+   ventes d'un magasin. Chaque commande y serait enregistrée chronologiquement.
+   Dans la plupart des cas, les données seront donc insérées dans le même ordre
+   où elles apparaîtront par la suite. De la même manière, une table, avec une
+   colonne code postal, pourrait avoir tous les codes d'une même ville
+   rassemblés naturellement au même endroit.
   </para>
 
   <para>
-   Quand le résumé automatique est activé, chaque fois qu'un intervalle de
-   page est rempli, une requête est envoyée à autovacuum pour qu'il exécute un
-   résumé ciblé pour cet intervalle, opération à exécuter à la fin du travail
-   du prochain worker sur la même base de données. Si la queue des demandes
-   est remplie, la demande n'est pas enregistré et un message est enregistré
-   dans les traces du serveur&nbsp;:
-<screen>
-LOG:  request for BRIN range summarization for index "brin_wi_idx" page 128 was not recorded
-</screen>
-   Quand cela arrive, l'intervalle sera résumé avec la méthode habituelle lors
-   du prochain VACUUM standard de la table.
+   Les index <acronym>BRIN</acronym> peuvent répondre à des requêtes via un
+   parcours d'index bitmap classique, et retourneront toutes les lignes de
+   toutes les pages dans chaque intervalle si le résumé des informations
+   contenues dans l'index est cohérent avec les conditions de la requête.
+   L'exécuteur de la requête doit revérifier ces lignes et annuler celles qui
+   ne répondent pas aux conditions initiales de la requête. En d'autres termes,
+   on parle d'index à perte (<foreignphrase>lossy</foreignphrase>). Comme
+   l'index <acronym>BRIN</acronym> est un petit index, parcourir cet index
+   ajoute une légère surcharge par rapport à un parcours séquentiel mais permet
+   d'éviter de parcourir des grandes parties de la table où on sait qu'on ne
+   trouvera pas de lignes à remonter.
   </para>
- </sect2>
-</sect1>
 
-<sect1 id="brin-builtin-opclasses">
- <title>Opérateurs de classe intégrés</title>
+  <para>
+   Les données spécifiques qu'un index <acronym>BRIN</acronym> va stocker, de
+   même que les requêtes spécifiques auquel l'index va pouvoir répondre
+   dépendent de la classe d'opérateur choisie pour chaque colonne de l'index.	
+   Les types de données possédant un ordre de tri linéaire peuvent utiliser une
+   classe d'opérateur qui ne conserve que la valeur minimale et la valeur
+   maximale dans chaque intervalle de bloc. Par exemple, un type géométrique
+   peut stocker une <foreignphrase>bounding box</foreignphrase> pour tous les
+   objets de l'intervalle de bloc.
+  </para>
 
- <para>
-  La distribution du noyau <productname>PostgreSQL</productname>
-  inclut la classe d'opérateur <acronym>BRIN</acronym> montrée dans
-  <xref linkend="brin-builtin-opclasses-table"/>.
- </para>
+  <para>
+   La taille de l'intervalle de bloc est déterminée à la création de l'index
+   par le paramètre <literal>pages_per_range</literal> Le nombre des entrées de
+   l'index sera égal à la taille de la relation en page, divisée par la valeur
+   sélectionnée dans <literal>pages_per_range</literal>. De ce fait, plus ce
+   nombre est bas, plus l'index sera volumineux (il y a plus d'entrées d'index
+   à stocker) mais, en même temps, le résumé des informations stockées pourra
+   être plus précis, et un nombre plus important de blocs de données pourront
+   être ignorés pendant le parcours d'index.
+  </para>
 
- <para>
-  L'opérateur de classe <firstterm>minmax</firstterm> stocke les valeurs
-  minimale et maximale apparaissant dans l'intervalle de la colonne indexée.
-  L'opérateur de classe <firstterm>inclusion</firstterm> stocke une valeur
-  qui est incluse dans les valeurs contenues dans l'intervalle de la colonne
-  indexée.
- </para>
+  <sect2 id="brin-operation">
+   <title>Maintenance de l'index</title>
+ 
+   <para>
+    Lors de la création de l'index, toutes les pages de la table sont
+    parcourues et un résumé des lignes de l'index est créé pour chaque
+    intervalle, incluant certainement aussi un intervalle incomplet à la fin.
+    Lors de l'ajout de nouvelles données dans des pages déja incluses dans des
+    résumés, cela va entrainer la mise à jour du résumé, avec les informations
+    sur les nouvelles lignes insérées. Lorsqu'une nouvelle page est créée et
+    qu'elle ne correspond à aucun des derniers intervalles résumés,
+    l'intervalle ne crée pas automatiquement un résumé. Ces lignes restent non
+    catégorisées jusqu'à ce qu'un processus soit lancé pour le faire, créant
+    alors les résumés initiaux. Ce processus peut être appelé manuellement en
+    exécutant la fonction <function>brin_summarize_range(regclass,
+    bigint)</function> ou la fonction
+    <function>brin_summarize_new_values(regclass)</function>&nbsp;;
+    automatiquement lorsque <command>VACUUM</command> va inspecter la
+    table&nbsp;; ou par un résumé automatique effectué par autovacuum, au fur
+    et à mesure que des insertions sont effectuées.  (Ce dernier déclencheur
+    est désactivé par défaut, et peut être activé avec le paramètre
+    <literal>autosummarize</literal>.)  Inversement, le résumé d'un intervalle
+    peut être supprimé en utilisant la fonction
+    <function>brin_desummarize_range(regclass, bigint)</function>, ce qui peut
+    être utile quand la ligne de l'index n'est plue une bonne représentation du
+    fait des changements des valeurs existantes.
+   </para>
 
- <table id="brin-builtin-opclasses-table">
-  <title>Classe d'opérateur <acronym>BRIN</acronym> intégrée </title>
-  <tgroup cols="3">
-   <thead>
-    <row>
-     <entry>Nom</entry>
-     <entry>Type de données indexées</entry>
-     <entry>Opérateurs indexables</entry>
-    </row>
-   </thead>
-   <tbody>
-    <row>
-     <entry><literal>int8_minmax_ops</literal></entry>
-     <entry><type>bigint</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>bit_minmax_ops</literal></entry>
-     <entry><type>bit</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>varbit_minmax_ops</literal></entry>
-     <entry><type>bit varying</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>box_inclusion_ops</literal></entry>
-     <entry><type>box</type></entry>
-     <entry>
-      <literal>&lt;&lt;</literal>
-      <literal>&amp;&lt;</literal>
-      <literal>&amp;&amp;</literal>
-      <literal>&amp;&gt;</literal>
-      <literal>&gt;&gt;</literal>
-      <literal>~=</literal>
-      <literal>@&gt;</literal>
-      <literal>&lt;@</literal>
-      <literal>&amp;&lt;|</literal>
-      <literal>&lt;&lt;|</literal>
-      <literal>|&gt;&gt;</literal>
-      <literal>|&amp;&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>bytea_minmax_ops</literal></entry>
-     <entry><type>bytea</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>bpchar_minmax_ops</literal></entry>
-     <entry><type>character</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>char_minmax_ops</literal></entry>
-     <entry><type>"char"</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>date_minmax_ops</literal></entry>
-     <entry><type>date</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>float8_minmax_ops</literal></entry>
-     <entry><type>double precision</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>inet_minmax_ops</literal></entry>
-     <entry><type>inet</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>network_inclusion_ops</literal></entry>
-     <entry><type>inet</type></entry>
-     <entry>
-      <literal>&amp;&amp;</literal>
-      <literal>&gt;&gt;=</literal>
-      <literal>&lt;&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;&gt;</literal>
-      <literal>&lt;&lt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>int4_minmax_ops</literal></entry>
-     <entry><type>integer</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>interval_minmax_ops</literal></entry>
-     <entry><type>interval</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>macaddr_minmax_ops</literal></entry>
-     <entry><type>macaddr</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>macaddr8_minmax_ops</literal></entry>
-     <entry><type>macaddr8</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>name_minmax_ops</literal></entry>
-     <entry><type>name</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>numeric_minmax_ops</literal></entry>
-     <entry><type>numeric</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>pg_lsn_minmax_ops</literal></entry>
-     <entry><type>pg_lsn</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>oid_minmax_ops</literal></entry>
-     <entry><type>oid</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>range_inclusion_ops</literal></entry>
-     <entry><type>tout type intervalle</type></entry>
-     <entry>
-      <literal>&lt;&lt;</literal>
-      <literal>&amp;&lt;</literal>
-      <literal>&amp;&amp;</literal>
-      <literal>&amp;&gt;</literal>
-      <literal>&gt;&gt;</literal>
-      <literal>@&gt;</literal>
-      <literal>&lt;@</literal>
-      <literal>-|-</literal>
-      <literal>=</literal>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;</literal>
-      <literal>&gt;=</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>float4_minmax_ops</literal></entry>
-     <entry><type>real</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>int2_minmax_ops</literal></entry>
-     <entry><type>smallint</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>text_minmax_ops</literal></entry>
-     <entry><type>text</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>tid_minmax_ops</literal></entry>
-     <entry><type>tid</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>timestamp_minmax_ops</literal></entry>
-     <entry><type>timestamp without time zone</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>timestamptz_minmax_ops</literal></entry>
-     <entry><type>timestamp with time zone</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>time_minmax_ops</literal></entry>
-     <entry><type>time without time zone</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>timetz_minmax_ops</literal></entry>
-     <entry><type>time with time zone</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-    <row>
-     <entry><literal>uuid_minmax_ops</literal></entry>
-     <entry><type>uuid</type></entry>
-     <entry>
-      <literal>&lt;</literal>
-      <literal>&lt;=</literal>
-      <literal>=</literal>
-      <literal>&gt;=</literal>
-      <literal>&gt;</literal>
-     </entry>
-    </row>
-   </tbody>
-  </tgroup>
- </table>
-</sect1>
+   <para>
+    Quand le résumé automatique est activé, chaque fois qu'un intervalle de
+    page est rempli, une requête est envoyée à autovacuum pour qu'il exécute un
+    résumé ciblé pour cet intervalle, opération à exécuter à la fin du travail
+    du prochain worker sur la même base de données. Si la queue des demandes
+    est remplie, la demande n'est pas enregistré et un message est enregistré
+    dans les traces du serveur&nbsp;:
+ <screen>
+ LOG:  request for BRIN range summarization for index "brin_wi_idx" page 128 was not recorded
+ </screen>
+    Quand cela arrive, l'intervalle sera résumé avec la méthode habituelle lors
+    du prochain VACUUM standard de la table.
+   </para>
+  </sect2>
+ </sect1>
 
-<sect1 id="brin-extensibility">
- <title>Extensibilité</title>
+ <sect1 id="brin-builtin-opclasses">
+  <title>Opérateurs de classe intégrés</title>
 
- <para>
-  L'interface <acronym>BRIN</acronym> possède un niveau élevé d'abstraction,
-  qui nécessite l'implémentation de la méthode d'accès rien que pour
-  l'implémentation de la sémantique des types de données accédées.
-  La couche <acronym>BRIN</acronym> s'occupera par contre elle-même de
-  la concurrence, l'accès et la recherche dans la structure de l'index.
-</para>
+  <para>
+   La distribution du noyau <productname>PostgreSQL</productname> inclut la
+   classe d'opérateur <acronym>BRIN</acronym> montrée dans <xref
+   linkend="brin-builtin-opclasses-table"/>.
+  </para>
+ 
+  <para>
+   L'opérateur de classe <firstterm>minmax</firstterm> stocke les valeurs
+   minimale et maximale apparaissant dans l'intervalle de la colonne indexée.
+   L'opérateur de classe <firstterm>inclusion</firstterm> stocke une valeur
+   qui est incluse dans les valeurs contenues dans l'intervalle de la colonne
+   indexée.
+  </para>
+ 
+  <table id="brin-builtin-opclasses-table">
+   <title>Classe d'opérateur <acronym>BRIN</acronym> intégrée</title>
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>Nom</entry>
+      <entry>Type de données indexées</entry>
+      <entry>Opérateurs indexables</entry>
+     </row>
+    </thead>
 
- <para>
-  Tout ce qu'il faut pour faire fonctionner la méthode d'accès
-  <acronym>BRIN</acronym> est d'implémenter quelques méthodes utilisateurs,
-  déterminant pour l'index les genre de valeurs stockées dans le résumé
-  et la manière dont elles interagissent avec les nœuds du parcours.
+    <tbody>
+     <row>
+      <entry><literal>int8_minmax_ops</literal></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>bit_minmax_ops</literal></entry>
+      <entry><type>bit</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>varbit_minmax_ops</literal></entry>
+      <entry><type>bit varying</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>box_inclusion_ops</literal></entry>
+      <entry><type>box</type></entry>
+      <entry>
+       <literal>&lt;&lt;</literal>
+       <literal>&amp;&lt;</literal>
+       <literal>&amp;&amp;</literal>
+       <literal>&amp;&gt;</literal>
+       <literal>&gt;&gt;</literal>
+       <literal>~=</literal>
+       <literal>@&gt;</literal>
+       <literal>&lt;@</literal>
+       <literal>&amp;&lt;|</literal>
+       <literal>&lt;&lt;|</literal>
+       <literal>|&gt;&gt;</literal>
+       <literal>|&amp;&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>bytea_minmax_ops</literal></entry>
+      <entry><type>bytea</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>bpchar_minmax_ops</literal></entry>
+      <entry><type>character</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>char_minmax_ops</literal></entry>
+      <entry><type>"char"</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>date_minmax_ops</literal></entry>
+      <entry><type>date</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>float8_minmax_ops</literal></entry>
+      <entry><type>double precision</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>inet_minmax_ops</literal></entry>
+      <entry><type>inet</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>network_inclusion_ops</literal></entry>
+      <entry><type>inet</type></entry>
+      <entry>
+       <literal>&amp;&amp;</literal>
+       <literal>&gt;&gt;=</literal>
+       <literal>&lt;&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;&gt;</literal>
+       <literal>&lt;&lt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>int4_minmax_ops</literal></entry>
+      <entry><type>integer</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>interval_minmax_ops</literal></entry>
+      <entry><type>interval</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>macaddr_minmax_ops</literal></entry>
+      <entry><type>macaddr</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>macaddr8_minmax_ops</literal></entry>
+      <entry><type>macaddr8</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>name_minmax_ops</literal></entry>
+      <entry><type>name</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>numeric_minmax_ops</literal></entry>
+      <entry><type>numeric</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>pg_lsn_minmax_ops</literal></entry>
+      <entry><type>pg_lsn</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>oid_minmax_ops</literal></entry>
+      <entry><type>oid</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>range_inclusion_ops</literal></entry>
+      <entry><type>tout type intervalle</type></entry>
+      <entry>
+       <literal>&lt;&lt;</literal>
+       <literal>&amp;&lt;</literal>
+       <literal>&amp;&amp;</literal>
+       <literal>&amp;&gt;</literal>
+       <literal>&gt;&gt;</literal>
+       <literal>@&gt;</literal>
+       <literal>&lt;@</literal>
+       <literal>-|-</literal>
+       <literal>=</literal>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;</literal>
+       <literal>&gt;=</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>float4_minmax_ops</literal></entry>
+      <entry><type>real</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>int2_minmax_ops</literal></entry>
+      <entry><type>smallint</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>text_minmax_ops</literal></entry>
+      <entry><type>text</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>tid_minmax_ops</literal></entry>
+      <entry><type>tid</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>timestamp_minmax_ops</literal></entry>
+      <entry><type>timestamp without time zone</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>timestamptz_minmax_ops</literal></entry>
+      <entry><type>timestamp with time zone</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>time_minmax_ops</literal></entry>
+      <entry><type>time without time zone</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>timetz_minmax_ops</literal></entry>
+      <entry><type>time with time zone</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><literal>uuid_minmax_ops</literal></entry>
+      <entry><type>uuid</type></entry>
+      <entry>
+       <literal>&lt;</literal>
+       <literal>&lt;=</literal>
+       <literal>=</literal>
+       <literal>&gt;=</literal>
+       <literal>&gt;</literal>
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
 
-  En bref, <acronym>BRIN</acronym> combine l'extensibilité avec la généralité,
-  la réutilisation du code et une interface claire.
- </para>
+ <sect1 id="brin-extensibility">
+  <title>Extensibilité</title>
 
- <para>
-  Il y a quatre méthodes qu'un opérateur de classe pour <acronym>BRIN</acronym>
-  doit fournir&nbsp;:
-
-  <variablelist>
-   <varlistentry>
-    <term><function>BrinOpcInfo *opcInfo(Oid type_oid)</function></term>
-    <listitem>
-     <para>
-	  Retourne les informations internes au sujet du résumé de données de
-	  la colonne indexée.
-	  Cette valeur doit pointer vers une structure
-	  <structname>BrinOpcInfo</structname> (allouée avec la fonction palloc), qui a cette définition :
-
-<programlisting>
+  <para>
+   L'interface <acronym>BRIN</acronym> possède un niveau élevé d'abstraction,
+   qui nécessite l'implémentation de la méthode d'accès rien que pour
+   l'implémentation de la sémantique des types de données accédées. La couche
+   <acronym>BRIN</acronym> s'occupera par contre elle-même de la concurrence,
+   l'accès et la recherche dans la structure de l'index.
+  </para>
+ 
+  <para>
+   Tout ce qu'il faut pour faire fonctionner la méthode d'accès
+   <acronym>BRIN</acronym> est d'implémenter quelques méthodes utilisateurs,
+   déterminant pour l'index les genre de valeurs stockées dans le résumé et la
+   manière dont elles interagissent avec les nœuds du parcours. En bref,
+   <acronym>BRIN</acronym> combine l'extensibilité avec la généralité, la
+   réutilisation du code et une interface claire.
+  </para>
+ 
+  <para>
+   Il y a quatre méthodes qu'un opérateur de classe pour
+   <acronym>BRIN</acronym> doit fournir&nbsp;:
+ 
+   <variablelist>
+    <varlistentry>
+     <term><function>BrinOpcInfo *opcInfo(Oid type_oid)</function></term>
+     <listitem>
+      <para>
+       Retourne les informations internes au sujet du résumé de données de la
+       colonne indexée. Cette valeur doit pointer vers une structure
+       <structname>BrinOpcInfo</structname> (allouée avec la fonction palloc),
+       qui a cette définition&nbsp;:
+       <programlisting>
 typedef struct BrinOpcInfo
 {
     /* Nombre de colonnes stockées dans une colonne indexée de cette classe d'opérateur */
@@ -538,362 +522,352 @@ typedef struct BrinOpcInfo
     TypeCacheEntry *oi_typcache[FLEXIBLE_ARRAY_MEMBER];
 } BrinOpcInfo;
 </programlisting>
-      <structname>BrinOpcInfo</structname>.<structfield>oi_opaque</structfield>
-      peut être utilisé par les routines d'opérateur de classe pour transmettre
-      des informations entre les procédures de support pendant le parcours
-      de l'index.
-     </para>
-    </listitem>
-   </varlistentry>
-
-   <varlistentry>
-    <term><function>bool consistent(BrinDesc *bdesc, BrinValues *column,
-       ScanKey key)</function></term>
-    <listitem>
-     <para>
-	  Retourne la clé de parcours si elle est cohérente avec les valeurs
-	  indexées données pour cet intervalle. 	
-      Le nombre attribué à utiliser est passé en tant que partie de la
-      clé de parcours.
-     </para>
-    </listitem>
-   </varlistentry>
-
-   <varlistentry>
-    <term><function>bool addValue(BrinDesc *bdesc, BrinValues *column,
-       Datum newval, bool isnull)</function></term>
-    <listitem>
-     <para>
-	  Renvoie à une ligne indexée et une valeur indexée, modifie les attributs
-	  indiqués de cette ligne, de manière à ce que le cumul représente la
-	  nouvelle valeur.
-	  Si une modification a été apportée à la ligne, la valeur <literal>true</literal>
-	  est retournée.
-     </para>
-    </listitem>
-   </varlistentry>
-
-   <varlistentry>
-    <term><function>bool unionTuples(BrinDesc *bdesc, BrinValues *a,
-       BrinValues *b)</function></term>
-    <listitem>
-     <para>
-	  Consolidation de deux lignes d'index. Ceci en prenant deux lignes
-	  d'index et en modifiant l'attribut indiqué de la première des deux,
-	  de manière à ce qu'elle représente les deux lignes.
-	  La seconde ligne n'est pas modifiée.	
-     </para>
-    </listitem>
-   </varlistentry>
-  </variablelist>
-
-  An operator class for <acronym>BRIN</acronym> can optionally specify the
-  following method:
-
-  <variablelist>
-    <varlistentry>
-     <term><function>void options(local_relopts *relopts)</function></term>
-     <listitem>
-      <para>
-       Defines a set of user-visible parameters that control operator class
-       behavior.
-      </para>
-
-      <para>
-       The <function>options</function> function is passed a pointer to a
-       <replaceable>local_relopts</replaceable> struct, which needs to be
-       filled with a set of operator class specific options.  The options
-       can be accessed from other support functions using the
-       <literal>PG_HAS_OPCLASS_OPTIONS()</literal> and
-       <literal>PG_GET_OPCLASS_OPTIONS()</literal> macros.
-      </para>
-
-      <para>
-       Since both key extraction of indexed values and representation of the
-       key in <acronym>GIN</acronym> are flexible, they may depend on
-       user-specified parameters.
+       <structname>BrinOpcInfo</structname>.<structfield>oi_opaque</structfield>
+       peut être utilisé par les routines d'opérateur de classe pour
+       transmettre des informations entre les procédures de support pendant le
+       parcours de l'index.
       </para>
      </listitem>
     </varlistentry>
-  </variablelist>
 
-  La distribution du noyau inclut du support pour les deux types de classe
-  d'opérateur&nbsp;: minmax et inclusion.
+    <varlistentry>
+     <term><function>bool consistent(BrinDesc *bdesc, BrinValues *column,
+      ScanKey key)</function></term>
+     <listitem>
+      <para>
+       Retourne la clé de parcours si elle est cohérente avec les valeurs
+       indexées données pour cet intervalle. Le nombre attribué à utiliser
+       est passé en tant que partie de la clé de parcours.
+      </para>
+     </listitem>
+    </varlistentry>
 
-  Les définitions de classes d'opérateur qui les utilisent sont envoyées en
-  types de données basiques appropriées.
+    <varlistentry>
+     <term><function>bool addValue(BrinDesc *bdesc, BrinValues *column,
+      Datum newval, bool isnull)</function></term>
+     <listitem>
+      <para>
+       Renvoie à une ligne indexée et une valeur indexée, modifie les
+       attributs indiqués de cette ligne, de manière à ce que le cumul
+       représente la nouvelle valeur. Si une modification a été apportée à la
+       ligne, la valeur <literal>true</literal> est retournée.
+      </para>
+     </listitem>
+    </varlistentry>
 
-  Des classes d'opérateurs appropriées peuvent être définies par l'utilisateur
-  pour d'autres types de données utilisant des définitions équivalentes,
-  et ceci sans avoir besoin d'écrire du code source.
-  La déclaration des entrées appropriées dans le catalogue est suffisante.
-  Notez que les hypothèses sur les sémantiques de stratégie d'opérateurs
-  sont embarquées dans les fonctions de support du code source.
- </para>
+    <varlistentry>
+     <term><function>bool unionTuples(BrinDesc *bdesc, BrinValues *a,
+      BrinValues *b)</function></term>
+     <listitem>
+      <para>
+       Consolidation de deux lignes d'index. Ceci en prenant deux lignes
+       d'index et en modifiant l'attribut indiqué de la première des deux, de
+       manière à ce qu'elle représente les deux lignes. La seconde ligne n'est
+       pas modifiée.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
 
- <para>
-  Les classes d'opérateurs qui implémentent des sémantiques complètement
-  différentes sont utilisables. Les implémentations fournies par les quatre principales
-  fonctions de support présentées ci-dessous sont écrites.
-  Notez que la compatibilité ascendante entre les versions majeures
-  n'est pas garantie : par exemple, les fonctions de support additionnelles
-  peuvent être requises dans des versions ultérieures.
- </para>
+   Une classe d'opérateur pour <acronym>BRIN</acronym> peut indiquer en option
+   la méthode suivante&nbsp;:
 
- <para>
-  Pour écrire une classe d'opérateur pour un type de données qui implémente
-  un résultat complétement ordonné, il est possible d'utiliser les
-  fonctions de support "minmax" avec les opérateurs correspondant tel que
-  décrit dans <xref linkend="brin-extensibility-minmax-table"/>.
-  Tous les membres de classe d'opérateurs (fonctions et opérateurs) sont
-  obligatoires.
- </para>
+   <variablelist>
+     <varlistentry>
+      <term><function>void options(local_relopts *relopts)</function></term>
+      <listitem>
+       <para>
+        Définit un ensemble de paramètres visibles aux utilisateurs qui
+        contrôlent le comportement d'une classe d'opérateur.
+       </para>
 
- <table id="brin-extensibility-minmax-table">
-  <title>Fonctions et numéros de support pour les classes d'opérateur Minmax</title>
-  <tgroup cols="2">
-   <thead>
-    <row>
-     <entry>Membre de classe d'opérateur</entry>
-     <entry>Objet</entry>
-    </row>
-   </thead>
-   <tbody>
-    <row>
-     <entry>Fonction de support 1</entry>
-     <entry>Fonction interne <function>brin_minmax_opcinfo()</function></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 2</entry>
-     <entry>Fonction interne <function>brin_minmax_add_value()</function></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 3</entry>
-     <entry>Fonction interne <function>brin_minmax_consistent()</function></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 4</entry>
-     <entry>Fonction interne <function>brin_minmax_union()</function></entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 1</entry>
-     <entry>Opérateur strictement inférieur</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 2</entry>
-     <entry>Opérateur inférieur</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 3</entry>
-     <entry>Opérateur d'égalité</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 4</entry>
-     <entry>Opérateur supérieur</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 5</entry>
-     <entry>Opérateur strictement supérieur</entry>
-    </row>
-   </tbody>
-  </tgroup>
- </table>
+       <para>
+        La fonction <function>options</function> se voit donné un pointeur
+        vers une structure <replaceable>local_relopts</replaceable> qui doit
+        être remplie avec un ensemble d'options spécifiques à la classe
+        d'opérateur. Les options peuvent être accédées à partir des autres
+        fonctions de support en utilisant les macros
+        <literal>PG_HAS_OPCLASS_OPTIONS()</literal> et
+        <literal>PG_GET_OPCLASS_OPTIONS()</literal>.
+       </para>
 
- <para>
-  Pour écrire un opérateur de classe pour un type de données complexe, qui
-  aurait des valeurs incluses dans un autre type, il est possible d'utiliser
-  la fonction de support d'inclusion avec l'opérateur correspondant,
-  tel que décrit dans <xref linkend="brin-extensibility-inclusion-table"/>.
-  Cela nécessite uniquement une simple fonction d'addition, qui peut être
-  écrite dans n'importe quel langage.
-  Des fonctions supplémentaires peuvent être définies pour obtenir des
-  fonctionnalités additionnelles. Tous les opérateurs sont optionnels.
-  Certains opérateurs requièrent d'autres opérateurs, affichés en tant
-  que dépendances de la table. 	
- </para>
+       <para>
+        Étant donné que l'extraction des clés des valeurs indexées et la
+        représentation de la clé dans <acronym>GIN</acronym> sont flexibles,
+        elles peuvent dépendre de paramètres spécifiés par l'utilisateur.
+       </para>
+      </listitem>
+     </varlistentry>
+   </variablelist>
 
- <table id="brin-extensibility-inclusion-table">
-  <title>Fonctions et numéros de support pour les classes d'opérateur
-  d'inclusion</title>
-  <tgroup cols="3">
-   <thead>
-    <row>
-     <entry>Membre de classe d'opérateur</entry>
-     <entry>Objet</entry>
-     <entry>Dépendance</entry>
-    </row>
-   </thead>
-   <tbody>
-    <row>
-     <entry>Fonction de support 1</entry>
-     <entry>Fonction interne <function>brin_inclusion_opcinfo()</function></entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 2</entry>
-     <entry>Fonction interne <function>brin_inclusion_add_value()</function></entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 3</entry>
-     <entry>Fonction interne <function>brin_inclusion_consistent()</function></entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 4</entry>
-     <entry>Fonction interne <function>brin_inclusion_union()</function></entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 11</entry>
-     <entry>Fonction de fusion de deux élements</entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 12</entry>
-     <entry>Fonction optionnelle de vérification si les deux éléments peuvent être fusionnés</entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 13</entry>
-     <entry>Fonction optionnelle de vérification si un élément est contenu dans un autre</entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Fonction de support 14</entry>
-     <entry>Fonction optionnelle de vérification si un élement est vide</entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 1</entry>
-     <entry>Opérateur A-gauche-de </entry>
-     <entry>Stratégie d'opérateur 4</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 2</entry>
-     <entry>Opérateur Ne-s-etend-pas-à-la-droite-de</entry>
-     <entry>Stratégie d'opérateur 5</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 3</entry>
-     <entry>Opérateur chevauchement</entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 4</entry>
-     <entry>Opérateur Ne-s-etend-pas-à-la-gauche-de</entry>
-     <entry>Stratégie d'opérateur 1</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 5</entry>
-     <entry>Opérateur A-droite-de</entry>
-     <entry>Stratégie d'opérateur 2</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 6, 18</entry>
-     <entry>Opérateur Equivalent-ou-identique-à</entry>
-     <entry>Stratégie d'opérateur 7</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 7, 13, 16, 24, 25</entry>
-     <entry>Opérateur Contient-ou-identique-à</entry>
-     <entry></entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 8, 14, 26, 27</entry>
-     <entry>Opérateur Contient-ou-identique-à</entry>
-     <entry>Stratégie d'opérateur 3</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 9</entry>
-     <entry>Opérateur Ne-s-étend-pas-plus-loin</entry>
-     <entry>Stratégie d'opérateur 11</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 10</entry>
-     <entry>Opérateur Est-le-suivant</entry>
-     <entry>Stratégie d'opérateur 12</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 11</entry>
-     <entry>Opérateur Est-le-précédent</entry>
-     <entry>Stratégie d'opérateur 9</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 12</entry>
-     <entry>Opérateur Ne-s-étend-pas-plus-loin</entry>
-     <entry>Stratégie d'opérateur 10</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 20</entry>
-     <entry>Opérateur Strictement-inférieur-à</entry>
-     <entry>Stratégie d'opérateur 5</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 21</entry>
-     <entry>Opérateur Inférieur-à</entry>
-     <entry>Stratégie d'opérateur 5</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 22</entry>
-     <entry>Opérateur Strictement-supérieur-à</entry>
-     <entry>Stratégie d'opérateur 1</entry>
-    </row>
-    <row>
-     <entry>Stratégie d'opérateur 23</entry>
-     <entry>Opérateur supérieur-à</entry>
-     <entry>Stratégie d'opérateur 1</entry>
-    </row>
-   </tbody>
-  </tgroup>
- </table>
+   La distribution du noyau inclut du support pour les deux types de classe
+   d'opérateur&nbsp;: minmax et inclusion. Les définitions de classes
+   d'opérateur qui les utilisent sont envoyées en types de données basiques
+   appropriées. Des classes d'opérateurs appropriées peuvent être définies par
+   l'utilisateur pour d'autres types de données utilisant des définitions
+   équivalentes, et ceci sans avoir besoin d'écrire du code source. La
+   déclaration des entrées appropriées dans le catalogue est suffisante. Notez
+   que les hypothèses sur les sémantiques de stratégie d'opérateurs sont
+   embarquées dans les fonctions de support du code source.
+  </para>
 
- <para>
-	Les numéros 1 à 10 des fonctions support sont reservés pour les
-	fonctions internes BRIN, de ce fait le niveau des fonctions SQL
-	commence à 11.
-	La fonction de support 11 est la principale fonction utilisée pour
-	construire l'index.
-	Elle doit accepter deux arguments, avec le même type de données que la
-	la classe d'opérateur, et renvoyer l'union des deux.
-	La classe d'opérateur inclusion peut stocker des valeurs unies de types
-	différents si elles sont définies avec le paramètre <literal>STORAGE</literal>
-	La valeur renvoyée par la fonction union doit correspondre au type
-	de données <literal>STORAGE</literal>
- </para>
+  <para>
+   Les classes d'opérateurs qui implémentent des sémantiques complètement
+   différentes sont utilisables. Les implémentations fournies par les quatre
+   principales fonctions de support présentées ci-dessous sont écrites. Notez
+   que la compatibilité ascendante entre les versions majeures n'est pas
+   garantie : par exemple, les fonctions de support additionnelles peuvent
+   être requises dans des versions ultérieures.
+  </para>
 
- <para>
-	Les numéros 12 et 14 des fonctions de support sont fournies pour
-	supporter les irrégularités des types de données internes.
-	La fonction 12 est utilisée pour supporter les adresses réseaux
-	de différentes familles qui ne sont pas fusionnables.
-	La fonction 14 est utilisée pour supporter les intervalles vides.
-	La fonction 13 est une fonction optionnelle mais recommandée. Elle
-	permet à une nouvelle valeur d'être vérifiée avant d'être passée à
-	la fonction d'union.
-    Puisque BRIN peut raccourcir certaines opérations lorsque
-    l'union n'est pas modifiée, utiliser cette fonction peut améliorer
-    les performances de l'index.
- </para>
+  <para>
+   Pour écrire une classe d'opérateur pour un type de données qui implémente
+   un résultat complétement ordonné, il est possible d'utiliser les fonctions
+   de support "minmax" avec les opérateurs correspondant tel que décrit dans
+   <xref linkend="brin-extensibility-minmax-table"/>. Tous les membres de
+   classe d'opérateurs (fonctions et opérateurs) sont obligatoires.
+  </para>
 
- <para>
-	Les classes d'opérateur minmax et inclusion supportent les opérateurs
-	utilisables	sur des types de données croisés, même si cela complexifie la gestion
-	des dépendances.
-	La classe d'opérateur minmax a besoin d'un ensemble complet d'opérateurs pour être
-	définie avec deux arguments qui auraient le même type de données.
-	Cela permet aux types de données additionnels d'être supportés en
-	définissant un ensemble d'opérateurs supplémentaires.
-	Les opérateurs de la classe d'opérateur inclusion sont dépendants
-	d'autres stratégies d'opérateur tel que décrit dans le <xref linkend="brin-extensibility-inclusion-table"/>,
-    ou des mêmes stratégie d'opérateur qu'eux-même.
-    Cela nécessite que l'opérateur dépendant soit défini avec le type de
-    données <literal>STORAGE</literal> pour l'argument du côté gauche, et
-    que l'autre type de données supportée se trouve du côté droit de
-    l'opérateur de support.
-    Vous pouvez consulter <literal>float4_minmax_ops</literal> comme
-    exemple pour minmax et <literal>box_inclusion_ops</literal> comme
-    exemple pour inclusion.
- </para>
-</sect1>
+  <table id="brin-extensibility-minmax-table">
+   <title>Fonctions et numéros de support pour les classes d'opérateur Minmax</title>
+   <tgroup cols="2">
+    <thead>
+     <row>
+      <entry>Membre de classe d'opérateur</entry>
+      <entry>Objet</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry>Fonction de support 1</entry>
+      <entry>Fonction interne <function>brin_minmax_opcinfo()</function></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 2</entry>
+      <entry>Fonction interne <function>brin_minmax_add_value()</function></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 3</entry>
+      <entry>Fonction interne <function>brin_minmax_consistent()</function></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 4</entry>
+      <entry>Fonction interne <function>brin_minmax_union()</function></entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 1</entry>
+      <entry>Opérateur strictement inférieur</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 2</entry>
+      <entry>Opérateur inférieur</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 3</entry>
+      <entry>Opérateur d'égalité</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 4</entry>
+      <entry>Opérateur supérieur</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 5</entry>
+      <entry>Opérateur strictement supérieur</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   Pour écrire un opérateur de classe pour un type de données complexe, qui
+   aurait des valeurs incluses dans un autre type, il est possible d'utiliser
+   la fonction de support d'inclusion avec l'opérateur correspondant, tel que
+   décrit dans <xref linkend="brin-extensibility-inclusion-table"/>. Cela
+   nécessite uniquement une simple fonction d'addition, qui peut être écrite
+   dans n'importe quel langage. Des fonctions supplémentaires peuvent être
+   définies pour obtenir des fonctionnalités additionnelles. Tous les
+   opérateurs sont optionnels. Certains opérateurs requièrent d'autres
+   opérateurs, affichés en tant que dépendances de la table.
+  </para>
+
+  <table id="brin-extensibility-inclusion-table">
+   <title>Fonctions et numéros de support pour les classes d'opérateur
+   d'inclusion</title>
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>Membre de classe d'opérateur</entry>
+      <entry>Objet</entry>
+      <entry>Dépendance</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry>Fonction de support 1</entry>
+      <entry>Fonction interne <function>brin_inclusion_opcinfo()</function></entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 2</entry>
+      <entry>Fonction interne <function>brin_inclusion_add_value()</function></entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 3</entry>
+      <entry>Fonction interne <function>brin_inclusion_consistent()</function></entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 4</entry>
+      <entry>Fonction interne <function>brin_inclusion_union()</function></entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 11</entry>
+      <entry>Fonction de fusion de deux élements</entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 12</entry>
+     <entry>Fonction optionnelle de vérification si les deux éléments peuvent être fusionnés
+      </entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 13</entry>
+      <entry>Fonction optionnelle de vérification si un élément est contenu dans un autre</entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Fonction de support 14</entry>
+      <entry>Fonction optionnelle de vérification si un élement est vide</entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 1</entry>
+      <entry>Opérateur A-gauche-de </entry>
+      <entry>Stratégie d'opérateur 4</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 2</entry>
+      <entry>Opérateur Ne-s-etend-pas-à-la-droite-de</entry>
+      <entry>Stratégie d'opérateur 5</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 3</entry>
+      <entry>Opérateur chevauchement</entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 4</entry>
+      <entry>Opérateur Ne-s-etend-pas-à-la-gauche-de</entry>
+      <entry>Stratégie d'opérateur 1</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 5</entry>
+      <entry>Opérateur A-droite-de</entry>
+      <entry>Stratégie d'opérateur 2</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 6, 18</entry>
+      <entry>Opérateur Equivalent-ou-identique-à</entry>
+      <entry>Stratégie d'opérateur 7</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 7, 13, 16, 24, 25</entry>
+      <entry>Opérateur Contient-ou-identique-à</entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 8, 14, 26, 27</entry>
+      <entry>Opérateur Contient-ou-identique-à</entry>
+      <entry>Stratégie d'opérateur 3</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 9</entry>
+      <entry>Opérateur Ne-s-étend-pas-plus-loin</entry>
+      <entry>Stratégie d'opérateur 11</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 10</entry>
+      <entry>Opérateur Est-le-suivant</entry>
+      <entry>Stratégie d'opérateur 12</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 11</entry>
+      <entry>Opérateur Est-le-précédent</entry>
+      <entry>Stratégie d'opérateur 9</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 12</entry>
+      <entry>Opérateur Ne-s-étend-pas-plus-loin</entry>
+      <entry>Stratégie d'opérateur 10</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 20</entry>
+      <entry>Opérateur Strictement-inférieur-à</entry>
+      <entry>Stratégie d'opérateur 5</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 21</entry>
+      <entry>Opérateur Inférieur-à</entry>
+      <entry>Stratégie d'opérateur 5</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 22</entry>
+      <entry>Opérateur Strictement-supérieur-à</entry>
+      <entry>Stratégie d'opérateur 1</entry>
+     </row>
+     <row>
+      <entry>Stratégie d'opérateur 23</entry>
+      <entry>Opérateur supérieur-à</entry>
+      <entry>Stratégie d'opérateur 1</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+	 Les numéros 1 à 10 des fonctions support sont reservés pour les fonctions
+   internes BRIN, de ce fait le niveau des fonctions SQL commence à 11. La
+   fonction de support 11 est la principale fonction utilisée pour construire
+   l'index. Elle doit accepter deux arguments, avec le même type de données que
+   la la classe d'opérateur, et renvoyer l'union des deux. La classe
+   d'opérateur inclusion peut stocker des valeurs unies de types différents si
+   elles sont définies avec le paramètre <literal>STORAGE</literal> La valeur
+   renvoyée par la fonction union doit correspondre au type de données
+   <literal>STORAGE</literal>
+  </para>
+ 
+  <para>
+   Les numéros 12 et 14 des fonctions de support sont fournies pour supporter
+   les irrégularités des types de données internes. La fonction 12 est
+   utilisée pour supporter les adresses réseaux de différentes familles qui ne
+   sont pas fusionnables. La fonction 14 est utilisée pour supporter les
+   intervalles vides. La fonction 13 est une fonction optionnelle mais
+   recommandée. Elle permet à une nouvelle valeur d'être vérifiée avant d'être
+   passée à la fonction d'union. Puisque BRIN peut raccourcir certaines
+   opérations lorsque l'union n'est pas modifiée, utiliser cette fonction peut
+   améliorer les performances de l'index.
+  </para>
+ 
+  <para>
+   Les classes d'opérateur minmax et inclusion supportent les opérateurs
+   utilisables	sur des types de données croisés, même si cela complexifie la
+   gestion des dépendances. La classe d'opérateur minmax a besoin d'un
+   ensemble complet d'opérateurs pour être définie avec deux arguments qui
+   auraient le même type de données. Cela permet aux types de données
+   additionnels d'être supportés en définissant un ensemble d'opérateurs
+   supplémentaires. Les opérateurs de la classe d'opérateur inclusion sont
+   dépendants d'autres stratégies d'opérateur tel que décrit dans le <xref
+   linkend=" brin-extensibility-inclusion-table"/>, ou des mêmes stratégie
+   d'opérateur qu'eux-même. Cela nécessite que l'opérateur dépendant soit
+   défini avec le type de données <literal>STORAGE</literal> pour l'argument
+   du côté gauche, et que l'autre type de données supportée se trouve du côté
+   droit de l'opérateur de support. Vous pouvez consulter
+   <literal>float4_minmax_ops</literal> comme exemple pour minmax et
+   <literal>box_inclusion_ops</literal> comme exemple pour inclusion.
+  </para>
+ </sect1>
+
 </chapter>
