@@ -4520,10 +4520,10 @@ SCRAM-SHA-256$<replaceable>&lt;nombre d'itération&gt;</replaceable>:<replaceabl
   </indexterm>
 
   <para>
-   Le catalogue <structname>pg_inherits</structname> enregistre l'information sur la
-   hiérarchie d'héritage des tables. Il existe une entrée pour chaque table enfant
-   direct dans la base de données. (L'héritage indirect peut être déterminé en
-   suivant les chaînes d'entrées.)
+   Le catalogue <structname>pg_inherits</structname> enregistre l'information
+   sur la hiérarchie d'héritage des tables et des index. Il existe une entrée
+   pour chaque table ou index enfant direct dans la base de données.
+   (L'héritage indirect peut être déterminé en suivant les chaînes d'entrées.)
   </para>
 
   <table>
@@ -4547,7 +4547,7 @@ SCRAM-SHA-256$<replaceable>&lt;nombre d'itération&gt;</replaceable>:<replaceabl
        (référence <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>oid</structfield>)
       </para>
       <para>
-       OID de la table fille
+       OID de la table fille ou de l'index fille
       </para></entry>
      </row>
 
@@ -4557,7 +4557,7 @@ SCRAM-SHA-256$<replaceable>&lt;nombre d'itération&gt;</replaceable>:<replaceabl
        (référence <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>oid</structfield>)
       </para>
       <para>
-       OID de la table mère
+       OID de la table mère ou de l'index mère
       </para></entry>
      </row>
 
@@ -4569,6 +4569,10 @@ SCRAM-SHA-256$<replaceable>&lt;nombre d'itération&gt;</replaceable>:<replaceabl
        S'il y a plus d'un parent direct pour une table fille (héritage multiple), ce
        nombre indique dans quel ordre les colonnes héritées doivent être
        arrangées. Le compteur commence à 1.
+      </para>
+      <para>
+       Le index ne peuvent pas avoir plusieurs héritages car elle peuvent
+       seulement hériter dans le cas du partitionnement déclaratif.
       </para></entry>
      </row>
     </tbody>
@@ -7697,8 +7701,7 @@ SCRAM-SHA-256$<replaceable>&lt;nombre d'itération&gt;</replaceable>:<replaceabl
        <structfield>subconninfo</structfield> <type>text</type>
       </para>
       <para>
-       Contient la valeur du paramètre <varname>synchronous_commit</varname>
-       pour les processus workers de la souscription.
+       Chaîne de connexion vers la base de données source
       </para></entry>
      </row>
 
@@ -7707,7 +7710,9 @@ SCRAM-SHA-256$<replaceable>&lt;nombre d'itération&gt;</replaceable>:<replaceabl
        <structfield>subslotname</structfield> <type>name</type>
       </para>
       <para>
-       Chaîne de connexion vers la base de données source
+       Nom du slot de réplication dans la base de données source (aussi
+       utilisé pour le nom origine de la réplication locale)&nbsp;;
+       null représente <literal>NONE</literal>
       </para></entry>
      </row>
 
@@ -7716,8 +7721,8 @@ SCRAM-SHA-256$<replaceable>&lt;nombre d'itération&gt;</replaceable>:<replaceabl
        <structfield>subsynccommit</structfield> <type>text</type>
       </para>
       <para>
-       Nom du slot de réplication dans la base de données source. Aussi
-       utilisé pour le nom origine de la réplication locale
+       Contient la valeur du paramètre <varname>synchronous_commit</varname>
+       pour les processus workers de la souscription.
       </para></entry>
      </row>
 
@@ -7808,7 +7813,9 @@ SCRAM-SHA-256$<replaceable>&lt;nombre d'itération&gt;</replaceable>:<replaceabl
        <structfield>srsublsn</structfield> <type>pg_lsn</type>
       </para>
       <para>
-       LSN de fin pour les états <literal>s</literal> et <literal>r</literal>.
+       LSN distant du changement d'état utilisé pour la coordination
+       de la synchronisation pour les états <literal>s</literal> ou
+       <literal>r</literal>, sinon NULL
       </para></entry>
      </row>
     </tbody>
@@ -11442,10 +11449,12 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       </para>
       <para>
        L'adresse (<literal>LSN</literal>) du plus ancien journal de
-       transactions toujours requis par le consommateur de ce slot et qui,
-       de ce fait, ne pourra plus être automatiquement supprimé pendant les
-       checkpoints. <literal>NULL</literal>
-       si le <literal>LSN</literal> de ce slot n'a jamais été réservé.
+       transactions toujours requis par le consommateur de ce slot et qui, de
+       ce fait, ne pourra plus être automatiquement supprimé pendant les
+       checkpoints sauf si ce LSN est en retard de plus de <xref
+       linkend="guc-max-slot-wal-keep-size"/> à partir du LSN courant.
+       <literal>NULL</literal> si le <literal>LSN</literal> de ce slot n'a
+       jamais été réservé.
       </para></entry>
      </row>
 
@@ -11470,19 +11479,26 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
        Les valeurs possibles sont&nbsp;:
        <itemizedlist>
         <listitem>
-         <para><literal>normal</literal> signifie que les journaux nécessaires
+         <para><literal>reserved</literal> signifie que les journaux nécessaires
          sont contenus dans <varname>max_wal_size</varname>.</para>
         </listitem>
         <listitem>
-         <para><literal>reserved</literal> signifie que
+         <para><literal>extended</literal> signifie que
          <varname>max_wal_size</varname> est dépassé mais que les fichiers
-         sont toujours disponibles, soit par un slot de réplication soit
-         par <varname>wal_keep_segments</varname>.</para>
+         sont toujours retenus, soit par un slot de réplication soit
+         par <varname>wal_keep_size</varname>.</para>
         </listitem>
         <listitem>
-         <para><literal>lost</literal> signifie que certains journaux sont
-         définitivement perdus et que ce slot ne peut plus être utilisé pour
-         continuer la réplication.</para>
+         <para>
+          <literal>unreserved</literal> signifie que le slot ne contient plus
+          les fichiers nécessaires et que certains seront supprimés au
+          prochain checkpoint. Cet état peut renvoyer soit
+          <literal>reserved</literal> soit <literal>extended</literal>.
+         </para>
+        </listitem>
+        <listitem>
+         <para><literal>lost</literal> signifie que certains journaux requis sont
+         définitivement perdus et que ce slot ne peut plus être utilisé.</para>
         </listitem>
        </itemizedlist>
        Les deux derniers états sont possibles uniquement quand
@@ -11494,10 +11510,13 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>min_safe_lsn</structfield> <type>pg_lsn</type>
+       <structfield>safe_wal_size</structfield> <type>pg_lsn</type>
       </para>
       <para>
-       Le LSN minimal actuellement disponible pour les walsenders.
+       Le nombre d'octets à écritre dans les WAL pour que ce slot ne soit pas
+       en danger de passer dans l'état lost. Il vaut NULL pour les slots dans
+       l'état lost, ainsi que si  <varname>max_slot_wal_keep_size</varname>
+       vaut <literal>-1</literal>.
       </para></entry>
      </row>
     </tbody>

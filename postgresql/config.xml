@@ -1211,14 +1211,22 @@ include 'nom_fichier'
     </indexterm>
     <para>
      Donne une liste d'algorithmes <acronym>SSL</acronym> autorisées à être
-     utilisés sur des connexions sécurisées. Voir la page de manuel de
+     utilisés sur des connexions SSL. Voir la page de manuel de
      <citerefentry><refentrytitle>ciphers</refentrytitle></citerefentry> dans
      le paquet <application>OpenSSL</application> pour la syntaxe de ce
-     paramètre et une liste des valeurs supportées.
-     Ce paramètre peut uniquement être modifié dans le fichier
-     La valeur par défaut est <literal>HIGH:MEDIUM:+3DES:!aNULL</literal>.
-     Cette valeur par défaut est généralement un choix raisonnable à moins que
-     vous n'ayez des contraintes de sécurité spécifiques.
+     paramètre et une liste des valeurs supportées. Seules les connexions
+     utilisant TLS version 1.2 et antérieures sont impactées. Il n'existe
+     actuellement pas de paramètre contrôlant le choix des algorithmes
+     utilisés par les connexions avec  TLS version 1.3. La valeur par défaut
+     est <literal>HIGH:MEDIUM:+3DES:!aNULL</literal>. Cette valeur est
+     généralement raisonnable, sauf si vous avez des besoins spécifiques en
+     terme de sécurité.
+    </para>
+
+    <para>
+     Ce paramètre peut seulement être configuré dans le fichier
+     <filename>postgresql.conf</filename> ou sur la ligne de commande du
+     serveur.
     </para>
 
     <para>
@@ -1772,24 +1780,62 @@ include 'nom_fichier'
      <primary>paramètre de configuration <varname>work_mem</varname></primary>
     </indexterm>
     <para>
-     Indique la quantité de mémoire maximale à utiliser pour l'exécution d'une
-     requête (tel qu'un tri ou une table de hachage) avant d'écrire dans des
-     fichiers temporaires sur disque. Si cette valeur est indiquée sans unité,
-     elle est considérée etre en Ko. La valeur par défaut est de 4 Mo
-     (<literal>4MB</literal>). Pour une requête complexe,
-     il peut y avoir plusieurs opérations de tri ou de hachage exécutées en
-     parallèle&nbsp;; chacune peut utiliser de la mémoire à hauteur de
-     cette valeur avant de commencer à placer les données dans des
-     fichiers temporaires. De plus, de nombreuses sessions peuvent
-     exécuter de telles opérations simultanément. La mémoire totale
-     utilisée peut, de ce fait, atteindre plusieurs fois la valeur
-     de <varname>work_mem</varname>&nbsp;;
+     Indique la quantité de mémoire maximale de base à utiliser pour
+     l'exécution d'une requête (tel qu'un tri ou une table de hachage) avant
+     d'écrire dans des fichiers temporaires sur disque. Si cette valeur est
+     indiquée sans unité, elle est considérée etre en Ko. La valeur par défaut
+     est de 4 Mo (<literal>4MB</literal>). Pour une requête complexe, il peut
+     y avoir plusieurs opérations de tri ou de hachage exécutées en
+     parallèle&nbsp;; chacune peut utiliser de la mémoire à hauteur de cette
+     valeur avant de commencer à placer les données dans des fichiers
+     temporaires. De plus, de nombreuses sessions peuvent exécuter de telles
+     opérations simultanément. La mémoire totale utilisée peut, de ce fait,
+     atteindre plusieurs fois la valeur de <varname>work_mem</varname>&nbsp;;
      il est nécessaire de garder cela à l'esprit lors du choix de cette
      valeur. Les opérations de tri sont utilisées pour <literal>ORDER
-      BY</literal>, <literal>DISTINCT</literal> et les jointures de
-     fusion. Les tables de hachage sont utilisées dans les jointures
-     de hachage, les agrégations et le traitement des
-     sous-requêtes <literal>IN</literal> fondés sur le hachage.
+     BY</literal>, <literal>DISTINCT</literal> et les jointures de fusion. Les
+     tables de hachage sont utilisées dans les jointures de hachage, les
+     agrégations et le traitement des sous-requêtes <literal>IN</literal>
+     fondés sur le hachage.
+    </para>
+    <para>
+     Les opérations basées sur le hachage sont généralement plus sensibles à
+     la disponibilité de la mémoire que leur équivalent basé sur le tri. La
+     mémoire disponible pour les tables de hachages est calculée en
+     multipliant <varname>work_mem</varname> par
+     <varname>hash_mem_multiplier</varname>. Cela rend possible pour les
+     opérations de hachage d'utiliser une quantité de mémoire qui dépasse la
+     quantité de base proposée par <varname>work_mem</varname>.
+    </para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry id="guc-hash-mem-multiplier" xreflabel="hash_mem_multiplier">
+   <term><varname>hash_mem_multiplier</varname> (<type>floating point</type>)
+   <indexterm>
+    <primary>paramètre de configuration <varname>hash_mem_multiplier</varname></primary>
+   </indexterm>
+   </term>
+   <listitem>
+    <para>
+     Utilisé pour calculer la quantité maximale de mémoire que les opérations
+     basées sur le hachage peuvent utiliser. La limite finale est déterminée
+     en multipliant <varname>work_mem</varname> par
+     <varname>hash_mem_multiplier</varname>. La valeur par défaut est 1.0, ce
+     qui rend les opérations de hachage sujettes au même maximum
+     que<varname>work_mem</varname> pour les opérations basées sur le tri.
+    </para>
+    <para>
+     Pensez à augmenter <varname>hash_mem_multiplier</varname> dans les
+     environnements où l'utilisation de fichiers temporaires survient
+     fréquemment, tout spécialement quand augmenter uniquement
+     <varname>work_mem</varname> a pour résultat une pression mémoire trop
+     importante (la pression mémoire prend typiquement la forme d'erreurs pour
+     manque de mémoire). Une configuration de 1.5 ou 2.0 pourrait être
+     efficace avec des charges de travail variées. Des configurations plus
+     hautes (entre 2.0 et 8.0, voire encore plus) pourraient être plus
+     efficaces dans les environnements où <varname>work_mem</varname> a déjà
+     été augmenté à 40 Moi, voire plus.
     </para>
    </listitem>
   </varlistentry>
@@ -3287,7 +3333,7 @@ block : bloc vidé,  dirty bloc : bloc à vider ?
      taille des WAL peut excéder <varname>max_wal_size</varname> sous
      certaines circonstances, comme une surcharge du serveur, une commande
      <varname>archive_command</varname> qui échoue, ou une configuration haute
-     pour <varname>wal_keep_segments</varname>. Si cette valeur est indiquée
+     pour <varname>wal_keep_size</varname>. Si cette valeur est indiquée
      sans unité, elle est considérée être un nombre de Mo. La valeur par
      défaut est 1 Go. Augmenter ce paramètre peut augmenter le temps
      nécessaire pour le rejeu suite à un crash. Ce paramètre ne peut être
@@ -3949,19 +3995,19 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
    </listitem>
   </varlistentry>
 
-  <varlistentry id="guc-wal-keep-segments" xreflabel="wal_keep_segments">
-   <term><varname>wal_keep_segments</varname> (<type>integer</type>)</term>
+  <varlistentry id="guc-wal-keep-segments" xreflabel="wal_keep_size">
+   <term><varname>wal_keep_size</varname> (<type>integer</type>)</term>
    <indexterm>
-    <primary>paramètre de configuration <varname>wal_keep_segments</varname></primary>
+    <primary>paramètre de configuration <varname>wal_keep_size</varname></primary>
    </indexterm>
    <listitem>
     <para>
-     Indique le nombre minimum de journaux de transactions passés à conserver dans
+     Indique la taille minimale de journaux de transactions passés à conserver dans
      le répertoire <filename>pg_wal</filename>, au cas où un serveur en
-     attente a besoin de les récupérer pour la réplication en flux. Chaque
-     fichier fait normalement 16&nbsp;Mo. Si un serveur en attente connecté
+     attente a besoin de les récupérer pour la réplication en flux.
+     Si un serveur en attente connecté
      au primaire se laisse distancer par le serveur en envoi pour plus de
-     <varname>wal_keep_segments</varname> fichiers, le serveur en envoi pourrait
+     <varname>wal_keep_size</varname> méga-octets, le serveur en envoi pourrait
      supprimer un journal de transactions toujours utile au serveur en
      attente, auquel cas la connexion de réplication serait fermée.
      Les connexions en aval seront également vouées à l'échec.
@@ -3971,17 +4017,19 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
     </para>
 
     <para>
-     Cette option ne configure que le nombre minimum de fichiers à conserver dans
-     <filename>pg_wal</filename>&nbsp;; le système pourrait avoir besoin
-     de conserver plus de fichiers pour l'archivage ou pour restaurer à
-     partir d'un CHECKPOINT. Si <varname>wal_keep_segments</varname> vaut
-     zéro (ce qui est la valeur par défaut), le système ne conserve aucun
+     Cette option ne configure que la volumétrie minimale de fichiers à
+     conserver dans <filename>pg_wal</filename>&nbsp;; le système pourrait
+     avoir besoin de conserver plus de fichiers pour l'archivage ou pour
+     restaurer à partir d'un CHECKPOINT. Si <varname>wal_keep_size</varname>
+     vaut zéro (ce qui est la valeur par défaut), le système ne conserve aucun
      fichier supplémentaire pour les serveurs en attente et le nombre des
-     anciens journaux disponibles pour les serveurs en attente est
-     seulement basé sur l'emplacement du dernier CHECKPOINT ainsi que sur
-     l'état de l'archivage des journaux de transactions. Ce paramètre peut seulement
-     être configuré dans le fichier <filename>postgresql.conf</filename>
-     ou sur la ligne de commande du serveur.
+     anciens journaux disponibles pour les serveurs en attente est seulement
+     basé sur l'emplacement du dernier CHECKPOINT ainsi que sur l'état de
+     l'archivage des journaux de transactions. Si cette valeur est configurée
+     sans unité, elle est prise comme des méga-octets. Ce paramètre peut
+     seulement être configuré dans le fichier
+     <filename>postgresql.conf</filename> ou sur la ligne de commande du
+     serveur.
     </para>
    </listitem>
   </varlistentry>
@@ -4795,10 +4843,10 @@ ANY <replaceable class="parameter">nb_sync</replaceable> ( <replaceable class="p
    </listitem>
   </varlistentry>
 
-  <varlistentry id="guc-enable-incrementalsort" xreflabel="enable_incrementalsort">
-   <term><varname>enable_incrementalsort</varname> (<type>boolean</type>)
+  <varlistentry id="guc-enable-incremental-sort" xreflabel="enable_incremental_sort">
+   <term><varname>enable_incremental_sort</varname> (<type>boolean</type>)
    <indexterm>
-    <primary><varname>enable_incrementalsort</varname> configuration parameter</primary>
+    <primary><varname>enable_incremental_sort</varname> configuration parameter</primary>
    </indexterm>
    </term>
    <listitem>
@@ -5032,23 +5080,6 @@ ANY <replaceable class="parameter">nb_sync</replaceable> ( <replaceable class="p
    </listitem>
   </varlistentry>
 
-     <varlistentry id="guc-hashagg-avoid-disk-plan" xreflabel="hashagg_avoid_disk_plan">
-      <term><varname>hashagg_avoid_disk_plan</varname> (<type>boolean</type>)
-      <indexterm>
-       <primary><varname>hashagg_avoid_disk_plan</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        If set to <literal>on</literal>, causes the planner to avoid choosing
-        hashed aggregation plans that are expected to use the disk. If hashed
-        aggregation is chosen, it may still require the use of disk at
-        execution time, even if this parameter is enabled. The default is
-        <literal>off</literal>.
-       </para>
-      </listitem>
-     </varlistentry>
-
  </variablelist>
 </sect2>
 <sect2 id="runtime-config-query-constants">
@@ -5141,7 +5172,7 @@ ANY <replaceable class="parameter">nb_sync</replaceable> ( <replaceable class="p
      diminuer random_page_cost peut être approprié. Le stockage qui a un coût
      de lecture aléatoire faible par rapport à du séquentiel (par exemple les
      disques SSD) peut aussi être mieux tenu en compte avec une valeur plus
-     faible pour random_page_cost.
+     faible pour random_page_cost, par exemple <literal>1.1</literal>.
     </para>
 
     <tip>
@@ -6008,7 +6039,7 @@ local0.*    /var/log/postgresql
     <xref linkend="guc-log-timezone"/>.) Les échappements
     <literal>%</literal> supportés sont similaires à ceux listés dans
     la spécification de <ulink
-    url="http://pubs.opengroup.org/onlinepubs/009695399/functions/strftime.html">strftime</ulink>
+    url="https://pubs.opengroup.org/onlinepubs/009695399/functions/strftime.html">strftime</ulink>
     par l'Open Group.
     Notez que la fonction <function>strftime</function> du système n'est
     pas utilisée directement, ce qui entraîne que les extensions spécifiques

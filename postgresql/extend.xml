@@ -1,9 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Dernière modification
-     le       $Date$
-     par      $Author$
-     révision $Revision$ -->
-
 <chapter id="extend">
  <title>Étendre <acronym>SQL</acronym></title>
 
@@ -621,35 +616,6 @@ RETURNS anycompatible AS ...
     supprimer l'intégralité de l'extension.
    </para>
 
-  <sect2 id="extend-extensions-style">
-   <title>Définir les objets d'extension</title>
-
-   <!-- XXX It's not enough to use qualified names, because one might write a
-        qualified name to an object that itself uses unqualified names.  Many
-        information_schema functions have that defect, for example.  However,
-        that's a defect in the referenced object, and relatively few queries
-        will be affected.  Also, we direct applications to secure search_path
-        when connecting to an untrusted database; if applications do that,
-        they are immune to known attacks even if some extension refers to a
-        defective object.  Therefore, guide extension authors as though core
-        PostgreSQL contained no such defect. -->
-
-   <para>
-    Les extensions fortement distribuées devraient assumées peu de chose de la
-    base de données qu'elles occupent. En particulier, sauf si vous exécutez
-    <literal>SET search_path = pg_temp</literal>, supposez par défaut que
-    chaque nom non qualifié pourrait se résoudre en un objet qu'un utilisateur
-    mal intentionné a défini. Faites attention aux constructions qui dépendent
-    implicitement du <varname>search_path</varname>&nbsp;: <token>IN</token>
-    et <literal>CASE <replaceable>expression</replaceable> WHEN</literal>
-    sélectionnent toujours un opérateur utilisant le chemin de recherche. À la
-    place, utilisez <literal>OPERATOR(<replaceable>schema</replaceable>.=)
-    ANY</literal> et <literal>CASE WHEN
-    <replaceable>expression</replaceable></literal>.
-   </para>
-
-  </sect2>
-
   <sect2>
    <title>Fichiers des extensions</title>
 
@@ -948,7 +914,7 @@ RETURNS anycompatible AS ...
     le schéma cible. Cela signifie que la commande <command>CREATE EXTENSION</command> réalisera l'équivalent
     de la commande suivante :
     <programlisting>
-SET LOCAL search_path TO @extschema@;
+SET LOCAL search_path TO @extschema@, pg_temp;
     </programlisting>
     Cela permettra aux objets du fichier de script d'être créés dans le schéma cible. Le fichier de script
     peut toutefois modifier la valeur de <varname>search_path</varname> si nécessaire, mais cela n'est
@@ -968,8 +934,16 @@ SET LOCAL search_path TO @extschema@;
 
    <para>
     Si des extensions requises sont définies par <varname>requires</varname> dans le fichier
-    de contrôle, leur schéma cible est ajouté à la valeur initiale de <varname>search_path</varname>.
+    de contrôle, leur schéma cible est ajouté à la valeur initiale de
+    <varname>search_path</varname>, d'après le schéma cible de la nouvelle
+    extension.
     Cela permet à leurs objets d'être visibles dans le fichier de script de l'extension installée.
+   </para>
+
+   <para>
+    Pour des raisons de sécurité, <literal>pg_temp</literal> est ajouté
+    automatiquement à la fin de <varname>search_path</varname> dans tous les
+    cas.
    </para>
 
    <para>
@@ -1202,6 +1176,150 @@ SELECT * FROM pg_extension_update_paths('<replaceable>extension_name</replaceabl
     </para>
    </sect2>
 
+  <sect2 id="extend-extensions-security">
+   <title>Considérations de sécurité pour les extensions</title>
+
+   <para>
+    Les extensions largement distribuées devraient assumer peu sur la base
+    qu'elles occupent. De ce fait, il est adéquat d'écrire des fonctions
+    fournies par une extension dans un style sécurisé qui ne peut pas être
+    compromis par des attaques basées sur le search_path.
+   </para>
+
+   <para>
+    Une extension qui dispose de la propriété <varname>superuser</varname>
+    configurée à true doit aussi considérer les risques de sécurité pour les
+    actions effectuées par ses scripts d'installation et de mise à jour. Il
+    n'est pas particulièrement compliqué pour un utilisateur mal intentionné
+    de créer des objets chevaux de Troie qui compromettront une exécution
+    ultérieure d'un script d'extension mal écrit, permettant à son utilisateur
+    de gagner les droits d'un superutilisateur.
+   </para>
+
+   <para>
+    Des conseils sur l'écriture de fonctions sécurisées sont donnés dans <xref
+    linkend="extend-extensions-security-funcs"/> ci-dessous, et d'autres
+    conseils, sur l'écriture de scripts d'installation sécurisés, sont donnés
+    dans <xref linkend="extend-extensions-security-scripts"/>.
+   </para>
+
+   <sect3 id="extend-extensions-security-funcs">
+    <title>Considérations de sécurité pour les fonctions d'extensions</title>
+
+    <para>
+     Les fonctions en langage SQL et PL fournies par les extensions peuvent
+     être l'objet d'attaques basées sur le search_path quand elles sont
+     exécutées car l'analyse de ces fonctions survient lors de leur exécution
+     et non pas lors de leur création.
+    </para>
+
+    <para>
+     La page de référence de <link
+     linkend="sql-createfunction-security"><command>CREATE
+     FUNCTION</command></link> contient des conseils sur la bonne écriture de
+     fonctions <literal>SECURITY DEFINER</literal>. Il est conseillé
+     d'appliquer ces techniques pour toute fonction fournie par une extension
+     car la fonction pourrait être appelée par un utilisateur avec des droits
+     importants.
+    </para>
+
+    <!-- XXX It's not enough to use qualified names, because one might write a
+         qualified name to an object that itself uses unqualified names.  Many
+         information_schema functions have that defect, for example.  However,
+         that's a defect in the referenced object, and relatively few queries
+         will be affected.  Also, we direct applications to secure search_path
+         when connecting to an untrusted database; if applications do that,
+         they are immune to known attacks even if some extension refers to a
+         defective object.  Therefore, guide extension authors as though core
+         PostgreSQL contained no such defect. -->
+    <para>
+     Si vous ne pouvez pas configurer le <varname>search_path</varname> pour
+     contenir seulement les schémas sécurisés, supposez que chaque nom non
+     qualifié pourrait désigner un objet défini par un utilisateur mal
+     intentionné. Faites attention aux requêtes qui pourraient dépendre
+     implicitement d'un <varname>search_path</varname>&nbsp;; par exemple,
+     <token>IN</token> et <literal>CASE <replaceable>expression</replaceable>
+     WHEN</literal> sélectionnent toujours un opérateur utilisant le chemin de
+     recherche. À la place, utilisez
+     <literal>OPERATOR(<replaceable>schema</replaceable>.=) ANY</literal> et
+     <literal>CASE WHEN <replaceable>expression</replaceable></literal>.
+    </para>
+
+    <para>
+     Une extension standard ne devrait généralement pas supposer qu'elle a été
+     installée dans un schéma sécurisé, ce qui signifie que même les
+     références à ses propres objets en qualifiant leur nom de celui du schéma
+     ne sont pas entièrement sans risque. Par exemple, si l'extension a défini
+     une fonction <literal>monschema.mafonction(bigint)</literal>, alors un
+     appel tel que <literal>monschema.mafonction(42)</literal> pourrait être
+     capturée par une fonction hostile
+     <literal>monschema.mafonction(integer)</literal>. Faites attention que
+     les types de données de la fonction et les paramètres de l'opérateur
+     correspondent exactement aux types d'argument déclarés, en utilisant des
+     conversions explicites si nécessaire.
+    </para>
+   </sect3>
+
+   <sect3 id="extend-extensions-security-scripts">
+    <title>Considérations de sécurité pour les scripts d'extension</title>
+
+    <para>
+     Un script d'installation ou de mise à jour d'extension devrait être écrit
+     pour se guarder contre les attaques se basant sur le schéma, survenant
+     lors de l'exécution du script. Si la référence d'un objet dans le script
+     peut se faire en résolvant un autre objet que celui voulu par l'auteur de
+     script, une compromission peut survenir immédiatement ou ultérieurement
+     quand l'object mal défini est utilisé.
+    </para>
+
+    <para>
+     Les commandes DDL telles que <command>CREATE FUNCTION</command> et
+     <command>CREATE OPERATOR CLASS</command> sont généralement sécurisées,
+     mais il convient de faire attention à toute commande ayant une expression
+     standard comme composant. Par exemple, <command>CREATE VIEW</command>
+     nécessite d'être validé, comme une expression <literal>DEFAULT</literal>
+     dans <command>CREATE FUNCTION</command>.
+    </para>
+
+    <para>
+     Quelque fois, un script d'extension peut avoir besoin d'exécuter un SQL,
+     par exemple pour réaliser des ajustements sur le catalogue qui ne
+     seraient pas possibles via une DDL. Faites bien attention d'exécuter de
+     telles commandes avec un <varname>search_path</varname> sécurisé&nbsp;;
+     ne faites <emphasis>pas</emphasis> confiance au chemin fourni par
+     <command>CREATE/ALTER EXTENSION</command> comme étant sécurisé. Une
+     meilleure approche est de configurer temporairement
+     <varname>search_path</varname> à <literal>'pg_catalog, pg_temp'</literal>
+     et d'insérer explicitement des références au schéma d'installation de
+     l'expression si nécessaire. (Cette pratique peut être utile pour créer
+     des vues.) Des exemples sont disponibles dans les modules
+     <filename>contrib</filename> de la distribution des sources de
+     <productname>PostgreSQL</productname>.
+    </para>
+
+    <para>
+     Les références entre extensions sont très difficiles à sécuriser
+     complètement, en partie à cause de l'incertitude sur le schéma
+     d'installation de l'autre extension. Ce risque est réduit si les deux
+     extensions sont installées dans le même schéma parce que, dans ce cas, un
+     objet hostile ne peut pas être placé avant l'extension référencée dans le
+     <varname>search_path</varname> d'installation. Néanmoins, aucun mécanisme
+     n'existe actuellement pour forcer cela.
+    </para>
+
+    <para>
+     N'utilisez <emphasis>pas</emphasis> <command>CREATE OR REPLACE
+     FUNCTION</command>, sauf dans un script de mise à jour qui doit modifier
+     la définition d'une fonction connue en tant que membre de l'extension.
+     (Et de la même façon pour l'option <literal>OR REPLACE</literal> d'autres
+     types d'objet.) Utiliser <literal>OR REPLACE</literal> sans raison ajoute
+     un risque d'écraser accidentellement la fonction de quelqu'un d'autre,
+     mais crée un risque de sécurité puisque la fonction surchargée conservera
+     son propriétaire original, qui pourrait la modifier de nouveau.
+    </para>
+   </sect3>
+  </sect2>
+
   <sect2 id="extend-extensions-example">
    <title>Exemples d'extensions</title>
 
@@ -1221,18 +1339,18 @@ SELECT * FROM pg_extension_update_paths('<replaceable>extension_name</replaceabl
 
 CREATE TYPE pair AS ( k text, v text );
 
-CREATE OR REPLACE FUNCTION pair(text, text)
+CREATE pair(text, text)
 RETURNS pair LANGUAGE SQL AS 'SELECT ROW($1, $2)::@extschema@.pair;';
 
 CREATE OPERATOR ~> (LEFTARG = text, RIGHTARG = text, FUNCTION = pair);
 
 -- "SET search_path" is easy to get right, but qualified names perform better.
-CREATE OR REPLACE FUNCTION lower(pair)
+CREATE FUNCTION lower(pair)
 RETURNS pair LANGUAGE SQL
 AS 'SELECT ROW(lower($1.k), lower($1.v))::@extschema@.pair;'
 SET search_path = pg_temp;
 
-CREATE OR REPLACE FUNCTION pair_concat(pair, pair)
+CREATE FUNCTION pair_concat(pair, pair)
 RETURNS pair LANGUAGE SQL
 AS 'SELECT ROW($1.k OPERATOR(pg_catalog.||) $2.k,
                $1.v OPERATOR(pg_catalog.||) $2.v)::@extschema@.pair;';
@@ -1247,6 +1365,7 @@ AS 'SELECT ROW($1.k OPERATOR(pg_catalog.||) $2.k,
 # extension pair
 comment = 'Un type de donnees representant un couple clef/valeur'
 default_version = '1.0'
+# n'est pas déplaçable à cause de l'utilisation de @extschema@
 relocatable = false
     </programlisting>
    </para>
