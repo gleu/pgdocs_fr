@@ -42,6 +42,7 @@ index.html: $(src)
 
 	[ -d $(BASEDIR)/$(HTM_OUTPUT)/images ] || mkdir $(BASEDIR)/$(HTM_OUTPUT)/images
 	cp img/*.png $(BASEDIR)/$(HTM_OUTPUT)/images
+	cp images/*.svg $(BASEDIR)/$(HTM_OUTPUT)/images
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
 
@@ -74,6 +75,7 @@ webhtml: $(src)
 
 	[ -d $(BASEDIR)/$(WEB_OUTPUT)/images ] || mkdir $(BASEDIR)/$(WEB_OUTPUT)/images
 	cp img/*.png $(BASEDIR)/$(WEB_OUTPUT)/images
+	cp images/*.svg $(BASEDIR)/$(HTM_OUTPUT)/images
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e 's@border="1"@border="0"@g' *.html
