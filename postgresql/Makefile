@@ -195,7 +195,7 @@ MAKEINFO = makeinfo
 ##
 
 # Quick syntax check without style processing
-check: postgres.xml $(ALLXML) check-tabs
+check: postgres.xml $(ALLXML)
 	$(XMLLINT) $(XMLINCLUDE) --noout --valid $<
 
 
