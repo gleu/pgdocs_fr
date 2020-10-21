@@ -71,7 +71,7 @@ pgfr: man html-website html INSTALL INSTALL.html postgres-A4.pdf
 man distprep-man: man-stamp
 
 man-stamp: stylesheet-man.xsl postgres.xml $(ALLXML)
-	#$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_MAN_FLAGS) $(wordlist 1,2,$^)
 	touch $@
 
@@ -88,7 +88,7 @@ INSTALL: % : %.html
 	rm $@.tmp
 
 INSTALL.html: %.html : stylesheet-text.xsl %.xml
-	#$(XMLLINT) --noout --valid $*.xml
+	$(XMLLINT) --noout --valid $*.xml
 	$(XSLTPROC) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $^ >$@
 
 INSTALL.xml: standalone-profile.xsl standalone-install.xml postgres.xml $(ALLXML)
@@ -106,13 +106,13 @@ endif
 html: html-stamp
 
 html-stamp: stylesheet.xsl postgres.xml $(ALLXML)
-	#$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $(wordlist 1,2,$^)
 	cp $(srcdir)/css/*.css html/
 	touch $@
 
 html-website: stylesheet.xsl postgres.xml $(ALLXML)
-	#$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --param website.stylesheet 1 $(wordlist 1,2,$^)
 	mv html $@
 	cp $(srcdir)/css/*.css $@/
@@ -120,14 +120,14 @@ html-website: stylesheet.xsl postgres.xml $(ALLXML)
 htmlhelp: htmlhelp-stamp
 
 htmlhelp-stamp: stylesheet-hh.xsl postgres.xml $(ALLXML)
-	#$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(wordlist 1,2,$^)
 	cp $(srcdir)/css/stylesheet.css htmlhelp/
 	touch $@
 
 # single-page HTML
 postgres.html: stylesheet-html-nochunk.xsl postgres.xml $(ALLXML)
-	#$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) -o $@ $(wordlist 1,2,$^)
 
 # single-page text
@@ -145,11 +145,11 @@ postgres.pdf:
 XSLTPROC_FO_FLAGS += --stringparam img.src.path '$(srcdir)/'
 
 %-A4.fo: stylesheet-fo.xsl %.xml $(ALLXML)
-	#$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type A4 -o $@ $(wordlist 1,2,$^)
 
 %-US.fo: stylesheet-fo.xsl %.xml $(ALLXML)
-	#$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type USletter -o $@ $(wordlist 1,2,$^)
 
 %.pdf: %.fo
@@ -162,7 +162,7 @@ XSLTPROC_FO_FLAGS += --stringparam img.src.path '$(srcdir)/'
 
 epub: postgres.epub
 postgres.epub: postgres.xml $(ALLXML)
-	#$(XMLLINT) --noout --valid $<
+	$(XMLLINT) --noout --valid $<
 	$(DBTOEPUB) -o $@ $<
 
 
@@ -190,7 +190,7 @@ MAKEINFO = makeinfo
 ##
 
 # Quick syntax check without style processing
-check: postgres.xml $(ALLXML) check-tabs
+check: postgres.xml $(ALLXML)
 	$(XMLLINT) $(XMLINCLUDE) --noout --valid $<
 
 
