@@ -1,161 +1,293 @@
-# Dernière modification
-#   le       $Date$
-#   par      $Author$
-#   révision $Revision$
+#----------------------------------------------------------------------------
+#
+# PostgreSQL documentation makefile
+#
+# doc/src/sgml/Makefile
+#
+#----------------------------------------------------------------------------
 
-MAJORVER := $(shell grep major version.xml | sed -e 's/<!ENTITY majorversion "\(.*\)">/\1/' -e 's/\.//g')
-VERSION := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/')
-VER := $(shell grep -v major version.xml | sed -e 's/<!ENTITY version "\(.*\)">/\1/' -e 's/\.//g')
+# This makefile is for building and installing the documentation.
+# When a release tarball is created, the documentation files are
+# prepared using the distprep target.  In Git-based trees these files
+# don't exist, unless explicitly built, so we skip the installation in
+# that case.
 
-BASEDIR := $(HOME)/pgsql-$(VERSION)-fr
-HTM_OUTPUT := pgsql-$(VER)-fr
-WEB_OUTPUT := web-$(VER)-fr
-TGZ_OUTPUT := pg$(MAJORVER).tar.gz
-ZIP_OUTPUT := pg$(MAJORVER).zip
-PDF_OUTPUT := pg$(MAJORVER).pdf
-QUICKPDF_OUTPUT := quickpg$(MAJORVER).pdf
-MAN_OUTPUT := pg$(MAJORVER).man.tar.gz
-CHM_OUTPUT := pg$(MAJORVER).chm.tar.gz
-NOCHUNKS_OUTPUT := pg$(MAJORVER).html
+# Make "html" the default target, since that is what most people tend
+# to want to use.
+html:
 
-CHUNK_QUIET=0
-XSLROOTDIR=/opt/docbook-xsl
-VPATH = $(BASEDIR):$(BASEDIR)/ref
-src = *.xml ref/*.xml
+# We don't need the tree-wide headers or install support here.
+NO_GENERATED_HEADERS=yes
+NO_TEMP_INSTALL=yes
 
-all: html webhtml pdf manpages INSTALL.html INSTALL.txt
+VERSION = 13
 
-dumbo: html webhtml manpages INSTALL.html INSTALL.txt
+all: html man
 
-html: index.html
-index.html: $(src)
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	xsltproc --xinclude --nonet -stringparam profile.condition html \
-		-stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
-		-stringparam chunk.quietly $(CHUNK_QUIET) \
-		-stringparam use.id.as.filename "yes" \
-		-stringparam base.dir $(BASEDIR)/$(HTM_OUTPUT)/ \
-		stylesheets/pg-chunked.xsl postgres.xml
+distprep: html distprep-man
 
-	[ -d $(BASEDIR)/$(HTM_OUTPUT)/stylesheets ] || mkdir $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
-	cp stylesheets/*.css $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
+top_srcdir = .
+srcdir = .
 
-	[ -d $(BASEDIR)/$(HTM_OUTPUT)/images ] || mkdir $(BASEDIR)/$(HTM_OUTPUT)/images
-	cp img/*.png $(BASEDIR)/$(HTM_OUTPUT)/images
-	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
-	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
+ifndef DBTOEPUB
+DBTOEPUB = $(missing) dbtoepub
+endif
 
-	for filename in `find $(BASEDIR)/$(HTM_OUTPUT) -name "*.html"`; do \
-	  tidy -config tidy.conf $$filename; \
-	  true; \
-	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
-	done;
+ifndef FOP
+FOP = $(missing) fop
+endif
 
-	cd $(BASEDIR); tar cfz $(TGZ_OUTPUT) $(HTM_OUTPUT)
-	cd $(BASEDIR); zip -r $(ZIP_OUTPUT) $(HTM_OUTPUT)
-	mv $(BASEDIR)/$(TGZ_OUTPUT) $(BASEDIR)/$(ZIP_OUTPUT) $(BASEDIR)/$(HTM_OUTPUT)
+XMLINCLUDE = --path .
 
-	rm -f $(BASEDIR)/$(HTM_OUTPUT)/*.html
-	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/images
-	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/prologue
-	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
+ifndef XMLLINT
+XMLLINT = $(missing) xmllint
+endif
 
-webhtml: $(src)
-	[ -d $(BASEDIR)/$(WEB_OUTPUT) ] || mkdir -p $(BASEDIR)/$(WEB_OUTPUT)
-	xsltproc --xinclude --nonet -stringparam profile.condition html \
-		-stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
-		-stringparam chunk.quietly $(CHUNK_QUIET) \
-		-stringparam use.id.as.filename "yes" \
-		-stringparam base.dir $(BASEDIR)/$(WEB_OUTPUT)/ \
-		stylesheets/pg-chunked-web.xsl postgres.xml
+ifndef XSLTPROC
+XSLTPROC = $(missing) xsltproc
+endif
 
-	[ -d $(BASEDIR)/$(WEB_OUTPUT)/stylesheets ] || mkdir $(BASEDIR)/$(WEB_OUTPUT)/stylesheets
-	cp stylesheets/*.css $(BASEDIR)/$(WEB_OUTPUT)/stylesheets
+override XSLTPROCFLAGS += --stringparam pg.version '$(VERSION)'
 
-	[ -d $(BASEDIR)/$(WEB_OUTPUT)/images ] || mkdir $(BASEDIR)/$(WEB_OUTPUT)/images
-	cp img/*.png $(BASEDIR)/$(WEB_OUTPUT)/images
-	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
-	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
-	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e 's@border="1"@border="0"@g' *.html
+ALLXML := $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml)
 
-	for filename in `find $(BASEDIR)/$(WEB_OUTPUT) -name "*.html"`; do \
-	  tidy -config tidy.conf $$filename; \
-	  true; \
-	  sed -i -e "s@text/html@application/xhtml+xml@g" $$filename; \
-	done;
-	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@</body>@</body><script type=\"text/javascript\">var gaJsHost = ((\"https:\" == document.location.protocol) ? \"https://ssl.\" : \"http://www.\"); document.write(unescape(\"%3Cscript src='\" + gaJsHost + \"google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E\")); </script> <script type=\"text/javascript\"> var pageTracker = _gat._getTracker(\"UA-140513-1\"); pageTracker._initData(); pageTracker._trackPageview(); </script>@g" *.html
+ALL_IMAGES := $(wildcard $(srcdir)/images/*.svg)
 
-pdf: $(PDF_OUTPUT)
-$(PDF_OUTPUT): $(src)
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	xsltproc --xinclude --nonet --stringparam profile.condition pdf \
-                -stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
-		--output $(BASEDIR)/pg-pdf.xml stylesheets/pg-profile.xsl postgres.xml
-	xsltproc --nonet --output $(BASEDIR)/pg-pdf.fo stylesheets/pg-pdf.xsl \
-		$(BASEDIR)/pg-pdf.xml
-	sed -i -e "s/inherit/all/" $(BASEDIR)/pg-pdf.fo
-	fop.sh $(BASEDIR)/pg-pdf.fo $(BASEDIR)/$(HTM_OUTPUT)/$(PDF_OUTPUT)
-	rm $(BASEDIR)/pg-pdf.xml $(BASEDIR)/pg-pdf.fo
+##
+## pgfr release
+##
 
-quickpdf: $(QUICKPDF_OUTPUT)
-$(QUICKPDF_OUTPUT): $(src)
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	xsltproc --xinclude --nonet --stringparam profile.condition pdf \
-                -stringparam  profile.attribute  "standalone" -stringparam  profile.value  "no" \
-		--output $(BASEDIR)/pg-pdf.xml stylesheets/pg-profile.xsl gettingstarted.xml
-	xsltproc --nonet --output $(BASEDIR)/pg-pdf.fo stylesheets/quickpg-pdf.xsl \
-		$(BASEDIR)/pg-pdf.xml
-	sed -i -e "s/inherit/all/" $(BASEDIR)/pg-pdf.fo
-	fop.sh $(BASEDIR)/pg-pdf.fo $(BASEDIR)/$(HTM_OUTPUT)/$(PDF_OUTPUT)
-	#rm $(BASEDIR)/pg-pdf.xml $(BASEDIR)/pg-pdf.fo
+pgfr: man html-website html INSTALL INSTALL.html postgres-A4.pdf
+	mv html-website $(VERSION)
+	tar cfz $(VERSION)/pg$(VERSION).tar.gz html
+	zip -qr $(VERSION)/pg$(VERSION).zip html
+	tar cfz $(VERSION)/pg$(VERSION).man.tar.gz man[0-9]
+	mv INSTALL $(VERSION)/INSTALL.txt
+	mv INSTALL.html $(VERSION)/
+	mv postgres-A4.pdf $(VERSION)/pg$(VERSION).pdf
 
-nochunks: $(NOCHUNKS_OUTPUT)
-$(NOCHUNKS_OUTPUT): $(src)
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	xsltproc --xinclude --nonet -stringparam profile.condition html \
-		--output $(BASEDIR)/$(NOCHUNKS_OUTPUT) \
-		stylesheets/pg-nochunks.xsl postgres.xml
+##
+## Man pages
+##
 
-	tidy -config tidy.conf $(BASEDIR)/$(NOCHUNKS_OUTPUT) || true
+man distprep-man: man-stamp
 
-	sed -i -e "s@text/html@application/xhtml+xml@g"  \
-	  $(BASEDIR)/$(NOCHUNKS_OUTPUT)
+man-stamp: stylesheet-man.xsl postgres.xml $(ALLXML)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_MAN_FLAGS) $(wordlist 1,2,$^)
+	touch $@
 
-validate:
-	xmllint --noout --nonet --xinclude --postvalid postgres.xml
+##
+## Generation of some text files.
+##
 
-INSTALL.html: $(src)
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	xsltproc --xinclude --nonet -stringparam profile.condition html \
-                --stringparam  profile.attribute  "standalone" --stringparam  profile.value  "yes" \
-		--output $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html \
-		stylesheets/pg-nochunks.xsl standalone-install.xml
+ICONV = iconv
+PANDOC = pandoc
 
-	tidy -config tidy.conf $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html || true
+INSTALL: % : %.html
+	$(PANDOC) -t plain -o $@.tmp $<
+	$(ICONV) -f utf8 -t us-ascii//TRANSLIT $@.tmp > $@
+	rm $@.tmp
 
-	sed -i -e "s@text/html@application/xhtml+xml@g"  \
-	  $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html
+INSTALL.html: %.html : stylesheet-text.xsl %.xml
+	$(XMLLINT) --noout --valid $*.xml
+	$(XSLTPROC) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $^ >$@
+
+INSTALL.xml: standalone-profile.xsl standalone-install.xml postgres.xml $(ALLXML)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --xinclude $(wordlist 1,2,$^) >$@
 
 
-INSTALL.txt: INSTALL.html
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	html2text $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.html > $(BASEDIR)/$(HTM_OUTPUT)/INSTALL.txt
+##
+## HTML
+##
 
-manpages: psql.1
-psql.1: $(src)
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	xsltproc $(XSLROOTDIR)/manpages/docbook.xsl \
-		standalone-manpages.xml
-	[ -d man/man1 ] || mkdir -p man/man1
-	[ -d man/man7 ] || mkdir -p man/man7
-	mv *.1 man/man1
-	mv *.7 man/man7
-	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(MAN_OUTPUT) man
-	rm -r man
+ifeq ($(STYLE),website)
+XSLTPROC_HTML_FLAGS += --param website.stylesheet 1
+endif
 
-htmlhelp:
-	[ -d $(BASEDIR)/$(HTM_OUTPUT) ] || mkdir -p $(BASEDIR)/$(HTM_OUTPUT)
-	[ -d chm ] || mkdir chm
-	xsltproc stylesheets/pg-chm.xsl postgres.xml
-	mv *.h?? chm
-	tar cvfz $(BASEDIR)/$(HTM_OUTPUT)/$(CHM_OUTPUT) chm
+html: html-stamp
+
+html-stamp: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $(wordlist 1,2,$^)
+	cp $(ALL_IMAGES) html/
+	cp $(srcdir)/css/*.css html/
+	touch $@
+
+html-website: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --param website.stylesheet 1 $(wordlist 1,2,$^)
+	mv html $@
+	cp $(ALL_IMAGES) $@/
+	cp $(srcdir)/css/*.css $@/
+
+htmlhelp: htmlhelp-stamp
+
+htmlhelp-stamp: stylesheet-hh.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(wordlist 1,2,$^)
+	cp $(ALL_IMAGES) htmlhelp/
+	cp $(srcdir)/css/stylesheet.css htmlhelp/
+	touch $@
+
+# single-page HTML
+postgres.html: stylesheet-html-nochunk.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) -o $@ $(wordlist 1,2,$^)
+
+# single-page text
+postgres.txt: postgres.html
+	$(PANDOC) -t plain -o $@ $<
+
+
+##
+## Print
+##
+
+postgres.pdf:
+	$(error Invalid target;  use postgres-A4.pdf or postgres-US.pdf as targets)
+
+XSLTPROC_FO_FLAGS += --stringparam img.src.path '$(srcdir)/'
+
+%-A4.fo: stylesheet-fo.xsl %.xml $(ALLXML)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type A4 -o $@ $(wordlist 1,2,$^)
+
+%-US.fo: stylesheet-fo.xsl %.xml $(ALLXML)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type USletter -o $@ $(wordlist 1,2,$^)
+
+%.pdf: %.fo $(ALL_IMAGES)
+	$(FOP) -q -fo $< -pdf $@
+
+
+##
+## EPUB
+##
+
+epub: postgres.epub
+postgres.epub: postgres.xml $(ALLXML) $(ALL_IMAGES)
+	$(XMLLINT) --noout --valid $<
+	$(DBTOEPUB) -o $@ $<
+
+
+##
+## Experimental Texinfo targets
+##
+
+DB2X_TEXIXML = db2x_texixml
+DB2X_XSLTPROC = db2x_xsltproc
+MAKEINFO = makeinfo
+
+%.texixml: %.xml $(ALLXML)
+	$(XMLLINT) --noout --valid $<
+	$(DB2X_XSLTPROC) -s texi -g output-file=$(basename $@) $< -o $@
+
+%.texi: %.texixml
+	$(DB2X_TEXIXML) --encoding=iso-8859-1//TRANSLIT $< --to-stdout > $@
+
+%.info: %.texi
+	$(MAKEINFO) --enable-encoding --no-split --no-validate $< -o $@
+
+
+##
+## Check
+##
+
+# Quick syntax check without style processing
+check: postgres.xml $(ALLXML)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $<
+
+
+##
+## Install
+##
+
+install: install-html install-man
+
+installdirs:
+	$(MKDIR_P) '$(DESTDIR)$(htmldir)'/html $(addprefix '$(DESTDIR)$(mandir)'/man, 1 3 $(sqlmansectnum))
+
+# If the install used a man directory shared with other applications, this will remove all files.
+uninstall:
+	rm -f '$(DESTDIR)$(htmldir)/html/'* $(addprefix  '$(DESTDIR)$(mandir)'/man, 1/* 3/* $(sqlmansectnum)/*)
+
+
+## Install html
+
+install-html: html installdirs
+	cp -R $(call vpathsearch,html) '$(DESTDIR)$(htmldir)'
+
+
+## Install man
+
+install-man: man installdirs
+
+sqlmansect ?= 7
+sqlmansectnum = $(shell expr X'$(sqlmansect)' : X'\([0-9]\)')
+
+# Before we install the man pages, we massage the section numbers to
+# follow the local conventions.
+#
+ifeq ($(sqlmansectnum),7)
+install-man:
+	cp -R $(foreach dir,man1 man3 man7,$(call vpathsearch,$(dir))) '$(DESTDIR)$(mandir)'
+
+else # sqlmansectnum != 7
+fix_sqlmansectnum = sed -e '/^\.TH/s/"7"/"$(sqlmansect)"/' \
+			-e 's/\\fR(7)/\\fR($(sqlmansectnum))/g' \
+			-e '1s/^\.so man7/.so man$(sqlmansectnum)/g;1s/^\(\.so.*\)\.7$$/\1.$(sqlmansect)/g'
+
+man: fixed-man-stamp
+
+fixed-man-stamp: man-stamp
+	@$(MKDIR_P) $(addprefix fixedman/,man1 man3 man$(sqlmansectnum))
+	for file in $(call vpathsearch,man1)/*.1; do $(fix_sqlmansectnum) $$file >fixedman/man1/`basename $$file` || exit; done
+	for file in $(call vpathsearch,man3)/*.3; do $(fix_sqlmansectnum) $$file >fixedman/man3/`basename $$file` || exit; done
+	for file in $(call vpathsearch,man7)/*.7; do $(fix_sqlmansectnum) $$file >fixedman/man$(sqlmansectnum)/`basename $$file | sed s/\.7$$/.$(sqlmansect)/` || exit; done
+
+install-man:
+	cp -R $(foreach dir,man1 man3 man$(sqlmansectnum),fixedman/$(dir)) '$(DESTDIR)$(mandir)'
+
+clean: clean-man
+.PHONY: clean-man
+clean-man:
+	rm -rf fixedman/ fixed-man-stamp
+
+endif # sqlmansectnum != 7
+
+# tabs are harmless, but it is best to avoid them in SGML files
+check-tabs:
+	@( ! grep '	' $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml $(srcdir)/*.xsl) ) || (echo "Tabs appear in SGML/XML files" 1>&2;  exit 1)
+
+##
+## Clean
+##
+
+# This allows removing some files from the distribution tarballs while
+# keeping the dependencies satisfied.
+.SECONDARY: INSTALL.html INSTALL.xml
+.SECONDARY: postgres-A4.fo postgres-US.fo
+
+clean:
+# text --- these are shipped, but not in this directory
+	rm -f INSTALL
+	rm -f INSTALL.html INSTALL.xml
+# single-page output
+	rm -f postgres.html postgres.txt
+# print
+	rm -f *.fo *.pdf
+# HTML Help
+	rm -rf htmlhelp/ htmlhelp-stamp
+# EPUB
+	rm -f postgres.epub
+# Texinfo
+	rm -f *.texixml *.texi *.info db2texi.refs
+
+distclean: clean
+
+maintainer-clean: distclean
+# HTML
+	rm -fr html/ html-stamp
+# man
+	rm -rf man1/ man3/ man7/ man-stamp
