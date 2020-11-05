@@ -3,7 +3,7 @@
 
 function usage() {
   echo '
-Ceci est is '.$_SERVER["argv"][0].'.
+Ceci est '.$_SERVER["argv"][0].'.
 
 Usage:
   '.$_SERVER["argv"][0].' [OPTIONS]... REPERTOIRE_HTML VERSION_MAJEURE
@@ -78,54 +78,6 @@ for ($i = 1; $i < $_SERVER["argc"]; $i++) {
         $dir = $_SERVER['argv'][$i];
       } else if ($i == count($_SERVER['argv']) - 1) {
         $version = $_SERVER['argv'][$i];
-        switch ($version) {
-          case '8.1':
-            $version_int = 801;
-            break;
-          case '8.2':
-            $version_int = 802;
-            break;
-          case '8.3':
-            $version_int = 803;
-            break;
-          case '8.4':
-            $version_int = 804;
-            break;
-          case '9.0':
-            $version_int = 900;
-            break;
-          case '9.1':
-            $version_int = 901;
-            break;
-          case '9.2':
-            $version_int = 902;
-            break;
-          case '9.3':
-            $version_int = 903;
-            break;
-          case '9.4':
-            $version_int = 904;
-            break;
-          case '9.5':
-            $version_int = 905;
-            break;
-          case '9.6':
-            $version_int = 906;
-            break;
-          case '10':
-            $version_int = 100;
-            break;
-          case '11':
-            $version_int = 110;
-            break;
-          case '12':
-            $version_int = 120;
-            break;
-          default:
-            echo "Il s'agit d'une version majeure : 8.1 à 8.4, 9.0 à 9.6, 10 à 12.\n";
-            exit;
-            break;
-        }
       }
       break;
   }
@@ -192,13 +144,19 @@ $pgconn = pg_connect($DSN)
 $query = "SET client_encoding TO utf8;";
 pg_query($pgconn, $query);
 
+// ajout de la version si nécessaire
+$query = "INSERT INTO versions (version) VALUES (
+               '".pg_escape_string($version)."') ON CONFLICT DO NOTHING;";
+// ... et exécution de cette dernière
+$result = pg_query($pgconn, $query);
+
 // lecture du répertoire
 if ($handle = opendir($dir)) {
-  echo "Traitement du répertoire : $dir";
+  echo "Traitement du répertoire : $dir\n";
 
   $result = pg_query($pgconn, 'BEGIN');
 
-  $query = 'DELETE FROM pages WHERE version='.$version_int;
+  $query = "DELETE FROM pages WHERE version='".pg_escape_string($version)."'";
   $result = pg_query($pgconn, $query);
 
   while (false !== ($file = readdir($handle))
@@ -268,7 +226,7 @@ if ($handle = opendir($dir)) {
       // préparation de la requête...
       $query = "INSERT INTO pages (url, version, titre, tags1, tags2, contenu) VALUES (
                '".pg_escape_string($file)."',
-               ".$version_int.",
+               '".$version."',
                '".pg_escape_string($titre)."',
                '".pg_escape_string($tags1)."',
                '".pg_escape_string($tags2)."',
