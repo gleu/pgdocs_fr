@@ -40,10 +40,10 @@ index.html: $(src)
 	[ -d $(BASEDIR)/$(HTM_OUTPUT)/stylesheets ] || mkdir $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
 	cp stylesheets/*.css $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
 
-	[ -d $(BASEDIR)/$(HTM_OUTPUT)/images ] || mkdir $(BASEDIR)/$(HTM_OUTPUT)/images
-	cp img/*.png $(BASEDIR)/$(HTM_OUTPUT)/images
+	[ -d $(BASEDIR)/$(HTM_OUTPUT)/img ] || mkdir $(BASEDIR)/$(HTM_OUTPUT)/img
+	cp img/*.png $(BASEDIR)/$(HTM_OUTPUT)/img
 	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
-	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
+	cd $(BASEDIR)/$(HTM_OUTPUT)/; sed -i -e "s@../img@img@g" *.html
 
 	for filename in `find $(BASEDIR)/$(HTM_OUTPUT) -name "*.html"`; do \
 	  tidy -config tidy.conf $$filename; \
@@ -56,7 +56,7 @@ index.html: $(src)
 	mv $(BASEDIR)/$(TGZ_OUTPUT) $(BASEDIR)/$(ZIP_OUTPUT) $(BASEDIR)/$(HTM_OUTPUT)
 
 	rm -f $(BASEDIR)/$(HTM_OUTPUT)/*.html
-	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/images
+	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/img
 	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/prologue
 	rm -rf $(BASEDIR)/$(HTM_OUTPUT)/stylesheets
 
@@ -72,10 +72,10 @@ webhtml: $(src)
 	[ -d $(BASEDIR)/$(WEB_OUTPUT)/stylesheets ] || mkdir $(BASEDIR)/$(WEB_OUTPUT)/stylesheets
 	cp stylesheets/*.css $(BASEDIR)/$(WEB_OUTPUT)/stylesheets
 
-	[ -d $(BASEDIR)/$(WEB_OUTPUT)/images ] || mkdir $(BASEDIR)/$(WEB_OUTPUT)/images
-	cp img/*.png $(BASEDIR)/$(WEB_OUTPUT)/images
+	[ -d $(BASEDIR)/$(WEB_OUTPUT)/img ] || mkdir $(BASEDIR)/$(WEB_OUTPUT)/img
+	cp img/*.png $(BASEDIR)/$(WEB_OUTPUT)/img
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../stylesheets@stylesheets@g" *.html
-	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../images@images@g" *.html
+	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e "s@../img@img@g" *.html
 	cd $(BASEDIR)/$(WEB_OUTPUT)/; sed -i -e 's@border="1"@border="0"@g' *.html
 
 	for filename in `find $(BASEDIR)/$(WEB_OUTPUT) -name "*.html"`; do \
