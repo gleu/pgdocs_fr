@@ -75,6 +75,9 @@
 		</li>
       </ul>
     </div>
+	<xsl:text disable-output-escaping="yes">
+	<![CDATA[<?php include "../lib/bandeau_doc.php" ?>]]>
+	</xsl:text>
 	</xsl:if>
     <div class="pgContent">
 	  <xsl:call-template name="breadcrumbs"/>
