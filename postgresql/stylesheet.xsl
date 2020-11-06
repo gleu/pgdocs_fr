@@ -27,7 +27,7 @@
     <xsl:otherwise>
       pgfr.css
       fontawesome.css
-      base.css
+      main.css
     </xsl:otherwise>
   </xsl:choose>
 </xsl:param>
