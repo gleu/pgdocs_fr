@@ -195,7 +195,7 @@
                     </xsl:otherwise>
                   </xsl:choose>
                 </xsl:attribute>
-              <img src="images/prev.png" alt="Précédent" />
+              <img src="img/prev.png" alt="Précédent" />
               <xsl:choose>
                 <xsl:when test="$prev/refmeta/refentrytitle != ''">
                   <xsl:value-of select="$prev/refmeta/refentrytitle"/>
@@ -244,7 +244,7 @@
                     <xsl:value-of select="$next/title"/>
                   </xsl:otherwise>
                 </xsl:choose>
-                <img src="images/next.png" alt="Suivant" />
+                <img src="img/next.png" alt="Suivant" />
                 </a>
           </xsl:if>
           </td>
