@@ -52,6 +52,7 @@ override XSLTPROCFLAGS += --stringparam pg.version '$(VERSION)'
 ALLXML := $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml)
 
 ALL_IMAGES := $(wildcard $(srcdir)/images/*.svg)
+ALL_WEBSITE_IMAGES := $(wildcard $(srcdir)/images/*.png)
 
 ##
 ## pgfr release
@@ -114,11 +115,12 @@ html-stamp: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
 	cp $(srcdir)/css/*.css html/
 	touch $@
 
-html-website: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
+html-website: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES) $(ALL_WEBSITE_IMAGES)
 	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --param website.stylesheet 1 $(wordlist 1,2,$^)
 	mv html $@
 	cp $(ALL_IMAGES) $@/
+	cp $(ALL_WEBSITE_IMAGES) $@/
 	cp $(srcdir)/css/*.css $@/
 
 htmlhelp: htmlhelp-stamp

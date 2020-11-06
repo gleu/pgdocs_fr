@@ -24,7 +24,7 @@
       <div id="pgHeader">
         <span id="pgHeaderLogoLeft">
           <a href="/" title="PostgreSQL">
-		  <img src="http://docs.postgresql.fr/theme/img/hdr_left.png"
+		  <img src="hdr_left.png"
 		       width="230"
 			   height="80"
 			   alt="PostgreSQL" />
@@ -32,7 +32,7 @@
         </span>
         <span id="pgHeaderLogoRight">
           <a href="/" title="La base de données la plus sophistiquée au monde.">
-		  <img src="http://docs.postgresql.fr/theme/img/hdr_right.png"
+		  <img src="hdr_right.png"
 		       width="210"
 			   height="80"
 			   alt="La base de données la plus sophistiquée au monde." />
@@ -42,36 +42,36 @@
     </div>
     <div class="pgTopNav">
       <div class="pgTopNavLeft"> 
-        <img src="http://docs.postgresql.fr/theme/img/nav_lft.png" width="7" height="23" alt="" />
+        <img src="nav_lft.png" width="7" height="23" alt="" />
       </div>
       <div class="pgTopNavRight">
-        <img src="http://docs.postgresql.fr/theme/img/nav_rgt.png" width="7" height="23" alt="" />
+        <img src="nav_rgt.png" width="7" height="23" alt="" />
       </div>
       <ul class="pgTopNavList">
         <li>
-		  <a href="http://www.postgresql.fr/" title="Accueil">Accueil</a>
+		  <a href="https://www.postgresql.fr/" title="Accueil">Accueil</a>
 		</li>
         <li>
-		  <a href="http://blog.postgresql.fr/" title="Lire les actualités">Actualités</a>
+		  <a href="https://blog.postgresql.fr/" title="Lire les actualités">Actualités</a>
 		</li>
         <li>
-		  <a href="http://docs.postgresql.fr/" title="Lire la documentation officielle">Documentation</a>
+		  <a href="https://docs.postgresql.fr/" title="Lire la documentation officielle">Documentation</a>
 		</li>
         <li>
-		  <a href="http://forums.postgresql.fr/" title="Pour poser des questions">Forums</a>
+		  <a href="https://forums.postgresql.fr/" title="Pour poser des questions">Forums</a>
 		</li>
         <li>
-		  <a href="http://asso.postgresql.fr/" title="La vie de l'association">Association</a>
+		  <a href="https://asso.postgresql.fr/" title="La vie de l'association">Association</a>
 		</li>
         <li>
-		  <a href="http://www.postgresql.fr/devel:accueil"
+		  <a href="https://www.postgresql.fr/devel:accueil"
 		     title="Informations pour les développeurs/traducteurs">Développeurs</a>
 		</li>
         <li>
-		  <a href="http://planete.postgresql.fr" title="La planète francophone sur PostgreSQL">Planète</a>
+		  <a href="https://planete.postgresql.fr" title="La planète francophone sur PostgreSQL">Planète</a>
 		</li>
         <li>
-		  <a href="http://support.postgresql.fr" title="Support sur PostgreSQL">Support</a>
+		  <a href="https://support.postgresql.fr" title="Support sur PostgreSQL">Support</a>
 		</li>
       </ul>
     </div>

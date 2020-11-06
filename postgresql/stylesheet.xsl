@@ -27,7 +27,6 @@
     <xsl:otherwise>
       pgfr.css
       fontawesome.css
-      bootstrap.min.css
       main.css
       normalize.css
     </xsl:otherwise>
