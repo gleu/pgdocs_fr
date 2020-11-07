@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- doc/src/sgml/backupmanifest.sgml -->
+
+<chapter id="backup-manifest-format">
+ <title>Format de manifeste de sauvegarde</title>
+
+  <indexterm>
+   <primary>Manifeste de sauvegarde</primary>
+  </indexterm>
+
+  <para>
+   Le manifeste de sauvegarde généré par <xref linkend="app-pgbasebackup"/>
+   est conçu initialement pour vérifier la sauvegarde avec <xref
+   linkend="app-pgverifybackup"/>. Cependant, d'autres outils peuvent lire le
+   manifeste de sauvegarde et utiliser les informations contenues pour leurs
+   propres besoins. À cette fin, ce chapitre décrit le format du fichier
+   manifeste de sauvegarde.
+  </para>
+
+  <para>
+   Un manifeste de sauvegarde est un document JSON encodé en UTF-8.(Même si en
+   général, il est recommandé que les documents JSON soient en Unicode,
+   PostgreSQL permet l'utilisation des types de données <type>json</type> et
+   <type>jsonb</type> avec tout type d'encodage serveur supporté. Il n'y a,
+   cependant, pas ce type d'exception pour le manifeste de sauvegarde.) Le
+   document JSON est toujours un objet&nbsp;; les clés présentes dans cet
+   objet sont décrites dans la section suivante.
+  </para>
+
+ <sect1 id="backup-manifest-toplevel">
+  <title>Objet de niveau supérieur du manifeste de sauvegarde</title>
+
+  <para>
+   Le document JSON du manifeste de sauvegarde contient les clés suivantes.
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>PostgreSQL-Backup-Manifest-Version</literal></term>
+    <listitem>
+     <para>
+      La valeur associée est toujours l'entier 1.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>Files</literal></term>
+    <listitem>
+     <para>
+      La valeur associée est toujours une liste d'objets, chacun décrivant un
+      fichier présent dans la sauvegarde. Aucune entrée n'est présente dans
+      cette liste pour les fichiers de journaux de transactions nécessaires
+      pour utiliser la sauvegarde ou pour le manifeste de sauvegarde lui même.
+      La structure de chaque objet de la liste est décrite dans <xref
+      linkend="backup-manifest-files" />.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>WAL-Ranges</literal></term>
+    <listitem>
+     <para>
+      La valeur associée est toujours une liste d'objet, chacun décrivant un
+      intervalle d'enregistrements de journaux de transaction chronologiques
+      pour utiliser la sauvegarde. La structure de ces objets est décrite dans
+      <xref linkend="backup-manifest-wal-ranges" />.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>Manifest-Checksum</literal></term>
+    <listitem>
+     <para>
+      Cette clé est toujours présente sur la dernière ligne du fichier
+      manifeste de sauvegarde. La valeur associée est une somme de contrôle
+      SHA256 de toutes les lignes précédentes. La méthode de somme de contrôle
+      est utilisée ici pour permettre aux clients d'effectuer l'analyse
+      incrémentale du manifeste. Même si le contrôle de somme SHA256 est
+      significativement plus coûteux qu'une somme de contrôle CRC32C, le
+      manifeste doit normalement être suffisamment petit pour que le calcul
+      supplémentaire ne soit pas significatif.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </sect1>
+
+ <sect1 id="backup-manifest-files">
+  <title>Objet fichier du manifeste de sauvegarde</title>
+
+  <para>
+   Cet objet, décrivant un seul fichier, contient soit une clé
+   <literal>Path</literal>, soit une clé <literal>Encoded-Path</literal>.
+   Habituellement, la clé <literal>Path</literal> est présente. La chaîne de
+   caractères associée est le chemin relatif du fichier à partir de la racine
+   du dossier de la sauvegarde. Les fichiers localisés dans un tablespace
+   défini par l'utilisateur auront un chemin dont les deux premiers composant
+   sont <filename>pg_tblspc</filename> et l'OID du tablespace. Si le chemin
+   n'est pas une chaîne de
+   caractères encodée correctement en UTF-8, ou si l'utilisateur a demandé que
+   tous les fichiers aient un chemin encodé, alors la clé
+   <literal>Encoded-Path</literal> sera présente à la place. La chaîne de
+   caractères associée sera la même pour l'autre clé, mais encodée comme une
+   chaîne de chiffres hexadécimaux. Chaque paire de chiffres hexadécimaux dans
+   la chaîne représente un unique octet.
+  </para>
+
+  <para>
+   Les deux clés suivantes sont toujours présentes&nbsp;:
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>Size</literal></term>
+    <listitem>
+     <para>
+      La taille attendue du fichier, au format entier.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>Last-Modified</literal></term>
+    <listitem>
+     <para>
+      La date de dernière modification du fichier vue par le serveur à la date
+      de sauvegarde. Contrairement aux autres attributs présents dans la
+      sauvegarde, cette clé n'est pas utilisée par <xref
+      linkend="app-pgverifybackup" />. Elle est incluse uniquement à titre
+      informatif.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+  <para>
+   Si la sauvegarde a été générée avec le somme de contrôle des fichiers, la
+   clé suivante est présente&nbsp;:
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>Checksum-Algorithm</literal></term>
+    <listitem>
+     <para>
+      L'algorithme de somme de contrôle utilisé pour calculer la somme de
+      contrôle de ce fichier. Actuellement, il est le même pour chaque fichier
+      dans le manifeste de sauvegarde, mais cela pourra changer dans une
+      version future. Maintenant, les algorithmes de somme de contrôle
+      supportés sont
+      <literal>CRC32C</literal>,
+      <literal>SHA224</literal>,
+      <literal>SHA256</literal>,
+      <literal>SHA384</literal> et
+      <literal>SHA512</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>Checksum</literal></term>
+    <listitem>
+     <para>
+      La somme de contrôle pour ce fichier, stockée comme une série de
+      caractères hexadécimaux, deux pour chaque octet de la somme de contrôle.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </sect1>
+
+ <sect1 id="backup-manifest-wal-ranges">
+  <title>Objet intervalle des journaux de transaction du manifeste de sauvegarde</title>
+
+  <para>
+   L'objet décrivant l'intervalle de journaux de transaction a trois
+   clés&nbsp;:
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>Timeline</literal></term>
+    <listitem>
+     <para>
+      La chronologie pour cet intervalle d'enregistrements de journaux de
+      transaction, sous format entier.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>Start-LSN</literal></term>
+    <listitem>
+     <para>
+      Le LSN à partir duquel la relecture doit démarrer sur la timeline
+      indiquée pour utiliser cette sauvegarde. Le LSN est stocké sous un
+      format habituellement utilisé par
+      <productname>PostgreSQL</productname>&nbsp;; une chaîne de caractères
+      constituée de deux chaînes de caractères hexadécimaux séparées par un
+      slash.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>End-LSN</literal></term>
+    <listitem>
+     <para>
+      Le plus récent LSN à partir duquel la relecture sur la timeline indiquée
+      peut terminer quand la sauvegarde est utilisée. Cette clé est au même
+      format que <literal>Start-LSN</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+  <para>
+   Normalement, il n'y aura qu'un seul intervalle de journaux de transaction.
+   Cependant si une sauvegarde est générée à partir d'un standby en cours de
+   changement de timeline suite à une promotion, il est possible d'avoir
+   plusieurs intervalles, chacun sur une différente chonologie. Il n'y aura
+   jamais plusieurs intervalles de journaux de transactions présents sur la
+   même chronologie.
+  </para>
+ </sect1>
+</chapter>

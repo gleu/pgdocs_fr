@@ -47,17 +47,18 @@
   </para>
 
   <para>
-   Le résultat est le même que lorsqu'on remplace le répertoire de données
-   cible avec celui de la source. Seuls les blocs modifiés des fichiers des
-   relations déjà existants sont copiés, tous les autres fichiers sont copiés
-   intégralement, fichiers de configurations compris. L'avantage de
-   <application>pg_rewind</application> par rapport à la réalisation d'une
-   nouvelle sauvegarde de base, ou l'utilisation d'un outil tel que
-   <application>rsync</application>, est que
-   <application>pg_rewind</application> n'a pas besoin de lire tous les blocs
-   non modifiés des fichiers de l'ancienne instance. Cela rend l'opération
-   éminement plus rapide lorsqu'on est face à une volumétrie conséquente et
-   qu'il a peu de différences entre les deux instances.
+   Après une synchronisation réussie, l'état du répertoire de données cible
+   est analogue à une sauvegarde de base du répertoire source de données.
+   Contrairement à l'exécution d'une sauvegarde de base ou l'utilisation d'un
+   outil comme <application>rsync</application>,
+   <application>pg_rewind</application> ne requiert pas de comparer ou copier
+   les blocs inchangés des relations dans l'instance. Seuls les blocs modifiés
+   de fichiers de relation existante sont copiés&nbsp;; tous les autres
+   fichiers, incluant tout nouveau fichier de relation, fichier de
+   configuration, et segment WAL, sont copiés en totalité. Ainsi, l'opération
+   de synchronisation est significativement plus rapide que les autres
+   approches si la base de données est volumineuse et que seule une petite
+   fraction de blocs diffère entre les instances.
   </para>
 
   <para>
@@ -73,27 +74,28 @@
    fichiers WAL peuvent ne plus être présents dans le répertoire
    <filename>pg_wal</filename>. Dans ce cas, ils peuvent être copiés à la main
    depuis les fichiers WAL archivés vers le répertoire
-   <filename>pg_wal</filename> ou récupérés au démarrage en configurant <xref
-   linkend="guc-primary-conninfo"/> ou <xref linkend="guc-restore-command"/>.
-   L'utilisation de <application>pg_rewind</application> n'est pas limitée au
-   failover&nbsp;: un serveur standby peut être promu, écrire quelques
-   transactions, puis transformé de nouveau en standby avec cet outil.
+   <filename>pg_wal</filename> ou être réexécutés par
+   <application>pg_rewind</application> avec l'option <literal>-c</literal>
+   pour automatiquement les récupérer de l'archive WAL. L'utilisation de
+   <application>pg_rewind</application> n'est pas limitée au failover&nbsp;:
+   un serveur standby peut être promu, écrire quelques transactions, puis
+   transformé de nouveau en standby avec cet outil.
   </para>
 
   <para>
-   Lorsque l'instance cible est démarrée pour la première fois après avoir
-   utilisé <application>pg_rewind</application>, elle va se mettre en mode de
-   restauration (<foreignphrase>recovery</foreignphrase>) et va rejouer tous
-   les fichiers WAL générés par l'instance source depuis la bascule. Si
-   certains fichiers WAL ne sont plus disponibles sur la source lorsque
-   <application>pg_rewind</application> est en cours, ils ne peuvent donc plus
-   être copiés par la session <application>pg_rewind</application>. Il est
-   alors nécessaire de faire en sorte qu'ils puissent être disponibles lorsque
-   le serveur cible sera démarré. Cela est possible en créant un fichier
-   <filename>recovery.signal</filename> dans le répertoire des données cible
-   et en configurant correctement le paramètre <xref
-   linkend="guc-restore-command"/> dans le fichier
-   <filename>postgresql.conf</filename>.
+   Après avoir exécuté <application>pg_rewind</application>, il est nécessaire
+   que la réapplication des WAL se termine pour que le répertoire de données
+   soit dans un état cohérent. Quand le serveur cible est redémarré, il va
+   entrer en récupération d'archive et rejouer tous les WAL générés sur le
+   serveur source depuis le dernier checkpoint avant le point de divergence.
+   Si certains WAL ne sont plus disponibles sur le serveur source quand
+   <application>pg_rewind</application> a été exécutée, et par conséquent ne
+   peuvent plus être copiés par la session
+   <application>pg_rewind</application>, ils doivent être rendus disponible
+   quand le serveur cible est démarré. Ceci peut être effectué en créant un
+   fichier <filename>recovery.signal</filename> dans le répertoire de données
+   cible et en configurant un <xref linkend="guc-restore-command"/> approprié
+   dans <filename>postgresql.conf</filename>.
   </para>
 
   <para>
@@ -113,6 +115,16 @@
     répertoire des données de la cible est très probablement dans un état
     inutilisable. Dans ce cas, réaliser une nouvelle sauvegarde est
     recommandé.
+   </para>
+
+   <para>
+    Comme <application>pg_rewind</application> copie entièrement les fichiers
+    de configuration de la source, il peut être requis de corriger la
+    configuration employée pour la reprise avant de redémarrer le serveur
+    cible, particulièrement si la cible est réintroduite comme un standby de
+    la source. Si vous redémarrez le serveur après que l'opération de
+    synchronisation soit terminée mais sans reprendre la configuration, la
+    cible peut diverger du primaire.
    </para>
 
    <para>
@@ -177,6 +189,37 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>--no-ensure-shutdown</option></term>
+      <listitem>
+       <para>
+        <application>pg_rewind</application> requiert que le serveur cible
+        soit proprement arrêté avant d'être synchronisé. Par défaut, si le
+        serveur cible n'est pas proprement arrêté,
+        <application>pg_rewind</application> le démarre en mode
+        simple-utilisateur pour effectuer d'abord une récupération après
+        accident, et l'arrête. En utilisant cette option,
+        <application>pg_rewind</application> ignore cela et tombe en erreur
+        immédiatement si le serveur n'est pas proprement stoppé. Les
+        utilisateurs doivent s'attendre à gérer la situation eux-même dans ce
+        cas.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-R</option></term>
+      <term><option>--write-recovery-conf</option></term>
+      <listitem>
+       <para>
+        Crée <filename>standby.signal</filename> et ajoute les paramètres de
+        connexion à <filename>postgresql.auto.conf</filename> dans le
+        répertoire de sortie. <literal>--source-server</literal> est
+        obligatoire avec cette option.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-n</option></term>
       <term><option>--dry-run</option></term>
       <listitem>
@@ -210,6 +253,19 @@
         Permet d'activer les traces. Activer cette option vous fournira les
         informations au fil de l'eau sur l'avancée de la copie des données
         depuis l'instance source.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-c</option></term>
+      <term><option>--restore-target-wal</option></term>
+      <listitem>
+       <para>
+        Utilise <varname>restore_command</varname> définie dans la
+        configuration de l'instance cible pour reprendre les fichiers WAL
+        depuis l'archive WAL si ces fichiers ne sont plus disponibles dans le
+        répertoire <filename>pg_wal</filename>.
        </para>
       </listitem>
      </varlistentry>
@@ -283,7 +339,7 @@ GRANT EXECUTE ON function pg_catalog.pg_ls_dir(text, boolean, boolean) TO rewind
 GRANT EXECUTE ON function pg_catalog.pg_stat_file(text, boolean) TO rewind_user;
 GRANT EXECUTE ON function pg_catalog.pg_read_binary_file(text) TO rewind_user;
 GRANT EXECUTE ON function pg_catalog.pg_read_binary_file(text, bigint, bigint, boolean) TO rewind_user;
-</programlisting>  
+</programlisting>
   </para>
 
   <para>
@@ -314,7 +370,10 @@ GRANT EXECUTE ON function pg_catalog.pg_read_binary_file(text, bigint, bigint, b
       chaque enregistrement dans les journaux de transactions, enregistrer
       chaque bloc de données modifié. Ceci a pour résultat une liste de tous
       les blocs de données modifiés dans l'instance cible, après la séparation
-      avec l'instance source.
+      avec l'instance source. Si certains fichiers WAL ne sont plus
+      disponibles, essayez de ré-exécuter <application>pg_rewind</application>
+      avec l'option <option>-c</option> pour chercher les fichiers manquants
+      dans l'archive WAL.
      </para>
     </step>
 
@@ -323,38 +382,51 @@ GRANT EXECUTE ON function pg_catalog.pg_read_binary_file(text, bigint, bigint, b
       Copier tous les blocs modifiés de l'instance source vers l'instance
       cible, soit en utilisant un accès direct au système de fichiers
       (<option>--source-pgdata</option>) soit en SQL
-      (<option>--source-server</option>).
+      (<option>--source-server</option>). Les fichiers de relations sont
+      maintenant dans un état équivalent au moment du dernier checkpoint
+      effectué avant le point où les timelines WAL de la source et de la cible
+      divergent, plus l'état actuel sur la source où il existe des blocs
+      modifiés sur la cible après divergence.
      </para>
     </step>
 
     <step>
      <para>
-      Copier tous les autres fichiers, tels que <filename>pg_xact</filename>
-      et les fichiers de configuration de l'instance source vers l'instance
-      cible (sauf les fichiers des relations). De façon similaire aux
-      sauvegardes de base, le contenu des répertoires
+      Copier tous les autres fichiers, incluant les nouveaux fichiers de
+      relation, les segments WAL, <filename>pg_xact</filename>, et les
+      fichiers de configuration de l'instance source sur l'instance cible. De
+      manière similaire, les sauvegardes de base, le contenu des répertoires
       <filename>pg_dynshmem/</filename>, <filename>pg_notify/</filename>,
       <filename>pg_replslot/</filename>, <filename>pg_serial/</filename>,
-      <filename>pg_snapshots/</filename>, <filename>pg_stat_tmp/</filename>et
-      <filename>pg_subtrans/</filename> sont omis des données copiées à partir
-      de l'instance source. Tout fichier ou répertoire commençant par
-      <filename>pgsql_tmp</filename> est omis, ainsi que
-      <filename>backup_label</filename>, <filename>tablespace_map</filename>,
+      <filename>pg_snapshots/</filename>, <filename>pg_stat_tmp/</filename> et
+      <filename>pg_subtrans/</filename> sont omis des données copiées depuis
+      le serveur source. Les fichiers <filename>backup_label</filename>,
+      <filename>tablespace_map</filename>,
       <filename>pg_internal.init</filename>,
-      <filename>postmaster.opts</filename> et
-      <filename>postmaster.pid</filename>.
+      <filename>postmaster.opts</filename>, et
+      <filename>postmaster.pid</filename>, aussi bien que tous fichiers ou
+      répertoires commençant par <filename>pgsql_tmp</filename>, sont omis.
      </para>
     </step>
 
     <step>
      <para>
-      Appliquer les enregistrements des journaux de transactions provenant de
-      l'instance source, en commençant à partir du checkpoint créé au moment
-      du failover. (En fait, <application>pg_rewind</application> n'applique
-      pas les journaux de transactions. Il crée simplement un fichier
-      backup_label qui fera en sorte que <productname>PostgreSQL</productname>
-      démarre en rejouant les enregistrements des journaux de transactions à
-      partir de ce checkpoint.)
+      Crée un ficher <filename>backup_label</filename> pour débuter la reprise
+      des WAL au checkpoint créé lors de la bascule et configure le fichier
+      <filename>pg_control</filename> avec une cohérence minimale du LSN
+      définie comme le résultat de
+      <literal>pg_current_wal_insert_lsn()</literal> lorsque la
+      synchronisation s'effectue depuis une source activée ou le dernier
+      checkpoint LSN quand la synchronisation s'effectue depuis une source
+      stoppée.
+     </para>
+    </step>
+
+    <step>
+     <para>
+      Quand la cible est démarrée, <productname>PostgreSQL</productname>
+      reprend tous les WAL nécessaires, donnant ainsi un répertoire de données
+      à un état cohérent.
      </para>
     </step>
    </procedure>

@@ -1,8 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Dernière modification
-     le       $Date$
-     par      $Author$
-     révision $Revision$ -->
 
 <chapter id="mvcc">
  <title>Contrôle d'accès simultané</title>
@@ -484,7 +480,7 @@ COMMIT;
     des transactions concurrentes durant son exécution. (Toutefois, la requête
     voit les effets de mises à jour précédentes effectuées dans sa propre
     transaction, bien qu'elles ne soient pas encore validées). C'est une
-    garantie plus élevée que requise par le standard <acronym>SQL</acronym>
+    garantie plus élevée que celle requise par le standard <acronym>SQL</acronym>
     pour ce niveau d'isolation, et elle évite le phénomène décrit dans
     <xref linkend="mvcc-isolevel-table"/> sauf pour les anomalies de
     sérialisation. Comme mentionné plus haut, c'est
@@ -563,12 +559,29 @@ COMMIT;
     les transactions en conflit.
    </para>
 
-    <para>
-     Avant la version 9.1 de <productname>PostgreSQL</productname>, une
-     demande d'isolation de transaction Serializable fournissait exactement
-     le comportement décrit ici. Pour maintenir l'ancien niveau Serializable,
-     il faudra maintenant demander Repeatable Read.
-    </para>
+   <para>
+    Le niveau d'isolation Repeatable Read est implémenté en utilisant une
+    technique connue dans la littérature académique des bases de données et
+    dans certains autres produits de bases de données comme
+    l'<firstterm>isolation de snapshots</firstterm> (<foreignphrase>Snapshot
+    Isolation</foreignphrase>). Les différences en comportement et performance
+    peuvent être observées en comparant avec les systèmes utilisant une
+    technique traditionnelle de verrouillage qui réduit la concurrence.
+    Certains autres systèmes offrent même les niveaux Repeatable Read et
+    Snapshot Isolation comme des niveaux d'isolation distinct avec des
+    comportements différents. Le phénomène qui permet cette distinction des
+    deux techniques n'a pas été formalisé par les chercheurs en base de
+    données jusqu'au développement du standard SQL et sont en dehors du
+    périmètre de ce manuel. Pour un traitement complet, merci de lire <xref
+    linkend="berenson95"/>.
+   </para>
+
+   <para>
+    Avant la version 9.1 de <productname>PostgreSQL</productname>, une
+    demande d'isolation de transaction Serializable fournissait exactement
+    le comportement décrit ici. Pour maintenir l'ancien niveau Serializable,
+    il faudra maintenant demander Repeatable Read.
+   </para>
   </sect2>
 
   <sect2 id="xact-serializable">
@@ -603,7 +616,7 @@ COMMIT;
     fait, ce niveau d'isolation fonctionne exactement comme Repeatable
     Read, excepté qu'il surveille les conditions qui pourraient amener
     l'exécution d'un jeu de transactions concurrentes à se comporter
-    d'une manière incompatible avec les exécutions sérielles (une à
+    d'une manière incompatible avec les exécutions séquentielles (une à
     la fois) de toutes ces transactions. Cette surveillance n'introduit
     aucun blocage supplémentaire par rapport à repeatable read, mais il
     y a un coût à cette surveillance, et la détection des conditions
@@ -612,63 +625,69 @@ COMMIT;
    </para>
 
    <para>
-      Comme exemple, considérez
-      la table <structname>ma_table</structname>, contenant initialement
+      Comme exemple, considérons
+      la table <structname>ma_table</structname>, contenant initialement&nbsp;:
    <screen> classe | valeur
 --------+-------
      1  |    10
      1  |    20
      2  |   100
      2  |   200</screen>
-      Supposons que la transaction sérialisable A traite
+      Supposons que la transaction sérialisable A calcule&nbsp;:
    <screen>SELECT SUM(valeur) FROM ma_table WHERE classe = 1;</screen>
-      puis insère le résultat (30) comme <structfield>valeur</structfield> dans une
-      nouvelle ligne avec <structfield>classe</structfield> <literal>= 2</literal>. Simultanément, la
-      transaction serialisable B traite
+      puis insère le résultat (30) comme <structfield>valeur</structfield>
+      dans une nouvelle ligne avec <structfield>classe</structfield>
+      <literal>= 2</literal>.
+      En même temps, la transaction sérialisable B calcule&nbsp;:
 <screen>SELECT SUM(valeur) FROM ma_table WHERE classe = 2;</screen>
-      et obtient le résultat 300, qu'il insère dans une nouvelle ligne avec
-      <structfield>classe</structfield> <literal>= 1</literal>.  À ce moment-là les deux transactions essayent de valider.
+      et obtient le résultat 300, qu'elle insère dans une nouvelle ligne avec
+      <structfield>classe</structfield> <literal>= 1</literal>.
+      Puis, les deux transactions essaient de valider.
       Si l'une des transactions fonctionnait au niveau d'isolation Repeatable Read,
-      les deux seraient autorisées à valider; mais puisqu'il n'y a pas d'ordre d'exécution
-      sériel cohérent avec le résultat, l'utilisation de transactions Serializable
-      permettra à une des deux transactions de valider, et annulera l'autre avec ce message:
+      les deux seraient autorisées à valider&nbsp;;
+      mais puisqu'il n'y a pas d'ordre d'exécution séquentiel cohérent
+      avec le résultat, l'utilisation de transactions Serializable
+      permettra à une des deux transactions de valider,
+      et annulera l'autre avec ce message&nbsp;:
 
 <screen>
 ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parallèle"
     </screen>
 
-    C'est parce que si A a été exécuté avant B, B aurait trouvé la somme 330, et non pas 300.
+    En effet, si A avait été exécuté avant B, B aurait trouvé la somme 330, et non pas 300.
     De façon similaire, l'autre ordre aurait eu comme résultat une somme
     différente pour le calcul par A.
    </para>
 
    <para>
     Si on se fie aux transactions sérialisées pour empêcher les anomalies, il
-    est important que toute donnée lue à partir d'une table utilisateur
-    permanente soit considérée comme valide jusqu'à ce que la transaction qui l'a lue
+    est important que toute donnée lue depuis une table utilisateur
+    permanente ne soit pas considérée comme valide,
+    et ce jusqu'à ce que la transaction qui l'a lue
     soit validée avec succès. Ceci est vrai même pour les transactions en
-    lecture seule, sauf pour les données lues dans une transaction
-    <firstterm>déferrable</firstterm> en lecture seule qui sont garanties
-    être valides à leur lecture, car une telle transaction attend jusqu'à
-    l'obtention d'une image garantie libre de tout problème avant lecture.
+    lecture, sauf pour les données lues dans une transaction en lecture seule
+    et <firstterm>déferrable</firstterm>, dont les données sont considérées
+    valides dès leur lecture. En effet, une telle transaction,
+    avant de lire quoi que ce soit, attend jusqu'à
+    l'obtention d'une image garantie libre de tout problème.
     Dans tous les autres cas, les applications ne doivent pas dépendre des
-    lectures d'une transaction qui a été par la suite annulée. À la place,
-    elles doivent tenter de nouveau la transaction jusqu'à ce qu'elle réussisse.
+    lectures d'une transaction annulée par la suite. Elles doivent plutôt
+    retenter la transaction jusqu'à ce qu'elle réussisse.
    </para>
 
    <para>
     Pour garantir une vraie sérialisation
     <productname>PostgreSQL</productname> utilise le
     <firstterm>verrouillage de prédicats</firstterm>, ce qui signifie
-    qu'il conserve des verrous qui permettent de déterminer quand
+    qu'il conserve des verrous qui lui permettent de déterminer si
     une écriture aurait eu un impact sur le résultat d'une lecture
     antérieure par une transaction concurrente, si elle s'était
     exécutée d'abord. Dans <productname>PostgreSQL</productname>,
-    ces verrous ne causent pas de blocage et ne peuvent donc
-    <emphasis>pas</emphasis> jouer un rôle dans l'avènement d'un
-    verrou mortel (deadlock). Ils sont utilisés pour identifier et
+    ces verrous ne causent pas de blocage, et ne peuvent donc
+    <emphasis>pas</emphasis> jouer un rôle dans un
+    verrou mortel (deadlock). Ces verrous sont utilisés pour identifier et
     marquer les dépendances entre des transactions sérialisables
-    concurrentes qui dans certaines combinaisons peuvent entrainer des
+    concurrentes qui, dans certaines combinaisons, peuvent entraîner des
     anomalies de sérialisation. Par contraste, une transaction Read
     Committed ou Repeatable Read qui voudrait garantir la cohérence
     des données devra prendre un verrou sur la table entière, ce
@@ -687,15 +706,15 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
     un <literal>mode</literal> de <literal>SIReadLock</literal>. Les
     verrous acquis pendant l'exécution d'une requête dépendront
     du plan utilisé par la requête, et plusieurs verrous fins (par
-    exemple, des verrous d'enregistrement) pourraient être combinés en
-    verrous plus grossiers (par exemple, des verrous de page) pendant le
-    déroulement de la transaction afin d'éviter d'épuiser la mémoire
-    utilisée pour suivre les verrous. Une transaction <literal>READ
-     ONLY</literal> pourra libérer ses verrous SIRead avant sa fin, si
-    elle détecte qu'aucun conflit ne peut encore se produire pouvant
-    potentiellement entraîner une anomalie de sérialisation. En fait,
+    exemple des verrous d'enregistrement) peuvent être combinés en
+    verrous plus grossiers (comme des verrous de page) pendant le
+    déroulement de la transaction, pour éviter d'épuiser la mémoire
+    utilisée par le suivi des verrous. Une transaction <literal>READ
+     ONLY</literal> peut libérer ses verrous SIRead avant sa fin, si
+    elle détecte que ne peut plus se produire un conflit
+    qui entraînerait une anomalie de sérialisation. En fait,
     les transactions <literal>READ ONLY</literal> seront souvent capables
-    d'établir ce fait au moment de leur démarrage, et ainsi éviter
+    d'établir ce fait dès leur démarrage, et ainsi éviteront
     de prendre des verrous de prédicat. Si vous demandez explicitement
     une transaction <literal>SERIALIZABLE READ ONLY DEFERRABLE</literal>,
     elle bloquera jusqu'à ce qu'elle puisse établir ce fait. (C'est le
@@ -709,53 +728,56 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
    <para>
     L'utilisation systématique de transactions Serializable peut
     simplifier le développement. La garantie que tout ensemble de
-    transactions sérialisées concurrentes et validées avec succès
-    auront le même effet que si elles avaient été exécutées une
-    à la fois signifie que, si vous pouvez démontrer qu'une seule
-    transaction fera ce qu'il faut lorsqu'elle est exécutée seule,
-    vous pouvez être certain qu'elle fera ce qu'il faut avec tout
+    transactions sérialisées, concurrentes, et validées avec succès,
+    aura le même effet que si elles avaient été exécutées une
+    par une signifie que, si vous pouvez démontrer qu'une
+    transaction exécutée seule est correcte, alors
+    vous pouvez être certain qu'elle le restera dans tout
     mélange de transactions sérialisées, même sans informations sur
-    ce que font les autres transactions, ou elle ne validera pas.
+    ce que font les autres transactions, ou qu'elle ne sera pas validée.
     Il est important qu'un environnement
-    qui utilise cette technique ait une façon généralisée de
+    qui utilise cette technique ait une méthode générale pour
     traiter les erreurs de sérialisation (qui retournent toujours
-    un SQLSTATE valant '40001'), parce qu'il sera très difficile de
-    prédire exactement quelles transactions pourraient contribuer à des
-    dépendances lecture/écriture et auront besoin d'être annulées
+    un SQLSTATE valant '40001'). En effet, il sera très difficile de
+    prédire correctement quelles transactions pourront contribuer à des
+    dépendances lecture/écriture, et auront besoin d'être annulées
     pour éviter les anomalies de sérialisation. La surveillance des
-    dépendances lecture/écriture a un coût, tout comme l'échec,
-    mais mis en face du coût et du blocage entrainés par les verrous
-    explicites et <literal>SELECT FOR UPDATE</literal> ou <literal>SELECT
-    FOR SHARE</literal>, les transactions serializable sont le meilleur
-    choix en termes de performances pour certains environnements.
+    dépendances lecture/écriture a un coût, tout comme la répétition
+    des transactions annulées pour un échec de sérialisation.
+    Mais les transactions sérialisables sont le meilleur
+    choix en termes de performances pour certains environnements,
+    en regard du coût et du blocage de verrous explicites,
+    de <literal>SELECT FOR UPDATE</literal> ou de <literal>SELECT
+    FOR SHARE</literal>, .
    </para>
 
    <para>
-    Bien que le niveau d'isolation Serializable des transactions pour
-    <productname>PostgreSQL</productname> ne permette seulement à des transactions
-    parallèles de valider leurs modifications que s'il est prouvé qu'un ordre
-    d'exécution en série produirait le même résultat, cela n'empêche pas
-    toujours la montée d'erreurs qui ne surviendrait pas dans une véritable
+    Bien que le niveau d'isolation Serializable de
+    <productname>PostgreSQL</productname> ne permette à des transactions
+    parallèles de valider leurs modifications que s'il est prouvé qu'une
+    exécution dans l'ordre produirait le même résultat, il n'empêche pas
+    toujours la levée d'erreurs qui ne surviendraient pas dans une véritable
     exécution en série. En particulier, il est possible de voir des violations
-    de contraintes uniques causées par des conflits sur des transactions
-    Serializable qui se surchargent même après avoir vérifié explicitement que
-    la clé n'est pas présente avant de tenter son insertion. Ceci peut
+    de contraintes uniques suite à des conflits entre transactions
+    Serializable qui se surchargent, même vérification explicite que
+    la clé n'est pas présente avant de tenter de l'insérer. Ceci peut
     s'éviter en s'assurant que <emphasis>toutes</emphasis> les transactions
     Serializable qui peuvent insérer des clés en conflit vérifient
     explicitement avant si elles peuvent l'insérer. Par exemple, imaginez une
     application qui demande à un utilisateur une nouvelle clé, puis vérifie si
-    elle n'existe pas déjà, ou génère une nouvelle clé en sélectionnant la clé
-    maximale déjà existante et en ajoutant la suivante. Si certaines
+    elle n'existe pas déjà en cherchant à la lire d'abord,
+    ou génère une nouvelle clé en sélectionnant la clé pré-existante
+    la plus grande puis en ajoutant un. Si certaines
     transactions Serializable insèrent de nouvelles clés directement sans
-    suivre ce protocole, les violations de contraintes uniques doivent être
-    reportées même dans les cas où elles ne pourraient pas survenir dans le
+    suivre ce protocole, des violations de contraintes uniques peuvent être
+    rapportées, même dans des cas où elles ne pourraient pas survenir dans le
     cas d'une exécution en série de transactions concurrentes.
    </para>
 
    <para>
     Pour une performance optimale quand on s'appuie sur les transactions
     Serializable pour le contrôle de la concurrence, ces points doivent
-    être pris en considération:
+    être pris en considération&nbsp;:
 
     <itemizedlist>
      <listitem>
@@ -766,21 +788,21 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
      </listitem>
      <listitem>
       <para>
-       Contrôler le nombre de connexions actives, en utilisant un pool de
-       connexions si nécessaire. C'est toujours un point important pour les
+       Contrôler le nombre de connexions actives, au besoin en utilisant un pool de
+       connexions. C'est toujours un point important pour les
        performances, mais cela peut être particulièrement important pour un
        système chargé qui utilise des transactions Serializable.
       </para>
      </listitem>
      <listitem>
       <para>
-       Ne mettez jamais plus dans une transaction seule qu'il n'est nécessaire
-       dans un but d'intégrité.
+       Ne mettez pas plus dans une transaction seule qu'il n'est nécessaire
+       pour l'intégrité.
       </para>
      </listitem>
      <listitem>
       <para>
-       Ne laissez pas des connexions trainer en <quote>idle in transaction</quote>
+       Ne laissez pas des connexions traîner en <quote>idle in transaction</quote>
        plus longtemps que nécessaire. Le paramètre de configuration
        <xref linkend="guc-idle-in-transaction-session-timeout"/> peut être
        utilisé pour déconnecter automatiquement les sessions persistantes.
@@ -789,15 +811,15 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
      <listitem>
       <para>
        Supprimez les verrous explicites, <literal>SELECT FOR UPDATE</literal>, et
-       <literal>SELECT FOR SHARE</literal> qui ne sont plus nécessaires grâce
+       <literal>SELECT FOR SHARE</literal>, quand ils ne sont plus nécessaires grâce
        aux protections fournies automatiquement par les transactions Serializable.
       </para>
      </listitem>
      <listitem>
       <para>
        Quand le système est forcé à combiner plusieurs verrous de prédicat
-       au niveau page en un seul verrou de prédicat au niveau relation
-       (si la table des verrous de prédicat est à court de mémoire), une
+       de niveau page en un seul verrou de niveau relation
+       (parce que la table des verrous de prédicat est à court de mémoire), une
        augmentation du taux d'échecs de sérialisation peut survenir. Vous
        pouvez éviter ceci en augmentant <xref
        linkend="guc-max-pred-locks-per-transaction"/>,
@@ -812,12 +834,24 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
        d'échecs de sérialisation. Il peut être utile d'encourager
        l'utilisation de parcours d'index en diminuant <xref
        linkend="guc-random-page-cost"/> et/ou en augmentant <xref
-       linkend="guc-cpu-tuple-cost"/>. Assurez-vous de bien mesurer toute
-       diminution du nombre d'annulations et de redémarrages de transactions
-       en comparaison de toute évolution globale du temps d'exécution des requêtes.
+       linkend="guc-cpu-tuple-cost"/>. Assurez-vous de bien mettre en balance
+       toute diminution du nombre d'annulations et de redémarrages de transactions
+       et l'évolution globale du temps d'exécution des requêtes.
       </para>
      </listitem>
     </itemizedlist>
+   </para>
+
+   <para>
+    Le niveau d'isolation Serializable est implémenté en utilisant une
+    technique connue sous le nom de <foreignphrase>
+    Serializable Snapshot Isolation</foreignphrase>
+    dans la littérature académique des bases de données. Elle se base
+    sur l'isolation par snapshot et ajoute des vérifications pour les
+    anomalies de sérialisation. Quelques différences de comportement et de
+    performance peuvent être observées lors de la comparaison avec d'autres
+    systèmes qui utilisent une technique de verrouillage traditionnelle. Merci
+    de lire <xref linkend="ports12"/> pour des informations détaillées.
    </para>
   </sect2>
  </sect1>
@@ -1086,28 +1120,35 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
    <table tocentry="1" id="table-lock-compatibility">
     <title>Modes de verrou conflictuels</title>
     <tgroup cols="9">
-     <colspec colnum="2" colname="lockst" />
-     <colspec colnum="9" colname="lockend" />
-     <spanspec namest="lockst" nameend="lockend" spanname="lockreq"/>
+     <colspec colnum="1" colwidth="1.25*"/>
+     <colspec colnum="2" colwidth="1*" colname="lockst"/>
+     <colspec colnum="3" colwidth="1*"/>
+     <colspec colnum="4" colwidth="1*"/>
+     <colspec colnum="5" colwidth="1*"/>
+     <colspec colnum="6" colwidth="1*"/>
+     <colspec colnum="7" colwidth="1*"/>
+     <colspec colnum="8" colwidth="1*"/>
+     <colspec colnum="9" colwidth="1*" colname="lockend"/>
+     <spanspec spanname="lockreq" namest="lockst" nameend="lockend" align="center"/>
      <thead>
       <row>
        <entry morerows="1">Verrou demandé</entry>
-       <entry spanname="lockreq">Verrou déjà détenu</entry>
+       <entry spanname="lockreq">Mode verrou existant</entry>
       </row>
       <row>
-       <entry>ACCESS SHARE</entry>
-       <entry>ROW SHARE</entry>
-       <entry>ROW EXCLUSIVE</entry>
-       <entry>SHARE UPDATE EXCLUSIVE</entry>
-       <entry>SHARE</entry>
-       <entry>SHARE ROW EXCLUSIVE</entry>
-       <entry>EXCLUSIVE</entry>
-       <entry>ACCESS EXCLUSIVE</entry>
+       <entry><literal>ACCESS SHARE</literal></entry>
+       <entry><literal>ROW SHARE</literal></entry>
+       <entry><literal>ROW EXCL.</literal></entry>
+       <entry><literal>SHARE UPDATE EXCL.</literal></entry>
+       <entry><literal>SHARE</literal></entry>
+       <entry><literal>SHARE ROW EXCL.</literal></entry>
+       <entry><literal>EXCL.</literal></entry>
+       <entry><literal>ACCESS EXCL.</literal></entry>
       </row>
      </thead>
      <tbody>
       <row>
-       <entry>ACCESS SHARE</entry>
+       <entry><literal>ACCESS SHARE</literal></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
@@ -1118,7 +1159,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
        <entry align="center">X</entry>
       </row>
       <row>
-       <entry>ROW SHARE</entry>
+       <entry><literal>ROW SHARE</literal></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
@@ -1129,7 +1170,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
        <entry align="center">X</entry>
       </row>
       <row>
-       <entry>ROW EXCLUSIVE</entry>
+       <entry><literal>ROW EXCLUSIVE</literal></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
@@ -1140,7 +1181,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
        <entry align="center">X</entry>
       </row>
       <row>
-       <entry>SHARE UPDATE EXCLUSIVE</entry>
+       <entry><literal>SHARE UPDATE EXCLUSIVE</literal></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
@@ -1151,7 +1192,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
        <entry align="center">X</entry>
       </row>
       <row>
-       <entry>SHARE</entry>
+       <entry><literal>SHARE</literal></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
        <entry align="center">X</entry>
@@ -1162,7 +1203,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
        <entry align="center">X</entry>
       </row>
       <row>
-       <entry>SHARE ROW EXCLUSIVE</entry>
+       <entry><literal>SHARE ROW EXCLUSIVE</literal></entry>
        <entry align="center"></entry>
        <entry align="center"></entry>
        <entry align="center">X</entry>
@@ -1173,7 +1214,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
        <entry align="center">X</entry>
       </row>
       <row>
-       <entry>EXCLUSIVE</entry>
+       <entry><literal>EXCLUSIVE</literal></entry>
        <entry align="center"></entry>
        <entry align="center">X</entry>
        <entry align="center">X</entry>
@@ -1184,7 +1225,7 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
        <entry align="center">X</entry>
       </row>
       <row>
-       <entry>ACCESS EXCLUSIVE</entry>
+       <entry><literal>ACCESS EXCLUSIVE</literal></entry>
        <entry align="center">X</entry>
        <entry align="center">X</entry>
        <entry align="center">X</entry>
@@ -1213,7 +1254,9 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
     jamais détenir des verrous en conflit pour la même ligne. Les verrous
     au niveau ligne n'affectent pas les lectures des données&nbsp;; elles
     bloquent seulement les <emphasis>écrivains et verrouilleurs</emphasis>
-    sur la même ligne.
+    sur la même ligne. Les verrous au niveau ligne sont relachés à la fin
+    de la transaction ou lors de l'annulation du savepoint, tout comme
+    les verrous de niveau table.
    </para>
 
    <variablelist>
@@ -1320,8 +1363,11 @@ ERREUR:  n'a pas pu sérialiser un accès à cause d'une mise à jour en parall�
    <table tocentry="1" id="row-lock-compatibility">
     <title>Verrous en conflit au niveau ligne</title>
     <tgroup cols="5">
-     <colspec colnum="2" colname="lockst"/>
-     <colspec colnum="5" colname="lockend"/>
+     <colspec colname="col1"    colwidth="1.5*"/>
+     <colspec colname="lockst"  colwidth="1*"/>
+     <colspec colname="col3"    colwidth="1*"/>
+     <colspec colname="col4"    colwidth="1*"/>
+     <colspec colname="lockend" colwidth="1*"/>
      <spanspec namest="lockst" nameend="lockend" spanname="lockreq"/>
      <thead>
       <row>
@@ -1442,6 +1488,21 @@ transaction exécute&nbsp;:
      mort. <productname>PostgreSQL</productname> détectera cette situation et
      annulera une des transactions.
     </para>
+
+   <para>
+    Le niveau d'isolation Repeatable Read est implémenté en utilisant une
+    technique connue dans la littérature académique sur les bases de données
+    et dans certains produits de bases de données sous le nom de
+    <firstterm>Snapshot Isolation</firstterm>. Des différences en comportement
+    et en performance peuvent être observées lors de comparaisons avec des
+    systèmes qui utilisent une technique de verrouillage traditionnelle qui
+    réduit la concurrence. Quelques autres systèmes peuvent même proposer
+    Repeatable Read et Snapshot Isolation sous la forme de niveaux d'isolation
+    distincts avec des comportements différents. Les phénomènes qui
+    distinguent les deux techniques n'ont pas été formalisés par les
+    chercheurs en bases de données jusqu'à ce que le standard SQL ne soit
+    écrit. Pour un traitement complet, voir <xref linkend="berenson95"/>.
+   </para>
 
     <para>
      La meilleure défense contre les verrous morts est généralement de les
@@ -1740,6 +1801,17 @@ SELECT pg_advisory_lock(q.id) FROM
     <literal>DELETE</literal>), il est donc possible d'obtenir les
     verrous explicitement avant que l'instantané ne soit figé.
    </para>
+
+   <para>
+    Le niveau d'isolation Serializable est implémenté en utilisant une
+    technique connue dans la littérature académique sur les bases de données
+    sous le nom de Serializable Snapshot Isolation, qui ajoute à une isolation
+    de snapshot en ajoutant des vérifications sur les anomalies de
+    sérialisation. Quelques différences dans le comportement et les
+    performances sont observables si on le compare à d'autres systèmes qui
+    utilisent une technique de verrouillage traditionnelle. Merci de lire
+    <xref linkend="ports12"/> pour des informations détaillées.
+   </para>
   </sect2>
  </sect1>
 
@@ -1762,6 +1834,16 @@ SELECT pg_advisory_lock(q.id) FROM
    successives sur la table cible, mais elles seront la cause d'incohérence
    visible entre le contenu de la table cible et les autres tables de la
    base.
+  </para>
+
+  <para>
+   L'accès interne aux catalogues système n'est pas faite en utilisant le
+   niveau d'isolation de la transaction actuelle. Ceci signifie que les objets
+   de base nouvellement créés, comme des tables, sont visibles aux
+   transactions concurrentes en Repeatable Read et en Serializable, même si
+   les lignes qu'elles contiennent ne le sont pas. À l'inverse les requêtes
+   qui examinent les catalogues systèmes ne voient pas les lignes représentant
+   les objets créés en concurrence dans les plus haut niveaux d'isolation.
   </para>
  </sect1>
 
@@ -1838,6 +1920,17 @@ SELECT pg_advisory_lock(q.id) FROM
    concurrentes qui ont besoin d'indexer des données scalaires. Lors du
    traitement de données non scalaires, les index B-tree ne sont pas utiles.
    Les index GiST, SP-GiST ou GIN doivent être utilisés à la place.
+  </para>
+
+  <para>
+   L'accès interne aux catalogues systèmes n'est pas réalisée en utilisant le
+   niveau d'isolation de la transaction courante. Cela signifie que les objets
+   nouvellement créés d'une base, comme les tables, sont visibles aux
+   transactions Repeatable Read et Serializable, même si les lignes qu'elles
+   contiennent ne le sont pas. À l'inverse, les requêtes qui examinent
+   explicitement les catalogues systèmes ne voient pas les lignes représentant
+   les objets nouvellement créés en concurrence, dans les plus hauts niveaux
+   d'isolation.
   </para>
  </sect1>
 </chapter>

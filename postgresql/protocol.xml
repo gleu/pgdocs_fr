@@ -1,9 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Dernière modification
-     le       $Date$
-     par      $Author$
-     révision $Revision$ -->
-
 <chapter id="protocol">
  <title>Protocole client/serveur</title>
 
@@ -859,7 +854,7 @@ BEGIN;
 INSERT INTO mytable VALUES(1);
 COMMIT;
 INSERT INTO mytable VALUES(2);
-SELECT 1/0;
+SELCT 1/0;<!-- l'erreur est intentionnelle -->
 </programlisting>
      alors aucune des instructions ne sera exécutée, la différence visible est
      que le premier <command>INSERT</command> n'est pas validé (<literal>COMMIT</literal>).
@@ -2016,7 +2011,7 @@ peut envoyer un message ErrorMessage.
   <para>
    Pour tester les commandes de réplication, vous pouvez réaliser une connexion
    de réplication via <application>psql</application> ou tout autre outil utilisant
-   <literal>libpq</literal> avec une chaîne de connexion utilisant l'option
+   <application>libpq</application> avec une chaîne de connexion utilisant l'option
    <literal>replication</literal>, par exemple&nbsp;:
    <programlisting>
 psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
@@ -2761,8 +2756,8 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
      </listitem>
     </varlistentry>
 
-    <varlistentry>
-     <term><literal>BASE_BACKUP</literal> [ <literal>LABEL</literal> <replaceable>'label'</replaceable> ] [ <literal>PROGRESS</literal> ] [ <literal>FAST</literal> ] [ <literal>WAL</literal> ] [ <literal>NOWAIT</literal> ] [ <literal>MAX_RATE</literal> <replaceable>rate</replaceable> ] [ <literal>TABLESPACE_MAP</literal> ] [ <literal>NOVERIFY_CHECKSUMS</literal> ]
+    <varlistentry id="protocol-replication-base-backup" xreflabel="BASE_BACKUP">
+     <term><literal>BASE_BACKUP</literal> [ <literal>LABEL</literal> <replaceable>'label'</replaceable> ] [ <literal>PROGRESS</literal> ] [ <literal>FAST</literal> ] [ <literal>WAL</literal> ] [ <literal>NOWAIT</literal> ] [ <literal>MAX_RATE</literal> <replaceable>rate</replaceable> ] [ <literal>TABLESPACE_MAP</literal> ] [ <literal>NOVERIFY_CHECKSUMS</literal> ] [ <literal>MANIFEST</literal> <replaceable>manifest_option</replaceable> ] [ <literal>MANIFEST_CHECKSUMS</literal> <replaceable>checksum_algorithm</replaceable> ]
       <indexterm><primary>BASE_BACKUP</primary></indexterm>
      </term>
      <listitem>
@@ -2878,13 +2873,52 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
           </para>
          </listitem>
         </varlistentry>
+
+       <varlistentry>
+        <term><literal>MANIFEST</literal> <replaceable>manifest_option</replaceable></term>
+        <listitem>
+         <para>
+          Quand cette option est indiquée avec une valeur
+          <literal>yes</literal> ou <literal>force-encode</literal>, un
+          manifeste de sauvegarde est créé et envoyé avec la sauvegarde. Le
+          manifeste est une liste de chaque fichier présent dans la sauvegarde
+          à l'exception des fichiers WAL qui pourraient être inclus. Il
+          enregistre la taille, la date de dernière modification et une somme
+          de contrôle optionnelle pour chaque fichier. Une valeur de
+          <literal>force-encode</literal> force l'encodage en hexadécimal de
+          tous les noms de fichier. Dans le cas contraire, ce type d'encodage
+          est uniquement réalisé pour les fichiers dont le nom contient des
+          séquences d'octets hors de l'UTF-8. <literal>force-encode</literal>
+          sert principalement de tests, pour être certain que les clients
+          lisant le manifeste de sauvegarde peuvent gérer ce cas. Pour la
+          compatibilité avec les anciennes versions, la valeur par défaut est
+          <literal>MANIFEST 'no'</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>MANIFEST_CHECKSUMS</literal> <replaceable>checksum_algorithm</replaceable></term>
+        <listitem>
+         <para>
+          Précise l'algorithme à utiliser pour chaque fichier inclus dans le
+          manifeste de sauvegarde. Actuellement, les algorithmes disponibles
+          sont <literal>NONE</literal>, <literal>CRC32C</literal>,
+          <literal>SHA224</literal>, <literal>SHA256</literal>,
+          <literal>SHA384</literal> et <literal>SHA512</literal>. Celui par
+          défaut est <literal>CRC32C</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
        </variablelist>
       </para>
+
       <para>
        Quand la sauvegarde est lancée, le serveur enverra tout d'abord
        deux ensembles de résultats standards, suivis par un ou plusieurs
        résultats de CopyResponse.
       </para>
+
       <para>
        Le premier ensemble de résultats standard contient la position de
        démarrage de la sauvegarde, dans une seule ligne avec deux colonnes. La
@@ -2918,7 +2952,8 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          <term><literal>size</literal> (<type>int8</type>)</term>
          <listitem>
           <para>
-           La taille approximative du tablespace, si le rapport de progression
+           La taille approximative du tablespace, en kilo-octets (1024 octets),
+           si le rapport de progression
            a été demandé, <literal>null</literal> dans le cas contraire.
           </para>
          </listitem>
@@ -2926,17 +2961,21 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        </variablelist>
       </para>
       <para>
-       Après l'envoi du deuxième ensemble standard de résultats, un ou plusieurs
-       résultats de type <literal>CopyResponse</literal> seront envoyés, un pour
-       le répertoire de données principal et un pour chaque tablespace supplémentaire,
-       autre que <literal>pg_default</literal> et <literal>pg_global</literal>.
-       Les données dans les résultats de type <literal>CopyResponse</literal>
-       seront dans le format tar (en suivant le <quote>format d'échange ustar</quote>
-       spécifié dans le standard POSIX 1003.1-2008) du contenu du tablespace,
-       sauf que les deux blocs de zéros à la fin indiqués dans le standard sont omis.
-       Un fois que l'envoi des données du tar est terminé, un ensemble final
-       de résultats sera envoyé, contenant la position finale de la sauvegarde
-       dans les journaux de transactions, au même format que la position de départ.
+       Après l'envoi du deuxième ensemble standard de résultats, un ou
+       plusieurs résultats de type <literal>CopyResponse</literal> seront
+       envoyés, un pour le répertoire de données principal et un pour chaque
+       tablespace supplémentaire, autre que <literal>pg_default</literal> et
+       <literal>pg_global</literal>. Les données dans les résultats de type
+       <literal>CopyResponse</literal> seront dans le format tar (en suivant
+       le <quote>format d'échange ustar</quote> spécifié dans le standard
+       POSIX 1003.1-2008) du contenu du tablespace, sauf que les deux blocs de
+       zéros à la fin indiqués dans le standard sont omis. Une fois que
+       l'envoi des données du tar est terminé et si un manifeste de sauvegarde
+       a été réclamé, un autre résultat <literal>CopyResponse</literal> est
+       envoyé, contenant les données du manifeste pour la sauvegarde de base
+       actuelle. Dans tous les cas, un ensemble final de résultats sera
+       envoyé, contenant la position finale de la sauvegarde dans les journaux
+       de transactions, au même format que la position de départ.
       </para>
 
       <para>

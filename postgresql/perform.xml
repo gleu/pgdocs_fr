@@ -1,8 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Dernière modification
-     le       $Date$
-     par      $Author$
-     révision $Revision$ -->
 
 <chapter id="performance-tips">
  <title>Conseils sur les performances</title>
@@ -340,7 +336,48 @@ EXPLAIN SELECT * FROM tenk1 WHERE unique1 = 42;
     requêtes qui ne récupèrent qu'une seule ligne, ou pour les requêtes qui
     ont une condition <literal>ORDER BY</literal> qui correspond à l'ordre
     de l'index, car cela ne nécessite aucune étape supplémentaire pour satisfaire
-    l'<literal>ORDER BY</literal>.
+    l'<literal>ORDER BY</literal>. Dans cet exemple, ajouter <literal>ORDER BY
+    unique1</literal> ferait que l'optimiseur utilise le même plan parce que
+    l'index fournit déjà implicitement le tri requis.
+   </para>
+
+   <para>
+     L'optimiseur peur effectuer une clause <literal>ORDER BY</literal> de
+     plusieurs façons. L'exemple ci-dessus montre qu'une clause de tri peut
+     être effectué implicitement. L'optimiseur pour aussi ajouter une étape de
+     tri (<literal>sort</literal>) explicite&nbsp;:
+
+<screen>
+EXPLAIN SELECT * FROM tenk1 ORDER BY unique1;
+                            QUERY PLAN
+-------------------------------------------------------------------
+ Sort  (cost=1109.39..1134.39 rows=10000 width=244)
+   Sort Key: unique1
+   ->  Seq Scan on tenk1  (cost=0.00..445.00 rows=10000 width=244)
+</screen>
+
+    Si une partie du plan garantit un ordre sur un préfixe des clés de tri
+    requises, alors l'optimiseur peut décider à la place d'utiliser une étape
+    de tri incrémental (<literal>incremental sort</literal>)&nbsp;:
+
+<screen>
+EXPLAIN SELECT * FROM tenk1 ORDER BY four, ten LIMIT 100;
+                                              QUERY PLAN
+-------------------------------------------------------------------&zwsp;-----------------------------------
+ Limit  (cost=521.06..538.05 rows=100 width=244)
+   ->  Incremental Sort  (cost=521.06..2220.95 rows=10000 width=244)
+         Sort Key: four, ten
+         Presorted Key: four
+         ->  Index Scan using index_tenk1_on_four on tenk1  (cost=0.29..1510.08 rows=10000 width=244)
+</screen>
+
+    Comparé aux tris normaux, le tri incrémental permet de renvoyer les lignes
+    avant que l'ensemble du résultat ne soit trié, ce qui permet en
+    particulier des optimisations avec les requêtes utilisant la clause
+    <literal>LIMIT</literal>. Il peut aussi réduire l'utilisation de la
+    mémoire et la probabilité d'envoyer des tris sur disque, mais cela a un
+    coût&nbsp;: une surcharge pour répartir l'ensemble de lignes résultats
+    dans plusieurs groupes de tri.
     </para>
 
     <para>
@@ -1259,7 +1296,8 @@ SELECT stxname, stxkeys, stxddependencies
      <para>
       Les dépendances fonctionnelles sont pour le moment uniquement appliquées
       pour les conditions sur une simple égalité entre une colonne et une
-      valeur constante. Elles ne sont pas utilisées pour améliorer
+      valeur constante et des clauses <literal>IN</literal> contenant des
+      valeurs constantes. Elles ne sont pas utilisées pour améliorer
       l'estimation sur les conditions d'égalité entre deux colonnes ou la
       comparaison d'une colonne avec une expression ni pour les clauses
       d'intervalle, <literal>LIKE</literal> ou tout autre type de condition.
@@ -1671,9 +1709,9 @@ WHERE quelquechosedautre;</programlisting>
     transactions ne sont pas impactés, car, en cas d'erreur, les fichiers
     contenant les données nouvellement chargées seront supprimés de toute
     façon. Néanmoins, cette considération ne s'applique que quand <xref
-    linkend="guc-wal-level"/> vaut <literal>minimal</literal> pour les tables
-    non partitionnées, car toutes les commandes doivent écrire dans les
-    journaux de transaction dans les autres cas.
+    linkend="guc-wal-level"/> vaut <literal>minimal</literal> car toutes les
+    commandes doivent écrire dans les journaux de transaction dans les autres
+    cas.
    </para>
 
   </sect2>
@@ -1784,41 +1822,13 @@ WHERE quelquechosedautre;</programlisting>
    <para>
     En dehors d'éviter le temps de traitement des données des journaux de
     transactions par l'archiveur ou l'émetteur des journaux de transactions,
-    le faire rendrait certaines commandes plus rapides parce qu'elles sont
-    conçues pour ne pas écrire du tout dans les journaux de transactions si
-    <varname>wal_level</varname> vaut <literal>minimal</literal>. (Elles
-    peuvent garantir la sûreté des données de façon moins coûteuse en exécutant
-    un <function>fsync</function> à la fin plutôt qu'en écrivant les journaux
-    de transactions&nbsp;:
-    <itemizedlist>
-     <listitem>
-      <para>
-       <command>CREATE TABLE AS SELECT</command>
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       <command>CREATE INDEX</command> (et les variantes telles que
-       <command>ALTER TABLE ADD PRIMARY KEY</command>)
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       <command>ALTER TABLE SET TABLESPACE</command>
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       <command>CLUSTER</command>
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       <command>COPY FROM</command>, quand la table cible vient d'être créée
-       ou vidée auparavant dans la transaction
-      </para>
-     </listitem>
-    </itemizedlist>
+    le faire rendrait certaines commandes plus rapides parce qu'elles
+    n'écrivent pas du tout dans les journaux de transactions si
+    <varname>wal_level</varname> vaut <literal>minimal</literal> and the
+    current subtransaction (or top-level transaction) created or truncated the
+    table or index they change. (Elles peuvent garantir la sûreté des données
+    de façon moins coûteuse en exécutant un <function>fsync</function> à la
+    fin plutôt qu'en écrivant les journaux de transactions).
    </para>
   </sect2>
 
