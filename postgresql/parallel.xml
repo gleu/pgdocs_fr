@@ -1,263 +1,263 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- doc/src/sgml/parallel.sgml -->
 
- <chapter id="parallel-query">
-  <title>Requêtes parallélisées</title>
+<chapter id="parallel-query">
+ <title>Requêtes parallélisées</title>
 
-  <indexterm zone="parallel-query">
-   <primary>requête parallélisée</primary>
-  </indexterm>
+ <indexterm zone="parallel-query">
+  <primary>requête parallélisée</primary>
+ </indexterm>
 
-  <para>
-   <productname>PostgreSQL</productname> peut préparer des plans de requêtes
-   utilisant plusieurs CPU pour répondre plus rapidement à certaines requêtes.
-   Cette fonctionnalité est connue sous le nom de requêtes parallélisées. Un
-   grand nombre de requêtes ne peuvent pas bénéficier de cette fonctionnalité,
-   soit à cause de la limitation de l'implémentation actuelle, soit parce qu'il
-   n'existe pas de plan imaginable qui soit plus rapide qu'un plan
-   sériel. Néanmoins, pour les requêtes pouvant en bénéficier, l'accélération
-   due à une requête parallélisée est souvent très significative. Beaucoup de
-   ces requêtes peuvent s'exécuter au moins deux fois plus rapidement grâce à
-   la parallélisation, et certaines requêtes quatre fois
-   voire plus. Les requêtes touchant à une grande quantité de données, mais
-   ne retournant que quelques lignes à l'utilisateur sont généralement celles
-   qui bénéficient le plus de cette fonctionnalité. Ce chapitre explique
-   quelques détails sur le fonctionnement des requêtes parallélisées et dans
-   quelles situations elles peuvent être utilisées pour que les
-   utilisateurs intéressés sachent quoi en attendre.
-  </para>
+ <para>
+  <productname>PostgreSQL</productname> peut préparer des plans de requêtes
+  utilisant plusieurs CPU pour répondre plus rapidement à certaines requêtes.
+  Cette fonctionnalité est connue sous le nom de requêtes parallélisées. Un
+  grand nombre de requêtes ne peuvent pas bénéficier de cette fonctionnalité,
+  soit à cause de la limitation de l'implémentation actuelle, soit parce qu'il
+  n'existe pas de plan imaginable qui soit plus rapide qu'un plan
+  sériel. Néanmoins, pour les requêtes pouvant en bénéficier, l'accélération
+  due à une requête parallélisée est souvent très significative. Beaucoup de
+  ces requêtes peuvent s'exécuter au moins deux fois plus rapidement grâce à
+  la parallélisation, et certaines requêtes quatre fois
+  voire plus. Les requêtes touchant à une grande quantité de données, mais
+  ne retournant que quelques lignes à l'utilisateur sont généralement celles
+  qui bénéficient le plus de cette fonctionnalité. Ce chapitre explique
+  quelques détails sur le fonctionnement des requêtes parallélisées et dans
+  quelles situations elles peuvent être utilisées pour que les
+  utilisateurs intéressés sachent quoi en attendre.
+ </para>
 
  <sect1 id="how-parallel-query-works">
   <title>Comment fonctionne la parallélisation des requêtes</title>
 
-   <para>
-    Quand l'optimiseur détermine que la parallélisation est la stratégie la
-    plus rapide pour une requête particulière, il crée un plan d'exécution
-    incluant un <firstterm>n&oelig;ud Gather</firstterm> ou un
-    <firstterm>n&oelig;ud Gather Merge</firstterm>. En voici un exemple
-    simple&nbsp;:
+  <para>
+   Quand l'optimiseur détermine que la parallélisation est la stratégie la
+   plus rapide pour une requête particulière, il crée un plan d'exécution
+   incluant un <firstterm>n&oelig;ud Gather</firstterm> ou un
+   <firstterm>n&oelig;ud Gather Merge</firstterm>. En voici un exemple
+   simple&nbsp;:
 
-<screen>
+   <screen>
 EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
-                                     QUERY PLAN                                      
+                                     QUERY PLAN
 -------------------------------------------------------------------------------------
  Gather  (cost=1000.00..217018.43 rows=1 width=97)
    Workers Planned: 2
    -&gt;  Parallel Seq Scan on pgbench_accounts  (cost=0.00..216018.33 rows=1 width=97)
          Filter: (filler ~~ '%x%'::text)
 (4 rows)
-</screen>
-   </para>
+   </screen>
+  </para>
 
-   <para>
-    Dans tous les cas, le n&oelig;ud <literal>Gather</literal> ou
-    <literal>Gather Merge</literal> aura exactement un no&oelig;ud enfant, qui
-    est la portion du plan exécutée en parallèle. Si le n&oelig;ud
-    <literal>Gather</literal> ou <literal>Gather Merge</literal> est à la
-    racine du
-    plan, alors la requête entière est parallélisée. S'il est placé ailleurs
-    dans le plan, alors seule cette portion du plan s'exécutera en
-    parallèle. Dans l'exemple ci-dessus, la requête accède à une seule
-    table, donc il n'existe qu'un seul autre n&oelig;ud de plan que le
-    n&oelig;ud <literal>Gather</literal> lui-même&nbsp;; comme ce n&oelig;ud
-    est un enfant du n&oelig;ud <literal>Gather</literal>, il
-    s'exécutera en parallèle.
-   </para>
+  <para>
+   Dans tous les cas, le n&oelig;ud <literal>Gather</literal> ou
+   <literal>Gather Merge</literal> aura exactement un no&oelig;ud enfant, qui
+   est la portion du plan exécutée en parallèle. Si le n&oelig;ud
+   <literal>Gather</literal> ou <literal>Gather Merge</literal> est à la
+   racine du
+   plan, alors la requête entière est parallélisée. S'il est placé ailleurs
+   dans le plan, alors seule cette portion du plan s'exécutera en
+   parallèle. Dans l'exemple ci-dessus, la requête accède à une seule
+   table, donc il n'existe qu'un seul autre n&oelig;ud de plan que le
+   n&oelig;ud <literal>Gather</literal> lui-même&nbsp;; comme ce n&oelig;ud
+   est un enfant du n&oelig;ud <literal>Gather</literal>, il
+   s'exécutera en parallèle.
+  </para>
 
-   <para>
-    En <link linkend="using-explain">utilisant EXPLAIN</link>, vous pouvez
-    voir le nombre de processus auxiliaires (appelés
-    <foreignphrase>workers</foreignphrase>) choisis par le planificateur.
-    Quand le n&oelig;ud <literal>Gather</literal> est atteint lors de
-    l'exécution de la requête, le processus en charge de la session
-    demandera un nombre de processus d'arrière-plan (<link
-    linkend="bgworker">background workers</link>) égal au nombre de workers
-    choisi par le planificateur. Le nombre de
-    <foreignphrase>background workers</foreignphrase> que le
-    planificateur envisagera est limité à au plus la valeur de
-    <xref linkend="guc-max-parallel-workers-per-gather"/>. Le nombre total de
-    <foreignphrase>background workers</foreignphrase> pouvant exister à un
-    même moment est limité par les paramètres <xref
-    linkend="guc-max-worker-processes"/> et <xref
-    linkend="guc-max-parallel-workers"/>. De ce fait, il est possible qu'une
-    requête parallélisée s'exécute avec moins de
-    <foreignphrase>workers</foreignphrase> que prévu, voire sans
-    <foreignphrase>worker</foreignphrase> du tout. Le plan optimal peut
-    dépendre du nombre de <foreignphrase>workers</foreignphrase> disponibles,
-    ce qui peut résulter en de médiocres performances des
-    requêtes. Si cela survient fréquemment, envisagez l'augmentation de
-    <varname>max_worker_processes</varname>  et de
-    <varname>max_parallel_workers</varname> pour qu'un plus grand nombre de
-    <foreignphrase>workers</foreignphrase> puissent travailler simultanément
-    ou la diminution de <varname>max_parallel_workers_per_gather</varname> pour que
-    le planificateur réclame moins de <foreignphrase>workers</foreignphrase>.
-   </para>
+  <para>
+   En <link linkend="using-explain">utilisant EXPLAIN</link>, vous pouvez
+   voir le nombre de processus auxiliaires (appelés
+   <foreignphrase>workers</foreignphrase>) choisis par le planificateur.
+   Quand le n&oelig;ud <literal>Gather</literal> est atteint lors de
+   l'exécution de la requête, le processus en charge de la session
+   demandera un nombre de processus d'arrière-plan (<link
+   linkend="bgworker">background workers</link>) égal au nombre de workers
+   choisi par le planificateur. Le nombre de
+   <foreignphrase>background workers</foreignphrase> que le
+   planificateur envisagera est limité à au plus la valeur de
+   <xref linkend="guc-max-parallel-workers-per-gather"/>. Le nombre total de
+   <foreignphrase>background workers</foreignphrase> pouvant exister à un
+   même moment est limité par les paramètres <xref
+   linkend="guc-max-worker-processes"/> et <xref
+   linkend="guc-max-parallel-workers"/>. De ce fait, il est possible qu'une
+   requête parallélisée s'exécute avec moins de
+   <foreignphrase>workers</foreignphrase> que prévu, voire sans
+   <foreignphrase>worker</foreignphrase> du tout. Le plan optimal peut
+   dépendre du nombre de <foreignphrase>workers</foreignphrase> disponibles,
+   ce qui peut résulter en de médiocres performances des
+   requêtes. Si cela survient fréquemment, envisagez l'augmentation de
+   <varname>max_worker_processes</varname>  et de
+   <varname>max_parallel_workers</varname> pour qu'un plus grand nombre de
+   <foreignphrase>workers</foreignphrase> puissent travailler simultanément
+   ou la diminution de <varname>max_parallel_workers_per_gather</varname> pour que
+   le planificateur réclame moins de <foreignphrase>workers</foreignphrase>.
+  </para>
 
-   <para>
-    Chaque processus <foreignphrase>background worker</foreignphrase> démarré
-    avec succès dans une requête parallélisée donnée exécutera la
-    portion parallélisée du plan. Le processus principal, appelé
-    <foreignphrase>leader</foreignphrase>, exécutera aussi cette portion du
-    plan bien qu'il ait des responsabilités supplémentaires&nbsp;: il doit
-    aussi lire toutes les lignes générées par les
-    <foreignphrase>workers</foreignphrase>. Quand la portion parallélisée du
-    plan ne génère qu'un petit nombre de lignes, le
-    <foreignphrase>leader</foreignphrase> se comportera souvent comme un
-    <foreignphrase>worker</foreignphrase> supplémentaire, accélérant
-    l'exécution de la requête. Par contre, quand la portion parallèle du plan
-    génère un grand nombre de lignes, le <foreignphrase>leader</foreignphrase>
-    peut être accaparé par la lecture des lignes générées par
-    les <foreignphrase>workers</foreignphrase> et par le traitement
-    des autres étapes au-dessus du n&oelig;ud <literal>Gather</literal> ou du
-    n&oelig;ud <literal>Gather Merge</literal>. Dans de
-    tels cas, le <foreignphrase>leader</foreignphrase> travaillera très peu sur la
-    portion parallélisée du plan.
-   </para>
+  <para>
+   Chaque processus <foreignphrase>background worker</foreignphrase> démarré
+   avec succès dans une requête parallélisée donnée exécutera la
+   portion parallélisée du plan. Le processus principal, appelé
+   <foreignphrase>leader</foreignphrase>, exécutera aussi cette portion du
+   plan bien qu'il ait des responsabilités supplémentaires&nbsp;: il doit
+   aussi lire toutes les lignes générées par les
+   <foreignphrase>workers</foreignphrase>. Quand la portion parallélisée du
+   plan ne génère qu'un petit nombre de lignes, le
+   <foreignphrase>leader</foreignphrase> se comportera souvent comme un
+   <foreignphrase>worker</foreignphrase> supplémentaire, accélérant
+   l'exécution de la requête. Par contre, quand la portion parallèle du plan
+   génère un grand nombre de lignes, le <foreignphrase>leader</foreignphrase>
+   peut être accaparé par la lecture des lignes générées par
+   les <foreignphrase>workers</foreignphrase> et par le traitement
+   des autres étapes au-dessus du n&oelig;ud <literal>Gather</literal> ou du
+   n&oelig;ud <literal>Gather Merge</literal>. Dans de
+   tels cas, le <foreignphrase>leader</foreignphrase> travaillera très peu sur la
+   portion parallélisée du plan.
+  </para>
 
-   <para>
-    Quand le n&oelig;ud principal de la portion parallélisée est
-    <literal>Gather Merge</literal> au lieu de <literal>Gather</literal>, cela
-    indique que chaque processus exécutant la portion parallélisée du plan
-    produit des lignes triées, et que le processus principal s'occupe de
-    conserver l'ordre des lignes pendant leur assemblage. Par contre,
-    <literal>Gather</literal> lit les lignes de processus d'aide dans
-    n'importe quel ordre, détruisant tout ordre qui aurait pu exister.
-   </para>
+  <para>
+   Quand le n&oelig;ud principal de la portion parallélisée est
+   <literal>Gather Merge</literal> au lieu de <literal>Gather</literal>, cela
+   indique que chaque processus exécutant la portion parallélisée du plan
+   produit des lignes triées, et que le processus principal s'occupe de
+   conserver l'ordre des lignes pendant leur assemblage. Par contre,
+   <literal>Gather</literal> lit les lignes de processus d'aide dans
+   n'importe quel ordre, détruisant tout ordre qui aurait pu exister.
+  </para>
  </sect1>
 
  <sect1 id="when-can-parallel-query-be-used">
   <title>Quand la parallélisation des requêtes peut-elle être utilisée&nbsp;?</title>
 
   <para>
-    Il existe plusieurs paramètres pouvant empêcher le planificateur
-    de la requête de générer un plan parallélisé quelles que soient les
-    circonstances. Pour faire en sorte que des plans parallélisés puissent
-    être générés, les paramètres suivants doivent être configurés ainsi&nbsp;:
+   Il existe plusieurs paramètres pouvant empêcher le planificateur
+   de la requête de générer un plan parallélisé quelles que soient les
+   circonstances. Pour faire en sorte que des plans parallélisés puissent
+   être générés, les paramètres suivants doivent être configurés ainsi&nbsp;:
   </para>
 
   <itemizedlist>
-    <listitem>
-      <para>
-        <xref linkend="guc-max-parallel-workers-per-gather"/> doit être
-        configuré à une valeur strictement positive. Ceci est un cas spécial
-        du principe plus général qu'il n'y aura pas plus de
-        <foreignphrase>workers</foreignphrase> que le nombre configuré via
-        <varname>max_parallel_workers_per_gather</varname>.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     <xref linkend="guc-max-parallel-workers-per-gather"/> doit être
+     configuré à une valeur strictement positive. Ceci est un cas spécial
+     du principe plus général qu'il n'y aura pas plus de
+     <foreignphrase>workers</foreignphrase> que le nombre configuré via
+     <varname>max_parallel_workers_per_gather</varname>.
+    </para>
+   </listitem>
   </itemizedlist>
 
   <para>
-    De plus, le système ne doit pas fonctionner en mode mono-utilisateur.
-    Comme le système de bases de données entier fonctionne alors avec un seul
-    processus, aucun <foreignphrase>background
+   De plus, le système ne doit pas fonctionner en mode mono-utilisateur.
+   Comme le système de bases de données entier fonctionne alors avec un seul
+   processus, aucun <foreignphrase>background
     worker</foreignphrase> ne sera disponible.
   </para>
 
   <para>
-    Même quand il est possible, dans l'absolu, de générer des plans pour
-    des requêtes parallélisées, le planificateur n'en générera pas
-    pour une requête donnée si une des conditions suivantes se vérifie&nbsp;:
+   Même quand il est possible, dans l'absolu, de générer des plans pour
+   des requêtes parallélisées, le planificateur n'en générera pas
+   pour une requête donnée si une des conditions suivantes se vérifie&nbsp;:
   </para>
 
   <itemizedlist>
-    <listitem>
-      <para>
-        La requête écrit des données ou verrouille des lignes de la base. Si
-        une requête contient une opération de modification de données, soit au
-        niveau supérieur, soit dans une CTE, aucun plan parallèle ne peut être
-        généré pour cette requête. Il existe des exceptions&nbsp;: les
-        commandes <literal>CREATE TABLE ... AS</literal>, <literal>SELECT
-        INTO</literal> et <literal>CREATE MATERIALIZED VIEW</literal>, qui
-        créent une nouvelle table et la peuplent, peuvent utiliser un plan
-        parallélisé.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     La requête écrit des données ou verrouille des lignes de la base. Si
+     une requête contient une opération de modification de données, soit au
+     niveau supérieur, soit dans une CTE, aucun plan parallèle ne peut être
+     généré pour cette requête. Il existe des exceptions&nbsp;: les
+     commandes <literal>CREATE TABLE ... AS</literal>, <literal>SELECT
+      INTO</literal> et <literal>CREATE MATERIALIZED VIEW</literal>, qui
+     créent une nouvelle table et la peuplent, peuvent utiliser un plan
+     parallélisé.
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        La requête est susceptible d'être suspendue durant l'exécution. Dans des
-        situations où le système pense qu'une exécution pourrait être partielle ou
-        incrémentale, aucun plan parallèle n'est généré.
-        Par exemple, un curseur créé avec <link
-        linkend="sql-declare">DECLARE CURSOR</link> n'utilisera jamais un plan
-        parallélisé. De façon similaire, une boucle PL/pgSQL de la forme
-        <literal>FOR x IN query LOOP .. END LOOP</literal> n'utilisera jamais
-        un plan parallélisé, car le système est incapable de vérifier que le
-        code dans la boucle peut s'exécuter en toute sécurité avec une requête
-        parallélisée.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     La requête est susceptible d'être suspendue durant l'exécution. Dans des
+     situations où le système pense qu'une exécution pourrait être partielle ou
+     incrémentale, aucun plan parallèle n'est généré.
+     Par exemple, un curseur créé avec <link
+     linkend="sql-declare">DECLARE CURSOR</link> n'utilisera jamais un plan
+     parallélisé. De façon similaire, une boucle PL/pgSQL de la forme
+     <literal>FOR x IN query LOOP .. END LOOP</literal> n'utilisera jamais
+     un plan parallélisé, car le système est incapable de vérifier que le
+     code dans la boucle peut s'exécuter en toute sécurité avec une requête
+     parallélisée.
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        La requête utilise une fonction marquée
-        <literal>PARALLEL UNSAFE</literal> (à parallélisation non sûre).
-        La plupart des fonctions systèmes sont
-        <literal>PARALLEL SAFE</literal> (à parallélisation sûre),
-        mais les fonctions utilisateurs sont marquées
-        <literal>PARALLEL UNSAFE</literal> par défaut. Voir la discussion
-        de <xref linkend="parallel-safety"/>.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     La requête utilise une fonction marquée
+     <literal>PARALLEL UNSAFE</literal> (à parallélisation non sûre).
+     La plupart des fonctions systèmes sont
+     <literal>PARALLEL SAFE</literal> (à parallélisation sûre),
+     mais les fonctions utilisateurs sont marquées
+     <literal>PARALLEL UNSAFE</literal> par défaut. Voir la discussion
+     de <xref linkend="parallel-safety"/>.
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        La requête est exécutée à l'intérieur d'une autre requête qui est déjà
-        parallélisée. Par exemple, si une fonction appelée par une requête
-        parallélisée exécute elle-même une requête SQL, celle-ci
-        n'utilisera jamais un plan parallélisé. Ceci est une limitation de
-        l'implémentation actuelle, mais il ne serait pas forcément souhaitable de la
-        supprimer, car cela pourrait mener à ce qu'une seule requête
-        utilise un très grand nombre de processus.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     La requête est exécutée à l'intérieur d'une autre requête qui est déjà
+     parallélisée. Par exemple, si une fonction appelée par une requête
+     parallélisée exécute elle-même une requête SQL, celle-ci
+     n'utilisera jamais un plan parallélisé. Ceci est une limitation de
+     l'implémentation actuelle, mais il ne serait pas forcément souhaitable de la
+     supprimer, car cela pourrait mener à ce qu'une seule requête
+     utilise un très grand nombre de processus.
+    </para>
+   </listitem>
   </itemizedlist>
 
   <para>
-    Même quand un plan parallélisé est généré pour une requête donnée,
-    certaines circonstances rendront impossible l'exécution en
-    parallèle. Si cela arrive, le
-    <foreignphrase>leader</foreignphrase> exécutera tout seul la portion du
-    plan sous le n&oelig;ud <literal>Gather</literal>, pratiquement comme s'il
-    n'était pas là. Ceci
-    surviendra si une des conditions suivantes est vérifiée&nbsp;:
+   Même quand un plan parallélisé est généré pour une requête donnée,
+   certaines circonstances rendront impossible l'exécution en
+   parallèle. Si cela arrive, le
+   <foreignphrase>leader</foreignphrase> exécutera tout seul la portion du
+   plan sous le n&oelig;ud <literal>Gather</literal>, pratiquement comme s'il
+   n'était pas là. Ceci
+   surviendra si une des conditions suivantes est vérifiée&nbsp;:
   </para>
 
   <itemizedlist>
-    <listitem>
-      <para>
-        Aucun <foreignphrase>background worker</foreignphrase> ne peut être
-        obtenu à cause de la limitation sur le nombre total de
-        <foreignphrase>background workers</foreignphrase>, due au paramètre
-        <xref linkend="guc-max-worker-processes"/>.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     Aucun <foreignphrase>background worker</foreignphrase> ne peut être
+     obtenu à cause de la limitation sur le nombre total de
+     <foreignphrase>background workers</foreignphrase>, due au paramètre
+     <xref linkend="guc-max-worker-processes"/>.
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        Aucun background worker ne peut être obtenu à cause de la limitation
-        sur le nombre total de <foreignphrase>background workers</foreignphrase>,
-        démarrés dans le cadre de requêtes parallèles,
-        qui ne peut pas dépasser <xref linkend="guc-max-parallel-workers"/>.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     Aucun background worker ne peut être obtenu à cause de la limitation
+     sur le nombre total de <foreignphrase>background workers</foreignphrase>,
+     démarrés dans le cadre de requêtes parallèles,
+     qui ne peut pas dépasser <xref linkend="guc-max-parallel-workers"/>.
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        Le client envoie un message Execute avec un nombre de lignes à récupérer
-        différent de zéro. Voir la discussion sur le <link
-        linkend="protocol-flow-ext-query">protocole de requête étendu</link>.
-        Comme la bibliothèque <link linkend="libpq">libpq</link> ne fournit
-        actuellement aucun moyen pour envoyer ce type de message, cela ne peut
-        survenir qu'en utilisant un client qui ne se base
-        pas sur la libpq. Si cela arrive fréquemment, ce pourrait être une
-        bonne idée de configurer <xref
-        linkend="guc-max-parallel-workers-per-gather"/> à zéro pour les
-        sessions concernées, pour éviter de générer des plans
-        de requêtes non optimaux s'ils sont exécutés de façon sérialisée.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     Le client envoie un message Execute avec un nombre de lignes à récupérer
+     différent de zéro. Voir la discussion sur le <link
+     linkend="protocol-flow-ext-query">protocole de requête étendu</link>.
+     Comme la bibliothèque <link linkend="libpq">libpq</link> ne fournit
+     actuellement aucun moyen pour envoyer ce type de message, cela ne peut
+     survenir qu'en utilisant un client qui ne se base
+     pas sur la libpq. Si cela arrive fréquemment, ce pourrait être une
+     bonne idée de configurer <xref
+     linkend="guc-max-parallel-workers-per-gather"/> à zéro pour les
+     sessions concernées, pour éviter de générer des plans
+     de requêtes non optimaux s'ils sont exécutés de façon sérialisée.
+    </para>
+   </listitem>
   </itemizedlist>
  </sect1>
 
@@ -265,75 +265,75 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
   <title>Plans parallélisés</title>
 
   <para>
-    Comme chaque <foreignphrase>worker</foreignphrase> exécute la portion
-    parallélisée du plan jusqu'à la fin, il n'est pas possible de prendre un
-    plan de requête ordinaire et de l'exécuter en utilisant plusieurs
-    <foreignphrase>workers</foreignphrase>. Chaque
-    <foreignphrase>worker</foreignphrase> produirait une copie complète du
-    jeu de résultats, donc la requête ne s'exécuterait pas
-    plus rapidement qu'à la normale, et produirait des résultats incorrects.
-    À la place, en interne, l'optimiseur considère la portion parallélisée du
-    plan comme un <firstterm>plan partiel</firstterm>&nbsp;; c'est-à-dire
-    construit pour que chaque processus exécutant le plan ne génère qu'un
-    sous-ensemble des lignes en sortie, et que chacune ait la garantie d'être
-    générée par exactement un des processus participants. Habituellement, cela
-    signifie que le parcours de la table directrice de la requête sera un
-    parcours parallélisable (<foreignphrase>parallel-aware</foreignphrase>).
+   Comme chaque <foreignphrase>worker</foreignphrase> exécute la portion
+   parallélisée du plan jusqu'à la fin, il n'est pas possible de prendre un
+   plan de requête ordinaire et de l'exécuter en utilisant plusieurs
+   <foreignphrase>workers</foreignphrase>. Chaque
+   <foreignphrase>worker</foreignphrase> produirait une copie complète du
+   jeu de résultats, donc la requête ne s'exécuterait pas
+   plus rapidement qu'à la normale, et produirait des résultats incorrects.
+   À la place, en interne, l'optimiseur considère la portion parallélisée du
+   plan comme un <firstterm>plan partiel</firstterm>&nbsp;; c'est-à-dire
+   construit pour que chaque processus exécutant le plan ne génère qu'un
+   sous-ensemble des lignes en sortie, et que chacune ait la garantie d'être
+   générée par exactement un des processus participants. Habituellement, cela
+   signifie que le parcours de la table directrice de la requête sera un
+   parcours parallélisable (<foreignphrase>parallel-aware</foreignphrase>).
   </para>
 
- <sect2 id="parallel-scans">
-  <title>Parcours parallélisés</title>
+  <sect2 id="parallel-scans">
+   <title>Parcours parallélisés</title>
 
-  <para>
+   <para>
     Les types suivants de parcours de table sont actuellement
     parallélisables&nbsp;:
 
-  <itemizedlist>
-    <listitem>
+    <itemizedlist>
+     <listitem>
       <para>
-        Lors d'un <emphasis>parcours séquentiel parallèle</emphasis>, les blocs
-        de la table seront divisés entre les processus participant au parcours.
-        Les blocs sont retournés un à la fois, afin que l'accès à la table
-        reste séquentiel.
+       Lors d'un <emphasis>parcours séquentiel parallèle</emphasis>, les blocs
+       de la table seront divisés entre les processus participant au parcours.
+       Les blocs sont retournés un à la fois, afin que l'accès à la table
+       reste séquentiel.
       </para>
-    </listitem>
-    <listitem>
+     </listitem>
+     <listitem>
       <para>
-        Lors d'un <emphasis>parcours de bitmap parallèle</emphasis>, un
-        processus est choisi pour être le dirigeant
-        (<foreignphrase>leader</foreignphrase>). Ce processus effectue le
-        parcours d'un ou plusieurs index et construit un bitmap indiquant quels
-        blocs de la table doivent être visités. Ces blocs sont alors divisés entre
-        les processus participants comme lors d'un parcours d'accès séquentiel.
-        En d'autres termes, le parcours de la table est effectué
-        en parallèle, mais le parcours d'index associé ne l'est pas.
+       Lors d'un <emphasis>parcours de bitmap parallèle</emphasis>, un
+       processus est choisi pour être le dirigeant
+       (<foreignphrase>leader</foreignphrase>). Ce processus effectue le
+       parcours d'un ou plusieurs index et construit un bitmap indiquant quels
+       blocs de la table doivent être visités. Ces blocs sont alors divisés entre
+       les processus participants comme lors d'un parcours d'accès séquentiel.
+       En d'autres termes, le parcours de la table est effectué
+       en parallèle, mais le parcours d'index associé ne l'est pas.
       </para>
-    </listitem>
-    <listitem>
+     </listitem>
+     <listitem>
       <para>
-        Lors d'un <emphasis>parcours d'index parallèle</emphasis> ou d'un
-        <emphasis>parcours d'index seul parallèle</emphasis>, les processus
-        participants lisent les données depuis l'index chacun à leur tour.
-        Actuellement, les parcours d'index parallèles ne sont
-        supportés que pour les index btree. Chaque processus réclamera un seul
-        bloc de l'index, et scannera et retournera toutes les lignes référencées
-        par ce bloc&nbsp;; les autres processus peuvent être en train de retourner
-        des lignes d'un bloc différent de l'index au même moment. Les
-        résultats d'un parcours d'index parallèle sont retournés triés au sein
-        de chaque worker parallèle.
+       Lors d'un <emphasis>parcours d'index parallèle</emphasis> ou d'un
+       <emphasis>parcours d'index seul parallèle</emphasis>, les processus
+       participants lisent les données depuis l'index chacun à leur tour.
+       Actuellement, les parcours d'index parallèles ne sont
+       supportés que pour les index btree. Chaque processus réclamera un seul
+       bloc de l'index, et scannera et retournera toutes les lignes référencées
+       par ce bloc&nbsp;; les autres processus peuvent être en train de retourner
+       des lignes d'un bloc différent de l'index au même moment. Les
+       résultats d'un parcours d'index parallèle sont retournés triés au sein
+       de chaque worker parallèle.
       </para>
-    </listitem>
-  </itemizedlist>
+     </listitem>
+    </itemizedlist>
 
     Dans le futur, d'autres types de parcours pourraient supporter la
     parallélisation, comme les parcours d'index autres que btree.
-  </para>
- </sect2>
+   </para>
+  </sect2>
 
- <sect2 id="parallel-joins">
-  <title>Jointures parallélisées</title>
+  <sect2 id="parallel-joins">
+   <title>Jointures parallélisées</title>
 
-  <para>
+   <para>
     Tout comme dans les plans non parallélisés, la table conductrice peut être
     jointe à une ou plusieurs autres tables en utilisant une boucle imbriquée,
     une jointure par hachage ou une jointure par tri-fusion. Le côté interne de
@@ -341,43 +341,43 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     ailleurs supporté par l'optimiseur, pourvu qu'il soit sans danger de le
     lancer au sein d'un worker parallèle. Suivant le type de jointure,
     la relation interne peut aussi être un plan parallélisé.
-  </para>
+   </para>
 
-  <itemizedlist>
+   <itemizedlist>
     <listitem>
-      <para>
-        Dans une <emphasis>boucle imbriquée</emphasis>, le côté
-        interne n'est jamais parallèle. Bien qu'il soit exécuté intégralement,
-        c'est efficace si le côté interne est un parcours d'index, car les
-        enregistrements extérieurs sont partagés entre les processus d'aide,
-        et donc aussi les boucles qui recherchent les valeurs dans l'index.
-      </para>
+     <para>
+      Dans une <emphasis>boucle imbriquée</emphasis>, le côté
+      interne n'est jamais parallèle. Bien qu'il soit exécuté intégralement,
+      c'est efficace si le côté interne est un parcours d'index, car les
+      enregistrements extérieurs sont partagés entre les processus d'aide,
+      et donc aussi les boucles qui recherchent les valeurs dans l'index.
+     </para>
     </listitem>
     <listitem>
-      <para>
-        Dans une <emphasis>jointure par tri-fusion</emphasis>, le côté intérieur
-        n'est jamais parallélisé et donc toujours exécuté intégralement. Ce peut
-        être inefficace, surtout s'il faut faire un tri, car le travail et les
-        résultats sont dupliqués dans tous les processus participants.
-      </para>
+     <para>
+      Dans une <emphasis>jointure par tri-fusion</emphasis>, le côté intérieur
+      n'est jamais parallélisé et donc toujours exécuté intégralement. Ce peut
+      être inefficace, surtout s'il faut faire un tri, car le travail et les
+      résultats sont dupliqués dans tous les processus participants.
+     </para>
     </listitem>
     <listitem>
-      <para>
-        Dans une <emphasis>jointure par hachage</emphasis> (sans l'adjectif
-        «&nbsp;parallélisée&nbsp;»), le côté intérieur est exécuté intégralement
-        par chaque processus participant pour fabriquer des copies identiques
-        de la table de hachage. Cela peut être inefficace si cette table est
-        grande ou le plan coûteux. Dans une <emphasis>jointure par hachage
-        parallélisée</emphasis>, le côté interne est un <emphasis>hachage
-        parallèle</emphasis> qui divise le travail sur une table de hachage
-        partagée entre les processus participants.
-      </para>
+     <para>
+      Dans une <emphasis>jointure par hachage</emphasis> (sans l'adjectif
+      «&nbsp;parallélisée&nbsp;»), le côté intérieur est exécuté intégralement
+      par chaque processus participant pour fabriquer des copies identiques
+      de la table de hachage. Cela peut être inefficace si cette table est
+      grande ou le plan coûteux. Dans une <emphasis>jointure par hachage
+       parallélisée</emphasis>, le côté interne est un <emphasis>hachage
+       parallèle</emphasis> qui divise le travail sur une table de hachage
+      partagée entre les processus participants.
+     </para>
     </listitem>
-  </itemizedlist>
- </sect2>
+   </itemizedlist>
+  </sect2>
 
- <sect2 id="parallel-aggregation">
-  <title>Agrégations parallélisées</title>
+  <sect2 id="parallel-aggregation">
+   <title>Agrégations parallélisées</title>
    <para>
     <productname>PostgreSQL</productname> procède à l'agrégation parallélisée
     en deux étapes. Tout d'abord, chaque processus de la
@@ -400,7 +400,7 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     de groupes en comparaison du nombre de lignes en entrée apparaîtront comme
     moins favorables au planificateur de requêtes. Par exemple, dans le pire
     scénario, le nombre de groupes vus par le n&oelig;ud <literal>Finalize
-    Aggregate</literal> pourrait être aussi grand que le nombre de lignes en
+     Aggregate</literal> pourrait être aussi grand que le nombre de lignes en
     entrée traitées par les processus workers à l'étape
     <literal>Partial Aggregate</literal>. Dans de tels cas, au niveau des
     performances il n'y a clairement aucun intérêt à utiliser
@@ -412,13 +412,13 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
    <para>
     L'agrégation parallélisée n'est pas supportée dans toutes les situations.
     Chaque agrégat doit être <link linkend="parallel-safety">à parallélisation
-    sûre</link> et doit avoir une fonction de combinaison. Si
+     sûre</link> et doit avoir une fonction de combinaison. Si
     l'agrégat a un état de transition de type <literal>internal</literal>, il
     doit avoir des fonctions de sérialisation et de désérialisation. Voir
     <xref linkend="sql-createaggregate"/> pour plus de détails. L'agrégation
     parallélisée n'est pas supportée si un appel à la fonction d'agrégat
     contient une clause <literal>DISTINCT</literal> ou <literal>ORDER
-    BY</literal> ainsi que pour les agrégats d'ensembles triés ou quand la
+     BY</literal> ainsi que pour les agrégats d'ensembles triés ou quand la
     requête contient une clause <literal>GROUPING SETS</literal>. Elle ne peut
     être utilisée que si toutes les jointures impliquées dans la requête sont
     dans la partie parallélisée du plan.
@@ -429,59 +429,59 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
    <title>Parallel Append</title>
 
    <para>
-     Quand <productname>PostgreSQL</productname> a besoin de combiner des
-     lignes de plusieurs sources dans un seul ensemble de résultats, il
-     utilise un nœud <literal>Append</literal> ou <literal>MergeAppend</literal>.
-     Cela arrive souvent en implémentant un <literal>UNION ALL</literal> ou en
-     parcourant une table partitionnée. Ces nœuds peuvent être utilisés dans des
-     plans parallélisés aussi bien que dans n'importe quel autre plan.
-     Cependant, dans un plan parallélisé, le planificateur peut utiliser un
-     nœud <literal>Parallel Append</literal> à la place.
+    Quand <productname>PostgreSQL</productname> a besoin de combiner des
+    lignes de plusieurs sources dans un seul ensemble de résultats, il
+    utilise un nœud <literal>Append</literal> ou <literal>MergeAppend</literal>.
+    Cela arrive souvent en implémentant un <literal>UNION ALL</literal> ou en
+    parcourant une table partitionnée. Ces nœuds peuvent être utilisés dans des
+    plans parallélisés aussi bien que dans n'importe quel autre plan.
+    Cependant, dans un plan parallélisé, le planificateur peut utiliser un
+    nœud <literal>Parallel Append</literal> à la place.
    </para>
 
    <para>
-     Quand un nœud <literal>Append</literal> est utilisé au sein d'un plan
-     parallélisé, chaque processus exécutera les plans enfants dans l'ordre où
-     ils apparaissent, de manière à ce que tous les processus participants
-     coopèrent pour exécuter le premier plan enfant jusqu'à la fin, et passent
-     au plan suivant à peu près au même moment. Quand un
-     <literal>Parallel Append</literal> est utilisé à la place, l'exécuteur va
-     par contre répartir les processus participants aussi uniformément que
-     possible entre ses plans enfants, pour que les multiples plans enfants
-     soient exécutés simultanément. Cela évite la contention, et évite aussi de
-     payer le coût de démarrage d'un plan enfant dans les processus qui ne
-     l'exécutent jamais.
+    Quand un nœud <literal>Append</literal> est utilisé au sein d'un plan
+    parallélisé, chaque processus exécutera les plans enfants dans l'ordre où
+    ils apparaissent, de manière à ce que tous les processus participants
+    coopèrent pour exécuter le premier plan enfant jusqu'à la fin, et passent
+    au plan suivant à peu près au même moment. Quand un
+    <literal>Parallel Append</literal> est utilisé à la place, l'exécuteur va
+    par contre répartir les processus participants aussi uniformément que
+    possible entre ses plans enfants, pour que les multiples plans enfants
+    soient exécutés simultanément. Cela évite la contention, et évite aussi de
+    payer le coût de démarrage d'un plan enfant dans les processus qui ne
+    l'exécutent jamais.
    </para>
 
    <para>
-     À l'inverse d'un nœud <literal>Append</literal> habituel, qui ne peut
-     avoir des enfants partiels que s'il est utilisé dans un plan parallélisé,
-     un nœud <literal>Parallel Append</literal> peut avoir à la fois des plans
-     enfants partiels et non partiels. Les enfants non partiels seront parcourus
-     par un seul processus, puisque les parcourir plus d'une fois provoquerait
-     une duplication des résultats. Les plans qui impliquent l'ajout de
-     plusieurs ensembles de résultat peuvent alors parvenir à un
-     parallélisme «&nbsp;à gros grains&nbsp;» même si des plans partiels
-     efficaces ne sont pas possibles. Par exemple, soit une requête sur une
-     table partitionnée, qui ne peut être implémentée efficacement qu'en
-     utilisant un index qui ne supporte pas les parcours parallélisés. Le
-     planificateur peut choisir un <literal>Parallel Append</literal> de
-     l'<literal>Index Scan</literal> habituel&nbsp; chaque parcours séparé
-     de l'index devra être exécuté jusqu'à la fin par un seul processus, mais
-     des parcours différents peuvent être exécutés au même moment par des
-     processus différents.
+    À l'inverse d'un nœud <literal>Append</literal> habituel, qui ne peut
+    avoir des enfants partiels que s'il est utilisé dans un plan parallélisé,
+    un nœud <literal>Parallel Append</literal> peut avoir à la fois des plans
+    enfants partiels et non partiels. Les enfants non partiels seront parcourus
+    par un seul processus, puisque les parcourir plus d'une fois provoquerait
+    une duplication des résultats. Les plans qui impliquent l'ajout de
+    plusieurs ensembles de résultat peuvent alors parvenir à un
+    parallélisme «&nbsp;à gros grains&nbsp;» même si des plans partiels
+    efficaces ne sont pas possibles. Par exemple, soit une requête sur une
+    table partitionnée, qui ne peut être implémentée efficacement qu'en
+    utilisant un index qui ne supporte pas les parcours parallélisés. Le
+    planificateur peut choisir un <literal>Parallel Append</literal> de
+    l'<literal>Index Scan</literal> habituel&nbsp; chaque parcours séparé
+    de l'index devra être exécuté jusqu'à la fin par un seul processus, mais
+    des parcours différents peuvent être exécutés au même moment par des
+    processus différents.
    </para>
 
    <para>
-     <xref linkend="guc-enable-parallel-append" /> peut être utilisé pour
-     désactiver cette fonctionnalité.
+    <xref linkend="guc-enable-parallel-append" /> peut être utilisé pour
+    désactiver cette fonctionnalité.
    </para>
   </sect2>
 
- <sect2 id="parallel-plan-tips">
-  <title>Conseils pour les plans parallélisés</title>
+  <sect2 id="parallel-plan-tips">
+   <title>Conseils pour les plans parallélisés</title>
 
-  <para>
+   <para>
     Si une requête ne produit pas un plan parallélisé comme attendu,
     vous pouvez tenter de réduire <xref linkend="guc-parallel-setup-cost"/>
     ou <xref linkend="guc-parallel-tuple-cost"/>.
@@ -493,87 +493,87 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     pour votre requête. Voir <xref linkend="when-can-parallel-query-be-used"/>
     et <xref linkend="parallel-safety"/> pour
     des explications sur les causes possibles.
-  </para>
+   </para>
 
-  <para>
+   <para>
     Lors de l'exécution d'un plan parallélisé, vous pouvez utiliser
     <literal>EXPLAIN (ANALYZE, VERBOSE)</literal> qui affichera des
     statistiques par <foreignphrase>worker</foreignphrase> pour chaque
     n&oelig;ud du plan. Ce peut être utile pour déterminer si le travail
     est correctement distribué entre les n&oelig;uds du plan et plus
     généralement pour comprendre les caractéristiques de performance du plan.
-  </para>
+   </para>
 
- </sect2>
+  </sect2>
  </sect1>
 
  <sect1 id="parallel-safety">
   <title>Sécurité de la parallélisation</title>
 
   <para>
-    Le planificateur classifie les opérations impliquées dans une requête
-    comme étant à <firstterm>parallélisation sûre</firstterm>,
-    <firstterm>parallélisation restreinte</firstterm>, ou
-	<firstterm>parallélisation non sûre</firstterm>. Une opération
-    à parallélisation sûre
-    est une opération n'entrant pas en conflit avec une
-    requête parallélisée. Une opération à parallélisation restreinte
-    ne peut pas être exécutée par un
-    <foreignphrase>worker</foreignphrase> parallélisé, mais peut l'être
-    par le <foreignphrase>leader</foreignphrase> pendant
-    l'exécution. De ce fait, les opérations à parallélisation
-    restreinte ne peuvent jamais survenir sous un n&oelig;ud
-    <literal>Gather</literal> ou <literal>Gather Merge</literal>. Une
-    opération à parallélisation non sûre ne peut être exécutée dans une
-    requête parallélisée, y compris au niveau du
-    <foreignphrase>leader</foreignphrase>. Quand une requête contient quoi que
-    ce soit de non sûr à paralléliser, la parallélisation y est
-    complètement désactivée.
+   Le planificateur classifie les opérations impliquées dans une requête
+   comme étant à <firstterm>parallélisation sûre</firstterm>,
+   <firstterm>parallélisation restreinte</firstterm>, ou
+   <firstterm>parallélisation non sûre</firstterm>. Une opération
+   à parallélisation sûre
+   est une opération n'entrant pas en conflit avec une
+   requête parallélisée. Une opération à parallélisation restreinte
+   ne peut pas être exécutée par un
+   <foreignphrase>worker</foreignphrase> parallélisé, mais peut l'être
+   par le <foreignphrase>leader</foreignphrase> pendant
+   l'exécution. De ce fait, les opérations à parallélisation
+   restreinte ne peuvent jamais survenir sous un n&oelig;ud
+   <literal>Gather</literal> ou <literal>Gather Merge</literal>. Une
+   opération à parallélisation non sûre ne peut être exécutée dans une
+   requête parallélisée, y compris au niveau du
+   <foreignphrase>leader</foreignphrase>. Quand une requête contient quoi que
+   ce soit de non sûr à paralléliser, la parallélisation y est
+   complètement désactivée.
   </para>
 
   <para>
-    Les opérations suivantes sont toujours à parallélisation restreinte.
+   Les opérations suivantes sont toujours à parallélisation restreinte.
   </para>
 
   <itemizedlist>
-    <listitem>
-      <para>
-        Parcours de CTE (<foreignphrase>Common Table Expressions</foreignphrase>).
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     Parcours de CTE (<foreignphrase>Common Table Expressions</foreignphrase>).
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        Parcours de tables temporaires.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     Parcours de tables temporaires.
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        Parcours de tables externes, sauf si le wrapper de données distantes a
-        une API <literal>IsForeignScanParallelSafe</literal> qui indique le
-        contraire.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     Parcours de tables externes, sauf si le wrapper de données distantes a
+     une API <literal>IsForeignScanParallelSafe</literal> qui indique le
+     contraire.
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        Nœuds du plan pour lesquels un <literal>InitPlan</literal> est
-        attaché.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     Nœuds du plan pour lesquels un <literal>InitPlan</literal> est
+     attaché.
+    </para>
+   </listitem>
 
-    <listitem>
-      <para>
-        Nœuds du plan qui référencent un <literal>SubPlan</literal> corrélé.
-      </para>
-    </listitem>
+   <listitem>
+    <para>
+     Nœuds du plan qui référencent un <literal>SubPlan</literal> corrélé.
+    </para>
+   </listitem>
   </itemizedlist>
 
- <sect2 id="parallel-labeling">
-  <title>Marquage de parallélisation pour les fonctions et agrégats</title>
+  <sect2 id="parallel-labeling">
+   <title>Marquage de parallélisation pour les fonctions et agrégats</title>
 
-  <para>
+   <para>
     Le planificateur ne peut pas déterminer automatiquement si une fonction ou
     un agrégat définis par un utilisateur est à parallélisation sûre,
     restreinte ou non sûre, car cela nécessiterait de pouvoir prédire
@@ -591,11 +591,11 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     <literal>PARALLEL</literal> peut être spécifiée comme
     <literal>SAFE</literal>, <literal>RESTRICTED</literal> ou
     <literal>UNSAFE</literal>.
-  </para>
+   </para>
 
-  <para>
+   <para>
     Les fonctions et agrégats doivent être marqués <literal>PARALLEL
-    UNSAFE</literal> s'ils écrivent dans la base, accèdent à des séquences,
+     UNSAFE</literal> s'ils écrivent dans la base, accèdent à des séquences,
     modifient l'état de la transaction même temporairement (par exemple, une
     fonction PL/pgSQL qui définit un bloc <literal>EXCEPTION</literal> pour
     récupérer des erreurs), ou font des modifications persistantes sur les
@@ -607,9 +607,9 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     <foreignphrase>workers</foreignphrase>. Par exemple,
     <literal>setseed</literal> et <literal>random</literal> sont à
     parallélisation restreinte pour cette dernière raison.
-  </para>
+   </para>
 
-  <para>
+   <para>
     En général, si une fonction est marquée comme étant sûre alors qu'elle ne
     l'est pas, ou si elle est marquée restreinte alors que sa
     parallélisation en fait n'est pas sûre, elle
@@ -620,9 +620,9 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     arbitraire. Cela étant dit, dans la plupart des cas, le résultat ne sera pas
     pire qu'avec toute autre fonction. En cas de doute, le mieux est probablement
     de marquer les fonctions en tant que <literal>UNSAFE</literal>.
-  </para>
+   </para>
 
-  <para>
+   <para>
     Si une fonction exécutée avec un <foreignphrase>worker</foreignphrase>
     parallèle acquiert des verrous non détenus par le
     <foreignphrase>leader</foreignphrase>, par exemple en exécutant une
@@ -633,9 +633,9 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     fonctions comme <literal>PARALLEL RESTRICTED</literal> pour vous assurer
     qu'elles ne s'exécutent qu'au sein du
     <foreignphrase>leader</foreignphrase>.
-  </para>
+   </para>
 
-  <para>
+   <para>
     Notez que le planificateur de requêtes ne cherche pas à différer
     l'évaluation des fonctions ou agrégats à parallélisation restreinte
     impliqués dans la requête pour obtenir un meilleur plan. Donc, par
@@ -648,10 +648,10 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     clause <literal>WHERE</literal> afin qu'elle se déroule au-dessus du
     n&oelig;ud <literal>Gather</literal>. Néanmoins, le planificateur ne le
     fait pas.
-  </para>
+   </para>
 
- </sect2>
+  </sect2>
 
  </sect1>
 
- </chapter>
+</chapter>
