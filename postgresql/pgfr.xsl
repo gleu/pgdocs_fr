@@ -78,6 +78,9 @@
 	<xsl:text disable-output-escaping="yes">
 	<![CDATA[<?php include "../lib/bandeau_doc.php" ?>]]>
 	</xsl:text>
+	<xsl:text disable-output-escaping="yes">
+	<![CDATA[<?php include "../lib/search_widget.php" ?>]]>
+    </xsl:text>
 	</xsl:if>
     <div class="pgContent">
 	  <xsl:call-template name="breadcrumbs"/>
