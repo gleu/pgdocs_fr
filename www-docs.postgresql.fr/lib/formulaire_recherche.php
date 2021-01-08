@@ -18,18 +18,16 @@
   $query = "SELECT p.version as version, v.ordre, count(*) as nb FROM pages p JOIN versions v USING(version) GROUP BY p.version, v.ordre ORDER BY v.ordre";
   $result = pg_query($pgconn, $query);
 
-  echo '<option value="0"';
-  if ($filtreversion=='0') echo ' SELECTED';
-  echo '>(toutes)</option>';
-  $ligne = 1;
   while ($ligne = pg_fetch_array($result))
   {
     echo '<option value="'.$ligne['version'].'"';
     if ($filtreversion==$ligne['version'] or (strlen($filtreversion)==0 and $ligne==1))
       echo ' SELECTED';
     echo '>'.$ligne['version'].' ('.$ligne['nb'].' pages)</option>';
-    $ligne++;
   }
+  echo '<option value="0"';
+  if ($filtreversion=='0') echo ' SELECTED';
+  echo '>Toutes versions</option>';
 ?>
               </select>
               <input id="submit" name="submit" type="submit" value="Rechercher" />
