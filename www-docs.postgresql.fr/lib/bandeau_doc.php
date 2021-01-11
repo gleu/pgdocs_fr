@@ -5,15 +5,17 @@
 "23" alt="" /></div>
 <ul class="pgTopNavList">
 <?php
-$DSN = "host=localhost dbname=docspgfr user=docspgfr";
+  $DSN = "host=localhost dbname=docspgfr user=docspgfr";
 
-$pgconn = pg_connect("$DSN");
+  $pgconn = pg_connect("$DSN");
 
-if ($pgconn)
-{
-  $query = "SET client_encoding TO utf8;";
-  $result = pg_query($pgconn, $query);
-}
+  if ($pgconn)
+  {
+    $query = "SET client_encoding TO utf8;";
+    $result = pg_query($pgconn, $query);
+  }
+
+  $version = substr($_SERVER['PHP_SELF'], 1, strpos($_SERVER['PHP_SELF'], "/", 1)-1);
   $url = substr(strrchr($_SERVER['PHP_SELF'], "/"), 1);
 
   if (!$pgconn)
@@ -63,6 +65,7 @@ if ($pgconn)
 
   echo "<li>Version originale ";
   echo '<a href="https://www.postgresql.org/docs'.$_SERVER['PHP_SELF'].'">EN</a>&nbsp;&nbsp;';
+  echo "</li>";
 ?>
 </ul>
 </div>
