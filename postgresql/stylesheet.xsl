@@ -27,18 +27,11 @@
     <xsl:otherwise>
       pgfr.css
       fontawesome.css
-      bootstrap.min.css
       main.css
       normalize.css
     </xsl:otherwise>
   </xsl:choose>
 </xsl:param>
-
-
-<!-- strip directory name from image filerefs -->
-<xsl:template match="imagedata/@fileref">
- <xsl:value-of select="substring-after(., '/')"/>
-</xsl:template>
 
 
 <!--
