@@ -26,9 +26,7 @@
     <xsl:when test="$website.stylesheet = 0">stylesheet.css</xsl:when>
     <xsl:otherwise>
       pgfr.css
-      fontawesome.css
-      main.css
-      normalize.css
+      docs-complete.css
     </xsl:otherwise>
   </xsl:choose>
 </xsl:param>
