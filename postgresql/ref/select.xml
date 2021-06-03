@@ -32,7 +32,7 @@ SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replac
     [ * | <replaceable class="parameter">expression</replaceable> [ [ AS ] <replaceable class="parameter">nom_d_affichage</replaceable> ] [, ...] ]
     [ FROM <replaceable class="parameter">éléments_from</replaceable> [, ...] ]
     [ WHERE <replaceable class="parameter">condition</replaceable> ]
-    [ GROUP BY <replaceable class="parameter">element_regroupement</replaceable> [, ...] ]
+    [ GROUP BY [ ALL | DISTINCT ] <replaceable class="parameter">element_regroupement</replaceable> [, ...] ]
     [ HAVING <replaceable class="parameter">condition</replaceable> ]
     [ WINDOW <replaceable class="parameter">nom_window</replaceable> AS ( <replaceable class="parameter">définition_window</replaceable> ) [, ...] ]
     [ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] <replaceable class="parameter">select</replaceable> ]
@@ -51,10 +51,10 @@ SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replac
     [ LATERAL ] <replaceable class="parameter">nom_fonction</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] )
                 [ WITH ORDINALITY ] [ [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">alias_colonne</replaceable> [, ...] ) ] ]
     [ LATERAL ] <replaceable class="parameter">nom_fonction</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) [ AS ] <replaceable class="parameter">alias</replaceable> ( <replaceable class="parameter">définition_colonne</replaceable> [, ...] )
-     [ LATERAL ] <replaceable class="parameter">nom_fonction</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) AS ( <replaceable class="parameter">définition_colonne</replaceable> [, ...] )
+    [ LATERAL ] <replaceable class="parameter">nom_fonction</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) AS ( <replaceable class="parameter">définition_colonne</replaceable> [, ...] )
     [ LATERAL ] ROWS FROM( <replaceable class="parameter">nom_fonction</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) [ AS ( <replaceable class="parameter">définition_colonne</replaceable> [, ...] ) ] [, ...] )
                 [ WITH ORDINALITY ] [ [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">alias_colonne</replaceable> [, ...] ) ] ]
-    <replaceable class="parameter">éléments_from</replaceable> [ NATURAL ] <replaceable class="parameter">type_jointure</replaceable> <replaceable class="parameter">éléments_from</replaceable> [ ON <replaceable class="parameter">condition_jointure</replaceable> | USING ( <replaceable class="parameter">colonne_jointure</replaceable> [, ...] ) ]
+    <replaceable class="parameter">éléments_from</replaceable> [ NATURAL ] <replaceable class="parameter">type_jointure</replaceable> <replaceable class="parameter">éléments_from</replaceable> [ ON <replaceable class="parameter">condition_jointure</replaceable> | USING ( <replaceable class="parameter">colonne_jointure</replaceable> [, ...] ) [ AS <replaceable class="parameter">jointure_utilisant_alias</replaceable> ] ]
 
 <phrase>et <replaceable class="parameter">element_regroupement</replaceable> peut valoir&nbsp;:</phrase>
 
@@ -68,6 +68,8 @@ SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replac
 <phrase>et <replaceable class="parameter">requête_with</replaceable> est&nbsp;:</phrase>
 
     <replaceable class="parameter">nom_requête_with</replaceable> [ ( <replaceable class="parameter">nom_colonne</replaceable> [, ...] ) ] AS [ [ NOT ] MATERIALIZED ] ( <replaceable class="parameter">select</replaceable> | <replaceable class="parameter">valeurs</replaceable> | <replaceable class="parameter">insert</replaceable> | <replaceable class="parameter">update</replaceable> | <replaceable class="parameter">delete</replaceable> )
+        [ SEARCH { BREADTH | DEPTH } FIRST BY <replaceable>column_name</replaceable> [, ...] SET <replaceable>search_seq_col_name</replaceable> ]
+        [ CYCLE <replaceable>column_name</replaceable> [, ...] SET <replaceable>cycle_mark_col_name</replaceable> [ TO <replaceable>cycle_mark_value</replaceable> DEFAULT <replaceable>cycle_mark_default</replaceable> ] USING <replaceable>cycle_path_col_name</replaceable> ]
 
 TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
   </synopsis>
@@ -271,6 +273,50 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
    </para>
 
    <para>
+    The optional <literal>SEARCH</literal> clause computes a <firstterm>search
+    sequence column</firstterm> that can be used for ordering the results of a
+    recursive query in either breadth-first or depth-first order.  The
+    supplied column name list specifies the row key that is to be used for
+    keeping track of visited rows.  A column named
+    <replaceable>search_seq_col_name</replaceable> will be added to the result
+    column list of the <literal>WITH</literal> query.  This column can be
+    ordered by in the outer query to achieve the respective ordering.  See
+    <xref linkend="queries-with-search"/> for examples.
+   </para>
+
+   <para>
+    The optional <literal>CYCLE</literal> clause is used to detect cycles in
+    recursive queries.  The supplied column name list specifies the row key
+    that is to be used for keeping track of visited rows.  A column named
+    <replaceable>cycle_mark_col_name</replaceable> will be added to the result
+    column list of the <literal>WITH</literal> query.  This column will be set
+    to <replaceable>cycle_mark_value</replaceable> when a cycle has been
+    detected, else to <replaceable>cycle_mark_default</replaceable>.
+    Furthermore, processing of the recursive union will stop when a cycle has
+    been detected.  <replaceable>cycle_mark_value</replaceable> and
+    <replaceable>cycle_mark_default</replaceable> must be constants and they
+    must be coercible to a common data type, and the data type must have an
+    inequality operator.  (The SQL standard requires that they be Boolean
+    constants or character strings, but PostgreSQL does not require that.)  By
+    default, <literal>TRUE</literal> and <literal>FALSE</literal> (of type
+    <type>boolean</type>) are used.  Furthermore, a column
+    named <replaceable>cycle_path_col_name</replaceable> will be added to the
+    result column list of the <literal>WITH</literal> query.  This column is
+    used internally for tracking visited rows.  See <xref
+    linkend="queries-with-cycle"/> for examples.
+   </para>
+
+   <para>
+    Both the <literal>SEARCH</literal> and the <literal>CYCLE</literal> clause
+    are only valid for recursive <literal>WITH</literal> queries.  The
+    <replaceable>with_query</replaceable> must be a <literal>UNION</literal>
+    (or <literal>UNION ALL</literal>) of two <literal>SELECT</literal> (or
+    equivalent) commands (no nested <literal>UNION</literal>s).  If both
+    clauses are used, the column added by the <literal>SEARCH</literal> clause
+    appears before the columns added by the <literal>CYCLE</literal> clause.
+   </para>
+
+   <para>
     La requête principale et les requêtes <literal>WITH</literal> sont toutes
     exécutées en même temps. Ceci implique que les effets d'une requête
     modifiant des données dans la clause <literal>WITH</literal> ne peuvent
@@ -454,7 +500,7 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
         <command>SELECT</command>. Le sous-<command>SELECT</command>
         doit être entouré de parenthèses et un alias
         <emphasis>doit</emphasis> lui être fourni.
-        Une commande <xref linkend="sql-values"/>
+        Une commande <link linkend="sql-values"><command>VALUES</command></link>
         peut aussi être utilisée ici.
        </para>
       </listitem>
@@ -649,7 +695,7 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
      <varlistentry>
       <term><literal>USING (<replaceable
         class="parameter">colonne_jointure</replaceable> [,
-        ...])</literal></term>
+        ...]) [ AS <replaceable class="parameter">jointure_utilisant_alias</replaceable> ]</literal></term>
       <listitem>
        <para>
         Une clause de la forme <literal>USING ( a, b, ... )</literal> est un
@@ -657,6 +703,18 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
          = table_droite.b ...</literal>. De plus, <literal>USING</literal> implique
         l'affichage d'une seule paire des colonnes correspondantes dans la sortie
         de la jointure.
+       </para>
+
+       <para>
+        If a <replaceable class="parameter">join_using_alias</replaceable>
+        name is specified, it provides a table alias for the join columns.
+        Only the join columns listed in the <literal>USING</literal> clause
+        are addressable by this name.  Unlike a regular <replaceable
+        class="parameter">alias</replaceable>, this does not hide the names of
+        the joined tables from the rest of the query.  Also unlike a regular
+        <replaceable class="parameter">alias</replaceable>, you cannot write a
+        column alias list &mdash; the output names of the join columns are the
+        same as they appear in the <literal>USING</literal> list.
        </para>
       </listitem>
      </varlistentry>
@@ -754,7 +812,7 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
 
    <para>
     La clause <literal>GROUP BY</literal> optionnelle a la forme générale
-    <synopsis>GROUP BY <replaceable class="parameter">element_regroupement</replaceable> [, ...]
+    <synopsis>GROUP BY [ ALL | DISTINCT ] <replaceable class="parameter">element_regroupement</replaceable> [, ...]
     </synopsis>
    </para>
 
@@ -779,7 +837,10 @@ TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ]
      regroupement</replaceable> indépendants. L'effet de ceci est l'équivalent
     de la construction d'un <literal>UNION ALL</literal> des sous-requêtes
     pour chaque ensemble de regroupement individuel avec leur propre clause
-    <literal>GROUP BY</literal>. Pour plus de détails sur la gestion des
+    <literal>GROUP BY</literal>. The optional <literal>DISTINCT</literal>
+    clause removes duplicate sets before processing; it does <emphasis>not</emphasis>
+    transform the <literal>UNION ALL</literal> into a <literal>UNION DISTINCT</literal>.
+    Pour plus de détails sur la gestion des
     ensembles de regroupement, voir <xref linkend="queries-grouping-sets"/>.
    </para>
 
@@ -1575,7 +1636,8 @@ KEY SHARE
     <literal>SKIP LOCKED</literal> s'appliquent seulement au(x) verrou(x)
     niveau ligne &mdash; le verrou niveau table <literal>ROW SHARE</literal>
     est toujours pris de façon ordinaire (voir <xref linkend="mvcc"/>).
-    L'option <literal>NOWAIT</literal> de <xref linkend="sql-lock"/> peut
+    L'option <literal>NOWAIT</literal> de <link
+    linkend="sql-lock"><command>LOCK</command></link> peut
     toujours être utilisée pour acquérir le verrou niveau table sans attendre.
    </para>
 
@@ -1968,18 +2030,6 @@ FROM manufacturiers m LEFT JOIN LATERAL recupere_nom_produits(m.id) pnom ON true
     D'autres bases de données <acronym>SQL</acronym> interdisent ce comportement,
     sauf à introduire une table virtuelle d'une seule ligne sur laquelle exécuter
     la commande <command>SELECT</command>.
-   </para>
-
-   <para>
-    S'il n'y a pas de clause <literal>FROM</literal>, la requête ne
-    peut pas référencer les tables de la base de données. La
-    requête suivante est, ainsi, invalide&nbsp;:
-    <programlisting>SELECT distributors.* WHERE distributors.name = 'Westward';
-    </programlisting>
-    Les versions antérieures à <productname>PostgreSQL</productname> 8.1
-    acceptaient les requêtes de cette forme en ajoutant une entrée implicite à
-    la clause <literal>FROM</literal> pour chaque table référencée.
-    Ce n'est plus autorisé.
    </para>
   </refsect2>
 

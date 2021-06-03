@@ -19,15 +19,12 @@
  <para>
   Les structures des catalogues sont déclarées dans des en-têtes de fichiers C
   spécialement formatées dans le répertoire
-  <filename>src/include/catalog/</filename> du code source.  En particulier,
-  il y a pour chaque catalogue un fichier d'en-tête nommé d'après le catalogue
+  <filename>src/include/catalog/</filename> du code source.
+  Il existe pour chaque catalogue un fichier d'en-tête nommé d'après le catalogue
   (par exemple, <filename>pg_class.h</filename> pour
   <structname>pg_class</structname>), qui définit l'ensemble des colonnes que
   le catalogue a, ainsi que certaines autres propriétés basique telles que son
-  OID.  D'autres fichiers cruciaux définissant la structure du catalogue
-  incluent <filename>indexing.h</filename>, qui définit les index présents sur
-  tous les catalogues systèmes, et <filename>toasting.h</filename>, qui définit
-  les tables TOAST pour les catalogues qui en ont besoin.
+  OID.
  </para>
 
  <para>
@@ -125,7 +122,8 @@
    que toutes les colonnes qui devraient être non NULL soient marquées comme
    telles dans <structname>pg_attribute</structname>.  Le code de <quote>bootstrap</quote>
    marquera automatiquement les colonnes comme <literal>NOT NULL</literal> si
-   elles sont de taille fixe et ne sont précédées d'aucune colonne potentiellement NULL.
+   elles sont de taille fixe et ne sont précédées d'aucune colonne potentiellement NULL
+   ou à taille variable.
    Quand cette règle ne convient pas, vous pouvez forcer un marquage correct en
    utilisant les annotations <literal>BKI_FORCE_NOT_NULL</literal> et
    <literal>BKI_FORCE_NULL</literal> selon les besoins.
@@ -439,12 +437,12 @@
    <para>
     Si <filename>genbki.pl</filename> a besoin d'assigner un OID à un
     enregistrement du catalogue ne pouvant donc être un OID assigné
-    manuellement, il utilisera une valeur de l'intervalle 10000&mdash;11999.
-    Le compteur des OID serveur est défini à 12000 au début d'une phase de
+    manuellement, il utilisera une valeur de l'intervalle 10000&mdash;12999.
+    Le compteur des OID serveur est défini à 13000 au début d'une phase de
     <quote>bootstrap</quote>. Dès lors, les objets créés par des commandes SQL
     classiques durant ladite phase de <quote>bootstrap</quote>, tels que des
     les objets créés par le script <filename>information_schema.sql</filename>,
-    reçoivent des OID de 12000 et supérieur.
+    reçoivent des OID de 13000 et supérieur.
    </para>
 
    <para>
@@ -489,11 +487,16 @@
 
     <listitem>
      <para>
-      Dans une telle colonne, toutes les entrées doivent utiliser le format
-      symbolique sauf quand on écrit <literal>0</literal> pour InvalidOid.  (Si
-      la colonne est déclarée <type>regproc</type>, vous pouvez facultativement
-      écrire <literal>-</literal> à la place de <literal>0</literal>.)
-      <filename>genbki.pl</filename> vous avertira sur des noms non reconnus.
+      In some catalog columns, it's allowed for entries to be zero instead
+      of a valid reference.  If this is allowed, write
+      <literal>BKI_LOOKUP_OPT</literal> instead
+      of <literal>BKI_LOOKUP</literal>.  Then you can
+      write <literal>0</literal> for an entry.  (If the column is
+      declared <type>regproc</type>, you can optionally
+      write <literal>-</literal> instead of <literal>0</literal>.)
+      Except for this special case, all entries in
+      a <literal>BKI_LOOKUP</literal> column must be symbolic references.
+      <filename>genbki.pl</filename> will warn about unrecognized names.
      </para>
     </listitem>
 
@@ -558,17 +561,6 @@
       schéma <literal>pg_catalog</literal>.
      </para>
     </listitem>
-
-    <listitem>
-     <para>
-      En plus des mécanismes de recherche génériques, il y a une convention
-      spéciale pour remplacer <literal>PGNSP</literal> par l'OID du schéma
-      <literal>pg_catalog</literal> et <literal>PGUID</literal> par l'OID du
-      rôle super-utilisateur effectuant le <quote>bootstrap</quote>.
-      Ces coutumes sont historiques mais il n'y a jusqu'ici pas eu de
-      nécessité de les généraliser.
-     </para>
-    </listitem>
    </itemizedlist>
 
    <para>
@@ -576,6 +568,22 @@
     pendant son exécution, et inscrit de simples OID numériques dans les
     fichiers BKI émis.  Le processus client de <quote>bootstrap</quote> n'a donc pas besoin
     de gérer les références symboliques.
+   </para>
+
+   <para>
+    It's desirable to mark OID reference columns
+    with <literal>BKI_LOOKUP</literal> or <literal>BKI_LOOKUP_OPT</literal>
+    even if the catalog has no initial data that requires lookup.  This
+    allows <filename>genbki.pl</filename> to record the foreign key
+    relationships that exist in the system catalogs.  That information is
+    used in the regression tests to check for incorrect entries.  See also
+    the macros <literal>DECLARE_FOREIGN_KEY</literal>,
+    <literal>DECLARE_FOREIGN_KEY_OPT</literal>,
+    <literal>DECLARE_ARRAY_FOREIGN_KEY</literal>,
+    and <literal>DECLARE_ARRAY_FOREIGN_KEY_OPT</literal>, which are
+    used to declare foreign key relationships that are too complex
+    for <literal>BKI_LOOKUP</literal> (typically, multi-column foreign
+    keys).
    </para>
   </sect2>
 
@@ -781,8 +789,9 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
    peut syntaxiquement pas appartenir à la commande qui précède en lance une
    autre. (En général, il est préférable, pour des raisons de clarté, de
    placer toute nouvelle commande sur une nouvelle ligne.) Les lexèmes peuvent être
-   des mots clés, des caractères spéciaux (parenthèses, virgules, etc.), nombres ou
-   chaînes de caractères entre guillemets doubles. Tous sont sensibles à la
+   des mots clés, des caractères spéciaux (parenthèses, virgules, etc.),
+   identifiants, nombres ou
+   chaînes de caractères entre guillemets simples. Tous sont sensibles à la
    casse.
   </para>
 
@@ -909,7 +918,8 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
       La valeur NULL peut être indiquée en utilisant le mot clé spécial
       <literal>_null_</literal>. Les valeurs qui ne ressemblent pas à des
       identifiants ou à des chaînes de nombres doivent être placées entre
-      guillemets doubles.
+      guillemets simples. (To include a single quote in a value, write it twice.
+      Escape-string-style backslash escapes are allowed in the string, too.)
      </para>
     </listitem>
    </varlistentry>
@@ -1079,7 +1089,7 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
    table&nbsp;:
    <programlisting>create test_table 420 (oid = oid, cola = int4, colb = text)
 open test_table
-insert ( 421 1 "value1" )
+insert ( 421 1 'value 1' )
 insert ( 422 2 _null_ )
 close test_table
    </programlisting>

@@ -28,6 +28,7 @@ CREATE TYPE <replaceable class="parameter">name</replaceable> AS RANGE (
     [ , COLLATION = <replaceable class="parameter">collationnement</replaceable> ]
     [ , CANONICAL = <replaceable class="parameter">fonction_canonique</replaceable> ]
     [ , SUBTYPE_DIFF = <replaceable class="parameter">fonction_diff_sous_type</replaceable> ]
+    [ , MULTIRANGE_TYPE_NAME = <replaceable class="parameter">multirange_type_name</replaceable> ]
 )
 
 CREATE TYPE <replaceable class="parameter">nom</replaceable> (
@@ -38,6 +39,7 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable> (
     [ , TYPMOD_IN = <replaceable class="parameter">type_modifier_input_function</replaceable> ]
     [ , TYPMOD_OUT = <replaceable class="parameter">type_modifier_output_function</replaceable> ]
     [ , ANALYZE = <replaceable class="parameter">fonction_analyse</replaceable> ]
+    [ , SUBSCRIPT = <replaceable class="parameter">subscript_function</replaceable> ]
     [ , INTERNALLENGTH = { <replaceable class="parameter">longueurinterne</replaceable> | VARIABLE } ]
     [ , PASSEDBYVALUE ]
     [ , ALIGNMENT = <replaceable class="parameter">alignement</replaceable> ]
@@ -118,7 +120,8 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     installation <productname>PostgreSQL</productname> standard). (Il est
     possible de créer un type énuméré avec zéro label, mais un tel type ne
     peut pas être utilisé pour contenir des valeurs avant qu'au moins un label
-    soit ajouté en utilisant <xref linkend="sql-altertype"/>.)
+    soit ajouté en utilisant <link
+    linkend="sql-altertype"><command>ALTER TYPE</command></link>.)
    </para>
   </refsect2>
 
@@ -172,6 +175,17 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     intervalle. Voir <xref linkend="rangetypes-defining"/> pour plus
     d'informations.
    </para>
+
+   <para>
+    The optional <replaceable class="parameter">multirange_type_name</replaceable>
+    parameter specifies the name of the corresponding multirange type.  If not
+    specified, this name is chosen automatically as follows.
+    If the range type name contains the substring <literal>range</literal>, then
+    the multirange type name is formed by replacement of the <literal>range</literal>
+    substring with <literal>multirange</literal> in the range
+    type name.  Otherwise, the multirange type name is formed by appending a
+    <literal>_multirange</literal> suffix to the range type name.
+   </para>
   </refsect2>
 
   <refsect2>
@@ -193,9 +207,9 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     fonctions <replaceable class="parameter">fonction_réception</replaceable>,
     <replaceable class="parameter">fonction_envoi</replaceable>,
     <replaceable class="parameter">type_modifier_input_function</replaceable>,
-    <replaceable class="parameter">type_modifier_output_function</replaceable>
-    et
-    <replaceable class="parameter">fonction_analyse</replaceable> sont
+    <replaceable class="parameter">type_modifier_output_function</replaceable>,
+    <replaceable class="parameter">fonction_analyse</replaceable> et
+    <replaceable class="parameter">subscript_function</replaceable> sont
     optionnelles. Généralement, ces fonctions sont codées en C ou dans un
     autre langage de bas niveau.
    </para>
@@ -320,6 +334,28 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </para>
 
    <para>
+    The optional <replaceable class="parameter">subscript_function</replaceable>
+    allows the data type to be subscripted in SQL commands.  Specifying this
+    function does not cause the type to be considered a <quote>true</quote>
+    array type; for example, it will not be a candidate for the result type
+    of <literal>ARRAY[]</literal> constructs.  But if subscripting a value
+    of the type is a natural notation for extracting data from it, then
+    a <replaceable class="parameter">subscript_function</replaceable> can
+    be written to define what that means.  The subscript function must be
+    declared to take a single argument of type <type>internal</type>, and
+    return an <type>internal</type> result, which is a pointer to a struct
+    of methods (functions) that implement subscripting.
+    The detailed API for subscript functions appears
+    in <filename>src/include/nodes/subscripting.h</filename>.
+    It may also be useful to read the array implementation
+    in <filename>src/backend/utils/adt/arraysubs.c</filename>,
+    or the simpler code
+    in <filename>contrib/hstore/hstore_subs.c</filename>.
+    Additional information appears in
+    <xref linkend="sql-createtype-array"/> below.
+   </para>
+
+   <para>
     Alors que les détails de la représentation interne du nouveau type ne sont
     connus que des fonctions d'entrées/sorties et des fonctions utilisateurs
     d'interaction avec le type, plusieurs propriétés de
@@ -438,11 +474,11 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </para>
 
    <para>
-    Pour indiquer qu'un type est un tableau, le type des éléments du
+    Pour indiquer qu'un type est un tableau de taille fixe, le type des éléments du
     tableau est précisé par le mot clé <literal>ELEMENT</literal>. Par exemple, pour
     définir un tableau d'entiers de quatre octets (<type>int4</type>),
-    <literal>ELEMENT = int4</literal> est utilisé. Plus de détails sur les types
-    tableau apparaissent ci-dessous.
+    <literal>ELEMENT = int4</literal> est utilisé. For more details,
+    see <xref linkend="sql-createtype-array"/> below.
    </para>
 
    <para>
@@ -465,7 +501,7 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </para>
   </refsect2>
 
-  <refsect2>
+  <refsect2 id="sql-createtype-array" xreflabel="Array Types">
    <title>Types tableau</title>
 
    <para>
@@ -478,7 +514,9 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     soit trouvé.)
     Ce type tableau créé implicitement est de longueur variable et utilise les
     fonctions d'entrée et sortie <literal>array_in</literal> et
-    <literal>array_out</literal>. Le type tableau trace tout changement dans
+    <literal>array_out</literal>. Furthermore, this type is what the system
+    uses for constructs such as <literal>ARRAY[]</literal> over the
+    user-defined type.  Le type tableau trace tout changement dans
     du type de base pour le propriétaire et le schéma. Il est aussi supprimé
     quand le type de base l'est.
    </para>
@@ -487,7 +525,7 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     Pourquoi existe-t-il une option
     <option>ELEMENT</option> si le système fabrique automatiquement le bon type
     tableau ?
-    La seule utilité d'<option>ELEMENT</option> est la création d'un type de longueur
+    L'utilité principale d'<option>ELEMENT</option> est la création d'un type de longueur
     fixe représenté en interne par un tableau d'éléments identiques auxquels on souhaite
     accéder directement par leurs indices (en plus de toute autre opération
     effectuée sur le type dans sa globalité). Par exemple, le type
@@ -496,13 +534,31 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     <literal>point[1]</literal>. Cette
     fonctionnalité n'est possible qu'avec les types de longueur fixe dont la
     forme interne est strictement une séquence de champs de longueur fixée.
-    Un type de longueur variable est accessible par ses indices
-    si sa représentation interne
-    généralisée est celle utilisée par <literal>array_in</literal> et <literal>array_out</literal>.
     Pour des raisons historiques (c'est-à-dire pour de mauvaises raisons, mais
     il est trop tard pour changer) les indices des tableaux de types de longueur
     fixe commencent à zéro et non à un comme c'est le cas pour les tableaux de
     longueur variable.
+   </para>
+
+   <para>
+    Specifying the <option>SUBSCRIPT</option> option allows a data type to
+    be subscripted, even though the system does not otherwise regard it as
+    an array type.  The behavior just described for fixed-length arrays is
+    actually implemented by the <option>SUBSCRIPT</option> handler
+    function <function>raw_array_subscript_handler</function>, which is
+    used automatically if you specify <option>ELEMENT</option> for a
+    fixed-length type without also writing <option>SUBSCRIPT</option>.
+   </para>
+
+   <para>
+    When specifying a custom <option>SUBSCRIPT</option> function, it is
+    not necessary to specify <option>ELEMENT</option> unless
+    the <option>SUBSCRIPT</option> handler function needs to
+    consult <structfield>typelem</structfield> to find out what to return.
+    Be aware that specifying <option>ELEMENT</option> causes the system to
+    assume that the new type contains, or is somehow physically dependent on,
+    the element type; thus for example changing properties of the element
+    type won't be allowed if there are any columns of the dependent type.
    </para>
   </refsect2>
  </refsect1>
@@ -595,6 +651,15 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </varlistentry>
 
    <varlistentry>
+    <term><replaceable class="parameter">multirange_type_name</replaceable></term>
+    <listitem>
+     <para>
+      The name of the corresponding multirange type.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">fonction_entrée</replaceable></term>
     <listitem>
      <para>
@@ -665,7 +730,17 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </varlistentry>
 
    <varlistentry>
-    <term><replaceable class="parameter">longueurinterne</replaceable></term>
+    <term><replaceable class="parameter">subscript_function</replaceable></term>
+    <listitem>
+     <para>
+      The name of a function that defines what subscripting a value of the
+      data type does.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">longueur_interne</replaceable></term>
     <listitem>
      <para>
       Une constante numérique qui précise la longueur en octets de la

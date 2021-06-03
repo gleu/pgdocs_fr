@@ -178,7 +178,7 @@ ce que les nœuds s'accordent dans un système transactionnel sérialisable.
     <term>Réplication logique</term>
     <listitem>
      <para>
-      La réplication logique autorise un serveur de bases de données d'envoyer
+      La réplication logique autorise un serveur de bases de données à envoyer
       un flux de modifications de données à un autre serveur. La réplication
       logique de <productname>PostgreSQL</productname> construit un flux de
       modifications logiques de données à partir des journaux de transactions.
@@ -199,12 +199,13 @@ ce que les nœuds s'accordent dans un système transactionnel sérialisable.
     <listitem>
 
      <para>
-      Une configuration de réplication primaire/secondaire envoie toutes les requêtes
-      de modification de données au serveur primaire. Ce serveur envoie les
-      modifications de données de façon asynchrone au serveur secondaire. Le secondaire
-      peut répondre aux requêtes en lecture seule alors que le serveur primaire
-      est en cours d'exécution. Le serveur secondaire est idéal pour les requêtes
-      vers un entrepôt de données.
+      A trigger-based replication setup typically funnels data modification
+      queries to a designated primary server. Operating on a per-table basis,
+      the primary server sends data changes (typically) asynchronously to the
+      standby servers.  Standby servers can answer queries while the primary is
+      running, and may allow some local data changes or write activity.  This
+      form of replication is often used for offloading large analytical or data
+      warehouse queries.
      </para>
 
      <para>
@@ -236,21 +237,17 @@ ce que les nœuds s'accordent dans un système transactionnel sérialisable.
       Si les requêtes sont envoyées sans modification, les fonctions comme
       <function>random()</function>, <function>CURRENT_TIMESTAMP</function> ainsi
       que les séquences ont des valeurs différentes sur les différents serveurs.
-      Cela parce que chaque serveur opère indépendamment alors que
+      Cela survient parce que chaque serveur opère indépendamment alors que
       les requêtes SQL sont diffusées (et non les données
       modifiées). Si cette solution est inacceptable, le
       <foreignphrase>middleware</foreignphrase> ou l'application doivent
-      demander ces valeurs à un seul serveur, et les utiliser dans
-      des requêtes d'écriture. Une autre solution est d'utiliser cette solution de réplication
-      avec une configuration primaire-secondaire traditionnelle, c'est à dire que les requêtes
-      de modification de données ne sont envoyées qu'au primaire et sont propagées aux
-      secondaires via une réplication primaire-secondaire, pas par le middleware de
-      réplication.  Il est impératif que
+      déterminer ces valeurs à partir d'une seule source, et les utiliser dans
+      les requêtes d'écriture. Il est impératif que
       toute transaction soit validée ou annulée sur tous les serveurs,
       éventuellement par validation en deux phases (<xref
       linkend="sql-prepare-transaction"/> et <xref linkend="sql-commit-prepared"/>).
       <productname>Pgpool-II</productname> et <productname>Continuent
-       Tungsten</productname> sont des exemples de ce type de réplication.
+      Tungsten</productname> sont des exemples de ce type de réplication.
      </para>
     </listitem>
    </varlistentry>
@@ -711,7 +708,7 @@ ce que les nœuds s'accordent dans un système transactionnel sérialisable.
    </para>
   </sect2>
 
-  <sect2 id="preparing-master-for-standby">
+  <sect2 id="preparing-primary-for-standby">
    <title>Préparer le primaire pour les serveurs de standby</title>
 
    <para>
@@ -763,10 +760,9 @@ ce que les nœuds s'accordent dans un système transactionnel sérialisable.
 
    <note>
     <para>
-     N'utilisez pas pg_standby ou des outils similaires avec le mode de standby intégré
-     décrit ici. <xref linkend="guc-restore-command"/> devrait retourner immédiatement
-     si le fichier n'existe pas; le serveur essaiera la commande à nouveau si nécessaire.
-     Voir <xref linkend="log-shipping-alternative"/> pour utiliser des outils tels que pg_standby.
+     <xref linkend="guc-restore-command"/> devrait retourner immédiatement si
+     le fichier n'existe pas&nbsp;; le serveur essaiera la commande à nouveau
+     si nécessaire.
     </para>
    </note>
 
@@ -1201,7 +1197,7 @@ primary_slot_name = 'node_a_slot'
      une valeur non vide. La variable <varname>synchronous_commit</varname> doit aussi être définie à
      <literal>on</literal>, mais comme il s'agit d'une valeur par défaut, il n'est pas nécessaire de la
      modifier. (Voir <xref linkend="runtime-config-wal-settings"/> et
-     <xref linkend="runtime-config-replication-master"/>.)
+     <xref linkend="runtime-config-replication-primary"/>.)
      Cette configuration va entraîner l'attente de la confirmation de l'écriture permanente de chaque validation
      sur le serveur de standby.
      La variable <varname>synchronous_commit</varname> peut être définie soit par des
@@ -1596,184 +1592,6 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
   </para>
  </sect1>
 
- <sect1 id="log-shipping-alternative">
-  <title>Méthode alternative pour le log shipping</title>
-
-  <para>
-   Une alternative au mode de standby intégré décrit dans les sections
-   précédentes est d'utiliser une <varname>restore_command</varname> qui
-   scrute le dépôt d'archives. C'était la seule méthode disponible dans les
-   versions 8.4 et inférieures. Voir le module <xref linkend="pgstandby"/>
-   pour une implémentation de référence de ceci.
-  </para>
-
-  <para>
-   Veuillez noter que dans ce mode, le serveur appliquera les WAL fichier par fichier,
-   ce qui entraîne que si vous requêtez sur le serveur de standby (voir Hot Standby),
-   il y a un délai entre une action sur le primaire et le moment où cette action
-   devient visible sur le standby, correspondant au temps nécessaire à
-   remplir le fichier de WAL. <varname>archive_timeout</varname>  peut être utilisé pour rendre ce délai
-   plus court. Notez aussi que vous ne pouvez combiner la streaming replication avec cette méthode.
-  </para>
-
-  <para>
-   Les opérations qui se produisent sur le primaire et les serveurs de standby sont
-   des opérations normales d'archivage et de recovery. Le seul point de
-   contact entre les deux serveurs de bases de données est l'archive de fichiers WAL
-   qu'ils partagent&nbsp;: le primaire écrivant dans l'archive, le standby
-   lisant de l'archive. Des précautions doivent être prises pour s'assurer que les archives WAL de serveurs
-   primaires différents ne soient pas mélangées ou confondues. L'archive n'a pas besoin
-   d'être de grande taille si elle n'est utilisée que pour le fonctionnement de standby.
-  </para>
-
-  <para>
-   La magie qui permet aux deux serveurs faiblement couplés de fonctionner ensemble est
-   une simple <varname>restore_command</varname> utilisée sur le standby qui
-   quand on lui demande le prochain fichier de WAL, attend que le primaire le mette
-   à disposition. La récupération normale
-   demanderait un fichier de l'archive WAL, en retournant un échec si le
-   fichier n'était pas disponible. Pour un fonctionnement en standby, il est normal que
-   le prochain fichier WAL ne soit pas disponible, ce qui entraîne que le standby doive attendre
-   qu'il apparaisse. Pour les fichiers se terminant en
-   <literal>.history</literal> il n'y a pas besoin d'attendre, et un code retour
-   différent de zéro doit être retourné. Une <varname>restore_command</varname>  d'attente
-   peut être écrite comme un script qui boucle après avoir scruté l'existence du prochain fichier de WAL.
-   Il doit aussi y avoir un moyen de déclencher la bascule, qui devrait interrompre la
-   <varname>restore_command</varname> , sortir le la boucle et retourner une erreur file-not-found
-   au serveur de standby. Cela met fin à la récupération et le standby démarrera alors comme un serveur normal.
-  </para>
-
-  <para>
-   Le pseudocode pour une <varname>restore_command</varname> appropriée est:
-   <programlisting>
-triggered = false;
-while (!NextWALFileReady() &amp;&amp; !triggered)
-{
-    sleep(100000L);         /* wait for ~0.1 sec */
-    if (CheckForExternalTrigger())
-        triggered = true;
-}
-if (!triggered)
-        CopyWALFileForRecovery();
-   </programlisting>
-  </para>
-
-  <para>
-   Un exemple fonctionnel de <varname>restore_command</varname> d'attente est fournie
-   par le module <xref linkend="pgstandby"/>. Il
-   devrait être utilisé en tant que référence, comme la bonne façon d'implémenter correctement la logique
-   décrite ci-dessus. Il peut aussi être étendu pour supporter des configurations et des
-   environnements spécifiques.
-  </para>
-
-  <para>
-   La méthode pour déclencher une bascule est une composante importante de la
-   planification et de la conception. Une possibilité est d'utiliser la
-   commande <varname>restore_command</varname>. Elle est exécutée une fois
-   pour chaque fichier WAL, mais le processus exécutant la <varname>restore_command</varname>
-   est créé et meurt pour chaque fichier, il n'y a donc ni démon ni processus serveur, et
-   on ne peut utiliser ni signaux ni gestionnaire de signaux.  Par conséquent, la
-   <varname>restore_command</varname> n'est pas appropriée pour déclencher la bascule.
-   Il est possible d'utiliser une simple fonctionnalité de timeout, particulièrement
-   si utilisée en conjonction avec un paramètre <varname>archive_timeout</varname>
-   sur le primaire. Toutefois, ceci est sujet à erreur, un problème réseau
-   ou un serveur primaire chargé pouvant suffire à déclencher une bascule. Un système
-   de notification comme la création explicite d'un fichier trigger est idéale, dans la
-   mesure du possible.
-  </para>
-
-  <sect2 id="warm-standby-config">
-   <title>Implémentation</title>
-
-   <para>
-    La procédure simplifié pour configurer un serveur de test en utilisant cette
-    méthode alternative est la suivante. Pour tous les détails
-    sur chaque étape, référez vous aux sections précédentes suivant les indications.
-    <orderedlist>
-     <listitem>
-      <para>
-       Paramétrez les systèmes primaire et standby de façon aussi identique que possible,
-       y compris deux copies identiques de <productname>PostgreSQL</productname> au même niveau
-       de version.
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       Activez l'archivage en continu du primaire vers un répertoire d'archives WAL
-       sur le serveur de standby. Assurez vous que
-       <xref linkend="guc-archive-mode"/>,
-       <xref linkend="guc-archive-command"/> et
-       <xref linkend="guc-archive-timeout"/>
-       sont positionnés correctement sur le primaire
-       (voir <xref linkend="backup-archiving-wal"/>).
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       Effectuez une sauvegarde de base du serveur primaire (voir <xref
-       linkend="backup-base-backup"/>), et chargez ces données sur le standby.
-      </para>
-     </listitem>
-     <listitem>
-      <para>
-       Commencez la récupération sur le serveur de standby à partir de
-       l'archive WAL locale, en utilisant un paramètre
-       <varname>restore_command</varname> qui attend comme décrit précédemment
-       (voir <xref linkend="backup-pitr-recovery"/>).
-      </para>
-     </listitem>
-    </orderedlist>
-   </para>
-
-   <para>
-    Le récupération considère l'archive WAL comme étant en lecture seule, donc une fois qu'un fichier WAL
-    a été copié sur le système de standby il peut être copié sur bande en même temps
-    qu'il est lu par le serveur de bases de données de standby.
-    Ainsi, on peut faire fonctionner un serveur de standby pour de la haute disponibilité
-    en même temps que les fichiers sont stockés pour de la reprise après sinistre.
-   </para>
-
-   <para>
-    À des fins de test, il est possible de faire fonctionner le serveur primaire et
-    de standby sur le même système. Cela n'apporte rien en termes de robustesse du serveur,
-    pas plus que cela ne pourrait être décrit comme de la haute disponibilité.
-   </para>
-  </sect2>
-
-  <sect2 id="warm-standby-record">
-   <title>Log Shipping par Enregistrements</title>
-
-   <para>
-    Il est aussi possible d'implémenter du log shipping par enregistrements en utilisant
-    cette méthode alternative, bien qu'elle nécessite des développements spécifiques,
-    et que les modifications ne seront toujours visibles aux requêtes de hot standby qu'après
-    que le fichier complet de WAL ait été recopié.
-   </para>
-
-   <para>
-    Un programme externe peut appeler la fonction <function>pg_walfile_name_offset()</function>
-    (voir <xref linkend="functions-admin"/>) pour obtenir le nom de fichier et la position exacte
-    en octets dans ce fichier de la fin actuelle du WAL. Il peut alors accéder au fichier WAL directement
-    et copier les données de la fin précédente connue à la fin courante vers les serveurs de standby.
-    Avec cette approche, la fenêtre de perte de données est la période de scrutation du programme de copie,
-    qui peut être très petite, et il n'y a pas de bande passante gaspillée en forçant l'archivage
-    de fichiers WAL partiellement remplis. Notez que les scripts <varname>restore_command</varname>
-    des serveurs de standby ne peuvent traiter que des fichiers WAL complets, les données copiées
-    de façon incrémentale ne sont donc d'ordinaire pas mises à  disposition des serveurs de standby.
-    Elles ne sont utiles que si le serveur primaire tombe &mdash; alors le dernier fichier WAL partiel
-    est fourni au standby avant de l'autoriser à s'activer. L'implémentation correcte de ce
-    mécanisme requiert la coopération entre le script <varname>restore_command</varname> et
-    le programme de recopie des données.
-   </para>
-
-   <para>
-    À partir de <productname>PostgreSQL</productname> version 9.0, vous pouvez utiliser
-    la streaming replication (voir <xref linkend="streaming-replication"/>) pour
-    bénéficier des mêmes fonctionnalités avec moins d'efforts.
-   </para>
-  </sect2>
- </sect1>
-
  <sect1 id="hot-standby">
   <title>Hot Standby</title>
 
@@ -2011,13 +1829,18 @@ if (!triggered)
    </para>
 
    <para>
-    Les utilisateurs pourront déterminer si leur session est en lecture seule en
-    exécutant <command>SHOW transaction_read_only</command>. De plus, un jeu de
-    fonctions (<xref linkend="functions-recovery-info-table"/>) permettent aux utilisateurs d'
-    accéder à des informations à propos du serveur de standby. Ceci vous permet d'écrire
-    des programmes qui sont conscients de l'état actuel de la base. Vous pouvez
-    vous en servir pour superviser l'avancement de la récupération, ou pour écrire des
-    programmes complexes qui restaurent la base dans des états particuliers.
+    Les utilisateurs peuvent déterminer si le Hot Standby est actuellement
+    actif pour leur session en exécutant <command>SHOW
+    transaction_read_only</command>.(In server versions before 14, the
+    <varname>in_hot_standby</varname> parameter did not exist; a workable
+    substitute method for older servers is <command>SHOW
+    transaction_read_only</command>.) De plus, un jeu de fonctions
+    (<xref linkend="functions-recovery-info-table"/>) permettent aux
+    utilisateurs d' accéder à des informations à propos du serveur de
+    standby. Ceci vous permet d'écrire des programmes qui sont conscients de
+    l'état actuel de la base. Vous pouvez vous en servir pour superviser
+    l'avancement de la récupération, ou pour écrire des programmes complexes
+    qui restaurent la base dans des états particuliers.
    </para>
   </sect2>
 
@@ -2251,6 +2074,12 @@ if (!triggered)
     standby. La vue système <structname>pg_stat_database</structname> contient aussi
     des informations synthétiques sur ce sujet.
    </para>
+
+   <para>
+    Users can control whether a log message is produced when WAL replay is waiting
+    longer than <varname>deadlock_timeout</varname> for conflicts. This
+    is controlled by the <xref linkend="guc-log-recovery-conflict-waits"/> parameter.
+   </para>
   </sect2>
 
   <sect2 id="hot-standby-admin">
@@ -2305,17 +2134,14 @@ LOG:  database system is ready to accept read only connections
    </para>
 
    <para>
-    Certains paramètres sur le standby vont devoir être revus si ils ont été
-    modifiés sur le primaire. Pour ces paramètres, la valeur sur le standby
-    devra être égale ou supérieure à celle du primaire. De ce fait, si vous
-    voulez augmenter ces valeurs, vous devez le faire d'abord sur tous les
-    serveurs standbys avant de le faire sur le serveur primaire. De la même
-    façon, si vous voulez diminuer ces valeurs, vous devez tout d'abord le
-    faire sur le serveur primaire, puis sur tous les serveurs secondaires. Si
-    ces paramètres ne sont pas suffisamment élevés le standby refusera de
-    démarrer. Il est tout à fait possible de fournir de nouvelles valeurs plus
-    élevées et de redémarrer le serveur pour reprendre la récupération. Ces
-    paramètres sont les suivants:
+    The settings of some parameters determine the size of shared memory for
+    tracking transaction IDs, locks, and prepared transactions.  These shared
+    memory structures must be no smaller on a standby than on the primary in
+    order to ensure that the standby does not run out of shared memory during
+    recovery.  For example, if the primary had used a prepared transaction but
+    the standby had not allocated any shared memory for tracking prepared
+    transactions, then recovery could not continue until the standby's
+    configuration is changed.  The parameters affected are:
 
     <itemizedlist>
      <listitem>
@@ -2344,6 +2170,37 @@ LOG:  database system is ready to accept read only connections
       </para>
      </listitem>
     </itemizedlist>
+
+    The easiest way to ensure this does not become a problem is to have these
+    parameters set on the standbys to values equal to or greater than on the
+    primary.  Therefore, if you want to increase these values, you should do
+    so on all standby servers first, before applying the changes to the
+    primary server.  Conversely, if you want to decrease these values, you
+    should do so on the primary server first, before applying the changes to
+    all standby servers.  Keep in mind that when a standby is promoted, it
+    becomes the new reference for the required parameter settings for the
+    standbys that follow it.  Therefore, to avoid this becoming a problem
+    during a switchover or failover, it is recommended to keep these settings
+    the same on all standby servers.
+   </para>
+
+   <para>
+    The WAL tracks changes to these parameters on the
+    primary.  If a hot standby processes WAL that indicates that the current
+    value on the primary is higher than its own value, it will log a warning
+    and pause recovery, for example:
+<screen>
+WARNING:  hot standby is not possible because of insufficient parameter settings
+DETAIL:  max_connections = 80 is a lower setting than on the primary server, where its value was 100.
+LOG:  recovery has paused
+DETAIL:  If recovery is unpaused, the server will shut down.
+HINT:  You can then restart the server after making the necessary configuration changes.
+</screen>
+    At that point, the settings on the standby need to be updated and the
+    instance restarted before recovery can continue.  If the standby is not a
+    hot standby, then when it encounters the incompatible parameter change, it
+    will shut down immediately without pausing, since there is then no value
+    in keeping it up.
    </para>
 
    <para>

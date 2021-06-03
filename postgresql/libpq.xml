@@ -242,6 +242,11 @@ PGconn *PQconnectdbParams(const char * const *keywords,
        <xref linkend="libpq-PQconnectdb"/>, et le reste des paramètres est
        ensuite appliqué comme spécifié dans <xref linkend="libpq-PQconnectdbParams"/>.
       </para>
+
+      <para>
+        <literal>pgtty</literal> is no longer used and any value passed will
+        be ignored.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -851,7 +856,8 @@ int callback_fn(char *buf, int size, PGconn *conn);
        est appelé. Il sera vide si le chemin de clé par défaut est utilisé.
        Pour les clés qui sont spécifiques au moteur, celui-ci est responsable
        de leurs implémentations qu'elles utilisent le callback mot de passe
-       OpenSSL ou qu'elles définissent leur propre gestionnaire.
+       <productname>OpenSSL</productname> ou qu'elles définissent leur propre
+       gestionnaire.
       </para>
 
       <para>
@@ -1104,7 +1110,9 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
         spécifie une communication par domaine Unix plutôt qu'une communication
         TCP/IP&nbsp;; la valeur est le nom du répertoire où le fichier socket
         est stocké. (Sur Unix, un chemin absolu commence par un slash. Sur windows, les
-        chemins débutant par la lettre du lecteur sont aussi reconnus.)  Par défaut, quand
+        chemins débutant par la lettre du lecteur sont aussi reconnus.) If the host name starts with <literal>@</literal>, it is
+        taken as a Unix-domain socket in the abstract namespace (currently
+        supported on Linux and Windows). Par défaut, quand
         <literal>host</literal> n'est pas spécifié ou est vide, il s'agit d'une
         communication par socket de domaine Unix<indexterm><primary>socket de
           domaine Unix</primary></indexterm> dans <filename>/tmp</filename> (ou
@@ -1720,6 +1728,8 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
         d'exploitation la désactive aussi dans des versions précédentes,
         donc activer ce paramètre n'aura aucun effet si le serveur n'accepte
         pas la compression.
+        <productname>PostgreSQL</productname> 14 disables compression
+        completely in the backend.
        </para>
 
        <para>
@@ -1772,14 +1782,17 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
        </para>
        <para>
         Spécifier ce paramètre avec toute valeur non vide supprime l'invite de
-        saisie <literal>Enter PEM pass phrase:</literal> que OpenSSL émet par
+        saisie <literal>Enter PEM pass phrase:</literal> que
+        <productname>OpenSSL</productname> émet par
         défaut quand une clé de certificat client chiffrée est fournie à
         <literal>libpq</literal>.
        </para>
        <para>
         Si la clé est non chiffrée, ce paramètre est ignoré. Le paramètre n'a
-        pas d'effet sur les clés spécifiée par les moteurs OpenSSL à moins que
-        le moteur utilise le mécanisme de callback de mot de passe OpenSSL
+        pas d'effet sur les clés spécifiée par les moteurs
+        <productname>OpenSSL</productname> à moins que
+        le moteur utilise le mécanisme de callback de mot de passe
+        <productname>OpenSSL</productname>
         pour les invites de saisie.
        </para>
        <para>
@@ -1815,8 +1828,54 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
         Ce paramètre indique le nom du fichier de la liste de révocation
         du certificat SSL. Les certificats listés dans ce fichier, s'il
         existe, seront rejetés lors d'une tentative d'authentification
-        avec le certificat du serveur. La valeur par défaut
-        est <filename>~/.postgresql/root.crl</filename>.
+        avec le certificat du serveur. If neither
+        <xref linkend='libpq-connect-sslcrl'/> nor
+        <xref linkend='libpq-connect-sslcrldir'/> is set, this setting is
+        taken as <filename>~/.postgresql/root.crl</filename>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-connect-sslcrldir" xreflabel="sslcrldir">
+      <term><literal>sslcrldir</literal></term>
+      <listitem>
+       <para>
+        This parameter specifies the directory name of the SSL certificate
+        revocation list (CRL).  Certificates listed in the files in this
+        directory, if it exists, will be rejected while attempting to
+        authenticate the server's certificate.
+       </para>
+
+       <para>
+        The directory needs to be prepared with the OpenSSL command
+        <literal>openssl rehash</literal> or <literal>c_rehash</literal>.  See
+        its documentation for details.
+       </para>
+
+       <para>
+        Both <literal>sslcrl</literal> and <literal>sslcrldir</literal> can be
+        specified together.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-connect-sslsni" xreflabel="sslsni">
+      <term><literal>sslsni</literal><indexterm><primary>Server Name Indication</primary></indexterm></term>
+      <listitem>
+       <para>
+        By default, libpq sets the TLS extension <quote>Server Name
+        Indication</quote> (SNI) on SSL-enabled connections.  See <ulink
+        url="https://tools.ietf.org/html/rfc6066#section-3">RFC 6066</ulink>
+        for details.  By setting this parameter to 0, this is turned off.
+       </para>
+
+       <para>
+        The Server Name Indication can be used by SSL-aware proxies to route
+        connections without having to decrypt the SSL stream.  (Note that this
+        requires a proxy that is aware of the PostgreSQL protocol handshake,
+        not just any SSL proxy.)  However, SNI makes the destination host name
+        appear in cleartext in the network traffic, so it might be undesirable
+        in some cases.
        </para>
       </listitem>
      </varlistentry>
@@ -1936,16 +1995,72 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
       <term><literal>target_session_attrs</literal></term>
       <listitem>
        <para>
-        Si ce paramètre est positionné à <literal>read-write</literal>, seule
-        une connexion dans laquelle les transactions en lecture/écriture sont
-        acceptées par défaut est considéré comme acceptable. La requête
-        <literal>SHOW transaction_read_only</literal> sera envoyée à chaque
-        connexion réussie; si elle retourne <literal>on</literal>, la connexion
-        sera fermée. Si plusieurs hôtes étaient spécifiés dans la chaîne de
-        connexion, chaque serveur restant sera testé tout comme si la tentative
-        de connexion avait échouée.  La valeur par défaut pour ce paramètre,
-        <literal>any</literal>, considère toutes les connexions comme
-        acceptables.
+        This option determines whether the session must have certain
+        properties to be acceptable.  It's typically used in combination
+        with multiple host names to select the first acceptable alternative
+        among several hosts.  There are six modes:
+
+        <variablelist>
+         <varlistentry>
+          <term><literal>any</literal> (default)</term>
+          <listitem>
+           <para>
+            any successful connection is acceptable
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>read-write</literal></term>
+          <listitem>
+           <para>
+            session must accept read-write transactions by default (that
+            is, the server must not be in hot standby mode and
+            the <varname>default_transaction_read_only</varname> parameter
+            must be <literal>off</literal>)
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>read-only</literal></term>
+          <listitem>
+           <para>
+            session must not accept read-write transactions by default (the
+            converse)
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>primary</literal></term>
+          <listitem>
+           <para>
+            server must not be in hot standby mode
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>standby</literal></term>
+          <listitem>
+           <para>
+            server must be in hot standby mode
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>prefer-standby</literal></term>
+          <listitem>
+           <para>
+            first try to find a standby server, but if none of the listed
+            hosts is a standby server, try again in <literal>any</literal>
+            mode
+           </para>
+          </listitem>
+         </varlistentry>
+        </variablelist>
        </para>
       </listitem>
      </varlistentry>
@@ -2134,10 +2249,10 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
      <term><function>PQtty</function><indexterm><primary>PQtty</primary></indexterm></term>
      <listitem>
       <para>
-       Renvoie le <acronym>TTY</acronym> de débogage pour la connexion
-       (ceci est obsolète car le serveur ne fait plus attention au
-       paramétrage du <acronym>TTY</acronym> mais la fonction reste pour
-       la compatibilité descendante).
+       This function no longer does anything, but it remains for backwards
+       compatibility.  The function always return an empty string, or
+       <symbol>NULL</symbol> if the <parameter>conn</parameter> argument is
+       <symbol>NULL</symbol>.
        <synopsis>char *PQtty(const PGconn *conn);
        </synopsis>
       </para>
@@ -2233,6 +2348,8 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
        <varname>server_encoding</varname>,
        <varname>client_encoding</varname>,
        <varname>application_name</varname>,
+       <varname>default_transaction_read_only</varname>,
+       <varname>in_hot_standby</varname>,
        <varname>is_superuser</varname>,
        <varname>session_authorization</varname>,
        <varname>datestyle</varname>,
@@ -2248,28 +2365,15 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
        <varname>IntervalStyle</varname> n'était pas renvoyé dans les versions
        antérieures à la 8.4&nbsp;;
        <varname>application_name</varname>  n'était pas renvoyé dans les versions
-       antérieures à la 9.0).
+       antérieures à la 9.0;
+       <varname>default_transaction_read_only</varname> and
+       <varname>in_hot_standby</varname> were not reported by releases before
+       14.).
        Notez que
        <varname>server_version</varname>,
        <varname>server_encoding</varname> et
        <varname>integer_datetimes</varname>
        ne peuvent pas changer après le lancement du serveur.
-      </para>
-
-      <para>
-       Les serveurs utilisant un protocole antérieur à la 3.0 ne rapportent pas la
-       configuration des paramètres mais <application>libpq</application> inclut la logique pour
-       obtenir des valeurs pour <varname>server_version</varname> et
-       <varname>client_encoding</varname>. Les applications sont encouragées à utiliser
-       <xref linkend="libpq-PQparameterStatus"/> plutôt qu'un code
-       <foreignphrase>ad-hoc</foreignphrase> pour trouver ces valeurs.
-       (Notez cependant que pour les connexions pré-3.0, changer
-       <varname>client_encoding</varname> via <command>SET</command>
-       après le lancement de la connexion ne sera pas reflété par
-       <xref linkend="libpq-PQparameterStatus"/>). Pour
-       <varname>server_version</varname>, voir aussi
-       <xref linkend="libpq-PQserverVersion"/>, qui renvoie
-       l'information dans un format numérique plus facile à comparer.
       </para>
 
       <para>
@@ -2295,18 +2399,15 @@ postgresql://user@localhost:5433/mydb?options=-c%20synchronous_commit%3Doff
      <listitem>
       <para>
        Interroge le protocole interface/moteur lors de son utilisation.
-       <synopsis>int PQprotocolVersion(const PGconn *conn);
-       </synopsis>
-       Les applications peuvent utiliser ceci pour déterminer si certaines
-       fonctionnalités sont supportées. Actuellement, les seules valeurs possible sont
-       2 (protocole 2.0), 3 (protocole 3.0) ou zéro (mauvaise connexion). La version du
-       protocole ne
-       changera pas après la fin du lancement de la connexion mais il pourrait
-       théoriquement changer lors d'une réinitialisation de la connexion. Le protocole
-       3.0 sera normalement utilisé lors de la communication avec les serveurs
-       <productname>PostgreSQL</productname> 7.4 ou ultérieures&nbsp;; les serveurs
-       antérieurs à la 7.4 supportent uniquement le protocole 2.0 (le protocole 1.0
-       est obsolète et non supporté par <application>libpq</application>).
+       <synopsis>int PQprotocolVersion(const PGconn *conn); </synopsis> Les
+       applications peuvent utiliser ceci pour déterminer si certaines
+       fonctionnalités sont supportées. Actuellement, les seules valeurs
+       possible sont 3 (protocole 3.0) ou zéro (mauvaise connexion). La
+       version du protocole ne changera pas après la fin du lancement de la
+       connexion mais il pourrait théoriquement changer lors d'une
+       réinitialisation de la connexion. Le protocole 3.0 est supporté par
+       les versions 7.4 et suivantes de
+       <productname>PostgreSQL</productname>.
       </para>
      </listitem>
     </varlistentry>
@@ -2573,11 +2674,12 @@ void *PQsslStruct(const PGconn *conn, const char *struct_name);
        </synopsis>
       </para>
       <para>
-       La ou les structures disponibles dépendent de l'implémentation
-       SSL utilisée. Pour OpenSSL, il y a une structure, disponible
-       sous le nom "OpenSSL", qui renvoie un pointeur sur la structure
-       OpenSSL <literal>SSL</literal>. Un exemple de code utilisant
-       cette fonction pourrait être&nbsp;:
+       La ou les structures disponibles dépendent de l'implémentation SSL
+       utilisée. Pour <productname>OpenSSL</productname>, il y a une
+       structure, disponible sous le nom "OpenSSL", qui renvoie un pointeur
+       sur la structure <productname>OpenSSL</productname>
+       <literal>SSL</literal>. Un exemple de code utilisant cette fonction
+       pourrait être&nbsp;:
        <programlisting><![CDATA[
  #include <libpq-fe.h>
  #include <openssl/ssl.h>
@@ -2620,13 +2722,13 @@ void *PQgetssl(const PGconn *conn);
 
       <para>
        Cette fonction est équivalente à <literal>PQsslStruct(conn,
-        "OpenSSL")</literal>. Elle ne devrait pas être utilisée dans les
-       nouvelles applications, car la structure renvoyée est spécifique
-       à OpenSSL et ne sera pas disponible si une autre implémentation
-       SSL est utilisée. Pour vérifier si une connexion utilise SSL,
-       appelez plutôt <xref linkend="libpq-PQsslInUse"/>,
-       et, pour plus de détails à propos de la connexion, utilisez
-       <xref linkend="libpq-PQsslAttribute"/>.
+       "OpenSSL")</literal>. Elle ne devrait pas être utilisée dans les
+        nouvelles applications, car la structure renvoyée est spécifique à
+        <productname>OpenSSL</productname> et ne sera pas disponible si une
+        autre implémentation <acronym>SSL</acronym> est utilisée. Pour
+        vérifier si une connexion utilise SSL, appelez plutôt <xref
+        linkend="libpq-PQsslInUse"/>, et, pour plus de détails à propos de la
+        connexion, utilisez <xref linkend="libpq-PQsslAttribute"/>.
       </para>
      </listitem>
     </varlistentry>
@@ -2715,9 +2817,6 @@ void *PQgetssl(const PGconn *conn);
         fonctionnalités supplémentaires&nbsp;: des valeurs de paramètres peuvent être
         spécifiées séparément de la chaîne de commande et les résultats de la requête
         peuvent être demandés soit au format texte soit au format binaire.
-        <xref linkend="libpq-PQexecParams"/> est supporté seulement dans les connexions avec le
-        protocole 3.0 et ses versions ultérieures&nbsp;; elle échouera lors de
-        l'utilisation du protocole 2.0.
        </para>
 
        <para>
@@ -2895,9 +2994,6 @@ void *PQgetssl(const PGconn *conn);
         fonction autorise les commandes à être exécutées de façon répétée sans
         être analysées et planifiées à chaque fois&nbsp;; voir <xref
         linkend="sql-prepare"/> pour les détails.
-        <xref linkend="libpq-PQprepare"/> est supporté uniquement par les
-        connexions utilisant le protocole 3.0 et ses versions
-        ultérieures&nbsp;; elle échouera avec le protocole 2.0.
        </para>
 
        <para>
@@ -2970,9 +3066,6 @@ void *PQgetssl(const PGconn *conn);
         commandes utilisées de façon répétée d'être analysées et planifiées seulement
         une fois plutôt que chaque fois qu'ils sont exécutés.
         L'instruction doit avoir été préparée précédemment dans la session en cours.
-        <xref linkend="libpq-PQexecPrepared"/> est supporté seulement pour des connexions
-        en protocole 3.0 et versions ultérieures&nbsp;; il échouera lors de
-        l'utilisation du protocole 2.0.
        </para>
 
        <para>
@@ -2999,9 +3092,6 @@ void *PQgetssl(const PGconn *conn);
        <para>
         <xref linkend="libpq-PQdescribePrepared"/> permet à une application d'obtenir des
         informations sur une instruction préparée précédente.
-        <xref linkend="libpq-PQdescribePrepared"/> est seulement supporté avec des
-        connexions utilisant le protocole 3.0 et ultérieures&nbsp;; il échouera lors
-        de l'utilisation du protocole 2.0.
        </para>
 
        <para>
@@ -3161,6 +3251,32 @@ void *PQgetssl(const PGconn *conn);
             ligne de résultat provenant de la commande courante. Ce statut
             n'intervient que lorsque le mode ligne-à-ligne a été sélectionné
             pour cette requête (voir <xref linkend="libpq-single-row-mode"/>).
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry id="libpq-pgres-pipeline-sync">
+          <term><literal>PGRES_PIPELINE_SYNC</literal></term>
+          <listitem>
+           <para>
+            The <structname>PGresult</structname> represents a
+            synchronization point in pipeline mode, requested by
+            <xref linkend="libpq-PQpipelineSync"/>.
+            This status occurs only when pipeline mode has been selected.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry id="libpq-pgres-pipeline-aborted">
+          <term><literal>PGRES_PIPELINE_ABORTED</literal></term>
+          <listitem>
+           <para>
+            The <structname>PGresult</structname> represents a pipeline that has
+            received an error from the server.  <function>PQgetResult</function>
+            must be called repeatedly, and each time it will return this status code
+            until the end of the current pipeline, at which point it will return
+            <literal>PGRES_PIPELINE_SYNC</literal> and normal processing can
+            resume.
            </para>
           </listitem>
          </varlistentry>
@@ -3520,10 +3636,7 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
 
        <para>
         Les erreurs générées en interne par <application>libpq</application> auront une
-        sévérité et un message principal mais aucun autre champ. Les erreurs renvoyées
-        par un serveur utilisant un protocole antérieure à la 3.0 inclueront la
-        sévérité, le message principal et parfois un message détaillé, mais
-        aucun autre champ.
+        sévérité et un message principal mais aucun autre champ.
        </para>
 
        <para>
@@ -3670,11 +3783,11 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
       </para>
 
       <para>
-       <literal>InvalidOid</literal> est renvoyé si le numéro de colonne est en dehors de la
-       plage, ou si la colonne spécifiée n'est pas une simple référence à une colonne de
-       table, ou lors de l'utilisation d'un protocole antérieur à la version 3.0. Vous
-       pouvez requêter la table système <literal>pg_class</literal>
-       pour déterminer exactement quelle table est référencée.
+       <literal>InvalidOid</literal> est renvoyé si le numéro de colonne est
+       en dehors de la plage, ou si la colonne spécifiée n'est pas une simple
+       référence à une colonne de table. Vous pouvez requêter la table
+       système <literal>pg_class</literal> pour déterminer exactement quelle
+       table est référencée.
       </para>
 
       <para>
@@ -4525,10 +4638,7 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
        Ceci est équivalent à <xref linkend="libpq-PQsendQuery"/> sauf que les
        paramètres de requêtes peuvent être spécifiés séparément à partir de la chaîne de
        requête. Les paramètres de la fonction sont gérés de façon identique à
-       <xref linkend="libpq-PQexecParams"/>. Comme
-       <xref linkend="libpq-PQexecParams"/>, cela ne fonctionnera pas
-       pour les connexions utilisant le protocole 2.0 et cela ne permet
-       qu'une seule commande dans la chaîne de requête.
+       <xref linkend="libpq-PQexecParams"/>.
       </para>
      </listitem>
     </varlistentry>
@@ -4551,8 +4661,7 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
        appel terminé avec succès, appelez <xref linkend="libpq-PQgetResult"/> pour
        déterminer si le serveur a créé avec succès l'instruction préparée. Les
        paramètres de la fonction sont gérés de façon identique à
-       <xref linkend="libpq-PQprepare"/>. Comme <xref linkend="libpq-PQprepare"/>, cela ne
-       fonctionnera pas sur les connexions utilisant le protocole 2.0.
+       <xref linkend="libpq-PQprepare"/>.
       </para>
      </listitem>
     </varlistentry>
@@ -4576,9 +4685,7 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
        commande à exécuter est spécifiée en nommant une instruction
        préparée précédente au lieu de donner une chaîne contenant la
        requête. Les paramètres de la fonction sont gérés de façon identique à
-       <xref linkend="libpq-PQexecPrepared"/>. Comme
-       <xref linkend="libpq-PQexecPrepared"/>, cela ne fonctionnera pas pour les
-       connexions utilisant le protocole 2.0.
+       <xref linkend="libpq-PQexecPrepared"/>.
       </para>
      </listitem>
     </varlistentry>
@@ -4598,9 +4705,7 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
        contraire. Après un appel réussi, appelez <xref linkend="libpq-PQgetResult"/>
        pour obtenir les résultats.
        Les paramètres de la fonction sont gérés de façon identique à
-       <xref linkend="libpq-PQdescribePrepared"/>. Comme
-       <xref linkend="libpq-PQdescribePrepared"/>, cela ne fonctionnera pas avec
-       les connexions utilisant le protocole 2.0.
+       <xref linkend="libpq-PQdescribePrepared"/>.
       </para>
      </listitem>
     </varlistentry>
@@ -4620,9 +4725,7 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
        contraire. Après un appel réussi, appelez <xref linkend="libpq-PQgetResult"/>
        pour obtenir les résultats.
        Les paramètres de la fonction sont gérés de façon identique à
-       <xref linkend="libpq-PQdescribePortal"/>. Comme
-       <xref linkend="libpq-PQdescribePortal"/>, cela ne fonctionnera pas avec
-       les connexions utilisant le protocole 2.0.
+       <xref linkend="libpq-PQdescribePortal"/>.
       </para>
      </listitem>
     </varlistentry>
@@ -4636,8 +4739,9 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
        <xref linkend="libpq-PQsendQueryParams"/>,
        <xref linkend="libpq-PQsendPrepare"/>,
        <xref linkend="libpq-PQsendQueryPrepared"/>,
-       <xref linkend="libpq-PQsendDescribePrepared"/> ou
-       <xref linkend="libpq-PQsendDescribePortal"/>, et le renvoie. Un pointeur
+       <xref linkend="libpq-PQsendDescribePrepared"/>,
+       <xref linkend="libpq-PQsendDescribePortal"/>, ou
+       <xref linkend="libpq-PQpipelineSync"/>, et le renvoie. Un pointeur
        NULL est renvoyé quand la commande est terminée et qu'il n'y aura plus
        de résultats.
        <synopsis>PGresult *PQgetResult(PGconn *conn);
@@ -4656,7 +4760,20 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
        avec <xref linkend="libpq-PQclear"/> quand vous en avez terminé.
        Notez que <xref linkend="libpq-PQgetResult"/> bloquera seulement si la
        commande est active et que les données nécessaires en réponse n'ont
-       pas encore été lues par <function>PQconsumeInput</function>.
+       pas encore été lues par <xref linkend="libpq-PQconsumeInput"/>.
+      </para>
+
+      <para>
+       In pipeline mode, <function>PQgetResult</function> will return normally
+       unless an error occurs; for any subsequent query sent after the one
+       that caused the error until (and excluding) the next synchronization point,
+       a special result of type <literal>PGRES_PIPELINE_ABORTED</literal> will
+       be returned, and a null pointer will be returned after it.
+       When the pipeline synchronization point is reached, a result of type
+       <literal>PGRES_PIPELINE_SYNC</literal> will be returned.
+       The result of the next query after the synchronization point follows
+       immediately (that is, no null pointer is returned after
+       the synchronization point.)
       </para>
 
       <note>
@@ -4865,6 +4982,476 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
 
  </sect1>
 
+ <sect1 id="libpq-pipeline-mode">
+  <title>Pipeline Mode</title>
+
+  <indexterm zone="libpq-pipeline-mode">
+   <primary>libpq</primary>
+   <secondary>pipeline mode</secondary>
+  </indexterm>
+
+  <indexterm zone="libpq-pipeline-mode">
+   <primary>pipelining</primary>
+   <secondary>in libpq</secondary>
+  </indexterm>
+
+  <indexterm zone="libpq-pipeline-mode">
+   <primary>batch mode</primary>
+   <secondary>in libpq</secondary>
+  </indexterm>
+
+  <para>
+   <application>libpq</application> pipeline mode allows applications to
+   send a query without having to read the result of the previously
+   sent query.  Taking advantage of the pipeline mode, a client will wait
+   less for the server, since multiple queries/results can be
+   sent/received in a single network transaction.
+  </para>
+
+  <para>
+   While pipeline mode provides a significant performance boost, writing
+   clients using the pipeline mode is more complex because it involves
+   managing a queue of pending queries and finding which result
+   corresponds to which query in the queue.
+  </para>
+
+  <para>
+   Pipeline mode also generally consumes more memory on both the client and server,
+   though careful and aggressive management of the send/receive queue can mitigate
+   this.  This applies whether or not the connection is in blocking or non-blocking
+   mode.
+  </para>
+
+  <para>
+   While the pipeline API was introduced in
+   <productname>PostgreSQL</productname> 14, it is a client-side feature
+   which doesn't require special server support, and works on any server
+   that supports the v3 extended query protocol.
+  </para>
+
+  <sect2 id="libpq-pipeline-using">
+   <title>Using Pipeline Mode</title>
+
+   <para>
+    To issue pipelines, the application must switch the connection
+    into pipeline mode,
+    which is done with <xref linkend="libpq-PQenterPipelineMode"/>.
+    <xref linkend="libpq-PQpipelineStatus"/> can be used
+    to test whether pipeline mode is active.
+    In pipeline mode, only <link linkend="libpq-async">asynchronous operations</link>
+    are permitted, and <literal>COPY</literal> is disallowed.
+    Using synchronous command execution functions
+    such as <function>PQfn</function>,
+    <function>PQexec</function>,
+    <function>PQexecParams</function>,
+    <function>PQprepare</function>,
+    <function>PQexecPrepared</function>,
+    <function>PQdescribePrepared</function>,
+    <function>PQdescribePortal</function>,
+    is an error condition.
+    Once all dispatched commands have had their results processed, and
+    the end pipeline result has been consumed, the application may return
+    to non-pipelined mode with <xref linkend="libpq-PQexitPipelineMode"/>.
+   </para>
+
+   <note>
+    <para>
+     It is best to use pipeline mode with <application>libpq</application> in
+     <link linkend="libpq-PQsetnonblocking">non-blocking mode</link>. If used
+     in blocking mode it is possible for a client/server deadlock to occur.
+      <footnote>
+       <para>
+        The client will block trying to send queries to the server, but the
+        server will block trying to send results to the client from queries
+        it has already processed. This only occurs when the client sends
+        enough queries to fill both its output buffer and the server's receive
+        buffer before it switches to processing input from the server,
+        but it's hard to predict exactly when that will happen.
+       </para>
+      </footnote>
+    </para>
+   </note>
+
+   <sect3 id="libpq-pipeline-sending">
+    <title>Issuing Queries</title>
+
+    <para>
+     After entering pipeline mode, the application dispatches requests using
+     <xref linkend="libpq-PQsendQuery"/>,
+     <xref linkend="libpq-PQsendQueryParams"/>,
+     or its prepared-query sibling
+     <xref linkend="libpq-PQsendQueryPrepared"/>.
+     These requests are queued on the client-side until flushed to the server;
+     this occurs when <xref linkend="libpq-PQpipelineSync"/> is used to
+     establish a synchronization point in the pipeline,
+     or when <xref linkend="libpq-PQflush"/> is called.
+     The functions <xref linkend="libpq-PQsendPrepare"/>,
+     <xref linkend="libpq-PQsendDescribePrepared"/>, and
+     <xref linkend="libpq-PQsendDescribePortal"/> also work in pipeline mode.
+     Result processing is described below.
+    </para>
+
+    <para>
+     The server executes statements, and returns results, in the order the
+     client sends them.  The server will begin executing the commands in the
+     pipeline immediately, not waiting for the end of the pipeline.
+     If any statement encounters an error, the server aborts the current
+     transaction and does not execute any subsequent command in the queue
+     until the next synchronization point established by
+     <function>PQpipelineSync</function>;
+     a <literal>PGRES_PIPELINE_ABORTED</literal> result is produced for
+     each such command.
+     (This remains true even if the commands in the pipeline would rollback
+     the transaction.)
+     Query processing resumes after the synchronization point.
+    </para>
+
+    <para>
+     It's fine for one operation to depend on the results of a
+     prior one; for example, one query may define a table that the next
+     query in the same pipeline uses. Similarly, an application may
+     create a named prepared statement and execute it with later
+     statements in the same pipeline.
+    </para>
+   </sect3>
+
+   <sect3 id="libpq-pipeline-results">
+    <title>Processing Results</title>
+
+    <para>
+     To process the result of one query in a pipeline, the application calls
+     <function>PQgetResult</function> repeatedly and handles each result
+     until <function>PQgetResult</function> returns null.
+     The result from the next query in the pipeline may then be retrieved using
+     <function>PQgetResult</function> again and the cycle repeated.
+     The application handles individual statement results as normal.
+     When the results of all the queries in the pipeline have been
+     returned, <function>PQgetResult</function> returns a result
+     containing the status value <literal>PGRES_PIPELINE_SYNC</literal>
+    </para>
+
+    <para>
+     The client may choose to defer result processing until the complete
+     pipeline has been sent, or interleave that with sending further
+     queries in the pipeline; see <xref linkend="libpq-pipeline-interleave"/>.
+    </para>
+
+    <para>
+     To enter single-row mode, call <function>PQsetSingleRowMode</function>
+     before retrieving results with <function>PQgetResult</function>.
+     This mode selection is effective only for the query currently
+     being processed. For more information on the use of
+     <function>PQsetSingleRowMode</function>,
+     refer to <xref linkend="libpq-single-row-mode"/>.
+    </para>
+
+    <para>
+     <function>PQgetResult</function> behaves the same as for normal
+     asynchronous processing except that it may contain the new
+     <type>PGresult</type> types <literal>PGRES_PIPELINE_SYNC</literal>
+     and <literal>PGRES_PIPELINE_ABORTED</literal>.
+     <literal>PGRES_PIPELINE_SYNC</literal> is reported exactly once for each
+     <function>PQpipelineSync</function> at the corresponding point
+     in the pipeline.
+     <literal>PGRES_PIPELINE_ABORTED</literal> is emitted in place of a normal
+     query result for the first error and all subsequent results
+     until the next <literal>PGRES_PIPELINE_SYNC</literal>;
+     see <xref linkend="libpq-pipeline-errors"/>.
+    </para>
+
+    <para>
+     <function>PQisBusy</function>, <function>PQconsumeInput</function>, etc
+     operate as normal when processing pipeline results.
+    </para>
+
+    <para>
+     <application>libpq</application> does not provide any information to the
+     application about the query currently being processed (except that
+     <function>PQgetResult</function> returns null to indicate that we start
+     returning the results of next query). The application must keep track
+     of the order in which it sent queries, to associate them with their
+     corresponding results.
+     Applications will typically use a state machine or a FIFO queue for this.
+    </para>
+
+   </sect3>
+
+   <sect3 id="libpq-pipeline-errors">
+    <title>Error Handling</title>
+
+    <para>
+     From the client's perspective, after <function>PQresultStatus</function>
+     returns <literal>PGRES_FATAL_ERROR</literal>,
+     the pipeline is flagged as aborted.
+     <function>PQresultStatus</function> will report a
+     <literal>PGRES_PIPELINE_ABORTED</literal> result for each remaining queued
+     operation in an aborted pipeline. The result for
+     <function>PQpipelineSync</function> is reported as
+     <literal>PGRES_PIPELINE_SYNC</literal> to signal the end of the aborted pipeline
+     and resumption of normal result processing.
+    </para>
+
+    <para>
+     The client <emphasis>must</emphasis> process results with
+     <function>PQgetResult</function> during error recovery.
+    </para>
+
+    <para>
+     If the pipeline used an implicit transaction, then operations that have
+     already executed are rolled back and operations that were queued to follow
+     the failed operation are skipped entirely. The same behavior holds if the
+     pipeline starts and commits a single explicit transaction (i.e. the first
+     statement is <literal>BEGIN</literal> and the last is
+     <literal>COMMIT</literal>) except that the session remains in an aborted
+     transaction state at the end of the pipeline. If a pipeline contains
+     <emphasis>multiple explicit transactions</emphasis>, all transactions that
+     committed prior to the error remain committed, the currently in-progress
+     transaction is aborted, and all subsequent operations are skipped completely,
+     including subsequent transactions.  If a pipeline synchronization point
+     occurs with an explicit transaction block in aborted state, the next pipeline
+     will become aborted immediately unless the next command puts the transaction
+     in normal mode with <command>ROLLBACK</command>.
+    </para>
+
+    <note>
+     <para>
+      The client must not assume that work is committed when it
+      <emphasis>sends</emphasis> a <literal>COMMIT</literal> &mdash; only when the
+      corresponding result is received to confirm the commit is complete.
+      Because errors arrive asynchronously, the application needs to be able to
+      restart from the last <emphasis>received</emphasis> committed change and
+      resend work done after that point if something goes wrong.
+     </para>
+    </note>
+   </sect3>
+
+   <sect3 id="libpq-pipeline-interleave">
+    <title>Interleaving Result Processing and Query Dispatch</title>
+
+    <para>
+     To avoid deadlocks on large pipelines the client should be structured
+     around a non-blocking event loop using operating system facilities
+     such as <function>select</function>, <function>poll</function>,
+     <function>WaitForMultipleObjectEx</function>, etc.
+    </para>
+
+    <para>
+     The client application should generally maintain a queue of work
+     remaining to be dispatched and a queue of work that has been dispatched
+     but not yet had its results processed. When the socket is writable
+     it should dispatch more work. When the socket is readable it should
+     read results and process them, matching them up to the next entry in
+     its corresponding results queue.  Based on available memory, results from the
+     socket should be read frequently: there's no need to wait until the
+     pipeline end to read the results.  Pipelines should be scoped to logical
+     units of work, usually (but not necessarily) one transaction per pipeline.
+     There's no need to exit pipeline mode and re-enter it between pipelines,
+     or to wait for one pipeline to finish before sending the next.
+    </para>
+
+    <para>
+     An example using <function>select()</function> and a simple state
+     machine to track sent and received work is in
+     <filename>src/test/modules/libpq_pipeline/libpq_pipeline.c</filename>
+     in the PostgreSQL source distribution.
+    </para>
+   </sect3>
+  </sect2>
+
+  <sect2 id="libpq-pipeline-functions">
+   <title>Functions Associated with Pipeline Mode</title>
+
+   <variablelist>
+
+    <varlistentry id="libpq-PQpipelineStatus">
+     <term><function>PQpipelineStatus</function><indexterm><primary>PQpipelineStatus</primary></indexterm></term>
+
+     <listitem>
+      <para>
+      Returns the current pipeline mode status of the
+      <application>libpq</application> connection.
+<synopsis>
+PGpipelineStatus PQpipelineStatus(const PGconn *conn);
+</synopsis>
+      </para>
+
+      <para>
+       <function>PQpipelineStatus</function> can return one of the following values:
+
+       <variablelist>
+        <varlistentry>
+         <term>
+          <literal>PQ_PIPELINE_ON</literal>
+         </term>
+         <listitem>
+          <para>
+           The <application>libpq</application> connection is in
+           pipeline mode.
+          </para>
+         </listitem>
+        </varlistentry>
+
+        <varlistentry>
+         <term>
+          <literal>PQ_PIPELINE_OFF</literal>
+         </term>
+         <listitem>
+          <para>
+           The <application>libpq</application> connection is
+           <emphasis>not</emphasis> in pipeline mode.
+          </para>
+         </listitem>
+        </varlistentry>
+
+        <varlistentry>
+         <term>
+          <literal>PQ_PIPELINE_ABORTED</literal>
+         </term>
+         <listitem>
+          <para>
+           The <application>libpq</application> connection is in pipeline
+           mode and an error occurred while processing the current pipeline.
+           The aborted flag is cleared when <function>PQgetResult</function>
+           returns a result of type <literal>PGRES_PIPELINE_SYNC</literal>.
+          </para>
+         </listitem>
+        </varlistentry>
+
+       </variablelist>
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQenterPipelineMode">
+     <term><function>PQenterPipelineMode</function><indexterm><primary>PQenterPipelineMode</primary></indexterm></term>
+
+     <listitem>
+      <para>
+      Causes a connection to enter pipeline mode if it is currently idle or
+      already in pipeline mode.
+
+<synopsis>
+int PQenterPipelineMode(PGconn *conn);
+</synopsis>
+
+      </para>
+      <para>
+       Returns 1 for success.
+       Returns 0 and has no effect if the connection is not currently
+       idle, i.e., it has a result ready, or it is waiting for more
+       input from the server, etc.
+       This function does not actually send anything to the server,
+       it just changes the <application>libpq</application> connection
+       state.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQexitPipelineMode">
+     <term><function>PQexitPipelineMode</function><indexterm><primary>PQexitPipelineMode</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Causes a connection to exit pipeline mode if it is currently in pipeline mode
+       with an empty queue and no pending results.
+<synopsis>
+int PQexitPipelineMode(PGconn *conn);
+</synopsis>
+      </para>
+      <para>
+       Returns 1 for success.  Returns 1 and takes no action if not in
+       pipeline mode. If the current statement isn't finished processing,
+       or <function>PQgetResult</function> has not been called to collect
+       results from all previously sent query, returns 0 (in which case,
+       use <xref linkend="libpq-PQerrorMessage"/> to get more information
+       about the failure).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQpipelineSync">
+     <term><function>PQpipelineSync</function><indexterm><primary>PQpipelineSync</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Marks a synchronization point in a pipeline by sending a
+       <link linkend="protocol-flow-ext-query">sync message</link>
+       and flushing the send buffer. This serves as
+       the delimiter of an implicit transaction and an error recovery
+       point; see <xref linkend="libpq-pipeline-errors"/>.
+
+<synopsis>
+int PQpipelineSync(PGconn *conn);
+</synopsis>
+      </para>
+      <para>
+       Returns 1 for success. Returns 0 if the connection is not in
+       pipeline mode or sending a
+       <link linkend="protocol-flow-ext-query">sync message</link>
+       failed.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </sect2>
+
+  <sect2 id="libpq-pipeline-tips">
+   <title>When to Use Pipeline Mode</title>
+
+   <para>
+    Much like asynchronous query mode, there is no meaningful performance
+    overhead when using pipeline mode. It increases client application complexity,
+    and extra caution is required to prevent client/server deadlocks, but
+    pipeline mode can offer considerable performance improvements, in exchange for
+    increased memory usage from leaving state around longer.
+   </para>
+
+   <para>
+    Pipeline mode is most useful when the server is distant, i.e., network latency
+    (<quote>ping time</quote>) is high, and also when many small operations
+    are being performed in rapid succession.  There is usually less benefit
+    in using pipelined commands when each query takes many multiples of the client/server
+    round-trip time to execute.  A 100-statement operation run on a server
+    300ms round-trip-time away would take 30 seconds in network latency alone
+    without pipelining; with pipelining it may spend as little as 0.3s waiting for
+    results from the server.
+   </para>
+
+   <para>
+    Use pipelined commands when your application does lots of small
+    <literal>INSERT</literal>, <literal>UPDATE</literal> and
+    <literal>DELETE</literal> operations that can't easily be transformed
+    into operations on sets, or into a <literal>COPY</literal> operation.
+   </para>
+
+   <para>
+    Pipeline mode is not useful when information from one operation is required by
+    the client to produce the next operation. In such cases, the client
+    would have to introduce a synchronization point and wait for a full client/server
+    round-trip to get the results it needs. However, it's often possible to
+    adjust the client design to exchange the required information server-side.
+    Read-modify-write cycles are especially good candidates; for example:
+<programlisting>
+BEGIN;
+SELECT x FROM mytable WHERE id = 42 FOR UPDATE;
+-- result: x=2
+-- client adds 1 to x:
+UPDATE mytable SET x = 3 WHERE id = 42;
+COMMIT;
+</programlisting>
+    could be much more efficiently done with:
+<programlisting>
+UPDATE mytable SET x = x + 1 WHERE id = 42;
+</programlisting>
+   </para>
+
+   <para>
+    Pipelining is less useful, and more complex, when a single pipeline contains
+    multiple transactions (see <xref linkend="libpq-pipeline-errors"/>).
+   </para>
+  </sect2>
+ </sect1>
+
  <sect1 id="libpq-single-row-mode">
   <title>Récupérer le résultats des requêtes ligne par ligne</title>
 
@@ -4906,6 +5493,13 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
    types, etc.) qu'un objet <structname>PGresult</structname> standard aurait
    pour cette requête. Chaque objet doit être libéré avec la fonction
    <xref linkend="libpq-PQclear"/> comme d'ordinaire.
+  </para>
+
+  <para>
+   When using pipeline mode, single-row mode needs to be activated for each
+   query in the pipeline before retrieving results for that query
+   with <function>PQgetResult</function>.
+   See <xref linkend="libpq-pipeline-mode"/> for more information.
   </para>
 
   <para>
@@ -5183,17 +5777,12 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
    <parameter>len</parameter> de cette structure à
    <literal>-1</literal>&nbsp;; les champs <parameter>isint</parameter>
    et <parameter>u</parameter> sont alors hors sujet.
-   (Cependant, ceci ne fonctionne que pour les connexions en protocole
-   3.0 et ultérieures.)
   </para>
 
   <para>
    Si la fonction renvoie NULL, <parameter>*result_len</parameter> est
    configuré à <literal>-1</literal>, et <parameter>*result_buf</parameter>
-   n'est pas modifié. (Ceci fonctionne seulement pour les connexions en
-   protocole 3.0 et ultérieures&nbsp;; avec le protocole 2.0, ni
-   <parameter>*result_len</parameter> ni <parameter>*result_buf</parameter> ne
-   sont modifiés.)
+   n'est pas modifié.
   </para>
 
   <para>
@@ -5395,14 +5984,6 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
    </variablelist>
   </para>
 
-  <note>
-   <para>
-    Ces valeurs de données supplémentaires sont seulement disponibles en
-    utilisant le protocole 3.0. Lors de l'utilisation du protocole 2.0, toutes ces
-    fonctions renvoient 0.
-   </para>
-  </note>
-
   <sect2 id="libpq-copy-send">
    <title>Fonctions d'envoi de données pour <command>COPY</command></title>
 
@@ -5464,9 +6045,7 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
        avec la chaîne pointée par <parameter>errormsg</parameter>
        comme message d'erreur. (Mais ne pas supposer que ce message d'erreur précis
        proviendra du serveur car le serveur pourrait avoir déjà échoué sur la commande
-       <command>COPY</command> pour des raisons qui lui sont propres). Notez aussi que
-       l'option forçant l'échec ne fonctionnera pas lors de l'utilisation de
-       connexions avec un protocole pre-3.0.
+       <command>COPY</command> pour des raisons qui lui sont propres).
       </para>
 
       <para>
@@ -5921,6 +6500,21 @@ PGContextVisibility PQsetErrorContextVisibility(PGconn *conn, PGContextVisibilit
       <synopsis>void PQtrace(PGconn *conn, FILE *stream);
       </synopsis>
      </para>
+
+     <para>
+      Each line consists of: an optional timestamp, a direction indicator
+      (<literal>F</literal> for messages from client to server
+      or <literal>B</literal> for messages from server to client),
+      message length, message type, and message contents.
+      Non-message contents fields (timestamp, direction, length and message type)
+      are separated by a tab. Message contents are separated by a space.
+      Protocol strings are enclosed in double quotes, while strings used as data
+      values are enclosed in single quotes.  Non-printable chars are printed as
+      hexadecimal escapes.
+      Further message-type-specific detail can be found in
+      <xref linkend="protocol-message-formats"/>.
+     </para>
+
      <note>
       <para>
        Sur Windows, si la bibliothèque <application>libpq</application> et une application sont
@@ -5931,6 +6525,31 @@ PGContextVisibility PQsetErrorContextVisibility(PGconn *conn, PGContextVisibilit
        applications qui l'utilisent.
       </para>
      </note>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="libpq-PQtraceSetFlags">
+    <term><function>PQtraceSetFlags</function><indexterm><primary>PQtraceSetFlags</primary></indexterm></term>
+
+    <listitem>
+     <para>
+      Controls the tracing behavior of client/server communication.
+<synopsis>
+void PQtraceSetFlags(PGconn *conn, int flags);
+</synopsis>
+     </para>
+
+     <para>
+      <literal>flags</literal> contains flag bits describing the operating mode
+      of tracing.
+      If <literal>flags</literal> contains <literal>PQTRACE_SUPPRESS_TIMESTAMPS</literal>,
+      then the timestamp is not included when printing each message.
+      If <literal>flags</literal> contains <literal>PQTRACE_REGRESS_MODE</literal>,
+      then some fields are redacted when printing each message, such as object
+      OIDs, to make the output more convenient to use in testing frameworks.
+      This function must be called after calling <function>PQtrace</function>.
+     </para>
+
     </listitem>
    </varlistentry>
 
@@ -6892,8 +7511,8 @@ main(void)
 
     if (PQstatus(conn) != CONNECTION_OK)
     {
-        fprintf(stderr, "Connection to database failed: %s",
-                PQerrorMessage(conn));
+        /* PQerrorMessage's result includes a trailing newline */
+        fprintf(stderr, "%s", PQerrorMessage(conn));
         PQfinish(conn);
         return 1;
     }
@@ -7228,6 +7847,16 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
     <listitem>
      <para>
       <indexterm>
+       <primary><envar>PGSSLSNI</envar></primary>
+      </indexterm>
+      <envar>PGSSLSNI</envar>  behaves the same as the <xref
+      linkend="libpq-connect-sslsni"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
        <primary><envar>PGREQUIREPEER</envar></primary>
       </indexterm>
       <envar>PGREQUIREPEER</envar> se comporte de la même façon que le
@@ -7528,8 +8157,9 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
    Une ligne dans <filename>pg_service.conf</filename> commençant par
    <literal>ldap://</literal> sera reconnue comme une URL LDAP et une requête LDAP
    sera exécutée. Le résultat doit être une liste de paires <literal>motclé =
-    valeur</literal> qui sera utilisée pour configurer les options de connexion.
-   L'URL doit être conforme à la RFC 1959 et être de la forme&nbsp;:
+   valeur</literal> qui sera utilisée pour configurer les options de connexion.
+   L'URL doit être conforme à la <ulink url="https://tools.ietf.org/html/rfc1959">RFC
+   1959</ulink> et être de la forme&nbsp;:
    <synopsis>
    ldap://[<replaceable>hôte</replaceable>[:<replaceable>port</replaceable>]]/<replaceable>base_recherche</replaceable>?<replaceable>attribut</replaceable>?<replaceable>étendue_recherche</replaceable>?<replaceable>filtre</replaceable>
    </synopsis>
@@ -7750,15 +8380,17 @@ ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
 
    <para>
     La clé peut être stockée en clair dans le texte ou chiffrée avec un
-    passphrase utilisant un algorithme supporté par OpenSSL, comme AES-128. Si
-    la clé est stockée chiffrée, alors la passphrase doit être fournie dans
-    l'option de connexion <xref linkend="libpq-connect-sslpassword"/>. Si une
-    clé chiffrée est fournie et que l'option <literal>sslpassword</literal> est
+    passphrase utilisant un algorithme supporté par
+    <productname>OpenSSL</productname>, comme AES-128. Si la clé est stockée
+    chiffrée, alors la passphrase doit être fournie dans l'option de
+    connexion <xref linkend="libpq-connect-sslpassword"/>. Si une clé
+    chiffrée est fournie et que l'option <literal>sslpassword</literal> est
     absente ou vide, une invite de saisie de mot de passe interactive par
-    OpenSSL s'affichera avec <literal>Enter PEM pass phrase:</literal> si un
-    TTY est présent. Les applications peuvent passer outre l'invite du
-    certificat client et la gestion du paramètre <literal>sslpassword</literal>
-    en fournissant leur propre callback pour la clé du mot de passe, voir <xref
+    <productname>OpenSSL</productname> s'affichera avec <literal>Enter PEM
+    pass phrase:</literal> si un TTY est présent. Les applications peuvent
+    passer outre l'invite du certificat client et la gestion du paramètre
+    <literal>sslpassword</literal> en fournissant leur propre callback pour
+    la clé du mot de passe, voir <xref
     linkend="libpq-pqsetsslkeypasshook-openssl"/>.
    </para>
 
@@ -8042,7 +8674,7 @@ ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
        <para>
         Quand <parameter>do_ssl</parameter> est différent de zéro,
         <application>libpq</application> initialisera la bibliothèque
-        <application>OpenSSL</application> avant d'ouvrir une connexion à la base
+        <productname>OpenSSL</productname> avant d'ouvrir une connexion à la base
         de données. Quand <parameter>do_crypto</parameter> est différent de
         zéro, la bibliothèque <literal>libcrypto</literal> sera initialisée. Par
         défaut (si <xref linkend="libpq-PQinitOpenSSL"/> n'est pas appelé), les deux
@@ -8052,7 +8684,7 @@ ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
 
        <para>
         Si votre application utilise et initialise soit
-        <application>OpenSSL</application> soit <literal>libcrypto</literal>,
+        <productname>OpenSSL</productname> soit <literal>libcrypto</literal>,
         vous <emphasis>devez</emphasis> appeler cette fonction avec des zéros
         pour les paramètres appropriés avant d'ouvrir la première connexion à la
         base de données. De plus, assurez-vous que vous avez fait cette
@@ -8076,7 +8708,7 @@ ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
        <para>
         Cette fonction est équivalente à
         <literal>PQinitOpenSSL(do_ssl, do_ssl)</literal>. C'est suffisant pour les
-        applications qui initialisent à la fois <application>OpenSSL</application>
+        applications qui initialisent à la fois <productname>OpenSSL</productname>
         et<literal>libcrypto</literal> ou aucune des deux.
        </para>
 
@@ -8369,8 +9001,7 @@ main(int argc, char **argv)
     /* Vérifier que la connexion au backend a été faite avec succès */
     if (PQstatus(conn) != CONNECTION_OK)
     {
-        fprintf(stderr, "Connection to database failed: %s",
-                PQerrorMessage(conn));
+        fprintf(stderr, "%s", PQerrorMessage(conn));
         exit_nicely(conn);
     }
 
@@ -8542,8 +9173,7 @@ main(int argc, char **argv)
     /* Vérifier que la connexion au backend a été faite avec succès */
     if (PQstatus(conn) != CONNECTION_OK)
     {
-        fprintf(stderr, "Connection to database failed: %s",
-                PQerrorMessage(conn));
+        fprintf(stderr, "%s", PQerrorMessage(conn));
         exit_nicely(conn);
     }
 
@@ -8781,8 +9411,7 @@ main(int argc, char **argv)
     /* Vérifie que la connexion à la base s'est bien déroulée */
     if (PQstatus(conn) != CONNECTION_OK)
     {
-        fprintf(stderr, "Connection to database failed: %s",
-                PQerrorMessage(conn));
+        fprintf(stderr, "%s", PQerrorMessage(conn));
         exit_nicely(conn);
     }
 

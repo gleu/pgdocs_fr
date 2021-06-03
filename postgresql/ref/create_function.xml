@@ -33,6 +33,7 @@
     | SET <replaceable class="parameter">parametre</replaceable> { TO <replaceable class="parameter">value</replaceable> | = <replaceable class="parameter">value</replaceable> | FROM CURRENT }
     | AS '<replaceable class="parameter">definition</replaceable>'
     | AS '<replaceable class="parameter">fichier_obj</replaceable>', '<replaceable class="parameter">symbole_lien</replaceable>'
+    | <replaceable class="parameter">corps_sql</replaceable>
   } ...
   </synopsis>
  </refsynopsisdiv>
@@ -261,7 +262,9 @@
       Le nom du langage d'écriture de la fonction. Peut
       être <literal>SQL</literal>, <literal>C</literal>,
       <literal>internal</literal> ou le nom d'un langage procédural
-      utilisateur, e.g. <literal>plpgsql</literal>. Entourer le nom de
+      utilisateur, e.g. <literal>plpgsql</literal>. The default is
+      <literal>sql</literal> if <replaceable
+      class="parameter">sql_body</replaceable> is specified.  Entourer le nom de
       guillemets simples est une pratique obsolète et nécessite la
       bonne casse.
      </para>
@@ -580,8 +583,8 @@
       fonction dans le code source C n'est pas le même que celui de la fonction
       SQL. La chaîne <replaceable class="parameter">fichier_obj</replaceable> est
       le nom du fichier de la bibliothèque partagée contenant la fonction C
-      compilée et est interprété comme pour une commande <xref
-      linkend="sql-load"/>. La chaîne
+      compilée et est interprété comme pour une commande <link
+      linkend="sql-load"><command>LOAD</command></link>. La chaîne
       <replaceable class="parameter">symbole_lien</replaceable> est le symbole
       de lien de la fonction, c'est-à-dire le nom de la fonction dans le code
       source C. Si ce lien est omis, il est supposé être le même que le nom de
@@ -596,6 +599,44 @@
       au même fichier objet, il est chargé seulement une fois par session.
       Pour décharger et recharger le fichier (par exemple lors du
       développement de la fonction), démarrez une nouvelle session.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">sql_body</replaceable></term>
+
+    <listitem>
+     <para>
+      The body of a <literal>LANGUAGE SQL</literal> function.  This can
+      either be a single statement
+<programlisting>
+RETURN <replaceable>expression</replaceable>
+</programlisting>
+      or a block
+<programlisting>
+BEGIN ATOMIC
+  <replaceable>statement</replaceable>;
+  <replaceable>statement</replaceable>;
+  ...
+  <replaceable>statement</replaceable>;
+END
+</programlisting>
+     </para>
+
+     <para>
+      This is similar to writing the text of the function body as a string
+      constant (see <replaceable>definition</replaceable> above), but there
+      are some differences: This form only works for <literal>LANGUAGE
+      SQL</literal>, the string constant form works for all languages.  This
+      form is parsed at function definition time, the string constant form is
+      parsed at execution time; therefore this form cannot support
+      polymorphic argument types and other constructs that are not resolvable
+      at function definition time.  This form tracks dependencies between the
+      function and objects used in the function body, so <literal>DROP
+      ... CASCADE</literal> will work correctly, whereas the form using
+      string literals may leave dangling functions.  Finally, this form is
+      more compatible with the SQL standard and other SQL implementations.
      </para>
     </listitem>
    </varlistentry>
@@ -677,6 +718,15 @@ CREATE FUNCTION truc(int, int default 42) ...
     LANGUAGE SQL
     IMMUTABLE
     RETURNS NULL ON NULL INPUT;
+</programlisting>
+   The same function written in a more SQL-conforming style, using argument
+   names and an unquoted body:
+<programlisting>
+CREATE FUNCTION add(a integer, b integer) RETURNS integer
+    LANGUAGE SQL
+    IMMUTABLE
+    RETURNS NULL ON NULL INPUT
+    RETURN a + b;
    </programlisting>
   </para>
 
@@ -812,23 +862,74 @@ COMMIT;
   <title>Compatibilité</title>
 
   <para>
-   Une commande <command>CREATE FUNCTION</command> est définie dans le standard SQL.
-   La version <productname>PostgreSQL</productname> est similaire
-   mais pas entièrement compatible. Les attributs ne sont pas portables, pas
-   plus que les différents langages disponibles.
+   A <command>CREATE FUNCTION</command> command is defined in the SQL
+   standard.  The <productname>PostgreSQL</productname> implementation can be
+   used in a compatible way but has many extensions.  Conversely, the SQL
+   standard specifies a number of optional features that are not implemented
+   in <productname>PostgreSQL</productname>.
   </para>
 
   <para>
-   Pour des raisons de compatibilité avec d'autres systèmes de bases de données,
-   <replaceable class="parameter">modearg</replaceable> peut être écrit
-   avant ou après <replaceable class="parameter">nomarg</replaceable>. Mais
-   seule la première façon est compatible avec le standard.
+   The following are important compatibility issues:
+
+   <itemizedlist>
+    <listitem>
+     <para>
+      <literal>OR REPLACE</literal> is a PostgreSQL extension.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      For compatibility with some other database systems, <replaceable
+      class="parameter">argmode</replaceable> can be written either before or
+      after <replaceable class="parameter">argname</replaceable>.  But only
+      the first way is standard-compliant.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      For parameter defaults, the SQL standard specifies only the syntax with
+      the <literal>DEFAULT</literal> key word.  The syntax with
+      <literal>=</literal> is used in T-SQL and Firebird.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      The <literal>SETOF</literal> modifier is a PostgreSQL extension.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Only <literal>SQL</literal> is standardized as a language.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      All other attributes except <literal>CALLED ON NULL INPUT</literal> and
+      <literal>RETURNS NULL ON NULL INPUT</literal> are not standardized.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      For the body of <literal>LANGUAGE SQL</literal> functions, the SQL
+      standard only specifies the <replaceable>sql_body</replaceable> form.
+     </para>
+    </listitem>
+   </itemizedlist>
   </para>
 
   <para>
-   Pour les valeurs par défaut des paramètres, le standard SQL spécifie seulement
-   la syntaxe du mot clé <literal>DEFAULT</literal>. La syntaxe utilisant
-   <literal>=</literal> est utilisé dans T-SQL et Firebird.
+   Simple <literal>LANGUAGE SQL</literal> functions can be written in a way
+   that is both standard-conforming and portable to other implementations.
+   More complex functions using advanced features, optimization attributes, or
+   other languages will necessarily be specific to PostgreSQL in a significant
+   way.
   </para>
  </refsect1>
 

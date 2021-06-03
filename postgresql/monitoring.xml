@@ -26,8 +26,8 @@
   programmes de surveillance Unix standards tels que <command>ps</command>,
   <command>top</command>, <command>iostat</command> et <command>vmstat</command>. De plus, une fois
   qu'une requête peu performante a été identifiée, des investigations
-  supplémentaires pourraient être nécessaires en utilisant la commande <xref
-  linkend="sql-explain"/> de
+  supplémentaires pourraient être nécessaires en utilisant la commande
+  <link linkend="sql-explain"><command>EXPLAIN</command></link> de
   <productname>PostgreSQL</productname>. La <xref linkend="using-explain"/>
   discute de <command>EXPLAIN</command> et des autres méthodes pour comprendre le
   comportement d'une seule requête.
@@ -62,10 +62,10 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
    (L'appel approprié de <command>ps</command> varie suivant les différentes
    plateformes, de même que les détails affichés. Cet exemple est
    tiré d'un système Linux récent.) Le premier processus affiché ici est le
-   processus serveur maître. Les arguments
+   processus serveur primaire. Les arguments
    affichés pour cette commande sont les mêmes qu'à son lancement. Les cinq
    processus suivants sont des processus en tâche de fond lancés
-   automatiquement par le processus maître (le processus
+   automatiquement par le processus primaire (le processus
    <quote>stats collector</quote> n'est pas présent si
    vous avez configuré le système pour qu'il ne lance pas le récupérateur de
    statistiques&nbsp;; de même que le processus <quote>autovacuum launcher</quote> peut être
@@ -192,6 +192,11 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
     des temps de lecture et d'écriture de blocs.
    </para>
 
+  <para>
+   The parameter <xref linkend="guc-track-wal-io-timing"/> enables monitoring
+   of WAL write times.
+  </para>
+
    <para>
     Normalement, ces paramètres sont configurés dans
     <filename>postgresql.conf</filename> de façon à ce qu'ils s'appliquent à tous les
@@ -292,7 +297,7 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
     propriétés générales, tel que l'utilisateur et la base de données, sont
     visibles à tous les utilisateurs. Les superutilisateurs et les membres du
     rôle interne <literal>pg_read_all_stats</literal> (voir aussi <xref
-    linkend="default-roles"/>) peuvent accéder à toutes les informations sur
+    linkend="predefined-roles"/>) peuvent accéder à toutes les informations sur
     les sessions.
    </para>
 
@@ -333,6 +338,15 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          <structname>pg_stat_replication</structname></link> pour les détails.
        </entry>
       </row>
+
+     <row>
+      <entry><structname>pg_stat_replication_slots</structname><indexterm><primary>pg_stat_replication_slots</primary></indexterm></entry>
+      <entry>One row per replication slot, showing statistics about
+       the replication slot's usage.
+       See <link linkend="monitoring-pg-stat-replication-slots-view">
+       <structname>pg_stat_replication_slots</structname></link> for details.
+      </entry>
+     </row>
 
       <row>
        <entry><structname>pg_stat_wal_receiver</structname><indexterm><primary>pg_stat_wal_receiver</primary></indexterm></entry>
@@ -415,6 +429,12 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        </entry>
       </row>
 
+     <row>
+      <entry><structname>pg_stat_progress_copy</structname><indexterm><primary>pg_stat_progress_copy</primary></indexterm></entry>
+      <entry>One row for each backend running <command>COPY</command>, showing current progress.
+       See <xref linkend='copy-progress-reporting'/>.
+      </entry>
+     </row>
      </tbody>
     </tgroup>
    </table>
@@ -448,6 +468,14 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          <structname>pg_stat_bgwriter</structname></link> pour plus de détails.
        </entry>
       </row>
+
+     <row>
+      <entry><structname>pg_stat_wal</structname><indexterm><primary>pg_stat_wal</primary></indexterm></entry>
+      <entry>One row only, showing statistics about WAL activity. See
+       <link linkend="monitoring-pg-stat-wal-view">
+       <structname>pg_stat_wal</structname></link> for details.
+      </entry>
+     </row>
 
       <row>
        <entry><structname>pg_stat_database</structname><indexterm><primary>pg_stat_database</primary></indexterm></entry>
@@ -903,6 +931,22 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       </row>
       <row>
        <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>query_id</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Identifier of this backend's most recent query. If
+        <structfield>state</structfield> is <literal>active</literal> this
+        field shows the identifier of the currently executing query. In
+        all other states, it shows the identifier of last query that was
+        executed.  Query identifiers are not computed by default so this
+        field will be null unless <xref linkend="guc-compute-query-id"/>
+        parameter is enabled or a third-party module that computes query
+        identifiers is configured.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
          <structfield>query</structfield> <type>text</type>
         </para>
         <para>
@@ -926,6 +970,7 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          <literal>logical replication worker</literal>,
          <literal>parallel worker</literal>, <literal>background writer</literal>,
          <literal>client backend</literal>, <literal>checkpointer</literal>,
+         <literal>archiver</literal>,
          <literal>startup</literal>, <literal>walreceiver</literal>,
          <literal>walsender</literal> et <literal>walwriter</literal>.
          De plus, les background workers enregistrés par les extensions pourraient
@@ -1163,11 +1208,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        <entry>En attente de SSL lors d'une tentative de connexion.</entry>
       </row>
       <row>
-       <entry><literal>WalReceiverWaitStart</literal></entry>
-       <entry>En attente du processus startup pour l'envoi des données initiales
-        pour une réplication en flux.</entry>
-      </row>
-      <row>
        <entry><literal>WalSenderWaitForWAL</literal></entry>
        <entry>En attente de l'envoi des WAL au processus WAL sender.</entry>
       </row>
@@ -1211,12 +1251,20 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
 
      <tbody>
       <row>
+       <entry><literal>BaseBackupRead</literal></entry>
+       <entry>Waiting for base backup to read from a file.</entry>
+      </row>
+      <row>
        <entry><literal>BufFileRead</literal></entry>
        <entry>En attente d'une lecture d'un fichier en cache.</entry>
       </row>
       <row>
        <entry><literal>BufFileWrite</literal></entry>
        <entry>En attente d'une écriture dans un fichier en cache.</entry>
+      </row>
+      <row>
+       <entry><literal>BufFileTruncate</literal></entry>
+       <entry>Waiting for a buffered file to be truncated.</entry>
       </row>
       <row>
        <entry><literal>ControlFileRead</literal></entry>
@@ -1537,6 +1585,22 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        <entry><literal>WALWrite</literal></entry>
        <entry>En attente d'une écriture dans un fichier WAL.</entry>
       </row>
+      <row>
+       <entry><literal>LogicalChangesRead</literal></entry>
+       <entry>Waiting for a read from a logical changes file.</entry>
+      </row>
+      <row>
+       <entry><literal>LogicalChangesWrite</literal></entry>
+       <entry>Waiting for a write to a logical changes file.</entry>
+      </row>
+      <row>
+       <entry><literal>LogicalSubxactRead</literal></entry>
+       <entry>Waiting for a read from a logical subxact file.</entry>
+      </row>
+      <row>
+       <entry><literal>LogicalSubxactWrite</literal></entry>
+       <entry>Waiting for a write to a logical subxact file.</entry>
+      </row>
      </tbody>
     </tgroup>
    </table>
@@ -1552,6 +1616,15 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </thead>
 
      <tbody>
+      <row>
+       <entry><literal>AppendReady</literal></entry>
+       <entry>Waiting for subplan nodes of an <literal>Append</literal> plan
+        node to be ready.</entry>
+      </row>
+      <row>
+       <entry><literal>BackendTermination</literal></entry>
+       <entry>Waiting for the termination of another backend.</entry>
+      </row>
       <row>
        <entry><literal>BackupWaitWalArchive</literal></entry>
        <entry>En attente que les fichiers WAL requis pour une sauvegarde
@@ -1569,6 +1642,10 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        <entry><literal>BtreePage</literal></entry>
        <entry>En attente que le numéro de page requis pour continuer un parcours
         parallélisé d'un index B-tree soit disponible.</entry>
+      </row>
+      <row>
+       <entry><literal>BufferIO</literal></entry>
+       <entry>Waiting for buffer I/O to complete.</entry>
       </row>
       <row>
        <entry><literal>CheckpointDone</literal></entry>
@@ -1752,6 +1829,15 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
         réplication synchrone.</entry>
       </row>
       <row>
+       <entry><literal>WalReceiverExit</literal></entry>
+       <entry>Waiting for the WAL receiver to exit.</entry>
+      </row>
+      <row>
+       <entry><literal>WalReceiverWaitStart</literal></entry>
+       <entry>Waiting for startup process to send initial data for streaming
+        replication.</entry>
+      </row>
+      <row>
        <entry><literal>XactGroupUpdate</literal></entry>
        <entry>En attente du leader pour la mise à jour du statut de transaction
         à la fin d'une opération parallélisée.</entry>
@@ -1871,17 +1957,9 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        <entry>En attente de l'accès à une page de données en mémoire.</entry>
       </row>
       <row>
-       <entry><literal>BufferIO</literal></entry>
-       <entry>En attente des I/O sur une page de données.</entry>
-      </row>
-      <row>
        <entry><literal>BufferMapping</literal></entry>
        <entry>En attente de l'association d'un bloc de données avec un tampon
         dans le cache.</entry>
-      </row>
-      <row>
-       <entry><literal>Checkpoint</literal></entry>
-       <entry>En attente du début d'un checkpoint.</entry>
       </row>
       <row>
        <entry><literal>CheckpointerComm</literal></entry>
@@ -2592,6 +2670,155 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
 
   </sect2>
 
+ <sect2 id="monitoring-pg-stat-replication-slots-view">
+  <title><structname>pg_stat_replication_slots</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_replication_slots</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_replication_slots</structname> view will contain
+   one row per logical replication slot, showing statistics about its usage.
+  </para>
+
+  <table id="pg-stat-replication-slots-view" xreflabel="pg_stat_replication_slots">
+   <title><structname>pg_stat_replication_slots</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        Column Type
+       </para>
+       <para>
+        Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>slot_name</structfield> <type>text</type>
+       </para>
+       <para>
+        A unique, cluster-wide identifier for the replication slot
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>spill_txns</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Number of transactions spilled to disk once the memory used by
+        logical decoding to decode changes from WAL has exceeded
+        <literal>logical_decoding_work_mem</literal>. The counter gets
+        incremented for both toplevel transactions and subtransactions.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>spill_count</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Number of times transactions were spilled to disk while decoding
+        changes from WAL for this slot. This counter is incremented each time
+        a transaction is spilled, and the same transaction may be spilled
+        multiple times.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>spill_bytes</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Amount of decoded transaction data spilled to disk while performing
+        decoding of changes from WAL for this slot. This and other spill
+        counters can be used to gauge the I/O which occurred during logical
+        decoding and allow tuning <literal>logical_decoding_work_mem</literal>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>stream_txns</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Number of in-progress transactions streamed to the decoding output
+        plugin after the memory used by logical decoding to decode changes
+        from WAL for this slot has exceeded
+        <literal>logical_decoding_work_mem</literal>. Streaming only
+        works with toplevel transactions (subtransactions can't be streamed
+        independently), so the counter is not incremented for subtransactions.
+       </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>stream_count</structfield><type>bigint</type>
+       </para>
+       <para>
+        Number of times in-progress transactions were streamed to the decoding
+        output plugin while decoding changes from WAL for this slot. This
+        counter is incremented each time a transaction is streamed, and the
+        same transaction may be streamed multiple times.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>stream_bytes</structfield><type>bigint</type>
+       </para>
+       <para>
+        Amount of transaction data decoded for streaming in-progress
+        transactions to the decoding output plugin while decoding changes from
+        WAL for this slot. This and other streaming counters for this slot can
+        be used to tune <literal>logical_decoding_work_mem</literal>.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>total_txns</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Number of decoded transactions sent to the decoding output plugin for
+        this slot. This counts toplevel transactions only, and is not incremented
+        for subtransactions. Note that this includes the transactions that are
+        streamed and/or spilled.
+       </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>total_bytes</structfield><type>bigint</type>
+       </para>
+       <para>
+        Amount of transaction data decoded for sending transactions to the
+        decoding output plugin while decoding changes from WAL for this slot.
+        Note that this includes data that is streamed and/or spilled.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>stats_reset</structfield> <type>timestamp with time zone</type>
+       </para>
+       <para>
+        Time at which these statistics were last reset
+       </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect2>
+
   <sect2 id="monitoring-pg-stat-wal-receiver-view">
    <title><structname>pg_stat_wal_receiver</structname></title>
 
@@ -2955,15 +3182,6 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       </row>
       <row>
        <entry role="catalog_table_entry"><para role="column_definition">
-         <structfield>compression</structfield> <type>boolean</type>
-        </para>
-        <para>
-         True si la compression SSL est utilisée, false sinon, ou
-         NULL si SSL n'est pas utilisé pour cette connexion
-        </para></entry>
-      </row>
-      <row>
-       <entry role="catalog_table_entry"><para role="column_definition">
          <structfield>client_dn</structfield> <type>text</type>
         </para>
         <para>
@@ -3296,6 +3514,140 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
 
   </sect2>
 
+ <sect2 id="monitoring-pg-stat-wal-view">
+   <title><structname>pg_stat_wal</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_wal</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_wal</structname> view will always have a
+   single row, containing data about WAL activity of the cluster.
+  </para>
+
+  <table id="pg-stat-wal-view" xreflabel="pg_stat_wal">
+   <title><structname>pg_stat_wal</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>wal_records</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Total number of WAL records generated
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>wal_fpi</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Total number of WAL full page images generated
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>wal_bytes</structfield> <type>numeric</type>
+      </para>
+      <para>
+       Total amount of WAL generated in bytes
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>wal_buffers_full</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times WAL data was written to disk because WAL buffers became full
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>wal_write</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times WAL buffers were written out to disk via
+       <function>XLogWrite</function> request.
+       See <xref linkend="wal-configuration"/> for more information about
+       the internal WAL function <function>XLogWrite</function>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>wal_sync</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times WAL files were synced to disk via
+       <function>issue_xlog_fsync</function> request
+       (if <xref linkend="guc-fsync"/> is <literal>on</literal> and
+       <xref linkend="guc-wal-sync-method"/> is either
+       <literal>fdatasync</literal>, <literal>fsync</literal> or
+       <literal>fsync_writethrough</literal>, otherwise zero).
+       See <xref linkend="wal-configuration"/> for more information about
+       the internal WAL function <function>issue_xlog_fsync</function>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>wal_write_time</structfield> <type>double precision</type>
+      </para>
+      <para>
+       Total amount of time spent writing WAL buffers to disk via
+       <function>XLogWrite</function> request, in milliseconds
+       (if <xref linkend="guc-track-wal-io-timing"/> is enabled,
+       otherwise zero).  This includes the sync time when
+       <varname>wal_sync_method</varname> is either
+       <literal>open_datasync</literal> or <literal>open_sync</literal>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>wal_sync_time</structfield> <type>double precision</type>
+      </para>
+      <para>
+       Total amount of time spent syncing WAL files to disk via
+       <function>issue_xlog_fsync</function> request, in milliseconds
+       (if <varname>track_wal_io_timing</varname> is enabled,
+       <varname>fsync</varname> is <literal>on</literal>, and
+       <varname>wal_sync_method</varname> is either
+       <literal>fdatasync</literal>, <literal>fsync</literal> or
+       <literal>fsync_writethrough</literal>, otherwise zero).
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>stats_reset</structfield> <type>timestamp with time zone</type>
+      </para>
+      <para>
+       Time at which these statistics were last reset
+      </para></entry>
+     </row>
+     </tbody>
+   </tgroup>
+  </table>
+
+</sect2>
+
   <sect2 id="monitoring-pg-stat-database-view">
    <title><structname>pg_stat_database</structname></title>
 
@@ -3512,6 +3864,83 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
          (si <xref linkend="guc-track-io-timing"/> est activé, sinon zéro)
         </para></entry>
       </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>session_time</structfield> <type>double precision</type>
+      </para>
+      <para>
+       Time spent by database sessions in this database, in milliseconds
+       (note that statistics are only updated when the state of a session
+       changes, so if sessions have been idle for a long time, this idle time
+       won't be included)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>active_time</structfield> <type>double precision</type>
+      </para>
+      <para>
+       Time spent executing SQL statements in this database, in milliseconds
+       (this corresponds to the states <literal>active</literal> and
+       <literal>fastpath function call</literal> in
+       <link linkend="monitoring-pg-stat-activity-view">
+       <structname>pg_stat_activity</structname></link>)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>idle_in_transaction_time</structfield> <type>double precision</type>
+      </para>
+      <para>
+       Time spent idling while in a transaction in this database, in milliseconds
+       (this corresponds to the states <literal>idle in transaction</literal> and
+       <literal>idle in transaction (aborted)</literal> in
+       <link linkend="monitoring-pg-stat-activity-view">
+       <structname>pg_stat_activity</structname></link>)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>sessions</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Total number of sessions established to this database
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>sessions_abandoned</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of database sessions to this database that were terminated
+       because connection to the client was lost
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>sessions_fatal</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of database sessions to this database that were terminated
+       by fatal errors
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>sessions_killed</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of database sessions to this database that were terminated
+       by operator intervention
+      </para></entry>
+     </row>
+
       <row>
        <entry role="catalog_table_entry"><para role="column_definition">
          <structfield>stats_reset</structfield> <type>timestamp with time zone</type>
@@ -4620,11 +5049,12 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
         </para>
         <para>
          Réinitialise à 0 les compteurs statistiques de l'instance, suivant
-         l'argument. L'argument peut être <literal>bgwriter</literal> pour
+         l'argument. L'argument peut valoir <literal>bgwriter</literal> pour
          réinitialiser tous les compteurs affichés dans la vue
-         <structname>pg_stat_bgwriter</structname> ou
+         <structname>pg_stat_bgwriter</structname>,
          <literal>archiver</literal> pour réinitialiser tous les compteurs
-         affichés dans la vue <structname>pg_stat_archiver</structname>.
+         affichés dans la vue <structname>pg_stat_archiver</structname> or <literal>wal</literal>
+         to reset all the counters shown in the <structname>pg_stat_wal</structname> view.
         </para>
         <para>
          Cette fonction est restreinte aux superutilisateurs par défaut, mais
@@ -4701,6 +5131,25 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
          d'autres utilisateurs peuvent avoir le droit EXECUTE pour exécuter la
          fonction.
         </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+          <primary>pg_stat_reset_replication_slot</primary>
+        </indexterm>
+        <function>pg_stat_reset_replication_slot</function> ( <type>text</type> )
+        <returnvalue>void</returnvalue>
+       </para>
+       <para>
+        Resets statistics of the replication slot defined by the argument. If
+        the argument is <literal>NULL</literal>, resets statistics for all
+        the replication slots.
+       </para>
+       <para>
+         This function is restricted to superusers by default, but other users
+         can be granted EXECUTE to run the function.
+       </para></entry>
       </row>
      </tbody>
     </tgroup>
@@ -4966,7 +5415,7 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
    progression de certaines commandes lors de leur exécution. Actuellement,
    les seules commandes supportant un rapport de progression sont
    <command>ANALYZE</command>, <command>CLUSTER</command>, <command>CREATE
-    INDEX</command>, <command>VACUUM</command>, et <xref
+    INDEX</command>, <command>VACUUM</command>, <command>COPY</command>, et <xref
    linkend="protocol-replication-base-backup"/> (i.e., commande de réplication
    que <xref linkend="app-pgbasebackup"/> exécute pour réaliser une sauvegarde
    de base). Ceci pourrait être étendu dans le futur.
@@ -4974,6 +5423,10 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
 
   <sect2 id="analyze-progress-reporting">
    <title>Rapporter la progression d'ANALYZE</title>
+
+   <indexterm>
+    <primary>pg_stat_progress_analyze</primary>
+   </indexterm>
 
    <para>
     Quand <command>ANALYZE</command> est en cours d'exécution, la vue
@@ -5179,8 +5632,7 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
    <note>
     <para>
      Notez que quand <command>ANALYZE</command> est exécutée sur une table
-     partitionnée,toutes ces partitions sont traitées récursivement comme
-     mentionnées dans <xref linkend="sql-analyze"/>. Dans ce cas, la
+     partitionnée,toutes ces partitions sont traitées récursivement. Dans ce cas, la
      progression d'<command>ANALYZE</command> est rapportée tout d'abord pour
      la table parent alors que les statistiques d'héritage sont récupérées,
      suivies par celles de chaque partition.
@@ -5190,6 +5642,10 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
 
   <sect2 id="create-index-progress-reporting">
    <title>Rapporter la progression du CREATE INDEX</title>
+
+   <indexterm>
+    <primary>pg_stat_progress_create_index</primary>
+   </indexterm>
 
    <para>
     Quand un <command>CREATE INDEX</command> ou un <command>REINDEX</command>
@@ -5339,6 +5795,7 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
          Lors de la création d'un index sur une table partitionnée, cette colonne
          est configurée au nombre total de partitions sur lesquels l'index est
          créé.
+         This field is <literal>0</literal> during a <literal>REINDEX</literal>.
         </para></entry>
       </row>
       <row>
@@ -5487,6 +5944,10 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
 
   <sect2 id="vacuum-progress-reporting">
    <title>Rapporter la progression du VACUUM</title>
+
+   <indexterm>
+    <primary>pg_stat_progress_vacuum</primary>
+   </indexterm>
 
    <para>
     La vue <structname>pg_stat_progress_vacuum</structname> contient une ligne
@@ -5710,6 +6171,10 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
   <sect2 id="cluster-progress-reporting">
    <title>Rapporter la progression de CLUSTER</title>
 
+   <indexterm>
+    <primary>pg_stat_progress_cluster</primary>
+   </indexterm>
+
    <para>
     Quand <command>CLUSTER</command> ou <command>VACUUM FULL</command> est en
     cours d'exécution, la vue <structname>pg_stat_progress_cluster</structname>
@@ -5916,6 +6381,10 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
   <sect2 id="basebackup-progress-reporting">
    <title>Rapporter la progression de la sauvegarde de base</title>
 
+   <indexterm>
+    <primary>pg_stat_progress_basebackup</primary>
+   </indexterm>
+
    <para>
     Quand une application comme <application>pg_basebackup</application>
     réalise une sauvegarde de base, la vue
@@ -6082,6 +6551,141 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
     </tgroup>
    </table>
   </sect2>
+
+ <sect2 id="copy-progress-reporting">
+  <title>COPY Progress Reporting</title>
+
+  <indexterm>
+   <primary>pg_stat_progress_copy</primary>
+  </indexterm>
+
+  <para>
+   Whenever <command>COPY</command> is running, the
+   <structname>pg_stat_progress_copy</structname> view will contain one row
+   for each backend that is currently running a <command>COPY</command> command.
+   The table below describes the information that will be reported and provides
+   information about how to interpret it.
+  </para>
+
+  <table id="pg-stat-progress-copy-view" xreflabel="pg_stat_progress_copy">
+   <title><structname>pg_stat_progress_copy</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pid</structfield> <type>integer</type>
+      </para>
+      <para>
+       Process ID of backend.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>datid</structfield> <type>oid</type>
+      </para>
+      <para>
+       OID of the database to which this backend is connected.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>datname</structfield> <type>name</type>
+      </para>
+      <para>
+       Name of the database to which this backend is connected.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>relid</structfield> <type>oid</type>
+      </para>
+      <para>
+       OID of the table on which the <command>COPY</command> command is
+       executed. It is set to <literal>0</literal> if copying from a
+       <command>SELECT</command> query.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>command</structfield> <type>text</type>
+      </para>
+      <para>
+       The command that is running: <literal>COPY FROM</literal>, or
+       <literal>COPY TO</literal>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>type</structfield> <type>text</type>
+      </para>
+      <para>
+       The io type that the data is read from or written to:
+       <literal>FILE</literal>, <literal>PROGRAM</literal>,
+       <literal>PIPE</literal> (for <command>COPY FROM STDIN</command> and
+       <command>COPY TO STDOUT</command>), or <literal>CALLBACK</literal>
+       (used for example during the initial table synchronization in
+       logical replication).
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>bytes_processed</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of bytes already processed by <command>COPY</command> command.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>bytes_total</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Size of source file for <command>COPY FROM</command> command in bytes.
+       It is set to <literal>0</literal> if not available.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>tuples_processed</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of tuples already processed by <command>COPY</command> command.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>tuples_excluded</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of tuples not processed because they were excluded by the
+       <command>WHERE</command> clause of the <command>COPY</command> command.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect2>
+
  </sect1>
 
  <sect1 id="dynamic-trace">

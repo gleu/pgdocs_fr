@@ -587,7 +587,7 @@ equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
 options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns void
       </synopsis>
       La fonction se voit fournie un pointeur vers une structure
-      <replaceable>local_relopts</replaceable> qui doit être remplie avec un
+      <structname>local_relopts</structname> qui doit être remplie avec un
       ensemble d'options spécifiques à une classe d'opérateur. Les options
       sont accessibles à partir des autres fonctions de support en utilisant
       les macros <literal>PG_HAS_OPCLASS_OPTIONS()</literal> et
@@ -657,6 +657,109 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
    </para>
   </sect2>
 
+ <sect2 id="btree-deletion">
+  <title>Bottom-up index deletion</title>
+  <para>
+   B-Tree indexes are not directly aware that under MVCC, there might
+   be multiple extant versions of the same logical table row; to an
+   index, each tuple is an independent object that needs its own index
+   entry.  <quote>Version churn</quote> tuples may sometimes
+   accumulate and adversely affect query latency and throughput.  This
+   typically occurs with <command>UPDATE</command>-heavy workloads
+   where most individual updates cannot apply the
+   <acronym>HOT</acronym> optimization.  Changing the value of only
+   one column covered by one index during an <command>UPDATE</command>
+   <emphasis>always</emphasis> necessitates a new set of index tuples
+   &mdash; one for <emphasis>each and every</emphasis> index on the
+   table.  Note in particular that this includes indexes that were not
+   <quote>logically modified</quote> by the <command>UPDATE</command>.
+   All indexes will need a successor physical index tuple that points
+   to the latest version in the table.  Each new tuple within each
+   index will generally need to coexist with the original
+   <quote>updated</quote> tuple for a short period of time (typically
+   until shortly after the <command>UPDATE</command> transaction
+   commits).
+  </para>
+  <para>
+   B-Tree indexes incrementally delete version churn index tuples by
+   performing <firstterm>bottom-up index deletion</firstterm> passes.
+   Each deletion pass is triggered in reaction to an anticipated
+   <quote>version churn page split</quote>.  This only happens with
+   indexes that are not logically modified by
+   <command>UPDATE</command> statements, where concentrated build up
+   of obsolete versions in particular pages would occur otherwise.  A
+   page split will usually be avoided, though it's possible that
+   certain implementation-level heuristics will fail to identify and
+   delete even one garbage index tuple (in which case a page split or
+   deduplication pass resolves the issue of an incoming new tuple not
+   fitting on a leaf page).  The worst case number of versions that
+   any index scan must traverse (for any single logical row) is an
+   important contributor to overall system responsiveness and
+   throughput.  A bottom-up index deletion pass targets suspected
+   garbage tuples in a single leaf page based on
+   <emphasis>qualitative</emphasis> distinctions involving logical
+   rows and versions.  This contrasts with the <quote>top-down</quote>
+   index cleanup performed by autovacuum workers, which is triggered
+   when certain <emphasis>quantitative</emphasis> table-level
+   thresholds are exceeded (see <xref linkend="autovacuum"/>).
+  </para>
+  <note>
+   <para>
+    Not all deletion operations that are performed within B-Tree
+    indexes are bottom-up deletion operations.  There is a distinct
+    category of index tuple deletion: <firstterm>simple index tuple
+     deletion</firstterm>.  This is a deferred maintenance operation
+    that deletes index tuples that are known to be safe to delete
+    (those whose item identifier's <literal>LP_DEAD</literal> bit is
+    already set).  Like bottom-up index deletion, simple index
+    deletion takes place at the point that a page split is anticipated
+    as a way of avoiding the split.
+   </para>
+   <para>
+    Simple deletion is opportunistic in the sense that it can only
+    take place when recent index scans set the
+    <literal>LP_DEAD</literal> bits of affected items in passing.
+    Prior to <productname>PostgreSQL</productname> 14, the only
+    category of B-Tree deletion was simple deletion.  The main
+    differences between it and bottom-up deletion are that only the
+    former is opportunistically driven by the activity of passing
+    index scans, while only the latter specifically targets version
+    churn from <command>UPDATE</command>s that do not logically modify
+    indexed columns.
+   </para>
+  </note>
+  <para>
+   Bottom-up index deletion performs the vast majority of all garbage
+   index tuple cleanup for particular indexes with certain workloads.
+   This is expected with any B-Tree index that is subject to
+   significant version churn from <command>UPDATE</command>s that
+   rarely or never logically modify the columns that the index covers.
+   The average and worst case number of versions per logical row can
+   be kept low purely through targeted incremental deletion passes.
+   It's quite possible that the on-disk size of certain indexes will
+   never increase by even one single page/block despite
+   <emphasis>constant</emphasis> version churn from
+   <command>UPDATE</command>s.  Even then, an exhaustive <quote>clean
+    sweep</quote> by a <command>VACUUM</command> operation (typically
+   run in an autovacuum worker process) will eventually be required as
+   a part of <emphasis>collective</emphasis> cleanup of the table and
+   each of its indexes.
+  </para>
+  <para>
+   Unlike <command>VACUUM</command>, bottom-up index deletion does not
+   provide any strong guarantees about how old the oldest garbage
+   index tuple may be.  No index can be permitted to retain
+   <quote>floating garbage</quote> index tuples that became dead prior
+   to a conservative cutoff point shared by the table and all of its
+   indexes collectively.  This fundamental table-level invariant makes
+   it safe to recycle table <acronym>TID</acronym>s.  This is how it
+   is possible for distinct logical rows to reuse the same table
+   <acronym>TID</acronym> over time (though this can never happen with
+   two logical rows whose lifetimes span the same
+   <command>VACUUM</command> cycle).
+  </para>
+ </sect2>
+
   <sect2 id="btree-deduplication">
    <title>Dédoublement</title>
 
@@ -698,8 +801,10 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
    <para>
     Le processus de dédoublement se déroule avec le moins d'effort possible,
     quand un nouveau élément est inséré et ne peut rentrer dans une page
-    feuille existante. Cela permet (ou au moins repousse) le fractionnement de
-    page feuille. Contrairement à la liste chainée d'enregistrements GIN, la liste
+    feuille existante, though only when
+    index tuple deletion could not free sufficient space for the new
+    item (typically deletion is briefly considered and then skipped
+    over). Contrairement à la liste chainée d'enregistrements GIN, la liste
     chainée d'enregistrements B-Tree n'a pas besoin de s'étendre à chaque fois qu'un
     nouveau doublon est inséré&nbsp;; ils sont simplement une représentation
     physique différente du contenu logique de la page feuille. Ce concept
@@ -737,26 +842,16 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
    </para>
 
    <para>
-    Pour les index B-Tree, sous MVCC, il peut y avoir plusieurs versions
-    existantes du même enregistrement logique en table&nbsp;; pour un index,
-    chaque tuple est un objet indépendant qui nécessite sa propre entrée dans
-    l'index. Les <quote>duplicatats de version</quote> peuvent parfois
-    s'accumuler et affecter négativement la latence et le débit des requêtes.
-    Ceci survient typiquement avec les charges de travail lourdes en
-    <command>UPDATE</command> où la plupart des mises à jours individuelles ne
-    peuvent pas utilisées l'optimisation <acronym>HOT</acronym> (souvent parce
-    qu'au moins une colonne indexée est modifiée, nécessitant ainsi un nouvel
-    ensemble de versions de lignes d'index &mdash; une nouvelle ligne pour
-    <emphasis>chacun</emphasis> des index). En fait, la déduplication B-Tree
-    améliore la fragmentation des index causée par le versionnement. Notez que
-    même les lignes d'un index unique ne sont pas nécessairement
-    <emphasis>physiquement</emphasis> uniques lors du stockage sur disque à
-    cause du versionnement. L'optimisation de la déduplication est appliquée
-    sélectivement dans les index uniques. Elle cible les pages qui semblent
-    avoir des duplicatas de versions. Le but principal est de donner plus de
-    temps pour l'exécution du <command>VACUUM</command> avant qu'une division
-    de page <quote>inutile</quote> causée par le versionnement puisse se
-    faire.
+    It is sometimes possible for unique indexes (as well as unique
+    constraints) to use deduplication.  This allows leaf pages to
+    temporarily <quote>absorb</quote> extra version churn duplicates.
+    Deduplication in unique indexes augments bottom-up index deletion,
+    especially in cases where a long-running transactions holds a
+    snapshot that blocks garbage collection.  The goal is to buy time
+    for the bottom-up index deletion strategy to become effective
+    again.  Delaying page splits until a single long-running
+    transaction naturally goes away can allow a bottom-up deletion pass
+    to succeed where an earlier deletion pass failed.
    </para>
 
    <tip>

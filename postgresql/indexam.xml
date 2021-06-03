@@ -147,6 +147,7 @@ typedef struct IndexAmRoutine
     amproperty_function amproperty;     /* peut être NULL */
     ambuildphasename_function ambuildphasename;   /* peut être NULL */
     amvalidate_function amvalidate;
+    amadjustmembers_function amadjustmembers; /* peut être NULL */
     ambeginscan_function ambeginscan;
     amrescan_function amrescan;
     amgettuple_function amgettuple;     /* peut être NULL */
@@ -315,6 +316,20 @@ aminsert (Relation indexRelation,
   </para>
 
   <para>
+   The <literal>indexUnchanged</literal> boolean value gives a hint
+   about the nature of the tuple to be indexed.  When it is true,
+   the tuple is a duplicate of some existing tuple in the index.  The
+   new tuple is a logically unchanged successor MVCC tuple version.  This
+   happens when an <command>UPDATE</command> takes place that does not
+   modify any columns covered by the index, but nevertheless requires a
+   new version in the index.  The index AM may use this hint to decide
+   to apply bottom-up index deletion in parts of the index where many
+   versions of the same logical row accumulate.  Note that updating a
+   non-key column does not affect the value of
+   <literal>indexUnchanged</literal>.
+  </para>
+
+  <para>
    La valeur booléenne résultante n'a de sens
    que si <literal>checkUnique</literal> vaut
    <literal>UNIQUE_CHECK_PARTIAL</literal>. Dans ce cas, un résultat true
@@ -394,7 +409,6 @@ amvacuumcleanup (IndexVacuumInfo *info,
   </para>
 
   <para>
-   À partir de <productname>PostgreSQL</productname> 8.4,
    <function>amvacuumcleanup</function> sera aussi appelé à la fin d'une
    opération <command>ANALYZE</command>. Dans ce cas,
    <literal>stats</literal> vaut toujours NULL et toute valeur de retour sera
@@ -543,7 +557,47 @@ amvalidate (Oid opclassoid);
    fonctions de support. La fonction
    <function>amvalidate</function> doit renvoyer false si la classe d'opérateur
    est invalide. Les problèmes devraient être rapportés avec les messages
-   <function>ereport</function>.
+   <function>ereport</function>, typically at <literal>INFO</literal> level.
+  </para>
+
+  <para>
+<programlisting>
+void
+amadjustmembers (Oid opfamilyoid,
+                 Oid opclassoid,
+                 List *operators,
+                 List *functions);
+</programlisting>
+   Validate proposed new operator and function members of an operator family,
+   so far as the access method can reasonably do that, and set their
+   dependency types if the default is not satisfactory.  This is called
+   during <command>CREATE OPERATOR CLASS</command> and during
+   <command>ALTER OPERATOR FAMILY ADD</command>; in the latter
+   case <parameter>opclassoid</parameter> is <literal>InvalidOid</literal>.
+   The <type>List</type> arguments are lists
+   of <structname>OpFamilyMember</structname> structs, as defined
+   in <filename>amapi.h</filename>.
+
+   Tests done by this function will typically be a subset of those
+   performed by <function>amvalidate</function>,
+   since <function>amadjustmembers</function> cannot assume that it is
+   seeing a complete set of members.  For example, it would be reasonable
+   to check the signature of a support function, but not to check whether
+   all required support functions are provided.  Any problems can be
+   reported by throwing an error.
+
+   The dependency-related fields of
+   the <structname>OpFamilyMember</structname> structs are initialized by
+   the core code to create hard dependencies on the opclass if this
+   is <command>CREATE OPERATOR CLASS</command>, or soft dependencies on the
+   opfamily if this is <command>ALTER OPERATOR FAMILY ADD</command>.
+   <function>amadjustmembers</function> can adjust these fields if some other
+   behavior is more appropriate.  For example, GIN, GiST, and SP-GiST
+   always set operator members to have soft dependencies on the opfamily,
+   since the connection between an operator and an opclass is relatively
+   weak in these index types; so it is reasonable to allow operator members
+   to be added and removed freely.  Optional support functions are typically
+   also given soft dependencies, so that they can be removed if necessary.
   </para>
 
 

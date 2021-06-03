@@ -279,6 +279,53 @@
   </para>
  </sect1>
 
+ <sect1 id="checksums">
+  <title>Data Checksums</title>
+  <indexterm>
+   <primary>checksums</primary>
+  </indexterm>
+
+  <para>
+   By default, data pages are not protected by checksums, but this can
+   optionally be enabled for a cluster. When enabled, each data page includes
+   a checksum that is updated when the page is written and verified each time
+   the page is read. Only data pages are protected by checksums; internal data
+   structures and temporary files are not.
+  </para>
+
+  <para>
+   Checksums are normally enabled when the cluster is initialized using <link
+   linkend="app-initdb-data-checksums"><application>initdb</application></link>.
+   They can also be enabled or disabled at a later time as an offline
+   operation. Data checksums are enabled or disabled at the full cluster
+   level, and cannot be specified individually for databases or tables.
+  </para>
+
+  <para>
+   The current state of checksums in the cluster can be verified by viewing the
+   value of the read-only configuration variable <xref
+   linkend="guc-data-checksums" /> by issuing the command <command>SHOW
+   data_checksums</command>.
+  </para>
+
+  <para>
+   When attempting to recover from page corruptions, it may be necessary to
+   bypass the checksum protection. To do this, temporarily set the
+   configuration parameter <xref linkend="guc-ignore-checksum-failure" />.
+  </para>
+
+  <sect2 id="checksums-offline-enable-disable">
+   <title>Off-line Enabling of Checksums</title>
+
+   <para>
+    The <link linkend="app-pgchecksums"><application>pg_checksums</application></link>
+    application can be used to enable or disable data checksums, as well as
+    verify checksums, on an offline cluster.
+   </para>
+
+  </sect2>
+ </sect1>
+
  <sect1 id="wal-intro">
   <title>Write-Ahead Logging (<acronym>WAL</acronym>)</title>
 
@@ -624,27 +671,32 @@
    écritures de pages modifiées, leur écriture pendant le checkpoint
    est étalée sur une période de temps. Elle est
    contrôlée par <xref linkend="guc-checkpoint-completion-target"/>,
-   donné comme une fraction de l'intervalle des checkpoints.
+   donné comme une fraction de l'intervalle des checkpoints
+   (configured by using
+   <varname>checkpoint_timeout</varname>).
    Le taux d'entrées/sorties est ajusté pour que le checkpoint
    se termine quand la fraction indiquée de
    <varname>checkpoint_timeout</varname> secondes s'est écoulée,
    ou avant que <varname>max_wal_size</varname> soit dépassé,
    selon ce qui arrivera en premier. Avec la valeur par
-   défaut de 0,5, on peut s'attendre à ce que
+   défaut de 0,9, on peut s'attendre à ce que
    <productname>PostgreSQL</productname> termine chaque checkpoint
-   dans la moitié du temps avant le démarrage du suivant.
-   Sur un système
-   très proche de son débit maximal d'entrées/sorties en fonctionnement
-   normal, vous pouvez augmenter
-   <varname>checkpoint_completion_target</varname> pour réduire la charge
-   due aux checkpoints. L'inconvénient
-   de prolonger les checkpoints est d'impacter le temps de
-   récupération, car il faudra conserver plus de journaux de transaction
-   si une récupération est nécessaire. Bien que
-   <varname>checkpoint_completion_target</varname> puisse monter à 1.0, il
-   le mieux est de la configurer à une valeur plus basse (au
-   plus 0,9), car les checkpoints incluent d'autres
-   activités en dehors de l'écriture des pages modifiées. Une valeur de 1,0
+   a bit before the next scheduled checkpoint (at around 90% of the last checkpoint's
+   duration).  This spreads out the I/O as much as possible so that the checkpoint
+   I/O load is consistent throughout the checkpoint interval.  The disadvantage of
+   this is that prolonging checkpoints affects recovery time, because more WAL
+   segments will need to be kept around for possible use in recovery.  A user
+   concerned about the amount of time required to recover might wish to reduce
+   <varname>checkpoint_timeout</varname> so that checkpoints occur more frequently
+   but still spread the I/O across the checkpoint interval.  Alternatively,
+   <varname>checkpoint_completion_target</varname> could be reduced, but this would
+   result in times of more intense I/O (during the checkpoint) and times of less I/O
+   (after the checkpoint completed but before the next scheduled checkpoint) and
+   therefore is not recommended.
+   Although <varname>checkpoint_completion_target</varname> could be set as high as
+   1.0, it is typically recommended to set it to no higher than 0.9 (the default)
+   since checkpoints include some other activities besides writing dirty buffers.
+   Une valeur de 1,0
    peut résulter en checkpoints qui ne se terminent
    pas à temps, ce qui entraînerait des baisses de performance à
    cause de variations inattendues dans le nombre de journaux nécessaires.
@@ -712,7 +764,7 @@
    données déjà traitées des journaux de transactions n'ont plus besoin d'être
    parcourues de nouveau, puis recycle les anciens journaux de transactions
    trouvés dans le répertoire <filename>pg_wal</filename>. Les restartpoints
-   ne peuvent être réalisés plus fréquemment que les checkpoints du maître car
+   ne peuvent être réalisés plus fréquemment que les checkpoints du primaire car
    les restartpoints peuvent seulement être réalisés aux enregistrements de
    checkpoint.
    Un restartpoint est déclenché lorsqu'un enregistement de checkpoint est
@@ -851,6 +903,35 @@
    <function>XLogFlush</function> dans les journaux applicatifs du serveur.
    Cette option
    pourrait être remplacée par un mécanisme plus général dans le futur.
+  </para>
+
+  <para>
+   There are two internal functions to write WAL data to disk:
+   <function>XLogWrite</function> and <function>issue_xlog_fsync</function>.
+   When <xref linkend="guc-track-wal-io-timing"/> is enabled, the total
+   amounts of time <function>XLogWrite</function> writes and
+   <function>issue_xlog_fsync</function> syncs WAL data to disk are counted as
+   <literal>wal_write_time</literal> and <literal>wal_sync_time</literal> in
+   <xref linkend="pg-stat-wal-view"/>, respectively.
+   <function>XLogWrite</function> is normally called by
+   <function>XLogInsertRecord</function> (when there is no space for the new
+   record in WAL buffers), <function>XLogFlush</function> and the WAL writer,
+   to write WAL buffers to disk and call <function>issue_xlog_fsync</function>.
+   <function>issue_xlog_fsync</function> is normally called by
+   <function>XLogWrite</function> to sync WAL files to disk.
+   If <varname>wal_sync_method</varname> is either
+   <literal>open_datasync</literal> or <literal>open_sync</literal>,
+   a write operation in <function>XLogWrite</function> guarantees to sync written
+   WAL data to disk and <function>issue_xlog_fsync</function> does nothing.
+   If <varname>wal_sync_method</varname> is either <literal>fdatasync</literal>,
+   <literal>fsync</literal>, or <literal>fsync_writethrough</literal>,
+   the write operation moves WAL buffers to kernel cache and
+   <function>issue_xlog_fsync</function> syncs them to disk. Regardless
+   of the setting of <varname>track_wal_io_timing</varname>, the number
+   of times <function>XLogWrite</function> writes and
+   <function>issue_xlog_fsync</function> syncs WAL data to disk are also
+   counted as <literal>wal_write</literal> and <literal>wal_sync</literal>
+   in <structname>pg_stat_wal</structname>, respectively.
   </para>
  </sect1>
 

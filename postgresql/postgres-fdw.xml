@@ -67,9 +67,17 @@
   Maintenant, vous avez seulement besoin de <command>SELECT</command> sur la
   table distante pour accéder aux données de la table du serveur distant. Vous
   pouvez aussi modifier la table sur le serveur distant en utilisant les
-  commandes <command>INSERT</command>, <command>UPDATE</command> et
-  <command>DELETE</command>. (Bien sûr, l'utilisateur utilisé pour la connexion
-  au serveur distant doit avoir le droits de faire tout cela.)
+  commandes <command>INSERT</command>, <command>UPDATE</command>,
+  <command>DELETE</command> et <command>TRUNCATE</command>.
+  (Of course, the remote user you have specified in your user mapping must
+  have privileges to do these things.)
+ </para>
+
+ <para>
+  Note that the <literal>ONLY</literal> option specified in
+  <command>SELECT</command>, <command>UPDATE</command>,
+  <command>DELETE</command> or <command>TRUNCATE</command>
+  has no effect when accessing or modifying the remote table.
  </para>
 
  <para>
@@ -82,7 +90,7 @@
   <command>UPDATE</command> exécutées sur des tables partitionnées, mais il ne
   gère pas le cas où une partition distante choisir pour insérer une ligne est
   aussi une partition cible d'<command>UPDATE</command> qui sera mise à jour
-  ultérieurement.
+  ailleurs dans la même commande.
  </para>
 
  <para>
@@ -378,8 +386,59 @@ OPTIONS (ADD password_required 'false');
      </listitem>
     </varlistentry>
 
+    <varlistentry>
+     <term><literal>batch_size</literal></term>
+     <listitem>
+      <para>
+       This option specifies the number of rows <filename>postgres_fdw</filename>
+       should insert in each insert operation. It can be specified for a
+       foreign table or a foreign server. The option specified on a table
+       overrides an option specified for the server.
+       The default is <literal>1</literal>.
+      </para>
+     </listitem>
+    </varlistentry>
+
    </variablelist>
 
+  </sect3>
+
+  <sect3>
+   <title>Asynchronous Execution Options</title>
+
+   <para>
+    <filename>postgres_fdw</filename> supports asynchronous execution, which
+    runs multiple parts of an <structname>Append</structname> node
+    concurrently rather than serially to improve performance.
+    This execution can be controled using the following option:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>async_capable</literal></term>
+     <listitem>
+      <para>
+       This option controls whether <filename>postgres_fdw</filename> allows
+       foreign tables to be scanned concurrently for asynchronous execution.
+       It can be specified for a foreign table or a foreign server.
+       A table-level option overrides a server-level option.
+       The default is <literal>false</literal>.
+      </para>
+
+      <para>
+       In order to ensure that the data being returned from a foreign server
+       is consistent, <filename>postgres_fdw</filename> will only open one
+       connection for a given foreign server and will run all queries against
+       that server sequentially even if there are multiple foreign tables
+       involved, unless those tables are subject to different user mappings.
+       In such a case, it may be more performant to disable this option to
+       eliminate the overhead associated with running queries asynchronously.
+      </para>
+     </listitem>
+    </varlistentry>
+
+   </variablelist>
   </sect3>
 
   <sect3>
@@ -418,6 +477,37 @@ OPTIONS (ADD password_required 'false');
      </listitem>
     </varlistentry>
 
+   </variablelist>
+  </sect3>
+
+  <sect3>
+   <title>Truncatability Options</title>
+
+   <para>
+    By default all foreign tables using <filename>postgres_fdw</filename> are assumed
+    to be truncatable.  This may be overridden using the following option:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>truncatable</literal></term>
+     <listitem>
+      <para>
+       This option controls whether <filename>postgres_fdw</filename> allows
+       foreign tables to be truncated using the <command>TRUNCATE</command>
+       command. It can be specified for a foreign table or a foreign server.
+       A table-level option overrides a server-level option.
+       The default is <literal>true</literal>.
+      </para>
+
+      <para>
+       Of course, if the remote table is not in fact truncatable, an error
+       would occur anyway.  Use of this option primarily allows the error to
+       be thrown locally without querying the remote server.
+      </para>
+     </listitem>
+    </varlistentry>
    </variablelist>
   </sect3>
 
@@ -503,15 +593,124 @@ OPTIONS (ADD password_required 'false');
 
    <para>
     Les tables ou tables distantes qui sont des partitions d'autres tables sont
-    automatiquement exclues.  Les tables partitionnées sont importées, à moins
-    qu'elles soient des partitions d'une autre table.  Puisque toutes les
-    données à traver la table partitionnées qui est à la racine de toute la
-    hiérarchie de partitionnement, cette approche devrait autoriser l'accès à
-    toutes les données sans avoir besoin de créer d'objets supplémentaires.
+    imported only when they are explicitly specified in
+    <literal>LIMIT TO</literal> clause.  Otherwise they are automatically
+    excluded from <xref linkend="sql-importforeignschema"/>.
+    Since all data can be accessed through the partitioned table
+    which is the root of the partitioning hierarchy, importing only
+    partitioned tables should allow access to all the data without
+    creating extra objects.
    </para>
 
   </sect3>
+
+  <sect3>
+    <title>Connection Management Options</title>
+
+    <para>
+     By default, all connections that <filename>postgres_fdw</filename>
+     establishes to foreign servers are kept open in the local session
+     for re-use.
+    </para>
+ 
+    <variablelist>
+ 
+     <varlistentry>
+      <term><literal>keep_connections</literal></term>
+      <listitem>
+       <para>
+        This option controls whether <filename>postgres_fdw</filename> keeps
+        the connections to the foreign server open so that subsequent
+        queries can re-use them. It can only be specified for a foreign server.
+        The default is <literal>on</literal>. If set to <literal>off</literal>,
+        all connections to this foreign server will be discarded at the end of
+        each transaction.
+      </para>
+      </listitem>
+     </varlistentry>
+ 
+    </variablelist>
+   </sect3>
  </sect2>
+
+<sect2>
+  <title>Functions</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><function>postgres_fdw_get_connections(OUT server_name text, OUT valid boolean) returns setof record</function></term>
+    <listitem>
+     <para>
+      This function returns the foreign server names of all the open
+      connections that <filename>postgres_fdw</filename> established from
+      the local session to the foreign servers. It also returns whether
+      each connection is valid or not. <literal>false</literal> is returned
+      if the foreign server connection is used in the current local
+      transaction but its foreign server or user mapping is changed or
+      dropped (Note that server name of an invalid connection will be
+      <literal>NULL</literal> if the server is dropped),
+      and then such invalid connection will be closed at
+      the end of that transaction. <literal>true</literal> is returned
+      otherwise. If there are no open connections, no record is returned.
+      Example usage of the function:
+<screen>
+postgres=# SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
+ server_name | valid 
+-------------+-------
+ loopback1   | t
+ loopback2   | f
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>postgres_fdw_disconnect(server_name text) returns boolean</function></term>
+    <listitem>
+     <para>
+      This function discards the open connections that are established by
+      <filename>postgres_fdw</filename> from the local session to
+      the foreign server with the given name.  Note that there can be
+      multiple connections to the given server using different user mappings.
+      If the connections are used in the current local transaction,
+      they are not disconnected and warning messages are reported.
+      This function returns <literal>true</literal> if it disconnects
+      at least one connection, otherwise <literal>false</literal>.
+      If no foreign server with the given name is found, an error is reported.
+      Example usage of the function:
+<screen>
+postgres=# SELECT postgres_fdw_disconnect('loopback1');
+ postgres_fdw_disconnect 
+-------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>postgres_fdw_disconnect_all() returns boolean</function></term>
+    <listitem>
+     <para>
+      This function discards all the open connections that are established by
+      <filename>postgres_fdw</filename> from the local session to
+      foreign servers.  If the connections are used in the current local
+      transaction, they are not disconnected and warning messages are reported.
+      This function returns <literal>true</literal> if it disconnects
+      at least one connection, otherwise <literal>false</literal>.
+      Example usage of the function:
+<screen>
+postgres=# SELECT postgres_fdw_disconnect_all();
+ postgres_fdw_disconnect_all 
+-----------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+   </variablelist>
+
+</sect2>
 
  <sect2>
   <title>Gestion des connexions</title>
@@ -519,11 +718,35 @@ OPTIONS (ADD password_required 'false');
   <para>
    <filename>postgres_fdw</filename> établit une connexion au serveur distant
    lors de la première requête qui utilise une table distante associée avec
-   le serveur distant. La connexion est conservée et réutilisée pour les
-   requêtes suivants de la même session. Néanmoins, si plusieurs identités
+   le serveur distant. By default this connection
+   is kept and re-used for subsequent queries in the same session.
+   This behavior can be controlled using
+   <literal>keep_connections</literal> option for a foreign server. Si plusieurs identités
    d'utilisateur (correspondances d'utilisateur) sont utilisées pour
    accéder au serveur distant, une connexion est établie pour chaque
    correspondance d'utilisateur.
+  </para>
+
+  <para>
+   When changing the definition of or removing a foreign server or
+   a user mapping, the associated connections are closed.
+   But note that if any connections are in use in the current local transaction,
+   they are kept until the end of the transaction.
+   Closed connections will be re-established when they are necessary
+   by future queries using a foreign table.
+  </para>
+
+  <para>
+   Once a connection to a foreign server has been established,
+   it's by default kept until the local or corresponding remote
+   session exits.  To disconnect a connection explicitly,
+   <literal>keep_connections</literal> option for a foreign server
+   may be disabled, or
+   <function>postgres_fdw_disconnect</function> and
+   <function>postgres_fdw_disconnect_all</function> functions
+   may be used.  For example, these are useful to close
+   connections that are no longer necessary, thereby releasing
+   connections on the foreign server.
   </para>
  </sect2>
 
@@ -750,7 +973,8 @@ CREATE FOREIGN TABLE foreign_table (
    à moins que des options <literal>column_name</literal> soient attachées aux
    colonnes individuelles pour montrer comment elles sont nommées sur la table
    distante.
-   Dans de nombreux cas, l'utilisation de <xref linkend="sql-importforeignschema"/>
+   Dans de nombreux cas, l'utilisation de <link
+   linkend="sql-importforeignschema"><command>IMPORT FOREIGN SCHEMA</command></link>
    est préférable à la construction manuelle des tables distantes.
   </para>
  </sect2>

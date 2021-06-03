@@ -155,7 +155,7 @@
    différente de <quote>full</quote> du côté du publieur, une identité de
    réplication comprenant les mêmes colonnes, ou moins de colonnes, peut aussi
    être configuré du côté de l'abonné. Voir <xref
-   linkend="sql-createtable-replica-identity"/> pour les détails sur la
+   linkend="sql-altertable-replica-identity"/> pour les détails sur la
    configuration de l'identité de réplication. Si une table sans identité de
    réplication est ajoutée à une publication qui réplique les opérations
    <command>UPDATE</command> ou <command>DELETE</command>, alors les
@@ -171,14 +171,15 @@
 
   <para>
    Une publication est créée en utilisant la commande
-   <xref linkend="sql-createpublication"/> et peut ensuite être modifiée
+   <link linkend="sql-createpublication"><command>CREATE PUBLICATION</command></link>
+   et peut ensuite être modifiée
    ou supprimée en utilisant la commande correspondante.
   </para>
 
   <para>
    Les tables individuelles peuvent être ajoutées ou supprimées
-   dynamiquement en utilisant <xref linkend="sql-alterpublication"/>.
-   Les opérations <literal>ADD TABLE</literal> et
+   dynamiquement en utilisant <link linkend="sql-alterpublication"><command>ALTER
+   PUBLICATION</command></link>. Les opérations <literal>ADD TABLE</literal> et
    <literal>DROP TABLE</literal> sont toutes les deux transactionnelles&nbsp;;
    de ce fait, une table va commencer ou arrêter de répliquer dans le bon
    instantané seulement une fois que la transaction a été validée.
@@ -215,9 +216,10 @@
   <para>
    Chaque abonnement recevra les changements par un slot de réplication
    (voir <xref linkend="streaming-replication-slots"/>).
-   Des slots de réplications temporaires supplémentaires peuvent être
+   Des slots de réplications supplémentaires peuvent être
    nécessaires pour la synchronisation initiale des données d'une table
-   contenant des données pré-existantes.
+   contenant des données pré-existantes and those will be dropped at the end of data
+   synchronization.
   </para>
 
   <para>
@@ -239,10 +241,14 @@
   </para>
 
   <para>
-   Un abonnement est ajouté en utilisant <xref linkend="sql-createsubscription"/>.
-   Il peut être arrêté/repris à n'importe quel moment en utilisant la
-   commande <xref linkend="sql-altersubscription"/> et il peut être
-   supprimé par la commande <xref linkend="sql-dropsubscription"/>.
+   Un abonnement est ajouté en utilisant <link
+   linkend="sql-createsubscription"><command>CREATE
+   SUBSCRIPTION</command></link>. Il peut être arrêté/repris à n'importe quel
+   moment en utilisant la commande <link
+   linkend="sql-altersubscription"><command>ALTER
+   SUBSCRIPTION</command></link> et il peut être supprimé par la commande
+   <link linkend="sql-dropsubscription"><command>DROP
+   SUBSCRIPTION</command></link>.
   </para>
 
   <para>
@@ -284,7 +290,18 @@
    <para>
     Comme présenté plus tôt, chaque abonnement (actif) reçoit les
     changements depuis un slot de réplication du serveur distant
-    (publication). Normalement, le slot de réplication distant est créé
+    (publication).
+   </para>
+   <para>
+    Additional table synchronization slots are normally transient, created
+    internally to perform initial table synchronization and dropped
+    automatically when they are no longer needed. These table synchronization
+    slots have generated names: <quote><literal>pg_%u_sync_%u_%llu</literal></quote>
+    (parameters: Subscription <parameter>oid</parameter>,
+    Table <parameter>relid</parameter>, system identifier <parameter>sysid</parameter>)
+   </para>
+   <para>
+    Normalement, le slot de réplication distant est créé
     automatiquement en utilisant la commande
     <command>CREATE SUBSCRIPTION</command> et il est supprimé
     automatiquement en utilisant la commande
@@ -337,7 +354,8 @@
        l'abonnement.
        Si l'instance distante n'existe plus, aucune action supplémentaire
        n'est nécessaire. Si, par contre, l'instance distante est
-       simplement temporairement injoignable, le slot de réplication
+       simplement temporairement injoignable, le slot de réplication (and any
+       still remaining table synchronization slots)
        devrait être supprimé manuellement, sinon l'instance va
        persévérer à conserver ses fichiers WAL jusqu'à saturation de
        l'espace disque disponible. Ces cas doivent être traités avec
@@ -473,7 +491,8 @@
      des tables indépendantes.). Les publications peuvent aussi spécifier les
      changements à répliquer en utilisant l'identité et le schéma de la table
      racine partitionnée au lieu de chaque partition individuelle à l'origine
-     des changements (voir <xref linkend="sql-createpublication"/>).
+     des changements (voir <link linkend="sql-createpublication"><command>CREATE
+     PUBLICATION</command></link>).
     </para>
    </listitem>
   </itemizedlist>
@@ -533,14 +552,18 @@
     Les données initiales présentes dans des tables abonnées sont
     photographiées et copiées dans une instance parallèle qui utilise
     un type particulier de processus apply.
-    Ce processus va créer son propre slot de réplication temporaire
-    et copier les données existantes. Une fois les données existantes
+    Ce processus va créer son propre slot de réplication
+    et copier les données existantes. As soon as the copy is finished
+    the table contents will become
+    visible to other backends. Une fois les données existantes
     copiées, le processus passe en mode de synchronisation, qui
     assure que la table est amenée vers un état synchronisé avec le
     processus apply principal, ceci en transférant toutes les
     modifications survenues pendant la copie initiale des données,
     réalisée avec le système de réplication logique standard.
-    Une fois la synchronisation terminée, le contrôle de la
+    During this synchronization phase, the changes
+    are applied and committed in the same order as they happened on the
+    publisher. Une fois la synchronisation terminée, le contrôle de la
     réplication de la table est rendu au processus apply principal et
     la réplication continue telle quelle.
    </para>
@@ -668,14 +691,12 @@
   </para>
 
   <para>
-   Du côté de l'abonné, le paramètre <varname>max_replication_slots</varname>
-   doit lui aussi être définipour configurer le nombre d'origines de
-   réplication à tracer.
-   Il devrait être défini au minimum au nombre d'abonnements
-   qui vont être souscrits par les bases abonnées.
-   Le paramètre <varname>max_logical_replication_workers</varname> doit
-   être positionné au minimum à la valeur du nombre d'abonnements plus une
-   réserve pour la synchronisation des tables.
+   <varname>max_replication_slots</varname> must also be set on the
+   subscriber. It should be set to at least the number of subscriptions that
+   will be added to the subscriber, plus some reserve for table
+   synchronization. <varname>max_logical_replication_workers</varname> must
+   be set to at least the number of subscriptions, again plus some reserve
+   for the table synchronization.
    En supplément, le paramètre <varname>max_worker_processes</varname>
    peut devoir être ajusté pour s'accorder au nombre de processus de
    réplication, (<varname>max_logical_replication_workers</varname>
