@@ -397,7 +397,10 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
     <structname>pg_stat_replication</structname></link>
    fournissent respectivement des informations sur l'état courant des slots de
    réplication et des connexions de réplication en flux. Ces vues s'appliquent à la fois
-   à la réplication physique et logique.
+   à la réplication physique et logique. The
+   <link linkend="monitoring-pg-stat-replication-slots-view">
+   <structname>pg_stat_replication_slots</structname></link>
+   view provides statistics information about the logical replication slots.
   </para>
  </sect1>
  <sect1 id="logicaldecoding-output-plugin">
@@ -1051,6 +1054,8 @@ OutputPluginWrite(ctx, true);
  </sect1>
  <sect1 id="logicaldecoding-synchronous">
   <title>Support de la réplication synchrone pour le décodage logique</title>
+   <sect2>
+    <title>Overview</title>
   <para>
    Le décodage logique peut être utilisé pour construire des solutions de
    <link linkend="synchronous-replication">réplication synchrone</link> avec
@@ -1073,6 +1078,59 @@ OutputPluginWrite(ctx, true);
     utilisée activement.
    </para>
   </note>
+   </sect2>
+
+   <sect2 id="logicaldecoding-synchronous-caveats">
+    <title>Caveats</title>
+
+    <para>
+     In synchronous replication setup, a deadlock can happen, if the transaction
+     has locked [user] catalog tables exclusively. This is because logical decoding of
+     transactions can lock catalog tables to access them. To avoid this users
+     must refrain from taking an exclusive lock on [user] catalog tables. This can
+     happen in the following ways:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+        Issuing an explicit <command>LOCK</command> on <structname>pg_class</structname>
+        (or any other catalog table) in a transaction.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Perform <command>CLUSTER</command> on <structname>pg_class</structname> in
+        a transaction.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        <command>PREPARE TRANSACTION</command> after <command>LOCK</command> command
+        on <structname>pg_class</structname> and allow logical decoding of two-phase
+        transactions.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        <command>PREPARE TRANSACTION</command> after <command>CLUSTER</command>
+        command on <structname>pg_trigger</structname> and allow logical decoding of
+        two-phase transactions. This will lead to deadlock only when published table
+        have a trigger.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        Executing <command>TRUNCATE</command> on [user] catalog table in a
+        transaction.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+   </sect2>
  </sect1>
 
   <sect1 id="logicaldecoding-streaming">
@@ -1238,9 +1296,10 @@ stream_commit_cb(...);  &lt;-- commit of the streamed transaction
       <para>
        The logical replication solution that builds distributed two phase commit
        using this feature can deadlock if the prepared transaction has locked
-       [user] catalog tables exclusively. They need to inform users to not have
-       locks on catalog tables (via explicit <command>LOCK</command> command) in
-       such transactions.
+       [user] catalog tables exclusively. To avoid this users must refrain from
+       having locks on catalog tables (e.g. explicit <command>LOCK</command> command)
+       in such transactions.
+       (See <xref linkend="logicaldecoding-synchronous-caveats"/> for the details.)
       </para>
      </listitem>
     </itemizedlist>
