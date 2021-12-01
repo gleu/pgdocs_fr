@@ -1459,10 +1459,9 @@ SELECT m.* FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid),
   </indexterm>
 
   <para>
-   Il est possible de contrôler le planificateur de requêtes à un certain
+   Il est possible de contrôler le planificateur de requêtes jusqu'à un certain
    point en utilisant une syntaxe <literal>JOIN</literal> explicite. Pour
-   voir en quoi ceci est important, nous avons besoin de quelques
-   connaissances.
+   voir en quoi ceci est important, nous avons besoin d'un peu de théorie.
   </para>
 
   <para>
@@ -1470,80 +1469,80 @@ SELECT m.* FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid),
 
    <programlisting>SELECT * FROM a, b, c WHERE a.id = b.id AND b.ref = c.id;</programlisting>
 
-   le planificateur est libre de joindre les tables données dans n'importe
-   quel ordre. Par exemple, il pourrait générer un plan de requête qui joint
-   A à B en utilisant la condition <literal>WHERE</literal> <literal>a.id =
-   b.id</literal>, puis joint C à cette nouvelle table jointe en utilisant
-   l'autre condition <literal>WHERE</literal>. Ou il pourrait joindre B à C,
-   puis A au résultat de cette jointure précédente. Ou il pourrait joindre A
-   à C, puis les joindre avec B, mais cela pourrait ne pas être efficace, car
+   le planificateur est libre de joindre dans n'importe quel ordre les tables indiquées.
+   Par exemple, il peut générer un plan de requête joignant
+   A à B par la condition <literal>WHERE</literal> <literal>a.id =
+   b.id</literal>, puis joingnant C à cette table jointe par
+   l'autre condition <literal>WHERE</literal>. Ou il peut joindre B à C,
+   puis le résultat avec A. Ou il peut joindre A
+   à C, puis les joindre avec B, mais cela serait inefficace, puisque
    le produit cartésien complet de A et C devra être formé alors qu'il n'y a
    pas de condition applicable dans la clause <literal>WHERE</literal> pour
-   permettre une optimisation de la jointure(toutes les jointures dans
-   l'exécuteur <productname>PostgreSQL</productname> arrivent entre deux
-   tables en entrées, donc il est nécessaire de construire le résultat de
+   optimiser cette la jointure. (Toutes les jointures dans
+   l'exécuteur <productname>PostgreSQL</productname> se produisent entre deux
+   tables, il est donc nécessaire de construire le résultat de
    l'une ou de l'autre de ces façons). Le point important est que ces
    différentes possibilités de jointures donnent des résultats sémantiquement
-   équivalents, mais pourraient avoir des coûts d'exécution grandement
-   différents. Du coup, le planificateur va toutes les explorer pour trouver
+   équivalents, mais peuvent avoir des coûts d'exécution extrêmement
+   différents. Le planificateur va donc toutes les explorer pour trouver
    le plan de requête le plus efficace.
   </para>
 
   <para>
-   Quand une requête implique seulement deux ou trois tables, il y a peu
-   d'ordres de jointures à préparer. Mais le nombre d'ordres de jointures
-   possibles grandit de façon exponentielle au fur et à mesure que le nombre
-   de tables augmente. Au-delà de dix tables en entrée, il n'est plus
-   possible de faire une recherche exhaustive de toutes les possibilités et
-   même la planification de six ou sept tables pourrait prendre beaucoup de
-   temps. Quand il y a trop de tables en entrée, le planificateur
+   Quand une requête n'implique que deux ou trois tables, il y a peu
+   d'ordres de jointures à considérer. Mais le nombre d'ordres de jointures
+   possibles grandit de façon exponentielle quand le nombre
+   de tables augmente. Au-delà d'environ dix tables en entrée, il n'est plus
+   possible de faire une recherche exhaustive de toutes les possibilités, et
+   même la planification de six ou sept tables peut prendre une durée gênante.
+   Avec trop de tables en entrée, le planificateur
    <productname>PostgreSQL</productname> basculera d'une recherche exhaustive
-   à une recherche <firstterm>génétique</firstterm> probabiliste via un
-   nombre limité de possibilités (la limite de bascule est initialisée par le
-   paramètre en exécution <xref linkend="guc-geqo-threshold"/>). La recherche
+   à une recherche <firstterm>génétique</firstterm> probabiliste depuis un
+   nombre limité de possibilités (la limite de bascule est définie par le
+   paramètre <xref linkend="guc-geqo-threshold"/>). La recherche
    génétique prend moins de temps, mais elle ne trouvera pas nécessairement
    le meilleur plan possible.
   </para>
 
   <para>
    Quand la requête implique des jointures externes, le planificateur est
-   moins libre qu'il ne l'est lors de jointures internes. Par exemple,
+   moins libre qu'avec des jointures internes. Par exemple,
    considérez&nbsp;:
 
    <programlisting>SELECT * FROM a LEFT JOIN (b JOIN c ON (b.ref = c.id)) ON (a.id = b.id);</programlisting>
 
-   Bien que les restrictions de cette requête semblent superficiellement
+   Bien qu'à première vue les conditions de cette requête semblent
    similaires à l'exemple précédent, les sémantiques sont différentes, car
-   une ligne doit être émise pour chaque ligne de A qui n'a pas de ligne
-   correspondante dans la jointure entre B et C. Du coup, le planificateur
-   n'a pas de choix dans l'ordre de la jointure ici&nbsp;: il doit joindre B
-   à C puis joindre A à ce résultat. Du coup, cette requête prend moins de
+   une ligne doit être émise pour chaque ligne de A qui sans ligne
+   correspondante dans la jointure entre B et C. Le planificateur n'a alors
+   pas le choix dans l'ordre de la jointure &nbsp;: ici, il doit joindre B
+   à C, puis joindre A au résultat. En conséquence, cette requête prend moins de
    temps à planifier que la requête précédente. Dans d'autres cas, le
-   planificateur pourrait être capable de déterminer que plus d'un ordre de
+   planificateur peut arriver à déterminer que plus d'un ordre de
    jointure est sûr. Par exemple, étant donné&nbsp;:
 
    <programlisting>SELECT * FROM a LEFT JOIN b ON (a.bid = b.id) LEFT JOIN c ON (a.cid = c.id);</programlisting>
 
-   il est valide de joindre A à soit B soit C en premier. Actuellement, seul
+   il est valide de joindre A en premier soit à B, soit à C. Actuellement, seul
    un <literal>FULL JOIN</literal> contraint complètement l'ordre de
-   jointure. La plupart des cas pratiques impliquant un <literal>LEFT
-   JOIN</literal> ou un <literal>RIGHT JOIN</literal> peuvent être arrangés
+   jointure. En pratique, La plupart des cas impliquant un <literal>LEFT
+   JOIN</literal> ou un <literal>RIGHT JOIN</literal> peuvent être réarrangés
    jusqu'à un certain degré.
   </para>
 
   <para>
-   La syntaxe de jointure interne explicite (<literal>INNER JOIN</literal>,
-   <literal>CROSS JOIN</literal> ou <literal>JOIN</literal>) est
-   sémantiquement identique à lister les relations en entrées du
-   <literal>FROM</literal>, donc il ne contraint pas l'ordre de la jointure.
+   Sémantiquement, la syntaxe d'une jointure interne explicite (<literal>INNER JOIN</literal>,
+   <literal>CROSS JOIN</literal> ou <literal>JOIN</literal>) revient
+   à lister les relations en entrées du
+   <literal>FROM</literal>, donc sans contraindre l'ordre de la jointure.
   </para>
 
   <para>
-   Même si la plupart des types de <literal>JOIN</literal> ne contraignent pas
-   complètement l'ordre de jointure, il est possible d'instruire le
-   planificateur de requête de <productname>PostgreSQL</productname> pour
-   qu'il traite toutes les clauses <literal>JOIN</literal> de façon à
-   contraindre quand même l'ordre de jointure. Par exemple, ces trois
+   Même si la plupart des types de <literal>JOIN</literal> ne sont pas complètement
+   contraignantes pour l'ordre de jointure, il est possible de forcer le
+   planificateur de requête de <productname>PostgreSQL</productname>
+   de les considérer comme contraignantes.
+   Par exemple, ces trois
    requêtes sont logiquement équivalentes&nbsp;:
 
    <programlisting>SELECT * FROM a, b, c WHERE a.id = b.id AND b.ref = c.id;
@@ -1558,34 +1557,33 @@ SELECT * FROM a JOIN (b JOIN c ON (b.ref = c.id)) ON (a.id = b.id);</programlist
   </para>
 
   <para>
-   Pour forcer le planificateur à suivre l'ordre de jointure demandé par les
-   <literal>JOIN</literal> explicites, initialisez le paramètre en exécution
+   Pour forcer le planificateur à suivre l'ordre de jointure des
+   <literal>JOIN</literal> explicites, passez le paramètre
    <xref linkend="guc-join-collapse-limit"/> à 1 (d'autres valeurs possibles
    sont discutées plus bas).
   </para>
 
   <para>
    Vous n'avez pas besoin de restreindre l'ordre de jointure pour diminuer le
-   temps de recherche car il est bien d'utiliser les opérateurs
-   <literal>JOIN</literal> dans les éléments d'une liste
+   temps de recherche car il est correct d'utiliser des opérateurs
+   <literal>JOIN</literal> parmi les éléments d'une liste
    <literal>FROM</literal>. Par exemple, considérez&nbsp;:
 
 <programlisting>SELECT * FROM a CROSS JOIN b, c, d, e WHERE ...;</programlisting>
 
-   Avec <varname>join_collapse_limit</varname> = 1, ceci force le
-   planificateur à joindre A à B avant de les joindre aux autres tables, mais
-   sans restreindre ses choix. Dans cet exemple, le nombre d'ordres de
+   Avec <varname>join_collapse_limit</varname> = 1, le planificateur est 
+   forcé de joindre A à B avant la jointure aux autres tables, mais
+   sans restreindre ses choix par ailleurs. Dans cet exemple, le nombre d'ordres de
    jointures possibles est réduit par un facteur de cinq.
   </para>
 
   <para>
-   Restreindre la recherche du planificateur de cette façon est une technique
-   utile pour réduire les temps de planification et pour diriger le
-   planificateur vers un bon plan de requêtes. Si le planificateur choisit un
-   mauvais ordre de jointure par défaut, vous pouvez le forcer à choisir un
-   meilleur ordre via la syntaxe <literal>JOIN</literal> &mdash; en supposant
-   que vous connaissiez un meilleur ordre. Une expérimentation est
-   recommandée.
+   Cette technique pour restreindre la recherche du planificateur peut servir à
+   réduire les temps de planification et aiguiller le
+   planificateur vers un bon plan de requête. Si le planificateur choisit spontanément un
+   mauvais ordre de jointure, vous pouvez le forcer à choisir un
+   meilleur via la syntaxe <literal>JOIN</literal> &mdash; à supposer
+   que vous connaissiez un meilleur ordre. Il faut tester.
   </para>
 
   <para>
@@ -1598,19 +1596,19 @@ FROM x, y,
     (SELECT * FROM a, b, c WHERE quelquechose) AS ss
 WHERE quelquechosedautre;</programlisting>
 
-   Cette requête pourrait survenir suite à l'utilisation d'une vue contenant
+   Cette situation peut apparaître lors de l'utilisation d'une vue contenant
    une jointure&nbsp;; la règle <literal>SELECT</literal> de la vue sera
    insérée à la place de la référence de la vue, produisant une requête
-   plutôt identique à celle ci-dessus. Normalement, le planificateur essaiera
+   comme celle ci-dessus. Normalement, le planificateur essaiera
    de regrouper la sous-requête avec son parent, donnant&nbsp;:
 
    <programlisting>SELECT * FROM x, y, a, b, c WHERE quelquechose AND quelquechosedautre;</programlisting>
 
-   Ceci résulte habituellement en un meilleur plan que de planifier séparément
-   la sous-requête (par exemple, les conditions <literal>WHERE</literal>
-   externes pourraient être telles que joindre X à A élimine en premier lieu
-   un bon nombre de lignes de A, évitant ainsi le besoin de former la sortie
-   complète de la sous-requête). Mais en même temps, nous avons accru le
+   Ceci donne généralement un meilleur plan que planifier séparément
+   la sous-requête. (Par exemple, grâce aux clauses <literal>WHERE</literal>
+   externes, joindre X à A peut éliminer d'entrée
+   un bon nombre de lignes de A, évitant ainsi le besoin de générer la
+   totalité de la sous-requête). Mais en même temps, nous avons accru le
    temps de planification&nbsp;; ici, nous avons un problème de jointure à
    cinq tables remplaçant un problème de deux jointures séparées à trois
    tables. À cause de l'augmentation exponentielle du nombre de possibilités,
@@ -1618,22 +1616,22 @@ WHERE quelquechosedautre;</programlisting>
    retrouver coincé dans des problèmes de recherche de grosses jointures en
    ne regroupant pas une sous-requête si plus de
    <varname>from_collapse_limit</varname> éléments sont la résultante de la
-   requête parent. Vous pouvez comparer le temps de planification avec la
-   qualité du plan en ajustant ce paramètre en exécution.
+   requête parent. Vous pouvez arbitrer entre le temps de planification et la
+   qualité du plan en ajustant ce paramètre à la hausse ou à la baisse.
   </para>
 
   <para>
    <xref linkend="guc-from-collapse-limit"/> et <xref
-   linkend="guc-join-collapse-limit"/> sont nommés de façon similaire parce
-   qu'ils font pratiquement la même chose&nbsp;: l'un d'eux contrôle le
-   moment où le planificateur <quote>aplatira</quote> les sous-requêtes et
-   l'autre contrôle s'il y a aplatissement des jointures explicites.
-   Typiquement, vous initialiserez <varname>join_collapse_limit</varname>
-   comme <varname>from_collapse_limit</varname> (de façon à ce que les
+   linkend="guc-join-collapse-limit"/> sont nommés de façon similaire car
+   ils font pratiquement la même chose&nbsp;: le premier contrôle le
+   moment où le planificateur <quote>aplatira</quote> les sous-requêtes, et
+   le second contrôle quand aplatir les jointures explicites.
+   Typiquement, vous définirez <varname>join_collapse_limit</varname>
+   à la même valeur que <varname>from_collapse_limit</varname> (de façon à ce que les
    jointures explicites et les sous-requêtes agissent de la même façon) ou
-   vous initialiserez <varname>join_collapse_limit</varname> à 1 (si vous
-   voulez contrôler l'ordre de jointure des jointures explicites). Mais vous
-   pourriez les initialiser différemment si vous tentez de configurer
+   vous affecterez <varname>join_collapse_limit</varname> à 1 (si vous
+   voulez contrôler l'ordre de jointure par des jointures explicites). Mais vous
+   pouvez les définir différemment en essayant de configurer
    finement la relation entre le temps de planification et le temps
    d'exécution.
   </para>
