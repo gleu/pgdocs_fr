@@ -8,7 +8,7 @@
 
  <para>
   Le module <filename>postgres_fdw</filename> fournit le wrapper de données
-  distantes <literal>postgres_fdw</literal>, dont le but est de données accès
+  distantes <literal>postgres_fdw</literal>, dont le but est de donner accès
   à des données enregistrées dans des serveurs
   <productname>PostgreSQL</productname> externes.
  </para>
@@ -67,9 +67,18 @@
   Maintenant, vous avez seulement besoin de <command>SELECT</command> sur la
   table distante pour accéder aux données de la table du serveur distant. Vous
   pouvez aussi modifier la table sur le serveur distant en utilisant les
-  commandes <command>INSERT</command>, <command>UPDATE</command> et
-  <command>DELETE</command>. (Bien sûr, l'utilisateur utilisé pour la connexion
-  au serveur distant doit avoir le droits de faire tout cela.)
+  commandes <command>INSERT</command>, <command>UPDATE</command>,
+  <command>DELETE</command> et <command>TRUNCATE</command>.
+  (Bien sûr, l'utilisateur distant que vous avez spécifié dans vos
+  correspondances d'utilisateur doit avoir les droits pour réaliser ces
+  actions.)
+ </para>
+
+ <para>
+  Notez que l'option <literal>ONLY</literal> spécifiée dans
+  <command>SELECT</command>, <command>UPDATE</command>,
+  <command>DELETE</command> ou <command>TRUNCATE</command> n'a pas d'effet
+  lors des accès ou modifications d'une table distante.
  </para>
 
  <para>
@@ -82,7 +91,7 @@
   <command>UPDATE</command> exécutées sur des tables partitionnées, mais il ne
   gère pas le cas où une partition distante choisir pour insérer une ligne est
   aussi une partition cible d'<command>UPDATE</command> qui sera mise à jour
-  ultérieurement.
+  ailleurs dans la même commande.
  </para>
 
  <para>
@@ -93,7 +102,7 @@
   lâche sur les conversions de type de données, des anomalies sémantiques
   surprenantes peuvent survenir quand les types ou les collationnements ne
   correspondent pas dans le cas où le serveur distant interprète légèrement
-  différemment les clauses <literal>WHERE</literal>.
+  différemment les conditions de la requête.
  </para>
 
  <para>
@@ -120,7 +129,7 @@
       <para>
        <literal>user</literal>, <literal>password</literal> et
        <literal>sslpassword</literal> (spécifiez-les au
-       niveau de la correspondance d'utilisateur instead, ou utilisez un
+       niveau de la correspondance d'utilisateur, ou utilisez un
        fichier service)
       </para>
      </listitem>
@@ -149,20 +158,20 @@
    </para>
 
    <para>
-    Seuls les superutilisateurs peuvent créer ou modifier des correspondances
+    Seuls les super-utilisateurs peuvent créer ou modifier des correspondances
     d'utilisateur avec les paramètres <literal>sslcert</literal> et
     <literal>sslkey</literal>.
    </para>
 
    <para>
-    Seuls les superutilisateurs peuvent se connecter à un serveur distant sans
+    Seuls les super-utilisateurs peuvent se connecter à un serveur distant sans
     authentification par mot de passe. Donc spécifiez toujours l'option
     <literal>password</literal> pour les correspondances d'utilisateur
     appartenant aux utilisateurs simples.
    </para>
 
    <para>
-    Un superutilisateur peut dépasser cette vérification sur une base
+    Un super-utilisateur peut dépasser cette vérification sur une base
     par-correspondance-utilisateur en configurant l'option
     <literal>password_required 'false'</literal>, par exemple&nbsp;:
     <programlisting>
@@ -171,13 +180,13 @@ OPTIONS (ADD password_required 'false');
     </programlisting>
     Pour empêcher des utilisateurs sans droit d'exploiter les droits
     d'authentification de l'utilisateur unix utilisé par le serveur PostgreSQL
-    pour escalader vers des droits superutilisateur, seul le superutilisateur
+    pour escalader vers des droits super-utilisateur, seul le super-utilisateur
     peut configurer cette option sur une correspondance d'utilisateur.
    </para>
 
    <para>
     Une grande attention est nécessaire pour s'assurer que cela n'autorise pas
-    l'utilisateur à se connecter comme un superutilisateur sur la base de
+    l'utilisateur à se connecter comme un super-utilisateur sur la base de
     données distante d'après les CVE-2007-3278 et CVE-2007-6601. Ne configurez
     pas <literal>password_required=false</literal> sur le rôle
     <literal>public</literal>. Gardez en tête que l'utilisateur peut
@@ -292,7 +301,8 @@ OPTIONS (ADD password_required 'false');
      <listitem>
       <para>
        Cette option, qui peut être indiquée pour un serveur distant, est une
-       valeur numérique qui est utilisée comme coût supplémentaire par ligne
+       valeur en virgule flottante qui est utilisée comme coût supplémentaire
+       par ligne
        pour les parcours de la table distante sur ce serveur. Cela représente
        le coût supplémentaire associé au transfert de données entre les
        serveurs. Vous pouvez augmenter ou réduire ce nombre pour refléter
@@ -378,8 +388,84 @@ OPTIONS (ADD password_required 'false');
      </listitem>
     </varlistentry>
 
-   </variablelist>
+    <varlistentry>
+     <term><literal>batch_size</literal></term>
+     <listitem>
+      <para>
+       Cette option spécifie le nombre de lignes que
+       <filename>postgres_fdw</filename> doit insérer à chaque opération
+       d'insertion. Elle est disponible au niveau serveur et/ou table
+       distante. L'option spécifiée sur une table surcharge celle spécifiée
+       sur le serveur. La valeur par défaut est <literal>1</literal>.
+      </para>
 
+      <para>
+       Notez que le nombre réel de lignes qu'insère
+       <filename>postgres_fdw</filename> en une fois dépend du nombre de
+       colonnes et de la valeur fournie pour <literal>batch_size</literal>.
+       Le batch est exécuté comme une seule requête, et le protocole libpq
+       (qu'utilise <filename>postgres_fdw</filename> pour se connecter au
+       serveur distant) limitent le nombre de paramètres dans une seule
+       requête à 65535. Quand le nombre de colonne *
+       <literal>batch_size</literal> dépasse la limite, le paramètre
+       <literal>batch_size</literal> sera ajusté pour éviter une erreur.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </sect3>
+
+  <sect3>
+   <title>Options d'exécution asynchrone</title>
+
+   <para>
+    <filename>postgres_fdw</filename> supporte les exécutions asynchrones, qui
+    exécutent plusieurs parties d'un nœud <structname>Append</structname> de
+    manière concurrente plutôt qu'en série pour améliorer les performances.
+    L'exécution peut être contrôlée en utilisant l'option suivante&nbsp;:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>async_capable</literal></term>
+     <listitem>
+      <para>
+       Cette option contrôle si <filename>postgres_fdw</filename> permet de
+       parcourir de manière concurrente les tables distantes pour les
+       exécutions asynchrones. Elle est configurable au niveau du serveur
+       distant et/ou de la table distante. L'option spécifiée au niveau table
+       surcharge l'option au niveau serveur. La valeur par défaut est
+       <literal>false</literal>.
+      </para>
+
+      <para>
+       Pour s'assurer que les données retournées depuis un serveur distant
+       sont cohérentes, <filename>postgres_fdw</filename> n'ouvrira qu'une
+       seule connexion pour un serveur distant et exécutera les requêtes sur
+       ce serveur séquentiellement même si de nombreuses tables distantes
+       sont impliquées, sauf si ces tables sont sujettes à différentes
+       correspondances d'utilisateur. Dans ce cas, il peut être plus
+       performant de désactiver cette option pour éliminer la surcharge
+       associée à l'exécution asynchrone des requêtes.
+      </para>
+
+      <para>
+       Une exécution asynchrone est réalisée quand un nœud
+       <structname>Append</structname> contient aussi bien un ou des
+       sous-plans exécutés de manière synchrone que un ou des sous-plans
+       exécutés de manière asynchrone. Dans un tel cas, si les sous-plans
+       asynchones sont ceux traités par <filename>postgres_fdw</filename>,
+       les lignes des sous-plans asynchrones ne sont pas retournés avant
+       qu'au moins un sous-plan synchrone retourne toutes ses lignes, car ce
+       sous-plan est exécuté pendant que les sous-plans aynchrones attendent
+       les résultats des requêtes asynchrones envoyées au serveur distant. Ce
+       comportement pourrait changer dans une version future.
+      </para>
+     </listitem>
+    </varlistentry>
+
+   </variablelist>
   </sect3>
 
   <sect3>
@@ -422,6 +508,40 @@ OPTIONS (ADD password_required 'false');
   </sect3>
 
   <sect3>
+   <title>Options de troncabilité</title>
+
+   <para>
+    Par défaut, toutes les tables distantes utilisant
+    <filename>postgres_fdw</filename> sont considérées comme troncable. Ceci
+    peut être surchargé en utilisant l'option suivante&nbsp;:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>truncatable</literal></term>
+     <listitem>
+      <para>
+       Cette option contrôle si <filename>postgres_fdw</filename> permet aux
+       tables distantes d'être tronquées en utilisant la commande
+       <command>TRUNCATE</command>. Elle est disponible au niveau du server
+       distant ainsi qu'à celui de la table distante. L'option au niveau
+       table surcharge l'option au niveau serveur. La valeur par défaut est
+       <literal>true</literal>.
+      </para>
+
+      <para>
+       Bien sûr, si la table distante n'est en fait pas troncable, une erreur
+       se produira de toute façon. L'utilisation principale de cette option
+       permet que l'erreur soit déclenchée localement sans requêter le
+       serveur distant.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </sect3>
+
+  <sect3>
    <title>Options d'import</title>
 
    <para>
@@ -445,12 +565,23 @@ OPTIONS (ADD password_required 'false');
      <listitem>
       <para>
        Cette option contrôle si les options <literal>COLLATE</literal> d'une
-       colonne sont inclus dans les définitions des tables distantes importées
-       à partir d'un serveur distant. La valeur par défaut est
-       <literal>true</literal>. Vous pourriez avoir besoin de la désactiver si
-       le serveur distant possède un ensemble de noms de collation différent
-       de celui du serveur local, ce qui risque d'être le cas s'il utilise un
-       autre système d'exploitation.
+       colonne sont inclus dans les définitions des tables distantes
+       importées à partir d'un serveur distant. La valeur par défaut est
+       <literal>true</literal>. Vous pourriez avoir besoin de la désactiver
+       si le serveur distant possède un ensemble de noms de collation
+       différent de celui du serveur local, ce qui risque d'être le cas s'il
+       utilise un autre système d'exploitation. Néanmoins, si vous le faites,
+       il existe un risque réel que les collations importées dans colonnes de
+       la table ne correspondent pas aux données sous-jacentes, résultant en
+       un comportement anormal des requêtes.
+      </para>
+
+      <para>
+       Même quand ce paramètre est configuré à <literal>true</literal>,
+       l'import des colonnes dont la collation est la valeur par défaut du
+       serveur distant peut êre risqué. Elles seront importées avec
+       <literal>COLLATE "default"</literal>, ce qui sélectionnera la
+       collation par défaut du serveur local, qui pourrait être différent.
       </para>
      </listitem>
     </varlistentry>
@@ -468,6 +599,19 @@ OPTIONS (ADD password_required 'false');
        problèmes. La commande <command>IMPORT</command> échouera si une
        expression par défaut importée utilise une fonction ou un opérateur qui
        n'existe pas localement.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><literal>import_generated</literal></term>
+     <listitem>
+      <para>
+       Cette option contrôle si les expressions <literal>GENERATED</literal>
+       de colonnes sont incluses dans les définitions des tables distantes
+       importées à partir d'un serveur distant. La valeur par défaut est
+       <literal>true</literal>. La commande <command>IMPORT</command>
+       échouera si une expression importée utilise une fonction ou un
+       opérateur qui n'existe pas localement.
       </para>
      </listitem>
     </varlistentry>
@@ -503,15 +647,127 @@ OPTIONS (ADD password_required 'false');
 
    <para>
     Les tables ou tables distantes qui sont des partitions d'autres tables sont
-    automatiquement exclues.  Les tables partitionnées sont importées, à moins
-    qu'elles soient des partitions d'une autre table.  Puisque toutes les
-    données à traver la table partitionnées qui est à la racine de toute la
-    hiérarchie de partitionnement, cette approche devrait autoriser l'accès à
-    toutes les données sans avoir besoin de créer d'objets supplémentaires.
+    imported only when they are explicitly specified in
+    <literal>LIMIT TO</literal> clause.  Otherwise they are automatically
+    excluded from <xref linkend="sql-importforeignschema"/>.
+    Since all data can be accessed through the partitioned table
+    which is the root of the partitioning hierarchy, importing only
+    partitioned tables should allow access to all the data without
+    creating extra objects.
    </para>
 
   </sect3>
+
+  <sect3>
+    <title>Options de gestion de connexions</title>
+
+    <para>
+     Par défaut, toutes les connexions que <filename>postgres_fdw</filename>
+     établit au serveur distant sont conservées ouvertes en session locale
+     pour une réutilisation.
+    </para>
+
+    <variablelist>
+
+     <varlistentry>
+      <term><literal>keep_connections</literal></term>
+      <listitem>
+       <para>
+        Cette option contrôle si <filename>postgres_fdw</filename> conserve
+        les connexions au serveur distant ouvertes, permettant aux requêtes
+        ultérieures de les réutiliser. Elle n'est disponible qu'au niveau
+        serveur distant. La valeur par défaut est <literal>on</literal>. Si
+        elle est configurée à <literal>off</literal>, toutes les connexions à
+        ce serveur distant seront supprimées à la fin de chaque transaction.
+      </para>
+      </listitem>
+     </varlistentry>
+
+    </variablelist>
+   </sect3>
  </sect2>
+
+<sect2>
+  <title>Fonctions</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><function>postgres_fdw_get_connections(OUT server_name text, OUT valid boolean) retourne un setof record</function></term>
+    <listitem>
+     <para>
+      Cette fonction renvoie les noms des serveurs distants de toutes les
+      connexions ouvertes que <filename>postgres_fdw</filename> a établies.
+      Elle renvoie aussi la validité ou non de chaque connexion.
+      <literal>false</literal> est retourné si la connexion au serveur
+      distant est utilisé dans la transaction courante locale sauf si le
+      serveur distant ou les correspondances d'utilisateur sont modifiées ou
+      supprimées(notez que le nom de serveur d'une connexion invalide sera
+      <literal>NULL</literal> si le serveur est supprimé), et ainsi de telles
+      connexions invalides seront fermées à la fin de cette transaction.
+      <literal>true</literal> est retournée dans les autres cas. S'il n'y a
+      pas de connexions ouvertes, aucun enregistrement n'est retourné.
+      Exemple d'utilisation de cette fonction&nbsp;:
+
+      <screen>postgres=# SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
+
+ server_name | valid
+-------------+-------
+ loopback1   | t
+ loopback2   | f</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>postgres_fdw_disconnect(server_name text) retourne un boolean</function></term>
+    <listitem>
+     <para>
+      Cette fonction supprime les connexions ouvertes qui sont établies par
+      <filename>postgres_fdw</filename> depuis une session locale à un
+      serveur distant avec un nom donné. Notez qu'il peut y avoir de
+      multiples connexions au serveur distant donné en utilisant différentes
+      correspondances d'utilisateur. Si les connexions sont utilisées dans la
+      transaction courante locale, elles ne sont pas déconnectées et des
+      messages d'alerte sont affichés. La fonction retourne
+      <literal>true</literal> si elle déconnecte au moins une connexion,
+      sinon <literal>false</literal>. Si aucun serveur distant avec un nom
+      donné n'est trouvé, une erreur est affichée. Exemple d'utilisation de
+      la fonction&nbsp;:
+
+      <screen>postgres=# SELECT postgres_fdw_disconnect('loopback1');
+
+ postgres_fdw_disconnect
+-------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>postgres_fdw_disconnect_all() retourne un boolean</function></term>
+    <listitem>
+     <para>
+      La fonction supprime toutes les connexions ouvertes établies par
+      <filename>postgres_fdw</filename> depuis la session locale au serveur
+      distant. Si les connexions sont utilisées dans la transaction locale
+      courante, elles ne sont pas déconnectées et des messages d'alerte sont
+      affichés. La fonction retourne <literal>true</literal> si elle
+      déconnecte au moins une connexion, sinon <literal>false</literal>.
+      Exemple d'utilisation de la fonction&nbsp;:
+
+      <screen>postgres=# SELECT postgres_fdw_disconnect_all();
+
+ postgres_fdw_disconnect_all
+-----------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+   </variablelist>
+
+</sect2>
 
  <sect2>
   <title>Gestion des connexions</title>
@@ -519,11 +775,35 @@ OPTIONS (ADD password_required 'false');
   <para>
    <filename>postgres_fdw</filename> établit une connexion au serveur distant
    lors de la première requête qui utilise une table distante associée avec
-   le serveur distant. La connexion est conservée et réutilisée pour les
-   requêtes suivants de la même session. Néanmoins, si plusieurs identités
-   d'utilisateur (correspondances d'utilisateur) sont utilisées pour
-   accéder au serveur distant, une connexion est établie pour chaque
-   correspondance d'utilisateur.
+   le serveur distant. Par défaut cette connexion est conservée et
+   ré-utilisée pour les requêtes suivantes dans la même session. Ce
+   comportement peut être contrôlé en utilisant l'option
+   <literal>keep_connections</literal> pour un serveur distant. Si plusieurs
+   correspondances d'utilisateur sont utilisées pour accéder au serveur
+   distant, une connexion est établie pour chaque correspondance
+   d'utilisateur.
+  </para>
+
+  <para>
+   Lors de changement de la définition ou suppression d'un serveur distant ou
+   de correspondances d'utilisateur, les connexions associées sont fermées.
+   Mais notez que si des connexions sont utilisées dans la transaction locale
+   courante, elles sont conservées jusqu'à la fin de transaction. Les
+   connexions fermées seront ré-établies quand cela sera nécessaire par les
+   futures requêtes utilisant une table distante.
+  </para>
+
+
+  <para>
+   Une fois qu'une connexion à un serveur distant a été établie, elle est par
+   défaut conservée jusqu'à ce que la session locale ou distante
+   correspondante termine. Pour déconnecter une connexion explicitement,
+   l'option <literal>keep_connections</literal> pour un serveur distant peut
+   être désactivée. Il est possible aussi d'utiliser les fonctions
+   <function>postgres_fdw_disconnect</function> et
+   <function>postgres_fdw_disconnect_all</function>. Par exemple, ces
+   dernières sont utiles pour fermer les connexions qui ne sont plus
+   nécessaires, libérant ainsi les connexions sur le serveur distant.
   </para>
  </sect2>
 
@@ -750,7 +1030,8 @@ CREATE FOREIGN TABLE foreign_table (
    à moins que des options <literal>column_name</literal> soient attachées aux
    colonnes individuelles pour montrer comment elles sont nommées sur la table
    distante.
-   Dans de nombreux cas, l'utilisation de <xref linkend="sql-importforeignschema"/>
+   Dans de nombreux cas, l'utilisation de <link
+   linkend="sql-importforeignschema"><command>IMPORT FOREIGN SCHEMA</command></link>
    est préférable à la construction manuelle des tables distantes.
   </para>
  </sect2>

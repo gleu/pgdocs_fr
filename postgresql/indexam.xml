@@ -147,6 +147,7 @@ typedef struct IndexAmRoutine
     amproperty_function amproperty;     /* peut être NULL */
     ambuildphasename_function ambuildphasename;   /* peut être NULL */
     amvalidate_function amvalidate;
+    amadjustmembers_function amadjustmembers; /* peut être NULL */
     ambeginscan_function ambeginscan;
     amrescan_function amrescan;
     amgettuple_function amgettuple;     /* peut être NULL */
@@ -315,6 +316,20 @@ aminsert (Relation indexRelation,
   </para>
 
   <para>
+   La valeur booléenne <literal>indexUnchanged</literal> donne une idée sur la
+   nature de la ligne à indexer. Quand elle vaut true, la ligne est un
+   duplicat d'une ligne existant dans l'index. La nouvelle ligne est une
+   version ultérieure de ligne MVCC logiquement non modifiée. Ceci survient
+   quand un <command>UPDATE</command> a lieu et qu'il ne modifie par les
+   colonnes couvertes par l'index, mais qu'une nouvelle version est malgré
+   tout nécessaire. La méthode d'accès de l'index peut utiliser cette
+   information pour décider d'application la suppression du bas vers le haut
+   dans certaines parties de l'index où de nombreuses versions de la même
+   ligne logique s'accumulent. Notez que la mise à jour d'une colonne non clé
+   n'affecte pas la valeur de <literal>indexUnchanged</literal>.
+  </para>
+
+  <para>
    La valeur booléenne résultante n'a de sens
    que si <literal>checkUnique</literal> vaut
    <literal>UNIQUE_CHECK_PARTIAL</literal>. Dans ce cas, un résultat true
@@ -394,7 +409,6 @@ amvacuumcleanup (IndexVacuumInfo *info,
   </para>
 
   <para>
-   À partir de <productname>PostgreSQL</productname> 8.4,
    <function>amvacuumcleanup</function> sera aussi appelé à la fin d'une
    opération <command>ANALYZE</command>. Dans ce cas,
    <literal>stats</literal> vaut toujours NULL et toute valeur de retour sera
@@ -543,7 +557,46 @@ amvalidate (Oid opclassoid);
    fonctions de support. La fonction
    <function>amvalidate</function> doit renvoyer false si la classe d'opérateur
    est invalide. Les problèmes devraient être rapportés avec les messages
-   <function>ereport</function>.
+   <function>ereport</function>, typiquement au niveau <literal>INFO</literal>.
+  </para>
+
+  <para>
+<programlisting>
+void
+amadjustmembers (Oid opfamilyoid,
+                 Oid opclassoid,
+                 List *operators,
+                 List *functions);
+</programlisting>
+   Valide l'opérateur new proposé et les membres fonctions d'une famille
+   d'opérateur, si la méthode d'accès peut raisonnablement le faire, et
+   configure leur types de dépendance si le défaut n'est pas satisfaisant.
+   C'est appelée lors du <command>CREATE OPERATOR CLASS</command> et lors du
+   <command>ALTER OPERATOR FAMILY ADD</command>&nbsp;; dans ce dernier cas,
+   <parameter>opclassoid</parameter> vaut <literal>InvalidOid</literal>. Les
+   arguments <type>List</type> sont des listes de structures
+   <structname>OpFamilyMember</structname>, comme définies dans
+   <filename>amapi.h</filename>. Les tests réalisés par cette fonction seront
+   typiquement un sous-ensemble de ceux réalisés par
+   <function>amvalidate</function>, parce que
+   <function>amadjustmembers</function> ne peut pas assumer qu'elle voit un
+   ensemble complet de membres. Par exemple, il serait raisonnable de
+   vérifier la signature d'une fonction d'appui, mais pas de vérifier si
+   toutes les fonctions d'appui requises sont fournies. Tout problème peut
+   être rapporté en renvoyant une erreur. Les champs relatifs aux dépendances
+   des structures <structname>OpFamilyMember</structname> sont initialisés
+   par le cœur de PostgreSQL pour créer les dépendances dures sur la classe
+   d'opérateur si c'est <command>CREATE OPERATOR CLASS</command>, ou des
+   dépendances douces sur la famille d'opérateur si c'est <command>ALTER
+   OPERATOR FAMILY ADD</command>. <function>amadjustmembers</function> peut
+   ajuster ces champs si d'autres comportements sont plus appropriés. Par
+   exemple, GIN, GiST et SP-GiST configurent toujours les membres opérateurs
+   pour avoir des dépendances douces sur la famille d'opérateur car la
+   connexion entre un opérateur et une classe d'opérateur est relativement
+   faible dans ces types d'index&nbsp;; donc il est raisonnable de permettre
+   l'ajout et la suppression libres de membres d'opérateurs. Les fonctions
+   d'appui optionnelles ont typiquement des dépendances douces, pour être
+   supprimées si nécessaire.
   </para>
 
 
@@ -603,7 +656,7 @@ amrescan (IndexScanDesc scan,
   </para>
 
   <para>
-   <programlisting>boolean
+   <programlisting>bool
 amgettuple (IndexScanDesc scan,
             ScanDirection direction);
    </programlisting>
@@ -976,9 +1029,12 @@ amrestrpos (IndexScanDesc scan);
    <literal>RowExclusiveLock</literal> lors de sa mise à jour (ce qui inclut le
    <command>VACUUM</command> simple). Comme ces types de
    verrous ne sont pas conflictuels, la méthode d'accès est responsable de la
-   finesse du verrouillage dont elle a besoin. Un verrou exclusif sur
-   l'intégralité de l'index entier n'est posé qu'à la création de l'index, sa destruction
-   ou lors d'un <literal>REINDEX</literal>.
+   finesse du verrouillage dont elle a besoin. Un verrou de type
+   <literal>ACCESS EXCLUSIVE</literal> sur l'intégralité de l'index entier
+   n'est posé qu'à la création de l'index, sa destruction ou lors d'un
+   <literal>REINDEX</literal> (un verrou <literal>SHARE UPDATE
+   EXCLUSIVE</literal> est pris à la place avec l'option
+   <literal>CONCURRENTLY</literal>).
   </para>
 
   <para>

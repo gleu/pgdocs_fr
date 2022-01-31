@@ -19,15 +19,12 @@
  <para>
   Les structures des catalogues sont déclarées dans des en-têtes de fichiers C
   spécialement formatées dans le répertoire
-  <filename>src/include/catalog/</filename> du code source.  En particulier,
-  il y a pour chaque catalogue un fichier d'en-tête nommé d'après le catalogue
+  <filename>src/include/catalog/</filename> du code source.
+  Il existe pour chaque catalogue un fichier d'en-tête nommé d'après le catalogue
   (par exemple, <filename>pg_class.h</filename> pour
   <structname>pg_class</structname>), qui définit l'ensemble des colonnes que
   le catalogue a, ainsi que certaines autres propriétés basique telles que son
-  OID.  D'autres fichiers cruciaux définissant la structure du catalogue
-  incluent <filename>indexing.h</filename>, qui définit les index présents sur
-  tous les catalogues systèmes, et <filename>toasting.h</filename>, qui définit
-  les tables TOAST pour les catalogues qui en ont besoin.
+  OID.
  </para>
 
  <para>
@@ -125,7 +122,8 @@
    que toutes les colonnes qui devraient être non NULL soient marquées comme
    telles dans <structname>pg_attribute</structname>.  Le code de <quote>bootstrap</quote>
    marquera automatiquement les colonnes comme <literal>NOT NULL</literal> si
-   elles sont de taille fixe et ne sont précédées d'aucune colonne potentiellement NULL.
+   elles sont de taille fixe et ne sont précédées d'aucune colonne potentiellement NULL
+   ou à taille variable.
    Quand cette règle ne convient pas, vous pouvez forcer un marquage correct en
    utilisant les annotations <literal>BKI_FORCE_NOT_NULL</literal> et
    <literal>BKI_FORCE_NULL</literal> selon les besoins.
@@ -489,11 +487,17 @@
 
     <listitem>
      <para>
-      Dans une telle colonne, toutes les entrées doivent utiliser le format
-      symbolique sauf quand on écrit <literal>0</literal> pour InvalidOid.  (Si
-      la colonne est déclarée <type>regproc</type>, vous pouvez facultativement
-      écrire <literal>-</literal> à la place de <literal>0</literal>.)
-      <filename>genbki.pl</filename> vous avertira sur des noms non reconnus.
+      Dans certaines colonnes du catalogue, des entrées à zéro sont permises à
+      la place d'une référence valide. Si cela est permis, écrivez
+      <literal>BKI_LOOKUP_OPT</literal> au lieu de
+      <literal>BKI_LOOKUP</literal>. Ainsi, vous pouvez écrire
+      <literal>0</literal> dans une entrée. (Si la colonne est déclarée
+      <type>regproc</type>, vous pouvez optionnellement écrire
+      <literal>-</literal> au lieu de <literal>0</literal>.) En dehors de ce
+      cas spécial, toutes les entrées dans une colonne
+      <literal>BKI_LOOKUP</literal> doivent être une référence symbolique.
+      <filename>genbki.pl</filename> vous avertira à propos des noms non
+      reconnus.
      </para>
     </listitem>
 
@@ -558,17 +562,6 @@
       schéma <literal>pg_catalog</literal>.
      </para>
     </listitem>
-
-    <listitem>
-     <para>
-      En plus des mécanismes de recherche génériques, il y a une convention
-      spéciale pour remplacer <literal>PGNSP</literal> par l'OID du schéma
-      <literal>pg_catalog</literal> et <literal>PGUID</literal> par l'OID du
-      rôle super-utilisateur effectuant le <quote>bootstrap</quote>.
-      Ces coutumes sont historiques mais il n'y a jusqu'ici pas eu de
-      nécessité de les généraliser.
-     </para>
-    </listitem>
    </itemizedlist>
 
    <para>
@@ -576,6 +569,23 @@
     pendant son exécution, et inscrit de simples OID numériques dans les
     fichiers BKI émis.  Le processus client de <quote>bootstrap</quote> n'a donc pas besoin
     de gérer les références symboliques.
+   </para>
+
+   <para>
+    Il est recommandé de marquer les colonnes de référence OID avec
+    <literal>BKI_LOOKUP</literal> ou <literal>BKI_LOOKUP_OPT</literal> même
+    si le catalogue n'a pas de données initiales nécessitant une recherche.
+    Ceci permet à <filename>genbki.pl</filename> d'enregistrer les clés
+    étrangères des relations qui existent dans le catalogue système. Cette
+    information est utilisée dans les tests de régression pour vérifier les
+    entrées incorrectes. Voir aussi les macros
+    <literal>DECLARE_FOREIGN_KEY</literal>,
+    <literal>DECLARE_FOREIGN_KEY_OPT</literal>,
+    <literal>DECLARE_ARRAY_FOREIGN_KEY</literal>, et
+    <literal>DECLARE_ARRAY_FOREIGN_KEY_OPT</literal>, qui sont utilisées pour
+    déclarer les clés étrangères des relations qui sont trop complexes pour
+    <literal>BKI_LOOKUP</literal> (typiquement, des clés étrangères
+    multi-colonnes).
    </para>
   </sect2>
 
@@ -781,8 +791,9 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
    peut syntaxiquement pas appartenir à la commande qui précède en lance une
    autre. (En général, il est préférable, pour des raisons de clarté, de
    placer toute nouvelle commande sur une nouvelle ligne.) Les lexèmes peuvent être
-   des mots clés, des caractères spéciaux (parenthèses, virgules, etc.), nombres ou
-   chaînes de caractères entre guillemets doubles. Tous sont sensibles à la
+   des mots clés, des caractères spéciaux (parenthèses, virgules, etc.),
+   identifiants, nombres ou
+   chaînes de caractères entre guillemets simples. Tous sont sensibles à la
    casse.
   </para>
 
@@ -909,7 +920,9 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
       La valeur NULL peut être indiquée en utilisant le mot clé spécial
       <literal>_null_</literal>. Les valeurs qui ne ressemblent pas à des
       identifiants ou à des chaînes de nombres doivent être placées entre
-      guillemets doubles.
+      guillemets simples. (Pour inclure un guillemet simple dans une valeur,
+      écrivez la deux fois. Les caractères d'échappement de chaîne
+      (les antislash) sont aussi autorisés dans une chaîne.)
      </para>
     </listitem>
    </varlistentry>
@@ -1079,7 +1092,7 @@ $ perl  rewrite_dat_with_prokind.pl  pg_proc.dat
    table&nbsp;:
    <programlisting>create test_table 420 (oid = oid, cola = int4, colb = text)
 open test_table
-insert ( 421 1 "value1" )
+insert ( 421 1 'valeur 1' )
 insert ( 422 2 _null_ )
 close test_table
    </programlisting>

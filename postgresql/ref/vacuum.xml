@@ -29,7 +29,8 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     ANALYZE [ <replaceable class="parameter">boolean</replaceable> ]
     DISABLE_PAGE_SKIPPING [ <replaceable class="parameter">boolean</replaceable> ]
     SKIP_LOCKED [ <replaceable class="parameter">boolean</replaceable> ]
-    INDEX_CLEANUP [ <replaceable class="parameter">boolean</replaceable> ]
+    INDEX_CLEANUP [ AUTO | ON | OFF ]
+    PROCESS_TOAST [ <replaceable class="parameter">boolean</replaceable> ]
     TRUNCATE [ <replaceable class="parameter">boolean</replaceable> ]
     PARALLEL <replaceable class="parameter">integer</replaceable>
 
@@ -84,7 +85,8 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    réécrit le contenu entier d'une table dans un nouveau fichier sur disque
    sans espace supplémentaire, permettant ainsi à l'espace non utilisé d'être
    retourné au système d'exploitation. Cette forme est bien plus lente et
-   requiert un verrou exclusif sur chaque table pendant qu'elle s'exécute.
+   requiert un verrou de type <literal>ACCESS EXCLUSIVE</literal> sur chaque
+   table pendant qu'elle s'exécute.
   </para>
 
   <para>
@@ -197,22 +199,63 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     <term><literal>INDEX_CLEANUP</literal></term>
     <listitem>
      <para>
-      Indique que <command>VACUUM</command> doit tenter de supprimer les
-      enregistrements de l'index qui pointent vers des lignes mortes. Ceci est
-      le comportement habituellement désiré et est donc la valeur par défaut
-      sauf si l'option <literal>vacuum_index_cleanup</literal> a été
-      configurée à false pour la table en cours de traitement. Configurer
-      cette option à false peut être utile quand il est nécessaire de rendre
-      le VACUUM aussi rapide que possible, par exemple pour éviter une
-      réutilisation imminente des identifiants de transaction (voir la <xref
-      linkend="vacuum-for-wraparound"/>). Néanmoins, si le nettoyage de
-      l'index n'est pas réalisé régulièrement, les performances pourraient en
-      souffrir parce que, la table étant modifiée, les index accumulent des
-      lignes mortes et la table elle-même accumule des pointeurs de ligne
-      mortes qui ne peuvent pas être supprimés tant que le nettoyage de
-      l'index n'est pas terminé. Cette option n'a aucun effet pour les tables
-      qui n'ont pas d'index et est ignoré si l'option <literal>FULL</literal>
-      est utilisée.
+      Habituellement, <command>VACUUM</command> ignorera le traitement des
+      index quand il y a très peu de lignes mortes dans la table. Quand cela
+      arrive, le coût de traitement de tous les index de la table devrait
+      dépasser fortement l'intérêt de supprimer les lignes mortes de l'index.
+      Cette option peut être utilisée pour forcer un
+      <command>VACUUM</command> à traiter les index quand il y a plus de zéro
+      ligne morte. La valeur par défaut est <literal>AUTO</literal>, ce qui
+      permet au <command>VACUUM</command> d'ignorer le traitement des index
+      quand il estime que c'est approprié. Si
+      <literal>INDEX_CLEANUP</literal> est configuré à <literal>ON</literal>,
+      <command>VACUUM</command> supprimera de façon conservatrice toutes les
+      lignes mortes des index. Ceci pourrait être utile pour une
+      compatibilité descendante avec les anciennes versions de
+      <productname>PostgreSQL</productname> pour lesquelles ceci était le
+      comportement par défaut.
+     </para>
+
+     <para>
+      <literal>INDEX_CLEANUP</literal> peut aussi être configuré à
+      <literal>OFF</literal> pour forcer <command>VACUUM</command> à
+      <emphasis>toujours</emphasis> ignorer le traitement des index, même
+      s'il y a un grand nombre de lignes mortes dans la table. Ceci pourrait
+      être utile quand il est nécessaire que <command>VACUUM</command>
+      termine aussi rapidement que possible pour éviter une réutilisation des
+      identifiants de transaction(voir <xref
+      linkend="vacuum-for-wraparound"/>). Néanmoins, le mécanisme de sécurité
+      du wraparound contrôlé par <xref linkend="guc-vacuum-failsafe-age"/> se
+      déclenchera automatiquement pour éviter un échec de la réutilisation
+      des identifiants. Si le nettoyage des index n'est pas réalisé
+      régulièrement, les performances pourraient en souffrir car, comme la
+      table est modifiée, les index accumuleraient des lignes mortes et la
+      table elle-même accumulerait des pointeurs des pointeurs de lignes
+      mortes qui ne peuvent être supprimés jusqu'au nettoyage de l'index.
+     </para>
+
+     <para>
+      Cette option n'a pas d'effet pour les tables qui n'ont pasd'index et est
+      ignoré si l'option <literal>FULL</literal> est utilisée. Elle n'a aussi
+      aucun effet sur le mécanisme de sécurité sur la réutilisation ds
+      identifiants de transactions. Lorsqu'elle est déclenchée, le traitement
+      des indexsera ignoré même si <literal>INDEX_CLEANUP</literal> est
+      configuré à <literal>ON</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PROCESS_TOAST</literal></term>
+    <listitem>
+     <para>
+      Indique que <command>VACUUM</command> doit tenter de traiter la table
+      <literal>TOAST</literal> correspondante pour chaque relation, si cette
+      table existe. Ceci est normalement le comportement désiré et c'est de ce
+      fait le comportement par défaut. Configurer cette option à false peut
+      être utile quand il est seulement nécessaire de traiter la table
+      principale. Cette option est requise quand l'option
+      <literal>FULL</literal> est utilisée.
      </para>
     </listitem>
    </varlistentry>
@@ -246,7 +289,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
       l'opération est égal au nombre d'index sur la relation qui supporte le
       vacuum parallélisé, qui est limité par le nombre de workers spécifiés
       avec la clause <literal>PARALLEL</literal> qui est elle-même limitée par
-      le paramètre <xref linkend="guc-max-parallel-workers-maintenance"/>. Un
+      le paramètre <xref linkend="guc-max-parallel-maintenance-workers"/>. Un
       index peut participer à un vacuum parallélisé si et seulement si la
       taille de l'index est supérieur à la valeur du paramètre <xref
       linkend="guc-min-parallel-index-scan-size"/>. Notez qu'il n'est pas
@@ -327,11 +370,11 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
 
   <para>
    Pour exécuter un VACUUM sur une table, vous devez habituellement être le
-   propriétaire de la table ou un superutilisateur. Néanmoins, les
+   propriétaire de la table ou un super-utilisateur. Néanmoins, les
    propriétaires de la base de données sont autorisés à exécuter VACUUM sur
    toutes les tables de leurs bases de données, sauf sur les catalogues
    partagés. Cette restriction signifie qu'un vrai <command>VACUUM</command>
-   sur une base complète ne peut se faire que par un superutilisateur.)
+   sur une base complète ne peut se faire que par un super-utilisateur.)
    <command>VACUUM</command> ignorera toutes les tables pour lesquelles
    l'utilisateur n'a pas le droit d'exécuter un VACUUM.
   </para>
@@ -393,6 +436,16 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    sur le VACUUM automatique et manuel, voir la
    <xref linkend="routine-vacuuming"/>.
   </para>
+
+  <para>
+   Chaque processus exécutant <command>VACUUM</command> sans l'option
+   <literal>FULL</literal> indiquera sa progression dans la vue
+   <structname>pg_stat_progress_vacuum</structname>. Les processus exécutant
+   <command>VACUUM FULL</command> indiqueront leur progression dans la vue
+   <structname>pg_stat_progress_cluster</structname>. Voir
+   <xref linkend="vacuum-progress-reporting"/> et
+   <xref linkend="cluster-progress-reporting"/> pour les détails.
+  </para>
  </refsect1>
 
  <refsect1>
@@ -421,6 +474,8 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    <member><xref linkend="app-vacuumdb"/></member>
    <member><xref linkend="runtime-config-resource-vacuum-cost"/></member>
    <member><xref linkend="autovacuum"/></member>
+   <member><xref linkend="vacuum-progress-reporting"/></member>
+   <member><xref linkend="cluster-progress-reporting"/></member>
   </simplelist>
  </refsect1>
 </refentry>

@@ -98,7 +98,7 @@ if ($g_passwordrequired and strlen($PGPASSWORD) == 0) {
       $pgpassfile = fopen($pgpassfilename, 'r');
       $found = false;
       while (!$found and $line = fgets($pgpassfile)) {
-        list($host, $port, $database, $user, $password) = split (":", trim($line), 5);
+        list($host, $port, $database, $user, $password) = preg_split ("/:/", trim($line), 5);
         if ((!strcmp($PGHOST, $host) or !strcmp('*', $host)) and
             (!strcmp($PGPORT, $port) or !strcmp('*', $port)) and
             (!strcmp($PGDATABASE, $database) or !strcmp('*', $database)) and

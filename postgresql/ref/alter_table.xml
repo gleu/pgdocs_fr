@@ -31,7 +31,7 @@ ALTER TABLE ALL IN TABLESPACE <replaceable class="parameter">nom</replaceable> [
 ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     ATTACH PARTITION <replaceable class="parameter">nouveau_partition</replaceable> { FOR VALUES <replaceable class="parameter">spec_limite_partition</replaceable> | DEFAULT }
 ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
-    DETACH PARTITION <replaceable class="parameter">nouveau_partition</replaceable>
+    DETACH PARTITION <replaceable class="parameter">nouveau_partition</replaceable> [ CONCURRENTLY | FINALIZE ]
 
 <phrase>où <replaceable class="parameter">action</replaceable> fait partie de&nbsp;:</phrase>
 
@@ -49,6 +49,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">nom_colonne</replaceable> SET ( <replaceable class="parameter">option_attribut</replaceable> = <replaceable class="parameter">valeur</replaceable> [, ... ] )
     ALTER [ COLUMN ] <replaceable class="parameter">nom_colonne</replaceable> RESET ( <replaceable class="parameter">option_attribut</replaceable> [, ... ] )
     ALTER [ COLUMN ] <replaceable class="parameter">nom_colonne</replaceable> SET STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN }
+    ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET COMPRESSION <replaceable class="parameter">méthode_compression</replaceable>
     ADD <replaceable class="parameter">contrainte_table</replaceable> [ NOT VALID ]
     ADD <replaceable class="parameter">contrainte_table_utilisant_index</replaceable>
     ALTER CONSTRAINT <replaceable class="parameter">nom_contrainte</replaceable> [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
@@ -77,7 +78,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">nom</replaceable>
     NO INHERIT <replaceable class="parameter">table_parent</replaceable>
     OF <replaceable class="parameter">nom_type</replaceable>
     NOT OF
-    OWNER TO { <replaceable class="parameter">nouveau_propriétaire</replaceable> | CURRENT_USER | SESSION_USER }
+    OWNER TO { <replaceable class="parameter">nouveau_propriétaire</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
     REPLICA IDENTITY { DEFAULT | USING INDEX <replaceable class="parameter">nom_index</replaceable> | FULL | NOTHING }
 
 <phrase>et <replaceable class="parameter">spec_limite_partition</replaceable> vaut&nbsp;:</phrase>
@@ -149,7 +150,8 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
      <listitem>
       <para>
        Ajoute une nouvelle colonne à la table en utilisant une syntaxe identique
-       à celle de <xref linkend="sql-createtable"/>. Si <literal>IF NOT
+       à celle de <link linkend="sql-createtable"><command>CREATE
+       TABLE</command></link>. Si <literal>IF NOT
         EXISTS</literal> est précisée et qu'une colonne existe déjà avec ce nom,
        aucune erreur n'est renvoyée.
       </para>
@@ -261,8 +263,9 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
      <listitem>
       <para>
        Modifier une colonne en colonne d'identité ou changer les attributs de
-       génération d'ue colonne d'identité existante.  Voir <xref
-       linkend="sql-createtable"/> pour plus de détails.
+       génération d'ue colonne d'identité existante.  Voir <link
+       linkend="sql-createtable"><command>CREATE TABLE</command></link> pour
+       plus de détails.
        Comme pour le <literal>SET DEFAULT</literal>, cette modification
        s'appliquera uniquement aux prochaines requêtes <command>INSERT</command>
        et <command>UPDATE</command>. Cela ne concerne donc pas les lignes déjà
@@ -284,8 +287,8 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
       <para>
        Modifie la séquence associée à une colonne d'identité existante.
        <replaceable>option_sequence</replaceable> est une options supportée par
-       <xref linkend="sql-altersequence"/> tout comme <literal>INCREMENT
-        BY</literal>.
+       <link linkend="sql-altersequence"><command>ALTER SEQUENCE</command></link>
+       tout comme <literal>INCREMENT BY</literal>.
       </para>
      </listitem>
     </varlistentry>
@@ -296,7 +299,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
       <para>
        Permet de modifier l'objectif de collecte de statistiques
        par colonne pour les opérations d'analyse
-       (<xref linkend="sql-analyze"/>) ultérieures.
+       (<link linkend="sql-analyze"><command>ANALYZE</command></link>) ultérieures.
        L'objectif prend une valeur entre 0 et 10000. il est positionné à -1 pour utiliser
        l'objectif de statistiques par défaut du système
        (<xref linkend="guc-default-statistics-target"/>). Pour plus d'informations sur
@@ -318,7 +321,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        Actuellement, les seules propriétés acceptées sont
        <literal>n_distinct</literal> et <literal>n_distinct_inherited</literal>,
        qui surchargent l'estimation du nombre de valeurs distinctes calculée par
-       <xref linkend="sql-analyze"/>
+       <link linkend="sql-analyze"><command>ANALYZE</command></link>.
        <literal>n_distinct</literal> affecte les statistiques de la table
        elle-même alors que <literal>n_distinct_inherited</literal> affecte les
        statistiques récupérées pour la table et les tables en héritant. Si
@@ -391,13 +394,47 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
      </listitem>
     </varlistentry>
 
+   <varlistentry>
+    <term>
+     <literal>SET COMPRESSION <replaceable class="parameter">compression_method</replaceable></literal>
+    </term>
+    <listitem>
+     <para>
+      Cette clause configure la méthode de compression pour une colonne,
+      déterminant comment les valeurs insérées dans le futur seront
+      compressées (si le mode de stockage permet la compression). Ceci ne
+      cause pas la réécriture de la table, donc les données existantes
+      pourraient toujours être compressées avec les autres méthodes de
+      compression. Si la table est restaurée avec
+      <application>pg_restore</application>, alors toutes les valeurs sont
+      réécritures avec la méthode de compression configurée. Néanmoins, quand
+      les données sont insérées à partir d'une autre relation (par exemple
+      par <command>INSERT ... SELECT</command>), les valeurs de la table
+      source ne sont pas forcément détoastées, donc toute donnée précédemment
+      compressée pourrait conserver sa méthode de compression existante,
+      plutôt que d'être recompressée avec la méthode de compression de la
+      colonne cible. Les méthodes de compression supportées sont
+      <literal>pglz</literal> et <literal>lz4</literal>.
+      (<literal>lz4</literal> est disponible seulement si
+      <option>--with-lz4</option> a été utilisé lors de la compilation de
+      <productname>PostgreSQL</productname>.) De plus, <replaceable
+      class="parameter">méthode_compression</replaceable> peut valoir
+      <literal>default</literal>, ce qui sélectionne le comportement par
+      défaut consistant à lire la valeur du paramètre <xref
+      linkend="guc-default-toast-compression"/> lors de l'insertion de
+      données pour déterminer la méthode à utiliser.
+     </para>
+    </listitem>
+   </varlistentry>
+
     <varlistentry>
      <term><literal>ADD <replaceable class="parameter">contrainte_table</replaceable>
        [ NOT VALID ]</literal></term>
      <listitem>
       <para>
        Ajoute une nouvelle contrainte à une table en utilisant une
-       syntaxe identique à <xref linkend="sql-createtable"/>, plus
+       syntaxe identique à <link linkend="sql-createtable"><command>CREATE
+       TABLE</command></link>, plus
        l'option <literal>NOT VALID</literal>, qui est actuellement
        seulement autorisée pour les contraintes de type clé étrangère et les
        contraintes CHECK.
@@ -428,7 +465,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
       <para>
        Des restrictions supplémentaires s'appliquent quand des contraintes
        uniques ou des clés primaires sont ajoutées à des tables partitionnées.
-       Voir <xref linkend="sql-createtable" />.
+       Voir <link linkend="sql-createtable"><command>CREATE TABLE</command></link>.
        De plus, les contraintes de clés étrangères sur les tables partitionnées
        ne peuvent bénéficier de l'option <literal>NOT VALID</literal>, pour
        l'instant.
@@ -513,6 +550,10 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        (Voir <xref linkend="sql-altertable-notes"/> ci-dessous pour une explication
        sur l'utilisation de cette commande.)
       </para>
+      <para>
+       Cette commande récupère un verrou de type <literal>SHARE UPDATE
+       EXCLUSIVE</literal>.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -545,7 +586,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        contraintes de clés étrangères ou les contraintes déferrés uniques ou
        d'exclusion). Désactiver ou activer les déclencheurs implicites de
        contraintes requiert des droits de
-       superutilisateur&nbsp;; cela doit se faire avec précaution car
+       super-utilisateur&nbsp;; cela doit se faire avec précaution car
        l'intégrité de la contrainte ne peut pas être garantie si les
        déclencheurs ne sont pas exécutés.
       </para>
@@ -612,8 +653,8 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        pour la table, alors une politique de refus est appliqué par défaut.
        Notez que les politiques peuvent exister pour une table même si la
        sécurité niveau ligne est désactivé. Dans ce cas, les politiques ne
-       seront <emphasis>pas</emphasis> appliquées, elles seront ignorées. Voir aussi <xref
-       linkend="sql-createpolicy"/>.
+       seront <emphasis>pas</emphasis> appliquées, elles seront ignorées. Voir
+       aussi <link linkend="sql-createpolicy"><command>CREATE POLICY</command></link>.
       </para>
      </listitem>
     </varlistentry>
@@ -628,7 +669,8 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        appliquées quand l'utilisateur est le propriétaire de la table. S'il est
        désactivé (ce qui est la configuration par défaut), alors la sécurité
        niveau ligne ne sera pas appliquée quand l'utilisateur est le
-       propriétaire de la table. Voir aussi <xref linkend="sql-createpolicy"/>.
+       propriétaire de la table. Voir aussi <link
+       linkend="sql-createpolicy"><command>CREATE POLICY</command></link>.
       </para>
      </listitem>
     </varlistentry>
@@ -638,7 +680,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
      <listitem>
       <para>
        Sélectionne l'index par défaut pour les prochaines
-       opérations <xref linkend="sql-cluster"/>.
+       opérations <link linkend="sql-cluster"><command>CLUSTER</command></link>.
        La table n'est pas réorganisée.
       </para>
       <para>
@@ -652,8 +694,9 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
      <listitem>
       <para>
        Supprime de la table la spécification d'index
-       <xref linkend="sql-cluster"/> la plus récemment
-       utilisée. Cela agit sur les opérations de réorganisation suivantes qui ne spécifient pas d'index.
+       <link linkend="sql-cluster"><command>CLUSTER</command></link> la plus
+       récemment utilisée. Cela agit sur les opérations de réorganisation
+       suivantes qui ne spécifient pas d'index.
       </para>
       <para>
        Changer les options de cluster nécessite un verrou <literal>SHARE UPDATE EXCLUSIVE</literal>.
@@ -702,7 +745,8 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        <command>ALTER TABLE</command> si désiré. Les tables du schéma
        <literal>information_schema</literal> ne sont pas considérées comme
        faisant partie des catalogues systèmes et seront donc déplacées. Voir
-       aussi <xref linkend="sql-createtablespace"/>.
+       aussi <link linkend="sql-createtablespace"><command>CREATE
+       TABLESPACE</command></link>.
       </para>
      </listitem>
     </varlistentry>
@@ -722,19 +766,21 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
      <term><literal>SET ( <replaceable class="parameter">paramètre_stockage</replaceable> [= <replaceable class="parameter">valeur</replaceable>] [, ... ] )</literal></term>
      <listitem>
       <para>
-       Cette forme modifie un ou plusieurs paramètres de stockage pour la table.
-       Voir <xref linkend="sql-createtable-storage-parameters" /> in the
-       <xref linkend="sql-createtable"/> documentation
-       pour les détails sur les paramètres disponibles. Le contenu de
-       la table ne sera pas modifié immédiatement par cette commande&nbsp;;
-       en fonction du paramètre, il pourra s'avérer nécessaire de réécrire la table pour
-       obtenir les effets désirés. Ceci peut se faire avec <link linkend="sql-vacuum">VACUUM
-        FULL</link>, <xref
-       linkend="sql-cluster"/> ou une des formes
-       d'<command>ALTER TABLE</command> qui force une réécriture de la table.
-       Pour les paramètres liés à l'optimiseur, les changement prendront effet
-       à partir de la prochaine fois que la table est verrouillée, donc les
-       requêtes en cours d'exécution ne seront pas affectées.
+       Cette forme modifie un ou plusieurs paramètres de stockage pour la
+       table. Voir <xref linkend="sql-createtable-storage-parameters" /> dans
+       la documentation de <link linkend="sql-createtable"><command>CREATE
+       TABLE</command></link> pour les détails sur les paramètres
+       disponibles. Le contenu de la table ne sera pas modifié immédiatement
+       par cette commande&nbsp;; en fonction du paramètre, il pourra s'avérer
+       nécessaire de réécrire la table pour obtenir les effets désirés. Ceci
+       peut se faire avec <link linkend="sql-vacuum"><command>VACUUM
+       FULL</command></link>, <link
+       linkend="sql-cluster"><command>CLUSTER</command></link> ou une des
+       formes d'<command>ALTER TABLE</command> qui force une réécriture de la
+       table. Pour les paramètres liés à l'optimiseur, les changement
+       prendront effet à partir de la prochaine fois que la table est
+       verrouillée, donc les requêtes en cours d'exécution ne seront pas
+       affectées.
       </para>
 
       <para>
@@ -829,7 +875,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
      </listitem>
     </varlistentry>
 
-    <varlistentry id="sql-createtable-replica-identity">
+    <varlistentry id="sql-altertable-replica-identity">
      <term><literal>REPLICA IDENTITY</literal></term>
      <listitem>
       <para>
@@ -898,8 +944,9 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
       <para>
        Une partition utilisant <literal>FOR VALUES</literal> utilise la même
        syntaxe pour <replaceable
-       class="parameter">spec_limite_partition</replaceable> que <xref
-       linkend="sql-createtable"/>. La spécification de limite de
+       class="parameter">spec_limite_partition</replaceable> que <link
+       linkend="sql-createtable"><command>CREATE TABLE</command></link>. La
+       spécification de limite de
        partition doit correspondre à la stratégie de partitionnement et à la clé
        de partition de la table cible.  La table qui doit être attachée doit
        avoir la totalité des colonnes identiques à la table cible et ne dois pas
@@ -957,11 +1004,20 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        des verrous <literal>ACCESS EXCLUSIVE</literal> sur la table à attacher
        et sur la partition par défaut (s'il y en a une).
       </para>
+
+      <para>
+       D'autres verrous pourraient être détenus sur toutes les sous-partitions
+       si la table en cours d'attachement est elle-même une table
+       partitionnée. Pareil si la partition est elle-même une table
+       partitionnée. Le verrouillage des sous-partitions peut être évité en
+       ajoutant une contrainte <literal>CHECK</literal> comme décrit dans
+       <xref linkend="ddl-partitioning-declarative-maintenance"/>.
+      </para>
      </listitem>
     </varlistentry>
 
-    <varlistentry>
-     <term><literal>DETACH PARTITION</literal> <replaceable class="parameter">nom_partition</replaceable></term>
+    <varlistentry id="sql-altertable-detach-partition">
+     <term><literal>DETACH PARTITION <replaceable class="parameter">nom_partition</replaceable> [ CONCURRENTLY | FINALIZE ]</literal></term>
      <listitem>
       <para>
        Cette syntaxe détache la partition spécifiée de la table cible. La
@@ -969,7 +1025,35 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
        plus aucun lien avec la table dont elle vient d'être détachée. Tout
        index attaché aux index de la table cible est détaché. Tous les triggers
        créés comme clones de ceux disponibles dans la table cible sont
-       supprimés.
+       supprimés. Un verrou <literal>SHARE</literal> est obtenu sur toute
+       table qui référence cette table partitionnée dans les contraintes de
+       type clé étrangère.
+      </para>
+      <para>
+       Si <literal>CONCURRENTLY</literal> est précisé, cela fonctionne en
+       utilisant un niveau de verrou réduit pour éviter de bloquer les autres
+       sessions qui pourraient être en train d'accéder à la table
+       partitionnée. Dans ce mode, deux transactions sont utilisées en
+       interne. Lors de la première transaction, un verrou <literal>SHARE
+       UPDATE EXCLUSIVE</literal> est pris à la fois sur la table parent et
+       sur la partition, et la partition est marquée comme en cours de
+       détachement&nbsp;; à ce moment là, la transaction est validée et la
+       commande devient en attente de toutes les autres transactions
+       utilisant la table partitionnée. Une fois que toutes ces transactions
+       ont terminé, la deuxième transaction acquiert un verrou <literal>SHARE
+       UPDATE EXCLUSIVE</literal> sur la table partitionnée et un verrou
+       <literal>ACCESS EXCLUSIVE</literal> sur la partition, et le processus
+       de détachement se termine. Une contrainte <literal>CHECK</literal> qui
+       duplique la contrainte de partitionnement est ajoutée à la partition.
+       <literal>CONCURRENTLY</literal> ne peut pas être utilisé dans un bloc
+       de transaction et n'est pas autorisé si la table partitionnée contient
+       une partition par défaut.
+      </para>
+      <para>
+       Si <literal>FINALIZE</literal> est indiqué, un appel précédent à
+       <literal>DETACH CONCURRENTLY</literal> qui a été annulé ou interrompu
+       est terminé. Au plus une partition dans une table partitionnée peut
+       être en attente de détachement.
       </para>
      </listitem>
     </varlistentry>
@@ -1000,7 +1084,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
    doit avoir le droit <literal>CREATE</literal> sur le schéma de la table.
    (Ces restrictions assurent que la modification du propriétaire ne diffère en
    rien de ce qu'il est possible de faire par la suppression et le recréation
-   de la table.  Néanmoins, un superutilisateur peut modifier le propriétaire
+   de la table.  Néanmoins, un super-utilisateur peut modifier le propriétaire
    de n'importe quelle table.) Pour ajouter une colonne ou modifier un type de
    colonne ou utiliser la clause <literal>OF</literal>, vous devez avoir le
    droit <literal>USAGE</literal> sur le type de la donnée.
@@ -1128,7 +1212,7 @@ WITH ( MODULUS <replaceable class="parameter">litéral_numérique</replaceable>,
     <listitem>
      <para>
       Désactiver ou activer tous les déclencheurs appartenant à la table.
-      (Les droits de superutilisateur sont nécessaires si l'un des déclencheurs
+      (Les droits de super-utilisateur sont nécessaires si l'un des déclencheurs
       est un déclencheur interne pour la gestion d'une contrainte comme
       ceux utilisés pour implanter les contraintes de type clés étrangères
       ou les contraintes déferrables comme les contraintes uniques et

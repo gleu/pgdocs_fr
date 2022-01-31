@@ -17,7 +17,7 @@
 
  <refsynopsisdiv>
   <synopsis>CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">nom_table</replaceable> ( [
-  { <replaceable class="parameter">nom_colonne</replaceable> <replaceable class="parameter">type_donnees</replaceable> [ COLLATE <replaceable>collation</replaceable> ] [ <replaceable class="parameter">contrainte_colonne</replaceable> [ ... ] ]
+  { <replaceable class="parameter">nom_colonne</replaceable> <replaceable class="parameter">type_donnees</replaceable> [ COMPRESSION <replaceable>méthode_compression</replaceable> ] [ COLLATE <replaceable>collation</replaceable> ] [ <replaceable class="parameter">contrainte_colonne</replaceable> [ ... ] ]
     | <replaceable>contrainte_table</replaceable>
     | LIKE <replaceable>table_source</replaceable> [ <replaceable>option_like</replaceable> ... ] }
     [, ... ]
@@ -73,7 +73,7 @@ peut être&nbsp;:</phrase>
 <phrase>et <replaceable class="parameter">option_like</replaceable> peut
 valoir&nbsp;:</phrase>
 
-{ INCLUDING | EXCLUDING } { COMMENTS | CONSTRAINTS | DEFAULTS | GENERATED | IDENTITY | INDEXES | STATISTICS | STORAGE | ALL }
+{ INCLUDING | EXCLUDING } { COMMENTS | COMPRESSION | CONSTRAINTS | DEFAULTS | GENERATED | IDENTITY | INDEXES | STATISTICS | STORAGE | ALL }
 
 <phrase>and <replaceable class="parameter">spec_limites_partition</replaceable> is:</phrase>
 
@@ -169,13 +169,15 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
     <term><literal>TEMPORARY</literal> ou <literal>TEMP</literal></term>
     <listitem>
      <para>
-      La table est temporaire. Les tables
-      temporaires sont automatiquement supprimées à la fin d'une session ou,
-      optionnellement, à la fin de la transaction en cours (voir <command>ON COMMIT</command>
-      ci-dessous). Les tables permanentes qui portent le même nom ne sont
-      pas visibles dans la session courante tant que la table temporaire existe
-      sauf s'il y est fait référence par leur nom qualifié du schéma. Tous les
-      index créés sur une table temporaire sont automatiquement temporaires.
+      La table est temporaire. Les tables temporaires sont automatiquement
+      supprimées à la fin d'une session ou, optionnellement, à la fin de la
+      transaction en cours (voir <command>ON COMMIT</command> ci-dessous). Le
+      paramètre search_path par défaut inclut tout d'abord le schéma
+      temporaire et donc les tables permanentes existantes nommées de façon
+      identiques ne sont pas choisies pour les nouveaux plans tant que la
+      table temporaire existe sauf s'il y est fait référence par leur nom
+      qualifié du schéma. Tous les index créés sur une table temporaire sont
+      automatiquement temporaires.
      </para>
 
      <para>
@@ -286,6 +288,33 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       colonne (qui doit être d'un type de données collationnable). Sans
       information, le collationnement par défaut du type de données de la
       colonne est utilisé.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>COMPRESSION <replaceable class="parameter">méthode_compression</replaceable></literal></term>
+    <listitem>
+     <para>
+      La clause <literal>COMPRESSION</literal> configure la méthode de
+      compression pour la colonne. La compression est supportée uniquement
+      pour les types de données de taille variable, et est utilisée
+      uniquement quand le mode de stockage de la colonne est
+      <literal>main</literal> ou <literal>extended</literal>.(voir <xref
+      linkend="sql-altertable"/> pour des informations sur les modes de
+      stockage des colonnes.) Configurer cette propriété sur une table
+      partitionnée n'a pas d'effet direct car de telles tables n'ont pas de
+      stockage propre, mais la valeur configurée sera héritée par les
+      nouvelles partitions. Les méthodes de compression supportées sont
+      <literal>pglz</literal> et <literal>lz4</literal>.
+      (<literal>lz4</literal> est disponible seulement si
+      <option>--with-lz4</option> a été utilisé lors de la compilation de
+      <productname>PostgreSQL</productname>.) De plus, <replaceable
+      class="parameter">méthode_compression</replaceable> peut valoir
+      <literal>default</literal> pour indiquer explicitement le comportement
+      par défaut, qui est de consulter la configuration du paramètre <xref
+      linkend="guc-default-toast-compression"/> au moment de l'insertion des
+      données pour déterminer la méthode à utiliser.
      </para>
     </listitem>
    </varlistentry>
@@ -643,6 +672,17 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
        </varlistentry>
 
        <varlistentry>
+        <term><literal>INCLUDING COMPRESSION</literal></term>
+        <listitem>
+         <para>
+          La méthode de compression des colonnes sera copiée. Le comportement
+          par défaut est d'exclure les méthodes de compression, résultant en
+          des colonnes ayant la méthode de compression par défaut.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
         <term><literal>INCLUDING CONSTRAINTS</literal></term>
         <listitem>
          <para>
@@ -880,9 +920,10 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
     <listitem>
      <para>
       Cette clause crée la colonne comme une <firstterm>colonne
-       d'identité</firstterm>.  Elle aura une séquence implicite attachée à elle
+      d'identité</firstterm>. Elle aura une séquence implicite attachée à elle
       et la colonne dans les nouvelles lignes auront automatiquement des
-      valeurs récupérées de la séquence qui lui est assignée.
+      valeurs récupérées de la séquence qui lui est assignée. Une telle
+      colonne est implicitement <literal>NOT NULL</literal>.
      </para>
 
      <para>
@@ -1229,7 +1270,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       n'est pas décalable dans le temps est vérifiée immédiatement après chaque commande. La
       vérification des contraintes décalables est repoussée à la
       fin de la transaction (à l'aide de la commande
-      <xref linkend="sql-set-constraints"/>).
+      <link linkend="sql-set-constraints"><command>SET CONSTRAINTS</command></link>).
       <literal>NOT DEFERRABLE</literal> est la valeur par défaut.
       Actuellement, seules les contraintes <literal>UNIQUE</literal>,
       <literal>PRIMARY KEY</literal>, <literal>EXCLUDE</literal> et
@@ -1253,8 +1294,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
       <literal>INITIALLY IMMEDIATE</literal>, elle est vérifiée après chaque
       instruction. Si la contrainte est <literal>INITIALLY DEFERRED</literal>,
       elle n'est vérifiée qu'à la fin de la transaction. Le moment de
-      vérification de la contrainte peut être modifié avec la commande <xref
-      linkend="sql-set-constraints"/>.
+      vérification de la contrainte peut être modifié avec la commande
+      <link linkend="sql-set-constraints"><command>SET CONSTRAINTS</command></link>.
      </para>
     </listitem>
    </varlistentry>
@@ -1323,8 +1364,9 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
         <listitem>
          <para>
           Toutes les lignes de la table temporaire sont détruites à la fin de
-          chaque bloc de transactions. En fait, un <xref
-          linkend="sql-truncate"/> automatique est réalisé à chaque validation.
+          chaque bloc de transactions. En fait, un <link
+          linkend="sql-truncate"><command>TRUNCATE</command></link> automatique
+          est réalisé à chaque validation.
           Lorsque cette clause est utilisée sur une table partitionnée, elle
           n'est pas exécutée en cascade sur ses partitions.
          </para>
@@ -1400,10 +1442,9 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
     <xref linkend="storage-toast"/> pour plus d'informations sur TOAST). Si
     une valeur de paramètre d'une table est configuré et que le paramètre
     équivalent <literal>toast.</literal> ne l'est pas, la partie TOAST
-    utilisera la valeur du paramètre de la table.
-    Spécifier ces paramètres pour les tables partitionnées n'est pas supporté,
-    mais vous pouvez les spécifier pour chaque partition n'ayant pas de sous
-    partition.
+    utilisera la valeur du paramètre de la table. Ces paramètres ne sont pas
+    supportés sur les tables partitionnées mais vous pouvez les indiquer sur
+    des partitions enfants individuelles.
    </para>
 
    <variablelist>
@@ -1491,7 +1532,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
        elle vaut true, le démon autovacuum réalise des
        <command>VACUUM</command> et/ou <command>ANALYZE</command> automatiques
        sur cette table en suivant les règles discutées dans <xref
-       linkend="autovacuum"/>. À false, cette table ne sera pas traitée par le
+       linkend="autovacuum"/>.
+       À false, cette table ne sera pas traitée par le
        démon autovacuum, sauf s'il y a un risque de réutilisation des
        identifiants de transaction. Voir <xref
        linkend="vacuum-for-wraparound"/> pour plus d'informations sur la
@@ -1506,21 +1548,28 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
     </varlistentry>
 
     <varlistentry id="reloption-vacuum-index-cleanup" xreflabel="vacuum_index_cleanup">
-     <term><literal>vacuum_index_cleanup</literal>, <literal>toast.vacuum_index_cleanup</literal> (<type>boolean</type>)
+     <term><literal>vacuum_index_cleanup</literal>, <literal>toast.vacuum_index_cleanup</literal> (<type>enum</type>)
       <indexterm>
        <primary>paramètre de stockage <varname>vacuum_index_cleanup</varname></primary>
       </indexterm>
      </term>
      <listitem>
       <para>
-       Permet d'activer ou de désactiver le nettoyage des index quand un
+       Force ou désactive le nettoyage des index quand un
        <command>VACUUM</command> est lancé sur cette table. La valeur par
-       défaut est <literal>true</literal>. Désactiver le nettoyage des index
-       peut accélérer considérablement la commande <command>VACUUM</command>,
-       mais cela peut aussi entraîner une fragmentation importante des index
-       si les modifications de la table sont fréquentes. Le paramètre
-       <literal>INDEX_CLEANUP</literal> de <xref linkend="sql-vacuum"/>,
-       s'il est indiqué, écrase cette valeur.
+       défaut est <literal>AUTO</literal>. À <literal>OFF</literal>, le
+       nettoyage de l'index est désactivé. À <literal>ON</literal>, il est
+       activé. À <literal>AUTO</literal>, une décision est prise
+       dynamiquement, chaque fois que <command>VACUUM</command> s'exécute. Le
+       comportement dynamique permet à <command>VACUUM</command> d'éviter un
+       parcours inutile des index pour supprimer très peu de lignes mortes.
+       Forcer la désactivation du nettoyage de tous les index peut accélérer
+       très significativement une opération <command>VACUUM</command>, mais
+       pourrait résulter en des index sévèrement fragmentés si les
+       modifications de la table sont fréquentes. Le paramètre
+       <literal>INDEX_CLEANUP</literal> de la commande <link
+       linkend="sql-vacuum"><command>VACUUM</command></link>, si indiqué,
+       surcharge la valeur de cette option.
       </para>
      </listitem>
     </varlistentry>
@@ -1539,7 +1588,8 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
        l'autovacuum suppriment ces pages et l'espace libéré est redonné
        au système d'exploitation. La suppression de ces pages vides nécessite
        un verrou de type <literal>ACCESS EXCLUSIVE</literal> sur la table.
-       Le paramètre <literal>TRUNCATE</literal> de la commande <xref linkend="sql-vacuum"/>,
+       Le paramètre <literal>TRUNCATE</literal> de la commande
+       <link linkend="sql-vacuum"><command>VACUUM</command></link>,
        si indiqué, écrase cette valeur.
       </para>
      </listitem>
@@ -1549,28 +1599,30 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_vacuum_threshold</literal>, <literal>toast.autovacuum_vacuum_threshold</literal> (<type>integer</type>)
       <indexterm>
        <primary><varname>autovacuum_vacuum_threshold</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
       <para>
        Valeur spécifique à la table pour le paramètre <xref
        linkend="guc-autovacuum-vacuum-threshold"/>.
+       Ce paramètre peut être configuré pour les tables partitionnées.
       </para>
      </listitem>
     </varlistentry>
 
-    <varlistentry id="reloption-autovacuum-vauum-scale-factor" xreflabel="autovacuum_vacuum_scale_factor">
+    <varlistentry id="reloption-autovacuum-vacuum-scale-factor" xreflabel="autovacuum_vacuum_scale_factor">
      <term><literal>autovacuum_vacuum_scale_factor</literal>, <literal>toast.autovacuum_vacuum_scale_factor</literal> (<type>floating point</type>)
       <indexterm>
        <primary><varname>autovacuum_vacuum_scale_factor</varname> </primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
       <para>
        Valeur spécifique à la table pour le paramètre <xref
        linkend="guc-autovacuum-vacuum-scale-factor"/>.
+       Ce paramètre peut être configuré pour les tables partitionnées.
       </para>
      </listitem>
     </varlistentry>
@@ -1579,7 +1631,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_vacuum_insert_threshold</literal>, <literal>toast.autovacuum_vacuum_insert_threshold</literal> (<type>integer</type>)
       <indexterm>
        <primary><varname>autovacuum_vacuum_insert_threshold</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
@@ -1593,10 +1645,10 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
     </varlistentry>
 
     <varlistentry id="reloption-autovacuum-vacuum-insert-scale-factor" xreflabel="autovacuum_vacuum_insert_scale_factor">
-     <term><literal>autovacuum_vacuum_insert_scale_factor</literal>, <literal>toast.autovacuum_vacuum_insert_scale_factor</literal> (<type>float4</type>)
+     <term><literal>autovacuum_vacuum_insert_scale_factor</literal>, <literal>toast.autovacuum_vacuum_insert_scale_factor</literal> (<type>floating point</type>)
       <indexterm>
        <primary><varname>autovacuum_vacuum_insert_scale_factor</varname> </primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
@@ -1610,7 +1662,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_analyze_threshold</literal> (<type>integer</type>)
       <indexterm>
        <primary><varname>autovacuum_analyze_threshold</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
@@ -1625,7 +1677,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_analyze_scale_factor</literal> (<type>floating point</type>)
       <indexterm>
        <primary><varname>autovacuum_analyze_scale_factor</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
@@ -1640,7 +1692,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_vacuum_cost_delay</literal>, <literal>toast.autovacuum_vacuum_cost_delay</literal> (<type>floating point</type>)
       <indexterm>
        <primary><varname>autovacuum_vacuum_cost_delay</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
@@ -1651,11 +1703,11 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      </listitem>
     </varlistentry>
 
-    <varlistentry id="reloption-autovacuum-vauum-cost-limit" xreflabel="autovacuum_vacuum_cost_limit">
+    <varlistentry id="reloption-autovacuum-vacuum-cost-limit" xreflabel="autovacuum_vacuum_cost_limit">
      <term><literal>autovacuum_vacuum_cost_limit</literal>, <literal>toast.autovacuum_vacuum_cost_limit</literal> (<type>integer</type>)
       <indexterm>
        <primary><varname>autovacuum_vacuum_cost_limit</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
@@ -1687,7 +1739,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_freeze_max_age</literal>, <literal>toast.autovacuum_freeze_max_age</literal> (<type>integer</type>)
       <indexterm>
        <primary><varname>autovacuum_freeze_max_age</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
@@ -1738,7 +1790,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>autovacuum_multixact_freeze_max_age</literal>, <literal>toast.autovacuum_multixact_freeze_max_age</literal> (<type>integer</type>)
       <indexterm>
        <primary><varname>autovacuum_multixact_freeze_max_age</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>
@@ -1771,7 +1823,7 @@ contrainte <literal>EXCLUDE</literal> peut valoir&nbsp;:</phrase>
      <term><literal>log_autovacuum_min_duration</literal>, <literal>toast.log_autovacuum_min_duration</literal> (<type>integer</type>)
       <indexterm>
        <primary><varname>log_autovacuum_min_duration</varname></primary>
-       <secondary>storage parameter</secondary>
+       <secondary>paramètre de stockage</secondary>
       </indexterm>
      </term>
      <listitem>

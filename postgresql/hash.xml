@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<chapter id="hash-index">
+<title>Index Hash</title>
+
+   <indexterm>
+    <primary>index</primary>
+    <secondary>Hash</secondary>
+   </indexterm>
+
+<sect1 id="hash-intro">
+ <title>Aperçu</title>
+
+ <para>
+  <productname>PostgreSQL</productname> propose une implémentation d'index
+  hash sur disque, qui sont résistants aux crashs. Tout type de données peut
+  être indexé par un index hash, y compris les types de données qui n'ont pas
+  un ordre linéaire bien défini. Les index hash stockent seulement la valeur
+  hachée de la donnée en cours d'indexation. De ce fait, il n'y a pas de
+  restrictions sur la taille de la colonne en cours d'indexation.
+ </para>
+
+ <para>
+  Les index hash supportent seulement les index à une colonne et ne gèrent pas
+  l'unicité des valeurs.
+ </para>
+
+ <para>
+  Les index hash acceptent uniquement l'opérateur <literal>=</literal>, donc
+  les clauses WHERE qui spécifient des opérations sur des intervalles ne
+  seront pas capable de tirer avantages des index hash.
+ </para>
+
+ <para>
+  Chaque ligne d'un index hash stocke la valeur hachée sur 4 octets, pas la
+  valeur réelle de la colonne. Ceci a pour conséquence qu'un index hash peut
+  être bien plus petit que le même index en B-tree lors de l'indexation de
+  données volumineuses, telles que des UUID, des URL, etc. L'absence de la
+  valeur dans la colonne rend aussi tous les parcours d'index à perte. Les
+  index hash peuvent prendre part à des parcours d'index bitmap et à des
+  parcours inverses.
+ </para>
+
+ <para>
+  Les index hash sont plus optimisés pour des charges de travail fortes en
+  SELECT et UPDATE qui font des recherches d'égalité sur des tables
+  volumineuses. Dans un index B-tree, les recherches doivent descendre dans
+  l'arbre jusqu'à trouver le bloc feuille. Dans les tables avec des millions
+  de lignes, cette descente peut augmenter le temps d'accès aux données.
+  L'équivalent du bloc feuille dans un index hash est appelé un bloc bucket.
+  Dans le cas d'un index hash, l'accès à ce bloc bucket est direct, réduisant
+  ainsi le temps d'accès dans les tables volumineuses. Cette réduction des
+  I/O logiques est encore plus prononcé sur les index/données qui sont plus
+  volumineuses que le cache (shared_buffers) et la RAM.
+ </para>
+
+ <para>
+  Les index hash ont été conçus pour faire face à des distributions inégales
+  des valeurs hachées. L'accès direct aux blocs bucket fonctionne bien si les
+  valeurs hachées sont distribuées de façon égale. Quand des insertions
+  remplissent le bloc bucket, des blocs overflow supplémentaires sont chaînés
+  à ce bloc bucket, étendant localement le stockage des lignes d'index qui
+  correspondent à cette valeur hachée. Lors du parcours d'un bucket pour
+  l'exécution des requêtes, nous avons besoin de parcourir tous les blocs
+  overflow. De ce fait, un index hash non balancé pourrait se révéler pire
+  qu'un B-Tree en terme de nombre d'accès aux blocs requis pour certaines
+  données.
+ </para>
+
+ <para>
+  En résultat des cas d'overflow, nous pouvons dire que les index hash sont
+  préférables dans le cas de données uniques, ou tout du moins pratiquement
+  unique, ou de données avec un petit nombre de lignes par bucket. Une façon
+  d'éviter les problèmes est d'exclure les valeurs très fréquentes de l'index
+  en utilisant une condition d'index partiel mais ceci n'est pas réalisable
+  dans beaucoup de cas.
+ </para>
+
+ <para>
+  Tout comme les B-Trees, les index hash réalisent de simples suppressions de
+  lignes d'index. Une opération de maintenance supprime les lignes d'index
+  connues pour pouvoir être supprimées sans risque (ceux dont le bit LP_DEAD
+  de l'identifiant de l'élément est déjà initialisé). Si une insertion ne
+  trouve pas d'espace disponible sur un bloc, nous essayons d'éviter de créer
+  un nouveau bloc overflow en tentant de supprimer les lignes d'index mortes.
+  La suppression ne peut survenir si le bloc est verrouillé à ce moment. La
+  suppression des pointeurs d'index morts survient aussi lors du VACUUM.
+ </para>
+
+ <para>
+  S'il peut, VACUUM essaiera aussi de faire tenir les lignes d'index dans
+  aussi peu de blocs overflow que possible, minimisant ainsi la chaîne
+  d'overflow. Si un bloc overflow devient vide, les blocs d'overflow peuvent
+  être recyclés pour réutilisation dans les autres buckets, bien que nous ne
+  les renvoyons jamais au système d'exploitation. Il n'y a actuellement
+  aucune fonctionnalité pour réduire un index hash, autrement qu'en le
+  reconstruisant avec REINDEX. Il n'existe pas non plus de fonctionnalité
+  pour réduire le nombre de buckets.
+ </para>
+
+ <para>
+  Les index hash peuvent étendre le nombre de blocs bucket au fur et à mesure
+  de l'augmentation du nombre de lignes indexées. La correspondance clé de
+  hachage - numéro de bucket est choisie pour que l'index puisse croître de
+  façon incrémentale. Quand un nouveau bucket est à ajouter à l'index, un
+  seul bucket existant devra être divisé, avec certains de ses
+  enregistrements transférés dans le nouveau bucket suivant la correspondance
+  mise à jour clé - numéro de bucket.
+ </para>
+
+ <para>
+  Cet agrandissement survient en avant-plan, ce qui pourrait augmenter la
+  durée d'exécution des insertions par les utilisateurs. De ce fait, les
+  index hash pourraient ne pas convenir pour des tables ayant un nombre de
+  lignes augmentant rapidement.
+ </para>
+
+</sect1>
+
+<sect1 id="hash-implementation">
+ <title>Implémentation</title>
+
+ <para>
+  Il existe quatre types de blocs dans un index hash&nbsp;: le bloc de
+  méta-données (bloc zéro), qui contient des informations de contrôle
+  allouées statiquement&nbsp;; les blocs des buckets principaux&nbsp; les
+  blocs overflow&nbsp;; et les blocs bitmap qui conservent la trace des blocs
+  overflow libérés et disponibles pour réutilisation. Dans un but
+  d'adressage, les blocs bitmap sont vus comme un sous-ensemble des blocs
+  overflow.
+ </para>
+
+ <para>
+  À la fois le parcours de l'index et l'insertion de lignes nécessitent de
+  localiser le bucket où une ligne donnée doit être située. Pour faire cela,
+  nous avons du nombre de buckets, de la valeur haute
+  (<foreignphrase>highmask</foreignphrase>) et de la valeur basse
+  (<foreignphrase>lowmask</foreignphrase>) partir de le bloc de
+  méta-données&nbsp;; néanmoins, il n'est pas souhaitable pour des raisons de
+  performance d'avoir à verrouiller le bloc de méta-données à chaque fois
+  qu'il est nécessaire de réaliser cette opération.
+ </para>
+
+ <para>
+  Les blocs buckets primaires et les blocs overflow sont alloués
+  indépendamment car n'importe quel index pourrait avoir plus ou moins de
+  blocs overflow suivant son nombre de buckets. Le code des index hash
+  utilise un ensemble intéressant de règles d'adressage pour accepter un
+  nombre variable de blocs overflow sans avoir à déplacer des blocs buckets
+  primaires après leur création.
+ </para>
+
+ <para>
+  Chaque ligne dans la table indexé est représentée par un seul enregistrement
+  dans l'index hash. Les enregistrements de l'index hash sont stockés dans
+  des blocs buckets et, s'ils existent, dans des blocs overflow. Nous
+  accélérons les recherches en conservant les entrées d'index de tout bloc
+  d'index triées par son code de hachage, permettant ainsi l'utilisation de
+  recherche binaire dans un bloc d'index. Notez néanmoins qu'il n'y pas de
+  garantie d'un ordre des codes de hachage sur plusieurs blocs d'index d'un
+  bucket.
+ </para>
+
+ <para>
+  Les algorithmes de division de bucket pour étendre un index hash sont trop
+  complexes pour être mentionnés ici, mais ils sont décrits dans le fichier
+  <filename>src/backend/access/hash/README</filename>. L'algorithme de
+  division est garanti contre les crashs et peut être relancé s'il ne s'est
+  pas terminé correctement.
+ </para>
+
+</sect1>
+
+</chapter>

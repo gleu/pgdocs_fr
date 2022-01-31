@@ -28,6 +28,7 @@ CREATE TYPE <replaceable class="parameter">name</replaceable> AS RANGE (
     [ , COLLATION = <replaceable class="parameter">collationnement</replaceable> ]
     [ , CANONICAL = <replaceable class="parameter">fonction_canonique</replaceable> ]
     [ , SUBTYPE_DIFF = <replaceable class="parameter">fonction_diff_sous_type</replaceable> ]
+    [ , MULTIRANGE_TYPE_NAME = <replaceable class="parameter">nom_type_multirange</replaceable> ]
 )
 
 CREATE TYPE <replaceable class="parameter">nom</replaceable> (
@@ -38,6 +39,7 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable> (
     [ , TYPMOD_IN = <replaceable class="parameter">type_modifier_input_function</replaceable> ]
     [ , TYPMOD_OUT = <replaceable class="parameter">type_modifier_output_function</replaceable> ]
     [ , ANALYZE = <replaceable class="parameter">fonction_analyse</replaceable> ]
+    [ , SUBSCRIPT = <replaceable class="parameter">fonction_indice</replaceable> ]
     [ , INTERNALLENGTH = { <replaceable class="parameter">longueurinterne</replaceable> | VARIABLE } ]
     [ , PASSEDBYVALUE ]
     [ , ALIGNMENT = <replaceable class="parameter">alignement</replaceable> ]
@@ -118,7 +120,8 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     installation <productname>PostgreSQL</productname> standard). (Il est
     possible de créer un type énuméré avec zéro label, mais un tel type ne
     peut pas être utilisé pour contenir des valeurs avant qu'au moins un label
-    soit ajouté en utilisant <xref linkend="sql-altertype"/>.)
+    soit ajouté en utilisant <link
+    linkend="sql-altertype"><command>ALTER TYPE</command></link>.)
    </para>
   </refsect2>
 
@@ -172,6 +175,17 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     intervalle. Voir <xref linkend="rangetypes-defining"/> pour plus
     d'informations.
    </para>
+
+   <para>
+    Le paramètre optionnel <replaceable class="parameter">nom_type_multirange</replaceable>
+    indique le nom du type multirange correspondant. Si non specifié, ce nom
+    est choisi automatiquement comme suit. Si le type de type range contient
+    la sous-chaîne <literal>range</literal>, alors le nom du type multirange
+    est formé par le remplacement de la sous-chaîne avec
+    <literal>multirange</literal> dans le nom du type range. Sinon le nom du
+    type multirange est formé en ajoutant le suffixe
+    <literal>_multirange</literal> au nom du type range.
+   </para>
   </refsect2>
 
   <refsect2>
@@ -179,7 +193,7 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
 
    <para>
     La quatrième forme de <command>CREATE TYPE</command> crée un nouveau type de base
-    (type scalaire). Pour créer un nouveau type de base, il faut être superutilisateur.
+    (type scalaire). Pour créer un nouveau type de base, il faut être super-utilisateur.
     (Cette restriction est imposée parce qu'une définition de type erronée pourrait
     embrouiller voire arrêter brutalement le serveur.)
    </para>
@@ -193,9 +207,9 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     fonctions <replaceable class="parameter">fonction_réception</replaceable>,
     <replaceable class="parameter">fonction_envoi</replaceable>,
     <replaceable class="parameter">type_modifier_input_function</replaceable>,
-    <replaceable class="parameter">type_modifier_output_function</replaceable>
-    et
-    <replaceable class="parameter">fonction_analyse</replaceable> sont
+    <replaceable class="parameter">type_modifier_output_function</replaceable>,
+    <replaceable class="parameter">fonction_analyse</replaceable> et
+    <replaceable class="parameter">fonction_indice</replaceable> sont
     optionnelles. Généralement, ces fonctions sont codées en C ou dans un
     autre langage de bas niveau.
    </para>
@@ -320,6 +334,29 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </para>
 
    <para>
+    La fonction optionnelle <replaceable
+    class="parameter">fonction_indice</replaceable> autorise l'utilisation
+    d'indice pour le type de données dans les commandes SQL. Indiquer cette
+    fonction ne fait pas en sorte que le type soit considéré comme un
+    <quote>vrai</quote> type tableau&nbsp;; par exemple, il ne sera pas un
+    candidat pour le type résultat de constructions <literal>ARRAY
+    []</literal>. Mais si indicer une valeur du type est une notation
+    naturelle pour en extraire des données, alors une <replaceable
+    class="parameter">fonction_indice</replaceable> peut être écrite pour
+    définir la signification. La fonction d'indice doit être déclarée comme
+    prenant un seul argument de type <type>internal</type>, et renvoyer un
+    résultat de type <type>internal</type>, qui est un pointeur vers une
+    structure de méthodes (fonctions) qui implémentent l'indiçage. L'API
+    détaillée pour les fonctions d'indice apparaît dans in
+    <filename>src/include/nodes/subscripting.h</filename>. Il pourrait aussi
+    être utile de lire l'implémentation des tableaux dans
+    <filename>src/backend/utils/adt/arraysubs.c</filename>, ou le code simple
+    de <filename>contrib/hstore/hstore_subs.c</filename>. Des informations
+    supplémentaires apparaissent dans <xref linkend="sql-createtype-array"/>,
+    ci-dessous.
+   </para>
+
+   <para>
     Alors que les détails de la représentation interne du nouveau type ne sont
     connus que des fonctions d'entrées/sorties et des fonctions utilisateurs
     d'interaction avec le type, plusieurs propriétés de
@@ -438,11 +475,11 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </para>
 
    <para>
-    Pour indiquer qu'un type est un tableau, le type des éléments du
+    Pour indiquer qu'un type est un tableau de taille fixe, le type des éléments du
     tableau est précisé par le mot clé <literal>ELEMENT</literal>. Par exemple, pour
     définir un tableau d'entiers de quatre octets (<type>int4</type>),
-    <literal>ELEMENT = int4</literal> est utilisé. Plus de détails sur les types
-    tableau apparaissent ci-dessous.
+    <literal>ELEMENT = int4</literal> est utilisé. Pour plus de détails,
+    voir <xref linkend="sql-createtype-array"/> ci-dessous.
    </para>
 
    <para>
@@ -465,29 +502,30 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </para>
   </refsect2>
 
-  <refsect2>
+  <refsect2 id="sql-createtype-array" xreflabel="Types tableau">
    <title>Types tableau</title>
 
    <para>
     À chaque fois qu'un type défini par un utilisateur est créé,
     <productname>PostgreSQL</productname> crée automatiquement un type tableau
-    associé dont le nom est composé à partir du type de base préfixé d'un
-    tiret bas et tronqué si nécessaire pour que le nom généré fasse moins de
+    associé dont le nom est composé à partir du type de base préfixé d'un tiret
+    bas et tronqué si nécessaire pour que le nom généré fasse moins de
     <symbol>NAMEDATALEN</symbol> octets. (Si le nom généré est en conflit avec
     un autre nom, le traitement est répété jusqu'à ce qu'un nom sans conflit
-    soit trouvé.)
-    Ce type tableau créé implicitement est de longueur variable et utilise les
-    fonctions d'entrée et sortie <literal>array_in</literal> et
-    <literal>array_out</literal>. Le type tableau trace tout changement dans
-    du type de base pour le propriétaire et le schéma. Il est aussi supprimé
-    quand le type de base l'est.
+    soit trouvé.) Ce type tableau créé implicitement est de longueur variable
+    et utilise les fonctions d'entrée et sortie <literal>array_in</literal> et
+    <literal>array_out</literal>. De plus, ce type est ce que le système
+    utilise pour les constructions telles que <literal>ARRAY[]</literal> sur
+    le type défini par l'utilisateur. Le type tableau trace tout changement
+    dans du type de base pour le propriétaire et le schéma. Il est aussi
+    supprimé quand le type de base l'est.
    </para>
 
    <para>
     Pourquoi existe-t-il une option
     <option>ELEMENT</option> si le système fabrique automatiquement le bon type
     tableau ?
-    La seule utilité d'<option>ELEMENT</option> est la création d'un type de longueur
+    L'utilité principale d'<option>ELEMENT</option> est la création d'un type de longueur
     fixe représenté en interne par un tableau d'éléments identiques auxquels on souhaite
     accéder directement par leurs indices (en plus de toute autre opération
     effectuée sur le type dans sa globalité). Par exemple, le type
@@ -496,13 +534,32 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
     <literal>point[1]</literal>. Cette
     fonctionnalité n'est possible qu'avec les types de longueur fixe dont la
     forme interne est strictement une séquence de champs de longueur fixée.
-    Un type de longueur variable est accessible par ses indices
-    si sa représentation interne
-    généralisée est celle utilisée par <literal>array_in</literal> et <literal>array_out</literal>.
     Pour des raisons historiques (c'est-à-dire pour de mauvaises raisons, mais
     il est trop tard pour changer) les indices des tableaux de types de longueur
     fixe commencent à zéro et non à un comme c'est le cas pour les tableaux de
     longueur variable.
+   </para>
+
+   <para>
+    Ajouter l'option <option>SUBSCRIPT</option> permet au type de données
+    d'utiliser des indices, même si le système ne le gère pas comme un type
+    tableau. Le comportement tout juste décrit pour les tableaux à longueur
+    fixe est en fait implémenté par la fonction gestionnaire
+    <option>SUBSCRIPT</option> appelée
+    <function>raw_array_subscript_handler</function>, qui est utilisée
+    automatiquement si vous indiquez <option>ELEMENT</option> pour un type de
+    longueur fixe sans écrire aussi <option>SUBSCRIPT</option>.
+   </para>
+
+   <para>
+    Lors de l'indication explicite d'une fonction <option>SUBSCRIPT</option>,
+    il n'est pas nécessaire d'indiquer <option>ELEMENT</option> sauf si la
+    fonction gestionnaire <option>SUBSCRIPT</option> a besoin de consulter
+    <structfield>typelem</structfield> pour savoir ce qu'elle renvoie. Faites
+    attentent qu'indiquer <option>ELEMENT</option> cause le système à assumer
+    que le nouveau type contient ou est quelque part physiquement dépendant,
+    du type élément&nbsp;; de ce fait, changer par exemple les propriétés du
+    type élément n'est pas autorisé s'il y a des colonnes du type dépendant.
    </para>
   </refsect2>
  </refsect1>
@@ -595,6 +652,15 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </varlistentry>
 
    <varlistentry>
+    <term><replaceable class="parameter">multirange_type_name</replaceable></term>
+    <listitem>
+     <para>
+      Le nom du type multirange correspondant.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">fonction_entrée</replaceable></term>
     <listitem>
      <para>
@@ -655,7 +721,7 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </varlistentry>
 
    <varlistentry>
-    <term><replaceable class="parameter">analyze_function</replaceable></term>
+    <term><replaceable class="parameter">fonction_analyze</replaceable></term>
     <listitem>
      <para>
       Le nom d'une fonction d'analyses statistiques pour le type
@@ -665,7 +731,17 @@ CREATE TYPE <replaceable class="parameter">nom</replaceable>
    </varlistentry>
 
    <varlistentry>
-    <term><replaceable class="parameter">longueurinterne</replaceable></term>
+    <term><replaceable class="parameter">fonction_indice</replaceable></term>
+    <listitem>
+     <para>
+      Le nom d'une fonction qui définit ce qu'indicer une valeur de ce type
+      de données signifie.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">longueur_interne</replaceable></term>
     <listitem>
      <para>
       Une constante numérique qui précise la longueur en octets de la

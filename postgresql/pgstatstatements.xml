@@ -8,8 +8,8 @@
 
  <para>
   Le module <filename>pg_stat_statements</filename> fournit un moyen de
-  surveiller les statistiques d'optimisation et d'exécution de tous les ordres
-  SQL exécutés par un serveur.
+  surveiller les statistiques d'optimisation et d'exécution de tous les
+  ordres SQL exécutés par un serveur.
  </para>
 
  <para>
@@ -17,15 +17,20 @@
   <literal>pg_stat_statements</literal> à <xref
   linkend="guc-shared-preload-libraries"/> dans le fichier de configuration
   <filename>postgresql.conf</filename> parce qu'il a besoin de mémoire
-  partagée supplémentaire. Ceci signifie qu'il faut redémarrer le serveur pour
-  ajouter ou supprimer le module.
+  partagée supplémentaire. Ceci signifie qu'il faut redémarrer le serveur
+  pour ajouter ou supprimer le module. De plus, le calcul de l'identifiant de
+  requête doit être activé pour que le module soit actif, ce qui est fait
+  automatiquement si <xref linkend="guc-compute-query-id"/> est configuré à
+  <literal>auto</literal> ou <literal>on</literal>, ou tout autre module
+  tiers chargé qui calcule les identifiants de requête.
  </para>
 
  <para>
-  Quand <filename>pg_stat_statements</filename> est chargé, il récupère des
+  Quand <filename>pg_stat_statements</filename> est actif, il récupère des
   statistiques sur toutes les bases de données du serveur. Pour y accéder et
-  les manipuler, le module fournit une vue,
-  <structname>pg_stat_statements</structname>, et les fonctions
+  les manipuler, le module fournit les vues
+  <structname>pg_stat_statements</structname> et
+  <structname>pg_stat_statements_info</structname>, et les fonctions
   <function>pg_stat_statements_reset</function> et
   <function>pg_stat_statements</function>. Elles ne sont pas disponibles
   globalement mais peuvent être activées pour une base de données spécifique
@@ -38,10 +43,11 @@
   <para>
    Les statistiques collectées par le module sont rendues disponibles par une
    vue nommée <structname>pg_stat_statements</structname>. Cette vue contient
-   une ligne pour chaque identifiant de base de données, identifiant
-   utilisateur et identifiant de requête distincts (jusqu'au nombre maximum
-   d'ordres distincts que le module peut surveiller). Les colonnes de la vue
-   sont affichées dans <xref linkend="pgstatstatements-columns"/>.
+   une ligne pour chaque combinaison d'un identifiant de base de données,
+   d'un identifiant utilisateur, d'un identifiant de requête et s'il s'agit
+   d'une requête principale ou non (jusqu'au nombre maximum d'ordres
+   distincts que le module peut surveiller). Les colonnes de la vue sont
+   affichées dans <xref linkend="pgstatstatements-columns"/>.
   </para>
 
   <table id="pgstatstatements-columns">
@@ -82,10 +88,21 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>toplevel</structfield> <type>bool</type>
+      </para>
+      <para>
+       True si la requête a été exécutée comme instruction de haut niveau
+       (toujours true si <varname>pg_stat_statements.track</varname> est
+       configuré à <literal>top</literal>)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
         <structfield>queryid</structfield> <type>bigint</type>
        </para>
        <para>
-        Code de hachage interne, calculé à partir de l'arbre d'analyse de la
+        Code de hachage, calculé à partir de l'arbre d'analyse de la
         requête
        </para></entry>
      </row>
@@ -374,17 +391,17 @@
   </table>
 
   <para>
-   Pour raisons de sécurité, seuls les super utilisateurs et les membres du
-   rôle <literal>pg_read_all_stats</literal> sont autorisé à voir le texte SQL
-   ainsi que le champ <structfield>queryid</structfield> des requêtes
+   Pour raisons de sécurité, seuls les super-utilisateurs et les membres du
+   rôle <literal>pg_read_all_stats</literal> sont autorisé à voir le texte
+   SQL ainsi que le champ <structfield>queryid</structfield> des requêtes
    exécutées par d'autres utilisateurs.  Les autres utilisateurs peuvent
    cependant voir les statistiques, si la vue a été installée dans leur base
    de données.
   </para>
 
   <para>
-   Les requêtes qui disposent d'un plan d'exécution (c'est-à-dire
-   <command>SELECT</command>, <command>INSERT</command>,
+   Les requêtes qui disposent d'un plan d'exécution
+   (c'est-à-dire <command>SELECT</command>, <command>INSERT</command>,
    <command>UPDATE</command>, et <command>DELETE</command>) sont combinées en
    une entrée unique dans <structname>pg_stat_statements</structname>
    lorsqu'elles ont un plan d'exécution similaire (d'après leur hachage). En
@@ -394,6 +411,16 @@
    (c'est-à-dire toutes les autres) ne sont considérées comme unique que
    lorsqu'elles sont égales au caractère près.
   </para>
+
+  <note>
+   <para>
+    Les détails suivant sur le remplacement des constantes et le
+    <structfield>queryid</structfield> s'appliquent seulement si <xref
+    linkend="guc-compute-query-id"/> est activé. Si vous utilisez un module
+    externe pour calculer <structfield>queryid</structfield>, vous devez vous
+    référer à sa documentation pour les détails.
+   </para>
+  </note>
 
   <para>
    Quand la valeur d'une constante a été ignorée pour pouvoir comparer la
@@ -503,6 +530,63 @@
  </sect2>
 
  <sect2>
+  <title>La vue <structname>pg_stat_statements_info</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_statements_info</primary>
+  </indexterm>
+
+  <para>
+   Les statistiques du module <filename>pg_stat_statements</filename> lui-même
+   sont tracées et rendues disponibles via une vue nommée
+   <structname>pg_stat_statements_info</structname>. Cette vue contient une
+   seule ligne. Les colonnes de la vue sont affichées dans <xref
+   linkend="pgstatstatementsinfo-columns"/>.
+  </para>
+
+  <table id="pgstatstatementsinfo-columns">
+   <title>Colonnes de <structname>pg_stat_statements_info</structname></title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Type de colonne
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>dealloc</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Nombre total de fois où les enregistrements de
+       <structname>pg_stat_statements</structname> pour les requêtes les moins
+       exécutées ont été désallouées parce que plus de
+       <varname>pg_stat_statements.max</varname> requêtes distinctes
+       ont été observées
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>stats_reset</structfield> <type>timestamp with time zone</type>
+      </para>
+      <para>
+       Horodatage de la dernière réinitialisation de toutes les statistiques de
+       <structname>pg_stat_statements</structname>.
+      </para></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+ </sect2>
+
+ <sect2>
   <title>Fonctions</title>
 
   <variablelist>
@@ -522,14 +606,18 @@
       <filename>pg_stat_statements</filename> correspondant aux
       <structfield>userid</structfield>, <structfield>dbid</structfield> et
       <structfield>queryid</structfield> indiqués. Si un de ces paramètres
-      n'est pas spécifié, la valeur par défaut <literal>0</literal> (invalide)
-      est utilisée pour chacun d'entre eux et les statistiques qui
-      correspondent avec les autres paramètres seront réinitialisées. Si aucun
-      paramètre n'est spécifié ou si tous les paramètres spécifiés sont à
-      <literal>0</literal> (invalide), elle annulera toutes les statistiques.
-      Par défaut, cette fonction peut seulement être exécutée par les
-      superutilisateurs. L'accès peut être donné à d'autres utilisateurs en
-      utilisant la commande <command>GRANT</command>.
+      n'est pas spécifié, la valeur par défaut <literal>0</literal>
+      (invalide) est utilisée pour chacun d'entre eux et les statistiques qui
+      correspondent avec les autres paramètres seront réinitialisées. Si
+      aucun paramètre n'est spécifié ou si tous les paramètres spécifiés sont
+      à <literal>0</literal> (invalide), elle annulera toutes les
+      statistiques. Si toutes les statistiques de la vue
+      <filename>pg_stat_statements</filename> sont annulées, cela va aussi
+      réinitialiser les statistiques de la vue
+      <structname>pg_stat_statements_info</structname>. Par défaut, cette
+      fonction peut seulement être exécutée par les super-utilisateurs.
+      L'accès peut être donné à d'autres utilisateurs en utilisant la
+      commande <command>GRANT</command>.
      </para>
     </listitem>
    </varlistentry>
@@ -554,15 +642,15 @@
       <literal>OUT</literal> qui correspond à la colonne
       <structfield>query</structfield> de la vue retournera des NULL).  Cette
       fonctionnalité est prévue pour le support d'outils externes qui
-      pourraient vouloir éviter le surcoût de récupérer de manière répétée les
-      textes des requêtes de longueur indéterminées.  De tels outils peuvent à
-      la place eux-même mettre le premier texte de requête récupéré pour
-      chaque entrée, puisque c'est déjà ce que fait
+      pourraient vouloir éviter le surcoût de récupérer de manière répétée
+      les textes des requêtes de longueur indéterminées.  De tels outils
+      peuvent à la place eux-même mettre le premier texte de requête récupéré
+      pour chaque entrée, puisque c'est déjà ce que fait
       <filename>pg_stat_statements</filename> lui-même, et ensuite récupérer
       les textes de requêtes uniquement si nécessaire.  Puisque le serveur
       stocke les textes de requête dans un fichier, cette approche pourrait
-      réduire les entrée/sorties physiques pour des vérifications répétées des
-      données de <structname>pg_stat_statements</structname>.
+      réduire les entrée/sorties physiques pour des vérifications répétées
+      des données de <structname>pg_stat_statements</structname>.
      </para>
     </listitem>
    </varlistentry>
@@ -582,10 +670,13 @@
      <para>
       <varname>pg_stat_statements.max</varname> est le nombre maximum d'ordres
       tracés par le module (c'est-à-dire le nombre maximum de lignes dans la
-      vue <structname>pg_stat_statements</structname>). Si un nombre supérieur
-      d'ordres SQL distincts a été observé, c'est l'information sur les ordres
-      les moins exécutés qui est ignorée. La valeur par défaut est 5000. Ce
-      paramètre peut uniquement être positionné au démarrage du serveur.
+      vue <structname>pg_stat_statements</structname>). Si un nombre
+      supérieur d'ordres SQL distincts a été observé, c'est l'information sur
+      les ordres les moins exécutés qui est ignorée. Le nombre de fois où une
+      telle information est ignorée est consultable dans la vu
+      <structname>pg_stat_statements_info</structname>. La valeur par défaut
+      est 5000. Ce paramètre peut uniquement être positionné au démarrage du
+      serveur.
      </para>
     </listitem>
    </varlistentry>
@@ -622,7 +713,7 @@
       utilitaires sont toutes les commandes SQL sauf
       <command>SELECT</command>, <command>INSERT</command>,
       <command>UPDATE</command> et <command>DELETE</command>. La valeur par
-      défaut est <literal>on</literal>. Seuls les superutilisateurs peuvent
+      défaut est <literal>on</literal>. Seuls les super-utilisateurs peuvent
       modifier cette configuration.
      </para>
     </listitem>
@@ -638,10 +729,12 @@
       <varname>pg_stat_statements.track_planning</varname> contrôle si les
       opérations d'optimisation/planification et leur durée sont tracées par
       ce module. Activer ce paramètre pourrait résulter en une perte visible
-      de performance, spécialement quand peu de requêtes du même genre sont
-      exécutées sur de nombreuses connexions concurrentes.
-      La valeur par défaut est <literal>off</literal>. Seuls les
-      superutilisateurs peuvent modifier cette configuration.
+      de performance, spécialement quand les requêtes avec des structures
+      identiques sont exécutées par de nombreuses connexions concurrentes, ce
+      qui pousse à mettre à jour un petit nombre d'entrées de
+      <structname>pg_stat_statements</structname>. La valeur par défaut est
+      <literal>off</literal>. Seuls les super-utilisateurs peuvent modifier
+      cette configuration.
      </para>
     </listitem>
    </varlistentry>
@@ -682,6 +775,7 @@
 # postgresql.conf
 shared_preload_libraries = 'pg_stat_statements'
 
+compute_query_id = on
 pg_stat_statements.max = 10000
 pg_stat_statements.track = all
   </programlisting>

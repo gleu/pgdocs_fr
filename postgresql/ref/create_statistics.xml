@@ -1,9 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-doc/src/sgml/ref/create_statistics.sgml
-PostgreSQL documentation
--->
-
 <refentry id="sql-createstatistics">
  <indexterm zone="sql-createstatistics">
   <primary>CREATE STATISTICS</primary>
@@ -22,6 +17,10 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
   <synopsis>
+CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">statistics_name</replaceable>
+    ON ( <replaceable class="parameter">expression</replaceable> )
+    FROM <replaceable class="parameter">table_name</replaceable>
+
 CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">nom_statistiques</replaceable>
     [ ( <replaceable class="parameter">type_statistique</replaceable> [, ... ] ) ]
     ON <replaceable class="parameter">nom_colonne</replaceable>, <replaceable class="parameter">nom_colonne</replaceable> [, ...]
@@ -42,8 +41,22 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">nom_statistiq
   </para>
 
   <para>
+   La commande <command>CREATE STATISTICS</command> a deux formes basiques. La
+   première forme autorise des statistiques à une variable pour une simple
+   expression à récupérer, fournissant des bénéfices similaires à un index
+   avec expression sans le surcoût de maintenance de l'index. Cette forme ne
+   permet pas d'indiquer le type de statistiques car les différents types de
+   statistiques sont uniquement pour les statistiques avec au moins deux
+   variables. La seconde forme de la commande permet la récupération de
+   statistiques sur plusieurs colonnes et/ou expressions, en indiquant
+   optionnellement les types de statistiques à inclure. Cette forme causera
+   aussi la récupération de statistiques à une variable sur toute expression
+   incluse dans la liste.
+  </para>
+
+  <para>
    Si un nom de schéma est donné (par exemple, <literal>CREATE STATISTICS
-    monschema.mastat ...</literal>) alors l'objet statistiques est crée dans le
+   monschema.mastat ...</literal>) alors l'objet statistiques est crée dans le
    schéma spécifié. Autrement, il sera crée dans le schéma courant. Le nom de
    l'objet statistiques doit être différent du nom de tous les autres objets
    statistiques dans le même schéma.
@@ -81,14 +94,16 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">nom_statistiq
     <term><replaceable class="parameter">type_statistique</replaceable></term>
     <listitem>
      <para>
-      Un type de statistique devant être calculé dans cet objet statistiques.
-      Les types actuellement supportés sont
+      Un type de statistique multivarié devant être calculé dans cet objet
+      statistiques. Les types actuellement supportés sont
       <literal>ndistinct</literal>, qui active des statistiques n-distinct,
-      <literal>dependencies</literal> qui active des statistiques de dépendances
-      fonctionnelles, et <literal>mcv</literal> qui active les listes
-      des valeurs les plus fréquentes.
-      Si cette clause est omise, tous les types statistiques supportés sont
-      inclus dans l'objet statistique.
+      <literal>dependencies</literal> qui active des statistiques de
+      dépendances fonctionnelles, et <literal>mcv</literal> qui active les
+      listes des valeurs les plus fréquentes. Si cette clause est omise, tous
+      les types statistiques supportés sont inclus dans l'objet statistique.
+      Les statistiques d'expression sur une variable sont construits
+      automatiquement si la définition des statistiques inclue des
+      expressions complexes plutôt que de simples références de colonnes.
       Pour plus d'informations, voir <xref linkend="planner-stats-extended"/>
       et <xref linkend="multivariate-statistics-examples"/>.
      </para>
@@ -100,8 +115,24 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">nom_statistiq
     <listitem>
      <para>
       Le nom d'une colonne de la table devant être couverte par les
-      statistiques calculées.  Au moins deux noms de colonnes doivent être
-      fournis&nbsp;; l'ordre des colonnes n'a pas d'importance.
+      statistiques calculées. Ceci est seulement autorisé pour construire des
+      statistiques sur plusieurs variables. Au moins deux noms de colonne ou
+      expressions doivent être indiqués, mais leur ordre n'est pas
+      significatif.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">expression</replaceable></term>
+    <listitem>
+     <para>
+      Une expression couverte par les statistiques calculées. Ceci pourrait
+      être utilisé pour construire des statistiques univariées sur une seule
+      expression, ou faire partie d'une liste de plusieurs noms de colonnes
+      et/ou expressions pour construire des statistiques multivariées. Dans
+      ce dernier cas, les statistiques univariées séparées sont construites
+      automatiquement pour chaque expression de la liste.
      </para>
     </listitem>
    </varlistentry>
@@ -124,8 +155,16 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">nom_statistiq
 
   <para>
    Vous devez être le propriétaire de la table pour créer un objet statistiques
-   lisant ses données. Une fois celui-ci créé le propriétaire de l'objet
+   lisant ses données. Une fois celui-ci créé, le propriétaire de l'objet
    statistiques est indépendant de la ou les tables sous-jacentes.
+  </para>
+
+  <para>
+   Les statistiques d'expression sont par expression et sont similaires à
+   créer un index sur l'expression, sauf qu'elles évitent le surcoût de
+   maintenance de l'index. Les statistiques d'expression sont construites
+   automatiquement pour chaque expression dans la définition de l'objet
+   statistique.
   </para>
  </refsect1>
 
@@ -137,7 +176,7 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">nom_statistiq
    fonctionnellement dépendantes, c'est-à-dire que la connaissance de la valeur
    de la première colonne est suffisante pour déterminer la valeur de l'autre
    colonne. Ensuite des statistiques de dépendances fonctionnelles sont
-   construites sur ces colonnes :
+   construites sur ces colonnes&nbsp;:
 
    <programlisting>
 CREATE TABLE t1 (
@@ -200,6 +239,77 @@ EXPLAIN ANALYZE SELECT * FROM t2 WHERE (a = 1) AND (b = 2);
    dans la table, de même qu'une borne supérieure sur les sélectivités
    des combinaisons de valeurs qui n'apparaissent pas dans la table,
    lui permettant de générer de meilleures estimations dans les deux cas.
+  </para>
+
+  <para>
+   Créer une table <structname>t3</structname> avec une seule colonne de type
+   timestamp, et exécuter des requêtes en utilisant des expressions sur cette
+   colonne. Sans les statistiques étendues, le planificateur n'a pas
+   d'information sur la distribution des données pour les expressions, et
+   utilise les estimations par défaut. Le planificateyr ne réalise pas non
+   plus que la valeur de la date tronquée au mois est complètement déterminée
+   par la valeur de la date tronquée au jour. De ce fait, des statistiques
+   sur l'expression et sur ndistinct sont construites sur ces deux
+   expressions&nbsp;:
+
+<programlisting>
+CREATE TABLE t3 (
+    a   timestamp
+);
+
+INSERT INTO t3 SELECT i FROM generate_series('2020-01-01'::timestamp,
+                                             '2020-12-31'::timestamp,
+                                             '1 minute'::interval) s(i);
+
+ANALYZE t3;
+
+-- le nombre de lignes correspondantes va être fortement sous-estimé :
+EXPLAIN ANALYZE SELECT * FROM t3
+  WHERE date_trunc('month', a) = '2020-01-01'::timestamp;
+
+EXPLAIN ANALYZE SELECT * FROM t3
+  WHERE date_trunc('day', a) BETWEEN '2020-01-01'::timestamp
+                                 AND '2020-06-30'::timestamp;
+
+EXPLAIN ANALYZE SELECT date_trunc('month', a), date_trunc('day', a)
+   FROM t3 GROUP BY 1, 2;
+
+-- construction de statistiques ndistinct sur la paire d'expressions (des statistiques
+-- par expression sont construites automatiquement)
+CREATE STATISTICS s3 (ndistinct) ON date_trunc('month', a), date_trunc('day', a) FROM t3;
+
+ANALYZE t3;
+
+-- maintenant les estimations de nombre de lignes sont plus précises :
+EXPLAIN ANALYZE SELECT * FROM t3
+  WHERE date_trunc('month', a) = '2020-01-01'::timestamp;
+
+EXPLAIN ANALYZE SELECT * FROM t3
+  WHERE date_trunc('day', a) BETWEEN '2020-01-01'::timestamp
+                                 AND '2020-06-30'::timestamp;
+
+EXPLAIN ANALYZE SELECT date_trunc('month', a), date_trunc('day', a)
+   FROM t3 GROUP BY 1, 2;
+</programlisting>
+
+   Sans statistiques sur l'expression et le ndistinct, le planificateur n'a
+   pas d'informations sur le nombre de valeurs distinctes pour les
+   expressions, et doit se baser sur les estimations par défaut. Les
+   conditions d'égalité et d'intervalle sont supposées avoir une sélectivité
+   de 0,5%, et le nombre de valeurs distinctes dans l'expression est supposé
+   être le même que pour la colonne (i.e. unique). Ceci résulte en une
+   sous-estimation significative du nombre de lignes pour les deux premières
+   requêtes. De plus, le planificateur ne connaît pas la relation entre les
+   expressions, donc il suppose que les deux conditions du
+   <literal>WHERE</literal> et la condition du <literal>GROUP BY</literal>
+   sont indépendentes, et multiplie leurs sélectivités ensemble pour arriver
+   à une sous-estimation sévère du nombre de groupes dans la requête
+   d'agrégat. Ceci est encore plus exacerbé par le manque de statistiques
+   précises sur les expressions, forçant le planificateur à utiliser une
+   estimation par défaut du ndistinct pour l'expression dérivée du ndistinct
+   pour la colonne. Avec de telles statistiques, le planificateur reconnaît
+   que les conditions sont corrélées, et arrive à des estimations bien plus
+   précises.
   </para>
 
  </refsect1>

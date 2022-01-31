@@ -141,7 +141,8 @@ GetForeignRelSize (PlannerInfo *root,
     (La valeur initiale provient de
     <structname>pg_class</structname>.<structfield>reltuples</structfield>
     qui représente le nombre total de lignes vues par le dernier
-    <command>ANALYZE</command>.)
+    <command>ANALYZE</command>&nbsp;; ça sera <literal>-1</literal> si
+    aucun <command>ANALYZE</command> n'a été exécuté sur la table distante.)
    </para>
 
    <para>
@@ -290,22 +291,22 @@ BeginForeignScan (ForeignScanState *node,
     initialisation nécessaires avant le démarrage du parcours, mais ne
     doit pas commencer à exécuter le vrai parcours (cela se fera lors
     du premier appel à <function>IterateForeignScan</function>). Le
-    n&oelig;ud <structname>ForeignScanState</structname> est déjà créé
+    nœud <structname>ForeignScanState</structname> est déjà créé
     mais son champ <structfield>fdw_state</structfield> vaut toujours
     NULL. Les informations sur la table à parcourir sont accessibles
-    via le n&oelig;ud <structname>ForeignScanState</structname> (en
-    particulier à partir du n&oelig;ud sous-jacent
+    via le nœud <structname>ForeignScanState</structname> (en
+    particulier à partir du nœud sous-jacent
     <structname>ForeignScan</structname> qui contient toute information
     privée au FDW fournie par <function>GetForeignPlan</function>).
     <literal>eflags</literal> contient les bits de drapeaux décrivant le
-    mode opératoire de l'exécuteur pour ce n&oelig;ud du plan.
+    mode opératoire de l'exécuteur pour ce nœud du plan.
    </para>
 
    <para>
     Notez que quand <literal>(eflags &amp; EXEC_FLAG_EXPLAIN_ONLY)</literal>
     est vraie, cette fonction ne doit pas réaliser d'actions visibles
     en externe. Elle doit seulement faire le minimum requis pour que
-    l'état du n&oelig;ud soit valide pour
+    l'état du nœud soit valide pour
     <function>ExplainForeignScan</function> et
     <function>EndForeignScan</function>.
    </para>
@@ -318,7 +319,7 @@ IterateForeignScan (ForeignScanState *node);
 
     Récupère une ligne de la source distante, la renvoyant dans un
     emplacement de ligne de table (le champ
-    <structfield>ScanTupleSlot</structfield> du n&oelig;ud doit être
+    <structfield>ScanTupleSlot</structfield> du nœud doit être
     utilisé dans ce but). Renvoie NULL s'il n'y a plus de lignes
     disponibles. L'infrastructure d'emplacement de ligne de table permet
     qu'une ligne physique ou virtuelle soit renvoyée. Dans la plupart
@@ -464,7 +465,8 @@ GetForeignJoinPaths (PlannerInfo *root,
    <para>
     <programlisting>
 void
-AddForeignUpdateTargets (Query *parsetree,
+AddForeignUpdateTargets (PlannerInfo *root,
+                         Index rtindex,
                          RangeTblEntry *target_rte,
                          Relation target_relation);
     </programlisting>
@@ -481,30 +483,29 @@ AddForeignUpdateTargets (Query *parsetree,
    </para>
 
    <para>
-    Pour faire cela, ajoutez les éléments <structname>TargetEntry</structname> à
-    <literal>parsetree-&gt;targetList</literal>, contenant les expressions des
-    valeurs supplémentaires à récupérer. Chacun de ces entrées doit être marquée
-    <structfield>resjunk</structfield> = <literal>true</literal>, et doit avoir
-    un <structfield>resname</structfield> distinct qui l'identifiera à
-    l'exécution. Évitez d'utiliser des noms correspondant à
-    <literal>ctid<replaceable>N</replaceable></literal>,
-    <literal>wholerow</literal> ou
-    <literal>wholerow<replaceable>N</replaceable></literal>, car le système peut
-    générer des colonnes ayant ces noms.
-    Si les expressions supplémentaires sont plus complexes que de simples Vas,
-    elles doivent être exécutées au travers de
-    <function>eval_const_expressions</function> avant de les ajouter dans la
-    liste de cibles (<literal>targetlist</literal>).
-   </para>
-
-   <para>
-    Bien que cette fonction soit appelée lors de l'optimisation, les
-    informations fournies sont un peu différentes de celles des routines de
-    planification.
-    <literal>parsetree</literal> est l'arbre d'analyse pour la commande
-    <command>UPDATE</command> ou <command>DELETE</command> alors que
-    <literal>target_rte</literal> et <literal>target_relation</literal>
-    décrivent la table distante cible.
+    Pour faire cela, construisez une <structname>Var</structname> représentant
+    une valeur supplémentaire dont vous avez besoin, et passez la à
+    <function>add_row_identity_var</function>, avec un nom pour la colonne
+    cachée. (Vous pouvez effectuer cela plusieurs fois, si plusieurs colonnes
+    sont nécessaires.) Vous devez choisir une colonne cachée distincte pour
+    chaque <structname>Var</structname> différente dont vous avez besoin, à
+    l'exception des <structname>Var</structname> identiques, sauf pour le
+    champ <structfield>varno</structfield>, qui peuvent, et doivent partager
+    un même nom de colonne. Le cœur du système utilise les colonnes cachées
+    nommées <literal>tableoid</literal> pour une colonne
+    <structfield>tableoid</structfield> de table, <literal>ctid</literal> ou
+    <literal>ctid<replaceable>N</replaceable></literal> pour
+    <structfield>ctid</structfield>, <literal>wholerow</literal> pour une
+    <structname>Var</structname> de ligne entière marquée avec
+    <structfield>vartype</structfield> = <type>RECORD</type>, et
+    <literal>wholerow<replaceable>N</replaceable></literal> pour une
+    <structname>Var</structname> de ligne entière avec
+    <structfield>vartype</structfield> égal au type de ligne déclaré de la
+    table. Ré-utiliser ces noms quand vous le pouvez (le planificateur
+    combinera les demandes dupliquées pour les colonnes cachées identiques).
+    Si vous avez besoin d'autres type de colonnes cachées en dehors de
+    celles-ci, il est préférable de choisir un nom préfixé avec le nom de
+    votre extension pour éviter des conflits avec d'autres FDW.
    </para>
 
    <para>
@@ -528,7 +529,7 @@ PlanForeignModify (PlannerInfo *root,
 
     Réalise toute opération supplémentaire de planification nécessaire pour
     une insertion, mise à jour ou suppression sur une table distante. Cette
-    fonction génère l'information privée du FDW qui sera attachée au n&oelig;ud
+    fonction génère l'information privée du FDW qui sera attachée au nœud
     du plan <structname>ModifyTable</structname> qui réalise la mise à jour.
     Cette information privée doit avoir la forme d'une
     <literal>List</literal>, et sera réalisée par
@@ -538,15 +539,15 @@ PlanForeignModify (PlannerInfo *root,
    <para>
     <literal>root</literal> est l'information globale du planificateur sur la
     requête.
-    <literal>plan</literal> est le n&oelig;ud du plan
+    <literal>plan</literal> est le nœud du plan
     <structname>ModifyTable</structname> qui est complet sauf pour le champ
     <structfield>fdwPrivLists</structfield>.
     <literal>resultRelation</literal> identifie la table distante cible par son
     index rangetable. <literal>subplan_index</literal> identifie la cible
-    du n&oelig;ud de plan <structname>ModifyTable</structname> en comptant à
+    du nœud de plan <structname>ModifyTable</structname> en comptant à
     partir de zéro&nbsp;; utilisez ceci si vous voulez indexer dans
-    <literal>plan-&gt;plans</literal> ou toute autre sous-structure du n&oelig;ud
-    <literal>plan</literal>.
+    les sous-structures <quote>per-target-relation</quote>
+    des nœuds du <literal>plan</literal>.
    </para>
 
    <para>
@@ -572,14 +573,16 @@ BeginForeignModify (ModifyTableState *mtstate,
 
     Commence l'exécution d'une opération de modification de la table distante.
     Cette routine est appelée lors du démarrage de l'exécuteur. Elle doit
-    réaliser toute initialisation nécessaire avant de procéder aux modifications
-    de la table. En conséquence, <function>ExecForeignInsert</function>,
-    <function>ExecForeignUpdate</function> ou <function>ExecForeignDelete</function>
-    seront appelées pour chaque ligne à insérer, mettre à jour ou supprimer.
+    réaliser toute initialisation nécessaire avant de procéder aux
+    modifications de la table. En conséquence,
+    <function>ExecForeignInsert/ExecForeignBatchInsert</function>,
+    <function>ExecForeignUpdate</function> ou
+    <function>ExecForeignDelete</function> seront appelées pour chaque ligne
+    à insérer, mettre à jour ou supprimer.
    </para>
 
    <para>
-    <literal>mtstate</literal> est l'état général du n&oelig;ud de plan
+    <literal>mtstate</literal> est l'état général du nœud de plan
     <structname>ModifyTable</structname> en cours d'exécution&nbsp;; les
     données globales sur le plan et l'état d'exécution sont disponibles via
     cette structure.
@@ -591,17 +594,17 @@ BeginForeignModify (ModifyTableState *mtstate,
     opération.)
     <literal>fdw_private</literal> contient les données privées générées par
     <function>PlanForeignModify</function>.
-    <literal>subplan_index</literal> identifie la cible du n&oelig;ud de
+    <literal>subplan_index</literal> identifie la cible du nœud de
     plan <structname>ModifyTable</structname>.
     <literal>eflags</literal> contient les bits de drapeaux décrivant le mode
-    opératoire de l'exécuteur pour ce n&oelig;ud de plan.
+    opératoire de l'exécuteur pour ce nœud de plan.
    </para>
 
    <para>
     Notez que quand <literal>(eflags &amp; EXEC_FLAG_EXPLAIN_ONLY)</literal>
     est vrai, cette fonction ne devrait réaliser aucune action visible
     externe&nbsp;; il devrait seulement faire le minimum requis pour rendre
-    l'état du n&oelig;ud valide pour
+    l'état du nœud valide pour
     <function>ExplainForeignModify</function> et
     <function>EndForeignModify</function>.
    </para>
@@ -638,7 +641,7 @@ ExecForeignInsert (EState *estate,
     <literal>slot</literal> contient la ligne à insérer&nbsp;; ça correspondra
     à la définition du type de la ligne de la table distante.
     <literal>planSlot</literal> contient la ligne qui a été générée par le
-    sous-plan du n&oelig;ud <structname>ModifyTable</structname>&nbsp;; cela
+    sous-plan du nœud <structname>ModifyTable</structname>&nbsp;; cela
     diffère du <literal>slot</literal> qui contient aussi les colonnes
     supplémentaires.
     (Le <literal>planSlot</literal> a typiquement peu d'intérêt pour
@@ -683,6 +686,80 @@ ExecForeignInsert (EState *estate,
 
    <para>
     <programlisting>
+TupleTableSlot **
+ExecForeignBatchInsert(EState *estate,
+                       ResultRelInfo *rinfo,
+                       TupleTableSlot **slots,
+                       TupleTableSlot **planSlots,
+                       int *numSlots);
+</programlisting>
+
+     Insère plusieurs lignes en bloc dans la table distante. Les paramètres
+     sont les même que pour <function>ExecForeignInsert</function> mis à part
+     que <literal>slots</literal> et <literal>planSlots</literal> contiennent
+     de plusieurs lignes et <literal>*numSlots</literal> spécifie le nombre
+     de lignes dans ces tableaux.
+    </para>
+
+    <para>
+     La valeur de retour est un tableau d'emplacements
+     (<quote>slots</quote>) contenant les données qui sont réellement
+     insérées (et peut différer des données fournies, par exemple avec le
+     résultat d'actions de trigger.) Les emplacements en entrée peuvent être
+     réutilisés à ce propos. Le nombre de lignes insérées avec succès est
+     retourné dans <literal>*numSlots</literal>.
+    </para>
+
+    <para>
+     Les données dans l'emplacement retour sont utilisés uniquement si
+     l'expression <command>INSERT</command> implique une vue <literal>WITH
+     CHECK OPTION</literal> ou si une table distance a un trigger
+     <literal>AFTER ROW</literal>. Les triggers nécessitent toutes les
+     colonnes, mais le FDW peut choisir, par optimisation distante, de
+     retourner toutes ou quelques unes des colonnes, en fonction du contenu
+     des contraintes <literal>WITH CHECK OPTION</literal>.
+    </para>
+
+    <para>
+     Si les pointeurs <function>ExecForeignBatchInsert</function> ou
+     <function>GetForeignModifyBatchSize</function> sont mis à
+     <literal>NULL</literal>, les tentatives d'insérer dans la table distante
+     utiliseront <function>ExecForeignInsert</function>. Cette fonction n'est
+     pas utilisée si l'expression <command>INSERT</command> dispose de la
+     clause <literal>RETURNING</literal>.
+    </para>
+
+    <para>
+     Notez que cette fonction est aussi appelée lors de l'insertion de lignes
+     dirigées dans une partition de table distante. Voir les fonctions
+     callback décrites ci-dessous qui permettent au FDW de supporter cela.
+    </para>
+
+    <para>
+<programlisting>
+int
+GetForeignModifyBatchSize(ResultRelInfo *rinfo);
+</programlisting>
+
+     Affiche le nombre maximum de lignes qu'un simple appel à
+     <function>ExecForeignBatchInsert</function> peut gérer pour la table
+     distante spécifiée. L'exécuteur passe au plus le nombre donnée de lignes
+     à <function>ExecForeignBatchInsert</function>. <literal>rinfo</literal>
+     est la structure <structname>ResultRelInfo</structname> décrivant la
+     cible de la table distante. Le FDW doit fournir le serveur distant et/ou
+     l'option de table distante pour que l'utilisateur affecte cette valeur
+     ou une valeur codée en dur.
+    </para>
+
+    <para>
+     Si le pointeur de <function>ExecForeignBatchInsert</function> ou
+     <function>GetForeignModifyBatchSize</function> est mis à
+     <literal>NULL</literal>, les tentatives d'insertion dans la table
+     distante utiliseront <function>ExecForeignInsert</function>.
+    </para>
+
+    <para>
+<programlisting>
 TupleTableSlot *
 ExecForeignUpdate (EState *estate,
                    ResultRelInfo *rinfo,
@@ -690,19 +767,23 @@ ExecForeignUpdate (EState *estate,
                    TupleTableSlot *planSlot);
     </programlisting>
 
-    Met à jour une ligne dans la table distante.
-    <literal>estate</literal> est l'état global de l'exécution de la requête.
-    <literal>rinfo</literal> est la structure <structname>ResultRelInfo</structname>
-    décrivant la table distante cible.
-    <literal>slot</literal> contient les nouvelles données de la ligne&nbsp;;
-    elles correspondront à la définition du type de ligne pour la table
-    distante.
-    <literal>planSlot</literal> contient la ligne qui a été générée par le
-    sous-plan du n&oelig;ud <structname>ModifyTable</structname>&nbsp;; il
-    diffère de <literal>slot</literal> car il peut contenir des colonnes
-    supplémentaires. En particulier, toute colonne supplémentaire qui était
-    réclamée par <function>AddForeignUpdateTargets</function> sera disponible
-    à partir de cet emplacement.
+    Met à jour une ligne dans la table distante. <literal>estate</literal> est
+    l'état global de l'exécution de la requête. <literal>rinfo</literal> est
+    la structure <structname>ResultRelInfo</structname> décrivant la table
+    distante cible. <literal>slot</literal> contient les nouvelles données de
+    la ligne&nbsp;; elles correspondront à la définition du type de ligne
+    pour la table distante. <literal>planSlot</literal> contient la ligne qui
+    a été générée par le sous-plan du nœud
+    <structname>ModifyTable</structname>. Contrairement au
+    <literal>slot</literal>, cette ligne contient seulement les nouvelles
+    valeurs pour les colonnes modifiées dans la requête. De ce fait, ne vous
+    appuyez pas sur les nombres d'attributs de la table distante à indexer
+    dans <literal>planSlot</literal>. De plus, <literal>planSlot</literal>
+    contient typiquement des colonnes <quote>inutiles</quote>
+    (<foreignphrase>junk</foreignphrase>) supplémentaires. En particulier,
+    toutes les colonnes inutiles demandées par
+    <function>AddForeignUpdateTargets</function> seront disponibles pour ce
+    slot.
    </para>
 
    <para>
@@ -749,7 +830,7 @@ ExecForeignDelete (EState *estate,
     <literal>slot</literal> ne contient rien d'utile à l'appel de la fonction
     mais peut être utilisé pour contenir la ligne renvoyée.
     <literal>planSlot</literal> contient la ligne générée par le sous-plan du
-    n&oelig;ud du plan <structname>ModifyTable</structname>&nbsp;; en particulier,
+    nœud du plan <structname>ModifyTable</structname>&nbsp;; en particulier,
     elle contient toute colonne supplémentaire réclamée par
     <function>AddForeignUpdateTargets</function>. Les colonnes supplémentaires
     doivent être utilisées pour identifier la ligne à supprimer.
@@ -819,15 +900,16 @@ BeginForeignInsert(ModifyTableState *mtstate,
     Débute l'exécution d'une opération d'insertion sur une table distante.
     Cette routine est appelée juste avant que la première ligne soit insérée
     dans la table distante quand il s'agit de la partition choisie par la
-    redirection de ligne ou quand il s'agit de la cible spécifiée dans
-    une commande <command>COPY FROM</command>.  Elle devrait effectuer toute
+    redirection de ligne ou quand il s'agit de la cible spécifiée dans une
+    commande <command>COPY FROM</command>.  Elle devrait effectuer toute
     initialisation nécessaire avant l'insertion elle-même.  Ensuite,
-    <function>ExecForeignInsert</function> sera appelée pour chaque ligne
-    devant être insérée dans la table distante.
+    <function>ExecForeignInsert</function> ou
+    <function>ExecForeignBatchInsert</function> seront appelées pour chaque
+    ligne devant être insérée dans la table distante.
    </para>
 
    <para>
-    <literal>mtstate</literal> est l'état général du n&oelig;ud de plan
+    <literal>mtstate</literal> est l'état général du nœud de plan
     <structname>ModifyTable</structname> en cours d'exécution&nbsp;;; les données
     globales sur le plan et l'état d'exécution sont disponibles via cette
     structure.
@@ -843,7 +925,8 @@ BeginForeignInsert(ModifyTableState *mtstate,
     Quand elle est appelée par une commande <command>COPY FROM</command>, les
     données globales liées au plan contenues dans <literal>mtstate</literal>
     ne sont pas fournies et le paramètre <literal>planSlot</literal> de
-    <function>ExecForeignInsert</function> appelée par la suite pour chaque
+    <function>ExecForeignInsert/ExecForeignBatchInsert</function> appelée par
+    la suite pour chaque
     ligne insérée vaut <literal>NULL</literal>, que la table distante soit la
     partition choisie par la redirection de ligne ou que cela soit la cible
     spécifiée dans la commande.
@@ -954,12 +1037,17 @@ PlanDirectModify (PlannerInfo *root,
     Pour exécuter la modification directe sur le serveur distant, cette
     fonction doit ré-écrire le sous-plan cible avec un nœud de plan
     <structname>ForeignScan</structname> qui exécute la modification directe
-    sur le serveur distant. Le champ <structfield>operation</structfield> du
-    <structname>ForeignScan</structname> doit être configuréé à l'énumération
-    <literal>CmdType</literal> de façon approprié&nbsp;; c'est-à-dire
-    <literal>CMD_UPDATE</literal> pour <command>UPDATE</command>,
-    <literal>CMD_INSERT</literal> pour <command>INSERT</command> et
-    <literal>CMD_DELETE</literal> pour <command>DELETE</command>.
+    sur le serveur distant. Les champs <structfield>operation</structfield>
+    et <structfield>resultRelation</structfield> du
+    <structname>ForeignScan</structname> doivent être configurés de façon
+    approprié. <structfield>operation</structfield> doit être affecté à la
+    valeur de l'énumération <literal>CmdType</literal> correspondante au type
+    d'expression (et qui est <literal>CMD_UPDATE</literal> pour
+    <command>UPDATE</command>, <literal>CMD_INSERT</literal> pour
+    <command>INSERT</command> et <literal>CMD_DELETE</literal> pour
+    <command>DELETE</command>), et l'argument
+    <literal>resultRelation</literal> doit être copié dans le champ
+    <structfield>resultRelation</structfield>.
    </para>
 
    <para>
@@ -1025,8 +1113,7 @@ IterateDirectModify (ForeignScanState *node);
     ligne de table (le champ <structfield>ScanTupleSlot</structfield> du nœud
     doit être utilisé pour cela). Les données insérées, mises à jour ou
     supprimées doivent être enregistrées dans le champ
-    <literal>es_result_relation_info-&gt;ri_projectReturning-&gt;pi_exprContext-&gt;ecxt_scantuple</literal>
-    du <structname>EState</structname> du nœud. Renvoie NULL s'il n'y a plus
+    <literal>node->resultRelInfo->ri_projectReturning-&gt;pi_exprContext-&gt;ecxt_scantuple</literal>. Renvoie NULL s'il n'y a plus
     de lignes disponibles. Notez que cette fonction est appelée dans un
     contexte mémoire à court terme qui sera réinitialisée à chaque appel.
     Créez un contexte mémoire dans <function>BeginDirectModify</function> si
@@ -1078,6 +1165,61 @@ EndDirectModify (ForeignScanState *node);
     une modification directe sur le serveur distant.
    </para>
 
+  </sect2>
+
+  <sect2 id="fdw-callbacks-truncate">
+   <title>Routines FDW pour <command>TRUNCATE</command></title>
+
+   <para>
+<programlisting>
+void
+ExecForeignTruncate(List *rels,
+                    DropBehavior behavior,
+                    bool restart_seqs);
+</programlisting>
+
+    Tronque les tables distantes. Cette fonction est appelée quand <xref
+    linkend="sql-truncate"/> est exécuté sur une table distante.
+    <literal>rels</literal> est une liste de structure de données
+    <structname>Relation</structname> des table distantes à tronquer.
+   </para>
+
+   <para>
+    Le comportement est soit <literal>DROP_RESTRICT</literal>, soit
+    <literal>DROP_CASCADE</literal> indiquant que l'option
+    <literal>RESTRICT</literal> ou <literal>CASCADE</literal>,
+    respectivement, a été indiquée dans la commande
+    <command>TRUNCATE</command> originelle.
+   </para>
+
+   <para>
+    Si <literal>restart_seqs</literal> vaut <literal>true</literal>, la
+    commande <command>TRUNCATE</command> originelle a requis le comportement
+    <literal>RESTART IDENTITY</literal>, sinon le comportement
+    <literal>CONTINUE IDENTITY</literal> a été requis.
+   </para>
+
+   <para>
+    Notez que les options <literal>ONLY</literal> spécifiées dans la commande
+    <command>TRUNCATE</command> originelle ne sont pas passées à
+    <function>ExecForeignTruncate</function>. Ce comportement est similaire
+    aux fonctions callback des <command>SELECT</command>,
+    <command>UPDATE</command> et <command>DELETE</command> sur une table
+    distante.
+   </para>
+
+   <para>
+    <function>ExecForeignTruncate</function> est invoquée une fois par serveur
+    distant pour lequel des tables distantes sont tronquées. Cela signifie
+    que toutes les tables distantes incluses dans <literal>rels</literal>
+    doivent appartenir au même serveur.
+   </para>
+
+   <para>
+    Si le pointeur de <function>ExecForeignTruncate</function> est mis à
+    <literal>NULL</literal>, les tentatives de tronquer des tables distantes
+    échoueront avec un message d'erreur.
+   </para>
   </sect2>
 
   <sect2 id="fdw-callbacks-row-locking">
@@ -1262,7 +1404,7 @@ ExplainForeignScan (ForeignScanState *node,
     <function>ExplainPropertyText</function> et aux fonctions relatives pour
     ajouter des champs à la sortie d'<command>EXPLAIN</command>. Les champs
     drapeaux dans <literal>es</literal> peuvent être utilisés pour déterminer
-    ce qui doit être affiché, et l'état du n&oelig;ud
+    ce qui doit être affiché, et l'état du nœud
     <structname>ForeignScanState</structname> peut être inspecté pour fournir
     des statistiques d'exécution dans le cas du <command>EXPLAIN
      ANALYZE</command>.
@@ -1289,7 +1431,7 @@ ExplainForeignModify (ModifyTableState *mtstate,
     <function>ExplainPropertyText</function> et les fonctions en relation
     pour ajouter des champs à la sortie d'<command>EXPLAIN</command>. Les champs
     drapeaux de <literal>es</literal> peuvent être utilisés pour déterminer
-    quoi afficher, et l'état du n&oelig;ud
+    quoi afficher, et l'état du nœud
     <structname>ModifyTableState</structname> peut être inspecté pour fournir
     des statistiques en exécution dans le cas du <command>EXPLAIN
      ANALYZE</command>. Les quatre premiers arguments sont les mêmes que pour
@@ -1524,7 +1666,7 @@ ReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt,
                            void *coordinate);
     </programlisting>
     Ré-initialise la mémoire partagée dynamique requise pour les opérations
-    parallélisées quand le n&oelig;ud du plan pour le parcours distant va être
+    parallélisées quand le nœud du plan pour le parcours distant va être
     ré-exécuté. Cette fonction est optionnelle et peut être omise si
     nécessaire. La pratique recommandée est que cette fonction réinitialise
     seulement l'état partagé alors que la fonction
@@ -1561,8 +1703,106 @@ ShutdownForeignScan(ForeignScanState *node);
    </para>
   </sect2>
 
+  <sect2 id="fdw-callbacks-async">
+   <title>Routines FDW pour les exécutions asynchrones</title>
+
+   <para>
+    Un nœud <structname>ForeignScan</structname> peut, optionellement,
+    supporter une exécution asynchrone tel que décrit dans
+    <filename>src/backend/executor/README</filename>. Les fonctions suivantes
+    sont toutes optionnelles, mais sont toutes requises si l'exécution
+    asynchrone doit être supportée.
+   </para>
+
+   <para>
+<programlisting>
+bool
+IsForeignPathAsyncCapable(ForeignPath *path);
+</programlisting>
+
+    Vérifie si un chemin <structname>ForeignPath</structname> donné peut
+    parcourir une relation distante sous-jacente asynchrone. Cette fonction
+    ne sera appelée uniquement à la fin d'une planification de requête quand
+    le chemin donné est un enfant direct du chemin
+    <structname>AppendPath</structname> et quand le planificateur estime que
+    l'exécution asynchrone améliore les performances, et devra retourner vrai
+    (<quote>true</quote>) si un chemin donné est capable de parcourir la
+    relation distante de façon asynchrone.
+   </para>
+
+   <para>
+    Si cette fonction n'est pas définie, il est assumé que le chemin donné
+    parcourt la relation distante en utilisant
+    <function>IterateForeignScan</function>.(Ceci implique que les fonctions
+    callbacks décrites ci-dessous ne seront jamais appelées, et n'ont pas
+    besoin d'être fournies.)
+  </para>
+
+   <para>
+<programlisting>
+void
+ForeignAsyncRequest(AsyncRequest *areq);
+</programlisting>
+
+    Produit une ligne de manière asynchrone à partir du nœud
+    <structname>ForeignScan</structname>. <literal>areq</literal> est la
+    structure <structname>AsyncRequest</structname> décrivant le nœud
+    <structname>ForeignScan</structname> et le nœud parent
+    <structname>Append</structname> requis par les lignes qui en viennent.
+    Cette fonction doit conserver la ligne dans un slot spécifié par
+    <literal>areq-&gt;result</literal>, et défini avec
+    <literal>areq-&gt;request_complete</literal> mis à
+    <literal>true</literal>&nbsp;; ou, s'il est nécessaire d'attendre un
+    événement extérieur au cœur du serveur, tel que des I/O réseau, et qu'une
+    ligne ne peut être générée immédiatement, le drapeau doit être mis à
+    <literal>false</literal>, et défini avec
+    <literal>areq-&gt;callback_pending</literal> mis à
+    <literal>true</literal> pour que le nœud
+    <structname>ForeignScan</structname> puisse recevoir un callback depuis
+    les fonctions callbacks décrites ci-dessous. S'il n'y a plus de lignes
+    diponibles, mettre le slot à NULL ou fournir un slot vide, et mettre le
+    drapeau <literal>areq-&gt;request_complete</literal> à
+    <literal>true</literal>. Il est recommandé d'utiliser
+    <function>ExecAsyncRequestDone</function> ou
+    <function>ExecAsyncRequestPending</function> pour affecter les paramètres
+    de sortie dans <literal>areq</literal>.
+   </para>
+
+   <para>
+<programlisting>
+void
+ForeignAsyncConfigureWait(AsyncRequest *areq);
+</programlisting>
+
+    Configure un événement de descripteur de fichier pour lequel le nœud
+    <structname>ForeignScan</structname> souhaite attendre. Cette fonction
+    sera appelée uniquement quand le nœud
+    <structname>ForeignScan</structname> a le drapeau
+    <literal>areq-&gt;callback_pending</literal> affecté, et devra ajouter
+    l'événement au <structfield>as_eventset</structfield> du nœud parent
+    <structname>Append</structname> décrit par <literal>areq</literal>. Voir
+    les commentaires pour <function>ExecAsyncConfigureWait</function> dans
+    <filename>src/backend/executor/execAsync.c</filename> pour des
+    informations additionnelles. Quand l'événement de descripteur de fichier
+    a lieu, <function>ForeignAsyncNotify</function> sera appelée.
+   </para>
+
+   <para>
+<programlisting>
+void
+ForeignAsyncNotify(AsyncRequest *areq);
+</programlisting>
+
+    Traite un événement pertinent qui s'est déroulé, puis produit une ligne de
+    façon asynchrone à partir du nœud <structname>ForeignScan</structname>.
+    Cette fonction devra affecter les paramètres de sortie dans
+    <literal>areq</literal> de la même façon que
+    <function>ForeignAsyncRequest</function>.
+   </para>
+  </sect2>
+
   <sect2 id="fdw-callbacks-reparameterize-paths">
-   <title>FDW Routines For reparameterization of paths</title>
+   <title>Routines FDW pour la reparamétrisation des chemins</title>
 
    <para>
     <programlisting>
@@ -1574,7 +1814,7 @@ ReparameterizeForeignPathByChild(PlannerInfo *root, List *fdw_private,
     le plus haut parent de la relation enfant <literal>child_rel</literal>
     spécifiée devant être paramétrée avec la relation enfant.  Cette fonction
     est utilisée pour reparamétrer n'importe quel chemin ou traduire n'importe
-    quel n&oelig;ud d'expression enregistré dans le membre
+    quel nœud d'expression enregistré dans le membre
     <literal>fdw_private</literal> du <structname>ForeignPath</structname>
     spécifié.  Le callback peut utiliser
     <literal>reparameterize_path_by_child</literal>,
@@ -1975,7 +2215,7 @@ GetForeignServerByName(const char *name, bool missing_ok);
    n'existe aucun <structname>RelOptInfo</structname> pour elle.
    La structure <structname>List</structname> renvoyée par
    <function>PlanForeignModify</function> a les mêmes restrictions que la liste
-   <structfield>fdw_private</structfield> d'un n&oelig;ud de plan
+   <structfield>fdw_private</structfield> d'un nœud de plan
    <structname>ForeignScan</structname>, c'est-à-dire qu'elle doit contenir
    seulement les structures que <function>copyObject</function> sait copier.
   </para>
