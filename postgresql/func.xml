@@ -10665,7 +10665,7 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
        <returnvalue>box</returnvalue>
       </para>
       <para>
-       Calcule de l'intersection de deux boîtes, ou NULL s'il n'y en a pas.
+       Calcule l'intersection de deux boîtes, ou NULL s'il n'y en a pas.
       </para>
       <para>
        <literal>box '(2,2),(-1,-1)' # box '(1,1),(-2,-2)'</literal>
@@ -10686,8 +10686,6 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
        (<type>point</type>, <type>line</type>),
        (<type>lseg</type>, <type>box</type>),
        (<type>lseg</type>, <type>lseg</type>),
-       (<type>lseg</type>, <type>line</type>),
-       (<type>line</type>, <type>box</type>),
        (<type>line</type>, <type>lseg</type>).
       </para>
       <para>
@@ -10702,13 +10700,12 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
        <returnvalue>double precision</returnvalue>
       </para>
       <para>
-       Calcule la distance entre les objets. Disponible pour tous les sept
-       types géométriques, pour toutes les combinaisons du <type>point</type>
-       avec un autre type géométrique, et pour ces paires supplémentaires de
-       types&nbsp;: (<type>box</type>, <type>lseg</type>), (<type>box</type>,
-       <type>line</type>), (<type>lseg</type>, <type>line</type>),
-       (<type>polygon</type>, <type>circle</type>) (et les cas de
-       commutation).
+       Calcule la distance entre les objets. Disponible pour tous les types
+       géométriques sauf <type>polygon</type>, pour toutes les combinaisons du
+       <type>point</type> avec un autre type géométrique, et pour ces paires
+       supplémentaires de types&nbsp;: (<type>box</type>, <type>lseg</type>),
+       (<type>lseg</type>, <type>line</type>), (<type>polygon</type>,
+       <type>circle</type>) (et les cas de commutation).
       </para>
       <para>
        <literal>circle '&lt;(0,0),1&gt;' &lt;-&gt; circle '&lt;(5,0),1&gt;'</literal>
@@ -10882,7 +10879,7 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
        <returnvalue>boolean</returnvalue>
       </para>
       <para>
-       Does first object not extend above second?
+       Est-ce que le premier objet ne s'étend pas au dessus du second&nbsp;?
        Disponible pour <type>box</type>, <type>polygon</type>,
        <type>circle</type>.
       </para>
@@ -11181,7 +11178,8 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
       </para>
       <para>
        Calcule le point central.
-       Disponible pour <type>box</type>, <type>circle</type>.
+       Disponible pour <type>box</type>, <type>lseg</type>,
+       <type>polygon</type>, <type>circle</type>.
       </para>
       <para>
        <literal>center(box '(1,2),(0,0)')</literal>
@@ -17367,26 +17365,41 @@ SELECT setval('myseq', 42, false);    <lineannotation>Le prochain <function>next
 
 <caution>
  <para>
-  Pour éviter que le blocage de transactions concurrentes cherchant à
-  obtenir des nombres de la même séquence, une opération
-  <function>nextval</function> n'est jamais annulable&nbsp;; autrement dit,
-  une fois qu'une valeur a été récupérée, elle est considérée utilisée et ne
-  sera jamais jamais renvoyée. Ceci est vrai même si la transaction
-  englobante est annulée plus tard ou si la requête appelante n'utilise pas
-  la valeur au final. Par exemple, un <command>INSERT</command> avec une
-  clause <literal>ON CONFLICT</literal> calculera la ligne à insérer, en
-  incluant les appels nécessaires à <function>nextval</function>, avant de
-  détecter un conflit qui l'obligerait à suivre la règle <literal>ON
-   CONFLICT</literal> à la place. De tels cas laisseront des
-  <quote>trous</quote> inutilisés dans la séquence de valeurs assignées. De
-  ce fait, les objets de séquence <productname>PostgreSQL</productname>
-  <emphasis>ne peuvent pas être utilisé pour obtenir des séquences
-   <quote>sans trou</quote></emphasis>.
+  Pour éviter le blocage de transactions concurrentes pour l'obtention de
+  nombres provenant de la même séquence, la valeur obtenue par
+  <function>nextval</function> n'est pas réclamée pour une ré-utilisation si
+  la transaction appelante s'annule après coup. Ceci signifie que des
+  annulations de transaction ou des crashs de bases de données peuvent avoir
+  pour conséquence des trous dans la séquence des valeurs affectées.  Ceci
+  peut aussi survenir sans annulation de transaction. Par exemple, un
+  <command>INSERT</command> avec une clause <literal>ON CONFLICT</literal>
+  calculera la ligne à insérer, incluant tout appel nécessaire à
+  <function>nextval</function>, avant de détecter un conflit qui causera la
+  poursuite sur la règle <literal>ON CONFLICT</literal>. De ce fait, les
+  objets séquences de <productname>PostgreSQL</productname> <emphasis>ne
+  peuvent pas être utilisées pour obtenir des séquences <quote>sans
+  trou</quote> </emphasis>.
  </para>
 
  <para>
-  De la même façon, aucun changement d'état de la séquence réalisé par
-  <function>setval</function> n'est annulé si la transaction est annulée.
+  De la même façon, les changements d'état de séquence réalisées par
+  <function>setval</function> sont immédiatement visibles aux autres
+  transactions, et ne sont pas annulées si la transaction appelante annule ses
+  modifications.
+ </para>
+
+ <para>
+  Si l'instance s'arrête brutalement avant de valider une transaction ayant
+  exécuté un appel à <function>nextval</function> ou
+  <function>setval</function>, le changement d'état de la séquence pourrait ne
+  pas arriver jusqu'au stockage permanent, donc l'état de la séquence n'est
+  pas certain, uqil soit à sa valeur d'originie ou à sa nouvelle valeur après
+  le redémarrage de l'instance.  Ceci n'est pas grave pour l'utilisation de la
+  séquence dans la base car les autres effets des transactions non valides ne
+  seront pas visibles. Néanmoins, si vous souhaitez utiliser une valeur de
+  séquence pour un stockage persistant hors de la base, assurez-vous que
+  l'appel à <function>nextval</function> soit validé avant de l'utiliser
+  hors base.
  </para>
 </caution>
 
@@ -25442,8 +25455,8 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
      </para>
      <para>
       Recherche une origine de réplication par son nom et renvoie son
-      identifiant interne. Si cette origine de réplication n'existe pas, une
-      erreur est renvoyée.
+      identifiant interne. Si cette origine de réplication n'existe pas,
+      <literal>NULL</literal> est renvoyée.
      </para></entry>
    </row>
 
