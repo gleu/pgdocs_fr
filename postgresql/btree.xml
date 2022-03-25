@@ -587,7 +587,7 @@ equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
 options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns void
       </synopsis>
       La fonction se voit fournie un pointeur vers une structure
-      <replaceable>local_relopts</replaceable> qui doit être remplie avec un
+      <structname>local_relopts</structname> qui doit être remplie avec un
       ensemble d'options spécifiques à une classe d'opérateur. Les options
       sont accessibles à partir des autres fonctions de support en utilisant
       les macros <literal>PG_HAS_OPCLASS_OPTIONS()</literal> et
@@ -657,6 +657,125 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
    </para>
   </sect2>
 
+  <sect2 id="btree-deletion">
+   <title>Suppression ascendante d'index</title>
+
+   <para>
+    Les index B-Tree n'ont pas directement connaissance que sous MVCC, il peut
+    y avoir plusieurs versions existantes de la même ligne logique d'une
+    table&nbsp;; pour un index, chaque ligne est un objet indépendant qui a
+    besoin de sa propre entrée d'index. Le <quote>renouvellement des
+    versions</quote> (<foreignphrase>version churn</foreignphrase> dans la
+    version originale) des lignes peut parfois s'accumuler et nuire à la
+    latence et au débit des requêtes. Ceci se produit typiquement avec des
+    charges élevées en <command>UPDATE</command> où la plupart des mises à
+    jour individuelles ne peuvent appliquer l'optimisation
+    <acronym>HOT</acronym>. Changer la valeur de seulement une colonne
+    couverte par un index durant un <command>UPDATE</command> nécessite
+    <emphasis>toujours</emphasis> un nouveau ensemble d'entrées
+    d'index &mdash; un pour <emphasis>chaque et tous les</emphasis> index sur
+    la table. Notons en particulier que cela inclut les index qui ne sont pas
+    <quote>modifiés logiquement</quote> par la commande
+    <command>UPDATE</command>. Tous les index nécessiteront une entrée
+    d'index physique successeur qui pointe vers la dernière version en table.
+    Chaque nouvelle entrée à l'intérieur de chaque index aura besoin, en
+    général, de coexister avec l'entrée <quote>modifiée</quote> originale
+    pour une courte période de temps (typiquement jusque peu après que la
+    transaction de l'<command>UPDATE</command> soit validée).
+   </para>
+
+   <para>
+    Les index B-Tree suppriment de manière incrémentielle les entrées d'index
+    de renouvellement de version en effectuant des passes de
+    <firstterm>suppression ascendante de l'index</firstterm>. Chaque passe de
+    suppression est déclenchée en réaction à un <quote>fractionnement de page
+    de renouvellement de version</quote> anticipée. Ceci se produit avec les
+    index qui ne sont pas modifiés logiquement par les déclarations
+    <command>UPDATE</command>, dans lesquels des accumulations concentrées de
+    versions obsolètes dans des blocs particuliers auraient lieu autrement.
+    Un fractionnement de bloc sera normalement évité, bien qu'il est possible
+    que certains niveaux d'implémentation d'heuristique échoueront même à
+    identifier et à supprimer une ligne à renouveller
+    (<foreignphrase>garbage tuple</foreignphrase> dans la version originale)
+    d'index (dans ce cas, un fractionnement de bloc ou une passe de
+    dédoublement résout le problème de l'entrée d'une nouvelle ligne qui ne
+    rentre pas dans le bloc feuille). Le pire nombre de versions que
+    n'importe quel parcours d'index doit traverser (pour n'importe quel
+    enregistrement unique logique) est un contributeur important pour la
+    réactivité et le débit globaux du système. Une passe de suppression
+    ascendante d'index cible les lignes à renouveller supposées dans un bloc
+    feuille unique par des distinctions <emphasis>qualitatives</emphasis>
+    impliquant enregistrements logiques et versions. Ceci diffère des
+    nettoyages d'index <quote>descendants</quote> effectués par les processus
+    de l'autovacuum, qui sont déclenchés quand certains seuils
+    <emphasis>quantitatifs</emphasis> au niveau table sont dépassés
+    (voir <xref linkend="autovacuum"/>).
+   </para>
+
+   <note>
+    <para>
+     Les opérations de suppression effectuées à l'intérieur des index B-Tree
+     ne sont pas toutes des opérations de suppression ascendantes. Il y a une
+     catégorie de suppression d'entrées d'index&nbsp;: <firstterm>la
+     suppression d'entrée d'index simple</firstterm>
+     (<foreignphrase>simple index tuple deletion</foreignphrase> en version
+     originale). C'est une opération de maintenance différée qui supprime les
+     entrées d'index en toute sécurité (ceux dont le bit
+     <literal>LP_DEAD</literal> de son élément identifiant est déjà affecté).
+     Comme les suppressions ascendantes d'index, la suppression d'index
+     simple a lieu au moment où un fractionnement de bloc est attendu comme
+     moyen d'éviter ce fractionnement.
+    </para>
+    <para>
+     La suppression simple est opportuniste dans le sens où elle peut
+     seulement s'effectuer quand les parcours récents d'index mettent à jour
+     les bits <literal>LP_DEAD</literal> des éléments affectés lors d'une
+     passe. Avant <productname>PostgreSQL</productname> 14, la seule
+     catégorie de suppression B-Tree était la suppression simple. Les
+     principales différences entre elle et les suppressions ascendantes sont
+     que seule la première est dirigée de manière opportuniste par l'activité
+     des passes de parcours d'index, tandis que la nouvelle ne cible
+     spécifiquement que le renouvellement de version des
+     <command>UPDATE</command> qui ne modifient pas logiquement les colonnes
+     indexées.
+    </para>
+   </note>
+
+   <para>
+    Les suppressions ascendantes d'index effectuent la grande majorité des
+    nettoyages des entrées à renouveller d'index pour certains index et
+    certaines charges de travail. C'est le cas pour les index B-Tree sujets à
+    un renouvellement de version significatif par les
+    <command>UPDATE</command> qui ne modifient logiquement que rarement ou
+    jamais les colonnes couvertes par l'index. La valeur moyenne et la pire
+    valeur possible de versions par enregistrement logique peuvent être
+    maintenues basses grâce aux passes incrémentales de suppression ciblée.
+    Il est possible que la taille sur disque de certains index n'augmentera
+    jamais même d'un simple bloc malgré un renouvellement de version
+    <emphasis>continu</emphasis> par les <command>UPDATE</command>. Même si
+    cela était le cas, un <quote>nettoyage</quote> exhaustif par une
+    opération <command>VACUUM</command> (typiquement exécutée par un
+    processus autovacuum), sera éventuellement requis comme une partie de
+    nettoyage <emphasis>collectif</emphasis> de la table et chacun de ses
+    index.
+   </para>
+
+   <para>
+    À la différence du <command>VACUUM</command>, la suppression ascendante
+    d'index ne fournit pas de solides garanties pour déterminer quel peut
+    être la plus ancienne entrée à renouveller dans l'index. Aucun index ne
+    peut permettre de conserver des entrées d'index <quote>à renouvellement
+    flottant</quote> qui seront morts avant le moment de conservation limite
+    partagé collectivement par la table et tous ses index. Cette constante
+    fondamentale au niveau table implique qu'il est sans danger de recycler
+    les <acronym>TID</acronym> d'une table. C'est ainsi qu'il est possible
+    pour les enregistrements logiques distincts de réutiliser les mêmes
+    <acronym>TID</acronym> dans une table au cours du temps (bien que cela ne
+    peut jamais se produire avec deux enregistrements logiques dont
+    l'espérance de vie couvre le même cycle <command>VACUUM</command>).
+   </para>
+  </sect2>
+
   <sect2 id="btree-deduplication">
    <title>Dédoublement</title>
 
@@ -698,15 +817,17 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
    <para>
     Le processus de dédoublement se déroule avec le moins d'effort possible,
     quand un nouveau élément est inséré et ne peut rentrer dans une page
-    feuille existante. Cela permet (ou au moins repousse) le fractionnement de
-    page feuille. Contrairement à la liste chainée d'enregistrements GIN, la liste
-    chainée d'enregistrements B-Tree n'a pas besoin de s'étendre à chaque fois qu'un
+    feuille existante, mais seulement quand la suppression d'entrée d'index
+    ne peut pas libérer suffisamment d'espace pour le nouvel élément
+    (typiquement la suppression est brièvement considérée puis ignorée).
+    Contrairement à la liste chainée d'enregistrements GIN, la liste chainée
+    d'enregistrements B-Tree n'a pas besoin de s'étendre à chaque fois qu'un
     nouveau doublon est inséré&nbsp;; ils sont simplement une représentation
     physique différente du contenu logique de la page feuille. Ce concept
-    priorise l'uniformité des performances sur des charges de travail mixte en
-    lecture-écriture. La plupart des applications clientes verront un bénéfice
-    modéré sur les performances en utilisant le dédoublement. Le dédoublement
-    est activé par défaut.
+    priorise l'uniformité des performances sur des charges de travail mixte
+    en lecture-écriture. La plupart des applications clientes verront un
+    bénéfice modéré sur les performances en utilisant le dédoublement. Le
+    dédoublement est activé par défaut.
    </para>
 
    <para>
@@ -737,26 +858,18 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
    </para>
 
    <para>
-    Pour les index B-Tree, sous MVCC, il peut y avoir plusieurs versions
-    existantes du même enregistrement logique en table&nbsp;; pour un index,
-    chaque tuple est un objet indépendant qui nécessite sa propre entrée dans
-    l'index. Les <quote>duplicatats de version</quote> peuvent parfois
-    s'accumuler et affecter négativement la latence et le débit des requêtes.
-    Ceci survient typiquement avec les charges de travail lourdes en
-    <command>UPDATE</command> où la plupart des mises à jours individuelles ne
-    peuvent pas utilisées l'optimisation <acronym>HOT</acronym> (souvent parce
-    qu'au moins une colonne indexée est modifiée, nécessitant ainsi un nouvel
-    ensemble de versions de lignes d'index &mdash; une nouvelle ligne pour
-    <emphasis>chacun</emphasis> des index). En fait, la déduplication B-Tree
-    améliore la fragmentation des index causée par le versionnement. Notez que
-    même les lignes d'un index unique ne sont pas nécessairement
-    <emphasis>physiquement</emphasis> uniques lors du stockage sur disque à
-    cause du versionnement. L'optimisation de la déduplication est appliquée
-    sélectivement dans les index uniques. Elle cible les pages qui semblent
-    avoir des duplicatas de versions. Le but principal est de donner plus de
-    temps pour l'exécution du <command>VACUUM</command> avant qu'une division
-    de page <quote>inutile</quote> causée par le versionnement puisse se
-    faire.
+    Il est parfois possible pour des index uniques (autant que pour des
+    contraintes uniques) d'utiliser le dédoublement. Cela permet aux blocs
+    feuilles d'<quote>absorber</quote> temporairement les doublons
+    supplémentaires des renouvellement de version. Le dédoublement des index
+    uniques augmente les suppressions ascendantes d'index, spécialement dans
+    les cas où une longue transaction garde un instantané qui bloque la
+    collecte des éléments à nettoyer. Le but est de gagner du temps pour que
+    la stratégie de suppression ascendante d'index devienne encore efficace.
+    Retarder les fractionnements de blocs jusqu'à ce qu'une transaction
+    longue finisse naturellement peut permettre à une passe de suppression
+    ascendante de réussir là où une passe de suppression précédente a
+    échoué.
    </para>
 
    <tip>

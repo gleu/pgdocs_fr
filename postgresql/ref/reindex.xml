@@ -21,7 +21,9 @@
 <phrase>où <replaceable class="parameter">option</replaceable> peut faire
 partie de&nbsp;:</phrase>
 
-    VERBOSE
+    CONCURRENTLY [ <replaceable class="parameter">boolean</replaceable> ]
+    TABLESPACE <replaceable class="parameter">new_tablespace</replaceable>
+    VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
   </synopsis>
  </refsynopsisdiv>
 
@@ -87,7 +89,9 @@ partie de&nbsp;:</phrase>
     <term><literal>INDEX</literal></term>
     <listitem>
      <para>
-      Recrée l'index spécifié.
+      Recrée l'index spécifié. Cette forme de <command>REINDEX</command>
+      ne peut pas être exécutée à l'intérieur d'un bloc de transaction quand
+      elle est utilisée avec un index partitionné.
      </para>
     </listitem>
    </varlistentry>
@@ -97,7 +101,9 @@ partie de&nbsp;:</phrase>
     <listitem>
      <para>
       Recrée tous les index de la table spécifiée. Si la table a une seconde
-      table <quote>TOAST</quote>, elle est aussi ré-indexée.
+      table <quote>TOAST</quote>, elle est aussi ré-indexée. Cette forme de
+      <command>REINDEX</command> ne peut pas être exécutée à l'intérieur d'un
+      bloc de transaction quand elle est utilisée avec un index partitionné.
      </para>
     </listitem>
    </varlistentry>
@@ -175,10 +181,42 @@ partie de&nbsp;:</phrase>
    </varlistentry>
 
    <varlistentry>
+    <term><literal>TABLESPACE</literal></term>
+    <listitem>
+     <para>
+      Spécifie le nouveau tablespace des index une fois reconstruits.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>VERBOSE</literal></term>
     <listitem>
      <para>
       Affiche un message de progression à chaque index traité.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">boolean</replaceable></term>
+    <listitem>
+     <para>
+      Indique si l'option sélectionnée doit être activée ou désactivée. Vous
+      pouvez écrire <literal>TRUE</literal>, <literal>ON</literal>, ou
+      <literal>1</literal> pour activer l'option, et <literal>FALSE</literal>,
+      <literal>OFF</literal> ou <literal>0</literal> pour la désactiver. La
+      valeur <replaceable class="parameter">boolean</replaceable> peut aussi
+      être omise, auquel cas <literal>TRUE</literal> esy supposée.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">nouveau_tablespace</replaceable></term>
+    <listitem>
+     <para>
+      Le tablespace où les index seront reconstruits.
      </para>
     </listitem>
    </varlistentry>
@@ -237,10 +275,12 @@ partie de&nbsp;:</phrase>
    création de l'index. Dans les faits, le contenu de l'index est complètement
    recréé. Néanmoins, les considérations de verrouillage sont assez
    différentes. <command>REINDEX</command> verrouille les écritures mais pas les
-   lectures de la table mère de l'index. Il positionne également un verrou exclusif sur
-   l'index en cours de traitement, ce qui bloque les lectures qui tentent
-   de l'utiliser. Au contraire, <command>DROP INDEX</command> crée temporairement
-   un verrou exclusif sur la table parent, bloquant ainsi écritures et lectures.
+   lectures de la table mère de l'index. Il positionne également un verrou de
+   type <literal>ACCESS EXCLUSIVE</literal> sur l'index en cours de
+   traitement, ce qui bloque les lectures qui tentent de l'utiliser. Au
+   contraire, <command>DROP INDEX</command> prends temporairement un verrou de
+   type <literal>ACCESS EXCLUSIVE</literal> sur la table parent, bloquant
+   ainsi écritures et lectures.
    Le <command>CREATE INDEX</command> qui suit verrouille les écritures mais pas les
    lectures&nbsp;; comme l'index n'existe pas, aucune lecture ne peut être
    tentée, signifiant qu'il n'y a aucun blocage et que les lectures sont
@@ -262,9 +302,34 @@ partie de&nbsp;:</phrase>
   </para>
 
   <para>
-   Ré-indexer les tables partitionnées ou les index partitionnés n'est pas
-   supporté. Par contre, chaque partition individuelle peut être ré-indexée
-   séparément.
+   Réindexer des index partitionnés ou des tables partitionnées est supporté
+   avec les commandes respectives <command>REINDEX INDEX</command> et
+   <command>REINDEX TABLE</command>. Chaque partition de la relation
+   partitionnée est réindexée dans une transaction séparée. Ces commandes ne
+   peuvent pas être utilisées à l'intérieur d'un bloc de transaction lors
+   d'un travail sur une table partitionnée ou sur un index partitionnée.
+  </para>
+  
+  <para>
+   Lors de l'utilisation de la clause <literal>TABLESPACE</literal> avec
+   <command>REINDEX</command> sur une table ou un index partitionné, seules
+   les références du tablespace des partitions feuilles sont mises à jour.
+   Comme les index partitionnées ne sont pas mis à jour, il est recommandé
+   d'utiliser séparément <command>ALTER TABLE ONLY</command> sur celles-ci
+   pour que toute nouvelle partition attachée hérite du nouveau tablespace.
+   En cas d'échec, il pourrait ne pas avoir déplacer tous les index vers le
+   nouveau tablespace. Ré-exécuter la commande reconstruira les partitions
+   feuilles et déplacera les index non traités précédemment vers le nouveau
+   tablespace.
+  </para>
+
+  <para>
+   Si <literal>SCHEMA</literal>, <literal>DATABASE</literal> ou
+   <literal>SYSTEM</literal> sont utilisés avec
+   <literal>TABLESPACE</literal>, les relations systèmes sont ignorés et un
+   simple message <literal>WARNING</literal> sera généré. Les index sur les
+   tables TOAST sont reconstruits, mais pas déplacés dans le nouveau
+   tablespace.
   </para>
 
   <refsect2 id="sql-reindex-concurrently" xreflabel="Reconstruire des index en parallèle">
@@ -422,6 +487,14 @@ Indexes:
    </para>
 
    <para>
+    Comme toute transaction longue, <command>REINDEX</command> sur une table
+    peut affecter les lignes supprimables par un <command>VACUUM</command>
+    concurrent sur toute autre table. En dehors de ceci, il existe des
+    opérations avec l'option <literal>CONCURRENTLY</literal> pour les index qui
+    ne sont pas partielles et qui sont sans expression.
+   </para>
+
+   <para>
     <command>REINDEX SYSTEM</command> ne supporte pas
     <command>CONCURRENTLY</command> puisque les catalogues systèmes ne peuvent
     pas être re-indexés en parallèle.
@@ -434,6 +507,13 @@ Indexes:
     avec des index de contraintes d'exclusion est ré-indexée en parallèle, ces
     index seront ignorés. (Il est toutefois possible de reconstruire de tels
     index sans l'option <command>CONCURRENTLY</command>.)
+   </para>
+
+   <para>
+     Chaque processus exécutant <command>REINDEX</command> indiquera sa
+     progression dans la vue
+     <structname>pg_stat_progress_create_index</structname>. Voir
+     <xref linkend="create-index-progress-reporting"/> pour les détails.
    </para>
   </refsect2>
  </refsect1>
@@ -492,6 +572,7 @@ REINDEX TABLE CONCURRENTLY my_broken_table;
    <member><xref linkend="sql-createindex"/></member>
    <member><xref linkend="sql-dropindex"/></member>
    <member><xref linkend="app-reindexdb"/></member>
+   <member><xref linkend="create-index-progress-reporting"/></member>
   </simplelist>
  </refsect1>
 </refentry>

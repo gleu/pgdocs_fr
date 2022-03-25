@@ -13,7 +13,7 @@
  <para>
   Ce chapitre définit l'interface entre le cœur du système de
   <productname>PostgreSQL</productname> et les <firstterm>méthodes d'accès
-   aux index</firstterm>, qui gérent chaque type d'index. Le système principal
+  aux index</firstterm>, qui gérent chaque type d'index. Le système principal
   ne sait rien des index en dehors de ce qui est spécifié ici. Il est donc
   possible de développer des types d'index entièrement nouveaux en écrivant du code
   supplémentaire.
@@ -147,6 +147,7 @@ typedef struct IndexAmRoutine
     amproperty_function amproperty;     /* peut être NULL */
     ambuildphasename_function ambuildphasename;   /* peut être NULL */
     amvalidate_function amvalidate;
+    amadjustmembers_function amadjustmembers; /* peut être NULL */
     ambeginscan_function ambeginscan;
     amrescan_function amrescan;
     amgettuple_function amgettuple;     /* peut être NULL */
@@ -201,7 +202,7 @@ typedef struct IndexAmRoutine
    implications peu évidentes. Les besoins de <structfield>amcanunique</structfield>
    sont discutés dans <xref linkend="index-unique-checks"/>.
    L'option <structfield>amcanmulticol</structfield> indique que la méthode
-   d'accès supporte les index multi-colonnes alors que
+   d'accès supporte les index à clés multi-colonnes alors que
    <structfield>amoptionalkey</structfield> autorise des parcours
    lorsqu'aucune restriction indexable n'est fournie pour la première colonne
    de l'index. Quand <structfield>amcanmulticol</structfield> est faux,
@@ -238,6 +239,19 @@ typedef struct IndexAmRoutine
    <structfield>amsearchnulls</structfield> à true, indiquant ainsi qu'elle
    supporte les clauses <literal>IS NULL</literal> et
    <literal>IS NOT NULL</literal> dans les conditions de recherche.
+  </para>
+
+  <para>
+   L'option <structfield>amcaninclude</structfield> indique si la méthode
+   d'accès supporte les colonnes <quote>included</quote>, c'est-à-dire qu'elle
+   peut enregistrer (sans traiter) des colonnes supplémentaires en dehors des
+   colonnes clés. En particulier, la combinaison de
+   <structfield>amcanmulticol</structfield>=<literal>false</literal> et de
+   <structfield>amcaninclude</structfield>=<literal>true</literal> est
+   sensible&nbsp;: cela signifie qu'il peut seulement y avoir une colonne clé,
+   mais qu'il peut y avoir une ou plusieurs colonnes inclues. De plus, les
+   colonnes inclues doivent être autorisées à être configurées à NULL,
+   indépendemment de <structfield>amoptionalkey</structfield>.
   </para>
 
  </sect1>
@@ -299,6 +313,20 @@ aminsert (Relation indexRelation,
    les détails. Normalement, la méthode d'accès a seulement besoin du
    paramètre <literal>heapRelation</literal> lors de la vérification
    d'unicité (car elle doit vérifier la visibilité de la ligne dans la table).
+  </para>
+
+  <para>
+   La valeur booléenne <literal>indexUnchanged</literal> donne une idée sur la
+   nature de la ligne à indexer. Quand elle vaut true, la ligne est un
+   duplicat d'une ligne existant dans l'index. La nouvelle ligne est une
+   version ultérieure de ligne MVCC logiquement non modifiée. Ceci survient
+   quand un <command>UPDATE</command> a lieu et qu'il ne modifie par les
+   colonnes couvertes par l'index, mais qu'une nouvelle version est malgré
+   tout nécessaire. La méthode d'accès de l'index peut utiliser cette
+   information pour décider d'application la suppression du bas vers le haut
+   dans certaines parties de l'index où de nombreuses versions de la même
+   ligne logique s'accumulent. Notez que la mise à jour d'une colonne non clé
+   n'affecte pas la valeur de <literal>indexUnchanged</literal>.
   </para>
 
   <para>
@@ -381,7 +409,6 @@ amvacuumcleanup (IndexVacuumInfo *info,
   </para>
 
   <para>
-   À partir de <productname>PostgreSQL</productname> 8.4,
    <function>amvacuumcleanup</function> sera aussi appelé à la fin d'une
    opération <command>ANALYZE</command>. Dans ce cas,
    <literal>stats</literal> vaut toujours NULL et toute valeur de retour sera
@@ -398,11 +425,12 @@ amcanreturn (Relation indexRelation, int attno);
    </programlisting>
    Vérifie si l'index supporte les <link
    linkend="indexes-index-only-scans"><firstterm>parcours d'index
-     seul</firstterm></link> sur la colonne indiquée, en renvoyant les valeurs
-   des colonnes pour un enregistrement d'index sous forme d'un
-   <structname>IndexTuple</structname>. Les numéros des attributs commencent
-   à 1 (c'est-à-dire&nbsp;:: pour la première colonne, attno vaut 1).
-   Renvoie true si c'est supporté, sinon false. Si la méthode d'accès ne
+   seul</firstterm></link> sur la colonne indiquée, en renvoyant la valeur
+   originale indexée de la colonne. Le numéro d'attribut est indexé à partir
+   de 1, c'est-à-dire que le champ attno de la première colonne est 1. Renvoie
+   true si supporté, false sinon. Cette fonction renvoit toujours true pour
+   les colonnes inclues (si elles sont supportées) car il y a peu d'intérêt à
+   une colonne inclue qui ne peut pas être récupérée. Si la méthode d'accès ne
    supporte pas du tout les parcours d'index seul, le champ
    <structfield>amcanreturn</structfield> de la structure
    <structname>IndexAmRoutine</structname> peut être mis à NULL.
@@ -501,7 +529,7 @@ amproperty (Oid index_oid, int attno,
    être avantageux d'implémenter un test sur
    <literal>AMPROP_RETURNABLE</literal> si cela peut être fait de façon plus
    simple que d'ouvrir l'index et d'appeler
-   <structfield>amcanreturn</structfield>, comme le fait
+   <function>amcanreturn</function>, comme le fait
    le code principal. Le comportement par défaut devrait être
    satisfaisant pour toutes les autres propriétés standard.
   </para>
@@ -529,7 +557,46 @@ amvalidate (Oid opclassoid);
    fonctions de support. La fonction
    <function>amvalidate</function> doit renvoyer false si la classe d'opérateur
    est invalide. Les problèmes devraient être rapportés avec les messages
-   <function>ereport</function>.
+   <function>ereport</function>, typiquement au niveau <literal>INFO</literal>.
+  </para>
+
+  <para>
+<programlisting>
+void
+amadjustmembers (Oid opfamilyoid,
+                 Oid opclassoid,
+                 List *operators,
+                 List *functions);
+</programlisting>
+   Valide l'opérateur new proposé et les membres fonctions d'une famille
+   d'opérateur, si la méthode d'accès peut raisonnablement le faire, et
+   configure leur types de dépendance si le défaut n'est pas satisfaisant.
+   C'est appelée lors du <command>CREATE OPERATOR CLASS</command> et lors du
+   <command>ALTER OPERATOR FAMILY ADD</command>&nbsp;; dans ce dernier cas,
+   <parameter>opclassoid</parameter> vaut <literal>InvalidOid</literal>. Les
+   arguments <type>List</type> sont des listes de structures
+   <structname>OpFamilyMember</structname>, comme définies dans
+   <filename>amapi.h</filename>. Les tests réalisés par cette fonction seront
+   typiquement un sous-ensemble de ceux réalisés par
+   <function>amvalidate</function>, parce que
+   <function>amadjustmembers</function> ne peut pas assumer qu'elle voit un
+   ensemble complet de membres. Par exemple, il serait raisonnable de
+   vérifier la signature d'une fonction d'appui, mais pas de vérifier si
+   toutes les fonctions d'appui requises sont fournies. Tout problème peut
+   être rapporté en renvoyant une erreur. Les champs relatifs aux dépendances
+   des structures <structname>OpFamilyMember</structname> sont initialisés
+   par le cœur de PostgreSQL pour créer les dépendances dures sur la classe
+   d'opérateur si c'est <command>CREATE OPERATOR CLASS</command>, ou des
+   dépendances douces sur la famille d'opérateur si c'est <command>ALTER
+   OPERATOR FAMILY ADD</command>. <function>amadjustmembers</function> peut
+   ajuster ces champs si d'autres comportements sont plus appropriés. Par
+   exemple, GIN, GiST et SP-GiST configurent toujours les membres opérateurs
+   pour avoir des dépendances douces sur la famille d'opérateur car la
+   connexion entre un opérateur et une classe d'opérateur est relativement
+   faible dans ces types d'index&nbsp;; donc il est raisonnable de permettre
+   l'ajout et la suppression libres de membres d'opérateurs. Les fonctions
+   d'appui optionnelles ont typiquement des dépendances douces, pour être
+   supprimées si nécessaire.
   </para>
 
 
@@ -589,7 +656,7 @@ amrescan (IndexScanDesc scan,
   </para>
 
   <para>
-   <programlisting>boolean
+   <programlisting>bool
 amgettuple (IndexScanDesc scan,
             ScanDirection direction);
    </programlisting>
@@ -614,23 +681,23 @@ amgettuple (IndexScanDesc scan,
 
   <para>
    Si l'index supporte les <link linkend="indexes-index-only-scans">parcours
-    d'index seul</link> (c'est-à-dire que
-   <function>amcanreturn</function> renvoit true), alors, en cas de succès,
-   la méthode d'accès doit aussi vérifier
+   d'index seul</link> (c'est-à-dire que <function>amcanreturn</function>
+   renvoit true pour chacune de ces colonnes), alors, en cas de succès, la
+   méthode d'accès doit aussi vérifier
    <literal>scan-&gt;xs_want_itup</literal>, et si ce dernier est true, elle
    doit renvoyer les données indexées originales de cette entrée d'index. Les
-   données peuvent être retournées sous la forme d'un pointeur
-   d'<structname>IndexTuple</structname> stocké dans
+   colonnes pour lesquelles <function>amcanreturn</function> renvoit false
+   peuvent êre renvoyées comme NULL. Les données peuvent être retournées sous
+   la forme d'un pointeur d'<structname>IndexTuple</structname> stocké dans
    <literal>scan-&gt;xs_itup</literal>, avec un descripteur de lignes dans
    <literal>scan-&gt;xs_itupdesc</literal>; ou sous la forme d'un pointeur
    <structname>HeapTuple</structname> stocké dans
-   <literal>scan-&gt;xs_hitup</literal>,
-   avec le descripteur de ligne <literal>scan-&gt;xs_hitupdesc</literal>.  (Le
-   second format devrait être utilisé lors de la reconstruction des données qui
-   pourraient ne pas tenir dans un <structname>IndexTuple</structname>.)  Dans
-   tous les cas, la gestion
-   de la donnée référencée par le pointeur est de la responsabilité de la
-   méthode d'accès. Les données doivent rester bonnes au moins jusqu'au
+   <literal>scan-&gt;xs_hitup</literal>, avec le descripteur de ligne
+   <literal>scan-&gt;xs_hitupdesc</literal>.  (Le second format devrait être
+   utilisé lors de la reconstruction des données qui pourraient ne pas tenir
+   dans un <structname>IndexTuple</structname>.)  Dans tous les cas, la
+   gestion de la donnée référencée par le pointeur est de la responsabilité de
+   la méthode d'accès. Les données doivent rester bonnes au moins jusqu'au
    prochain appel à <function>amgettuple</function>,
    <function>amrescan</function> ou <function>amendscan</function> pour le
    parcours.
@@ -962,9 +1029,12 @@ amrestrpos (IndexScanDesc scan);
    <literal>RowExclusiveLock</literal> lors de sa mise à jour (ce qui inclut le
    <command>VACUUM</command> simple). Comme ces types de
    verrous ne sont pas conflictuels, la méthode d'accès est responsable de la
-   finesse du verrouillage dont elle a besoin. Un verrou exclusif sur
-   l'intégralité de l'index entier n'est posé qu'à la création de l'index, sa destruction
-   ou lors d'un <literal>REINDEX</literal>.
+   finesse du verrouillage dont elle a besoin. Un verrou de type
+   <literal>ACCESS EXCLUSIVE</literal> sur l'intégralité de l'index entier
+   n'est posé qu'à la création de l'index, sa destruction ou lors d'un
+   <literal>REINDEX</literal> (un verrou <literal>SHARE UPDATE
+   EXCLUSIVE</literal> est pris à la place avec l'option
+   <literal>CONCURRENTLY</literal>).
   </para>
 
   <para>

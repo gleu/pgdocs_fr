@@ -61,7 +61,8 @@
  </para>
 
  <para>
-  La RFC 7159 spécifie que les chaînes JSON devraient être encodées en UTF8.
+  La <acronym>RFC</acronym> 7159 spécifie que les chaînes JSON devraient être
+  encodées en UTF8.
   Il n'est donc pas possible pour les types JSON de se conformer de manière
   rigoureuse à la spécification JSON, à moins que l'encodage de la base de
   données soit UTF8.  Tenter d'inclure directement des caractères qui ne
@@ -71,8 +72,8 @@
  </para>
 
  <para>
-  La RFC 7159 autorise les chaînes JSON à contenir des séquences Unicode
-  échappées, indiquées avec
+  La <acronym>RFC</acronym> 7159 autorise les chaînes JSON à contenir des
+  séquences Unicode échappées, indiquées avec
   <literal>\u<replaceable>XXXX</replaceable></literal>. Dans la fonction
   d'entrée pour le type <type>json</type>, les échappements Unicode sont
   autorisés quel que soit l'encodage de la base de données, et sont vérifiés
@@ -503,7 +504,7 @@ CREATE INDEX idxgintags ON api USING GIN ((jdoc -&gt; 'tags'));
 SELECT jdoc->'guid', jdoc->'name' FROM api WHERE jdoc @@ '$.tags[*] == "qui"';
    </programlisting>
    <programlisting>
-SELECT jdoc->'guid', jdoc->'name' FROM api WHERE jdoc @@ '$.tags[*] ? (@ == "qui")';
+SELECT jdoc->'guid', jdoc->'name' FROM api WHERE jdoc @? '$.tags[*] ? (@ == "qui")';
    </programlisting>
    L'index GIN extrait les informations de la forme suivante du
    <literal>jsonpath</literal>&nbsp;: <replaceable>chaîne d'accès</replaceable> = <replaceable>const</replaceable>.
@@ -619,6 +620,110 @@ SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @&gt; '{"tags": ["qu
   </para>
  </sect2>
 
+ <sect2 id="jsonb-subscripting">
+  <title>Utiliser l'indiçage avec <type>jsonb</type></title>
+  <para>
+   Le type de données <type>jsonb</type> accepte les expressions avec indice,
+   du style tableau, pour extraire et modifier les éléments. Les valeurs
+   imbriquées peuvent être indiquées en chaînant les expressions à indice, en
+   suivant les mêmes règles que l'argument <literal>path</literal> dans la
+   fonction <literal>jsonb_set</literal>. Si une valeur <type>jsonb</type>
+   est un tableau, les indices numériques commencent à zéro, et les nombres
+   négatifs comptent àpartir du dernier élément du tableau. Les expressions
+   d'intervalle ne sont pas acceptées. Le résultat d'une expression par
+   indice est toujours du type de données jsonb.
+  </para>
+
+  <para>
+   Les requêtes <command>UPDATE</command> peuvent utiliser l'indiçage dans la
+   clause <literal>SET</literal> pour modifier les valeurs
+   <type>jsonb</type>. Les chemins d'indice doivent être parcourables pour
+   toutes les valeurs affectées. Par exemple, le chemin <literal>val['a']
+   ['b']['c']</literal> peut être entièrement traversé jusqu'à
+   <literal>c</literal> si <literal>val</literal>, <literal>val
+   ['a']</literal> et <literal>val['a']['b']</literal> sont des objets. Si
+   <literal>val['a']</literal> ou <literal>val['a']['b']</literal> ne sont
+   pas définis, il sera créé comme un objet vide et rempli comme nécessaire.
+   Néanoins, si <literal>val</literal> lui-même ou une des valeurs
+   intermédiaires est défini comme un non-objet (une chaîne, un nombre ou le
+   <literal>null</literal> <literal>jsonb</literal>), la traversée ne peut
+   pas continuer, donc une erreur est levée et la transaction est annulée.
+  </para>
+
+  <para>
+   Un exemple de syntaxe avec indiçage&nbsp;:
+
+<programlisting>
+
+-- Extraire la valeur d'un objet par sa clé
+SELECT ('{"a": 1}'::jsonb)['a'];
+
+-- Extraire une valeur d'objet imbriqué par le chemin de la clé
+SELECT ('{"a": {"b": {"c": 1}}}'::jsonb)['a']['b']['c'];
+
+-- Extraire l'élément du tableau par indice
+SELECT ('[1, "2", null]'::jsonb)[1];
+
+-- Mise à jour de la valeur de l'objet par sa clé.
+-- Notez les guillemets simples autour de '1' : la valeur affectée
+-- doit aussi être du type jsonb
+UPDATE table_name SET jsonb_field['key'] = '1';
+
+-- Ceci lèvera une erreur si un enregistrement de jsonb_field['a']['b'] se révèle
+-- être autre chose qu'un objet. Par exemple, la valeur {"a": 1} a une valeur numérique
+-- de la clé 'a'.
+UPDATE table_name SET jsonb_field['a']['b']['c'] = '1';
+
+-- Filtrer lesenregistrements en utilisant une clause WHERE avec des indices.
+-- Comme le résultat de l'indiçage est jsonb, la valeur à laquelle nous la comparons
+-- doit aussi être jsonb.
+-- Les guillemets doubles rendent valide "value" comme chaîne jsonb.
+SELECT * FROM table_name WHERE jsonb_field['key'] = '"value"';
+</programlisting>
+
+   L'affectation de <type>jsonb</type> via l'indiçage gère quelques cas particuliers
+   différemment de <literal>jsonb_set</literal>. Quand une valeur source <type>jsonb</type>
+   vaut <literal>NULL</literal>, l'affectation via l'indiçage continuera comme s'il s'agissait d'une
+   valeur JSON vide (objet ou tableau) impliquée par la clé d'indiçage&nbsp;:
+
+<programlisting>
+-- Là où jsonb_field valait NULL, il vaut maintenant {"a": 1}
+UPDATE table_name SET jsonb_field['a'] = '1';
+
+-- Là où jsonb_field valait NULL, il vaut maintenant [1]
+UPDATE table_name SET jsonb_field[0] = '1';
+</programlisting>
+
+   Si un index est indiqué pour un tableau contenant trop peu d'éléments, les
+   éléments <literal>NULL</literal> seront ajoutés jusqu'à ce que l'index
+   soit atteignable et que la valeur puisse être initialisée.
+
+<programlisting>
+-- Là où jsonb_field valait [], il vaut maintenant [null, null, 2];
+-- Là où jsonb_field valait [0], il vaut maintenant [0, null, 2]
+UPDATE table_name SET jsonb_field[2] = '2';
+</programlisting>
+
+   Une valeur de type <type>jsonb</type> acceptera des affectations sur des
+   chemins indicés non existants car le dernier élément existant à être
+   traversé est un objet ou un tableau, comme impliqué par l'indice
+   correspondant (l'élément indiqué par le dernier indice dans le chemin
+   n'est pas traversé et pourrait être n'improte quoi). Le tableau imbriqué
+   et les structures d'objet seront créés et, dans le premier cas, aligné
+   avec des <literal>null</literal>, comme spécifié par le chemin d'indice
+   jusqu'à ce que la valeur affectée puisse être placée.
+
+<programlisting>
+-- Là où jsonb_field valait {}, il vaut maintenant {'a': [{'b': 1}]}
+UPDATE table_name SET jsonb_field['a'][0]['b'] = '1';
+
+-- Là où jsonb_field valait [], il vaut maintenant [null, {'a': 1}]
+UPDATE table_name SET jsonb_field[1]['a'] = '1';
+</programlisting>
+
+  </para>
+ </sect2>
+
  <sect2>
   <title>Transformations</title>
 
@@ -649,7 +754,7 @@ SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @&gt; '{"tags": ["qu
    confiance (<quote>trusted</quote>), autrement dit il peut être installé par
    des utilisateurs qui n'ont pas l'attribut <literal>SUPERUSER</literal> mais
    qui ont le droit <literal>CREATE</literal> sur la base actuelle. Le reste
-   nécessite d'être superutilisateur pour être installé.
+   nécessite d'être super-utilisateur pour être installé.
   </para>
  </sect2>
 

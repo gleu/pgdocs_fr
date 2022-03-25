@@ -21,7 +21,7 @@
  </refnamediv>
 
  <refsynopsisdiv>
-  <synopsis>CREATE [ CONSTRAINT ] TRIGGER <replaceable class="parameter">nom</replaceable> { BEFORE | AFTER | INSTEAD OF } { <replaceable class="parameter">événement</replaceable> [ OR ... ] }
+  <synopsis>CREATE [ OR REPLACE ] [ CONSTRAINT ] TRIGGER <replaceable class="parameter">nom</replaceable> { BEFORE | AFTER | INSTEAD OF } { <replaceable class="parameter">événement</replaceable> [ OR ... ] }
     ON <replaceable class="parameter">nom_table</replaceable>
     [ FROM <replaceable class="parameter">nom_table_referencee</replaceable> ]
     [ NOT DEFERRABLE | [ DEFERRABLE ] [ INITIALLY IMMEDIATE | INITIALLY DEFERRED ] ]
@@ -43,11 +43,19 @@
   <title>Description</title>
 
   <para>
-   <command>CREATE TRIGGER</command> crée un nouveau déclencheur. Le
-   déclencheur est associé à la table, à la vue ou à la table distante
-   spécifiée et exécute la fonction
+   <command>CREATE TRIGGER</command> crée un nouveau déclencheur.
+   <command>CREATE OR REPLACE TRIGGER</command> va soit créer un nouveau
+   trigger, soit remplacer un trigger existant. Le déclencheur est associé à
+   la table, à la vue ou à la table distante spécifiée et exécute la fonction
    <replaceable class="parameter">nom_fonction</replaceable> lorsque
    certaines opérations sont réalisées sur cette table.
+  </para>
+
+  <para>
+   Pour remplacer la définition actuelle d'un trigger existant, utilisez
+   <command>CREATE OR REPLACE TRIGGER</command>, en indiquant le nom du
+   trigger existant et la table parent. Toutes les autres propriétés sont
+   remplacés.
   </para>
 
   <para>
@@ -168,11 +176,16 @@
   </para>
 
   <para>
+   <indexterm>
+    <primary>trigger</primary>
+    <secondary>constraint trigger</secondary>
+   </indexterm>
    Lorsque l'option <literal>CONSTRAINT</literal> est spécifiée, cette
    commande crée un <firstterm>déclencheur contrainte</firstterm>.  Ce nouvel
    objet est identique aux déclencheurs normaux excepté le fait que le moment
-   de déclenchement peut alors être ajusté via l'utilisation de <xref
-   linkend="sql-set-constraints"/>. Les déclencheurs contraintes ne peuvent
+   de déclenchement peut alors être ajusté via l'utilisation de <link
+   linkend="sql-set-constraints"><command>SET CONSTRAINTS</command></link>.
+   Les déclencheurs contraintes ne peuvent
    être que de type <literal>AFTER ROW</literal> sur des tables standards (pas
    des tables distantes).  Ils peuvent être déclenchés soit à la fin de
    l'instruction causant l'événement, soit à la fin de la transaction ayant
@@ -446,14 +459,25 @@ UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2
   <title>Notes</title>
 
   <para>
-   Pour créer un déclencheur sur une table, l'utilisateur doit posséder le droit
+   Pour créer ou remplacer un trigger sur une table, l'utilisateur doit posséder le droit
    <literal>TRIGGER</literal> sur la table. L'utilisateur doit aussi avoir
    le droit <literal>EXECUTE</literal> sur la fonction trigger.
   </para>
 
   <para>
-   Utiliser <xref linkend="sql-droptrigger"/>
+   Utiliser <link linkend="sql-droptrigger"><command>DROP TRIGGER</command></link>
    pour supprimer un déclencheur.
+  </para>
+
+  <para>
+   Créer un trigger niveau ligne sur une table partitionnée causera la
+   création d'un trigger <quote>clone</quote> identique sur chacune des
+   partitions existantes&nbsp;; et toute partition créée ou attachée après
+   aura aussi un trigger identique. S'il existe déjà un trigger de même nom
+   sur une partition, une erreur est renvoyée sauf si <command>CREATE OR
+   REPLACE TRIGGER</command> est utilisé, auquel cas ce trigger est remplacé
+   avec un trigger clone. Quand une partition est détachée de son parent, ses
+   triggers clone sont supprimés.
   </para>
 
   <para>
@@ -468,12 +492,6 @@ UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2
    commande comme <literal>UPDATE ... SET x = x ...</literal> déclenchera le
    trigger sur la colonne <literal>x</literal>, bien que la valeur de cette
    colonne ne change pas.
-  </para>
-
-  <para>
-   Il existe quelques fonctions triggers natives qui peuvent être utilisées
-   pour résoudre des problèmes communs sans avoir à écrire son propre code
-   pour le trigger. Voir <xref linkend="functions-trigger"/>.
   </para>
 
   <para>
@@ -534,15 +552,6 @@ UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2
   </para>
 
   <para>
-   Créer un trigger niveau ligne sur une table partitionnée impliquera la
-   création de triggers identiques sur toutes les partitions existantes. De
-   plus, toute partition créée ou attachée après coup contiendra elle-aussi un
-   trigger identique. Si la partition est détachée de son parent, le trigger
-   est supprimé. Les triggers sur les tables partitionnées ne peuvent pas être
-   des triggers <literal>INSTEAD OF</literal>.
-  </para>
-
-  <para>
    Modifier une table partitionnée ou une table avec des enfants héritées
    déclenche les triggers au niveau requête attachés à cette table
    spécifiquement nommée, mais pas les triggers au niveau requête de ses
@@ -553,9 +562,33 @@ UPDATE OF <replaceable>nom_colonne_1</replaceable> [, <replaceable>nom_colonne_2
    les images avant et après des lignes sont visibles pour toutes les
    partitions affectées et pour toutes les tables filles. Dans le cas de
    l'héritage, les images de ligne incluent seulement les colonnes présentes
-   dans la table où le trigger est attaché. Actuellement, les triggers au
-   niveau ligne avec des relations de transition ne peuvent être définis sur
-   les partitions ou les tables filles.
+   dans la table où le trigger est attaché.
+  </para>
+
+  <para>
+   Actuellement, les triggers niveau ligne avec des relations de transition ne
+   peuvent pas être définis sur des partitions ou des tables d'héritage. De
+   plus, les triggers sur des tables partitionnées ne peuvent pas être
+   <literal>INSTEAD OF</literal>.
+  </para>
+
+  <para>
+   Actuellement, l'option <literal>OR REPLACE</literal> n'est pas supportée
+   par les triggers de contrainte.
+  </para>
+
+  <para>
+   Remplacer un trigger existant dans une transaction qui a déjà réalisée des
+   actions de mises à jour sur la table du trigger n'est pas recommandé. Les
+   décisions de déclenchement du trigger, ou des portions de ces décisions,
+   qui ont déjà été réalisées ne seront pas reconsidérées, donc les effets
+   pourraient être surprenant.
+  </para>
+
+  <para>
+   Il existe quelques fonctions triggers natives pouvant être utilisées pour
+   résoudre des problèmes communs sans avoir à écrire son propre code
+   trigger&nbsp;; voir <xref linkend="functions-trigger"/>.
   </para>
 
   <para>
@@ -587,12 +620,12 @@ CREATE TRIGGER check_update
     EXECUTE FUNCTION check_account_update();
    </programlisting>
 
-   Idem, mais avec une exécution de la fonction seulement si la colonne
-   <literal>balance</literal> est spécifiée comme cible de la commande
-   <command>UPDATE</command>&nbsp;:
+   Modifiez la définition du trigger pour seulement exécuter la fonction
+   si la colonne <literal>balance</literal> est indiquée comme cible dans
+   la commande <command>UPDATE</command>&nbsp;:
 
    <programlisting>
-CREATE TRIGGER check_update
+CREATE OR REPLACE TRIGGER check_update
     BEFORE UPDATE OF balance ON accounts
     FOR EACH ROW
     EXECUTE FUNCTION check_account_update();
@@ -750,6 +783,7 @@ CREATE TRIGGER paired_items_update
   <para>
    <command>CREATE CONSTRAINT TRIGGER</command> est une extension spécifique à
    <productname>PostgreSQL</productname> du standard <acronym>SQL</acronym>.
+   L'option <literal>OR REPLACE</literal> est aussi une extension.
   </para>
  </refsect1>
 
