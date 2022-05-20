@@ -23,10 +23,14 @@ PostgreSQL documentation
  <refsynopsisdiv>
   <synopsis>
 CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
-    [ FOR TABLE [ ONLY ] <replaceable class="parameter">nom_table</replaceable> [ * ] [, ...]
-      | FOR ALL TABLES ]
+    [ FOR ALL TABLES
+      | FOR <replaceable class="parameter">publication_object</replaceable> [, ... ] ]
     [ WITH ( <replaceable class="parameter">parametre_publication</replaceable> [= <replaceable class="parameter">valeur</replaceable>] [, ... ] ) ]
 
+<phrase>where <replaceable class="parameter">publication_object</replaceable> is one of:</phrase>
+
+    TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ ( <replaceable class="parameter">column_name</replaceable> [, ... ] ) ] [ WHERE ( <replaceable class="parameter">expression</replaceable> ) ] [, ... ]
+    ALL TABLES IN SCHEMA { <replaceable class="parameter">schema_name</replaceable> | CURRENT_SCHEMA } [, ... ]
   </synopsis>
  </refsynopsisdiv>
 
@@ -79,6 +83,22 @@ CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
      </para>
 
      <para>
+      If the optional <literal>WHERE</literal> clause is specified, it defines a
+      <firstterm>row filter</firstterm> expression. Rows for
+      which the <replaceable class="parameter">expression</replaceable>
+      evaluates to false or null will not be published. Note that parentheses
+      are required around the expression. It has no effect on
+      <literal>TRUNCATE</literal> commands.
+     </para>
+
+     <para>
+      When a column list is specified, only the named columns are replicated.
+      If no column list is specified, all columns of the table are replicated
+      through this publication, including any columns added later.  If a column
+      list is specified, it must include the replica identity columns.
+     </para>
+
+     <para>
       Seules les tables persistentes et les tables partitionnées peuvent faire
       partie d'une publication. Les tables temporaires, tables non
       journalisées, tables distantes, vues matérialisées et vues standard ne
@@ -94,6 +114,11 @@ CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
       directement sur une partition seront publiées via les publications dont
       fait partie la table partitionnée.
      </para>
+
+     <para>
+      Specifying a table that is part of a schema specified by
+      <literal>FOR ALL TABLES IN SCHEMA</literal> is not supported.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -104,6 +129,37 @@ CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
       Marque la publication comme publication qui réplique les changement pour
       toutes les tables de la base, en incluant les tables qui seront crées
       dans le futur.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>FOR ALL TABLES IN SCHEMA</literal></term>
+    <listitem>
+     <para>
+      Marks the publication as one that replicates changes for all tables in
+      the specified list of schemas, including tables created in the future.
+     </para>
+
+     <para>
+      Specifying a schema along with a table which belongs to the specified
+      schema using <literal>FOR TABLE</literal> is not supported.
+     </para>
+
+     <para>
+      Only persistent base tables and partitioned tables present in the schema
+      will be included as part of the publication.  Temporary tables, unlogged
+      tables, foreign tables, materialized views, and regular views from the
+      schema will not be part of the publication.
+     </para>
+
+     <para>
+      When a partitioned table is published via schema level publication, all
+      of its existing and future partitions are implicitly considered to be part of the
+      publication, regardless of whether they are from the publication schema or not.
+      So, even operations that are performed directly on a
+      partition are also published via publications that its ancestors are
+      part of.
      </para>
     </listitem>
    </varlistentry>
@@ -147,6 +203,11 @@ CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
          </para>
 
          <para>
+          This parameter also affects how row filters and column lists are
+          chosen for partitions; see below for details.
+         </para>
+
+         <para>
           Si ceci est activé, les opérations <literal>TRUNCATE</literal>
           réalisées directement sur les partitions ne sont pas répliquées.
          </para>
@@ -165,10 +226,10 @@ CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
   <title>Notes</title>
 
   <para>
-   Si ni <literal>FOR TABLE</literal> ni <literal>FOR ALL
-    TABLES</literal> n'est spécifié, alors la publication commence avec un
-   ensemble de tables vide.  C'est utile si des tables doivent être ajoutée
-   ultérieurement.
+   If <literal>FOR TABLE</literal>, <literal>FOR ALL TABLES</literal> or
+   <literal>FOR ALL TABLES IN SCHEMA</literal> are not specified, then the
+   publication starts out with an empty set of tables.  That is useful if
+   tables or schemas are to be added later.
   </para>
 
   <para>
@@ -185,9 +246,9 @@ CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
 
   <para>
    Pour ajouter une table à une publication, l'utilisateur lançant la commande
-   doit avoir les droits de propriétaire de la table.  La clause <command>FOR
-    ALL TABLES</command> nécessite d'être super-utilisateur pour pouvoir
-   l'utiliser.
+   doit avoir les droits de propriétaire de la table. Les clauses <command>FOR
+   ALL TABLES</command> et <command>FOR ALL TABLES IN SCHEMA</command>
+   nécessitent d'être super-utilisateur pour pouvoir les utiliser.
   </para>
 
   <para>
@@ -195,6 +256,31 @@ CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
    <command>UPDATE</command> et/ou <command>DELETE</command> doivent avoir
    <literal>REPLICA IDENTITY</literal> défini.  Autrement ces opérations seront
    interdites sur ces tables.
+  </para>
+
+  <para>
+   A row filter expression (i.e., the <literal>WHERE</literal> clause) must contain only
+   columns that are covered by the <literal>REPLICA IDENTITY</literal>, in
+   order for <command>UPDATE</command> and <command>DELETE</command> operations
+   to be published. For publication of <command>INSERT</command> operations,
+   any column may be used in the <literal>WHERE</literal> expression. The
+   row filter allows simple expressions that don't have
+   user-defined functions, user-defined operators, user-defined types,
+   user-defined collations, non-immutable built-in functions, or references to
+   system columns.
+  </para>
+
+  <para>
+   For published partitioned tables, the row filter for each
+   partition is taken from the published partitioned table if the
+   publication parameter <literal>publish_via_partition_root</literal> is true,
+   or from the partition itself if it is false (the default).
+   See <xref linkend="logical-replication-row-filter"/> for details about row
+   filters.
+   Similarly, for published partitioned tables, the column list for each
+   partition is taken from the published partitioned table if the
+   publication parameter <literal>publish_via_partition_root</literal> is true,
+   or from the partition itself if it is false.
   </para>
 
   <para>
@@ -221,20 +307,32 @@ CREATE PUBLICATION <replaceable class="parameter">nom</replaceable>
   <para>
    Les opérations <acronym>DDL</acronym> ne sont pas publiées.
   </para>
+
+  <para>
+   The <literal>WHERE</literal> clause expression is executed with the role used
+   for the replication connection.
+  </para>
  </refsect1>
 
  <refsect1>
   <title>Exemples</title>
 
   <para>
-   Créer une publication qui publie tous les changement sur deux tables :
+   Créer une publication qui publie tous les changements sur deux tables :
    <programlisting>
 CREATE PUBLICATION mypublication FOR TABLE users, departments;
    </programlisting>
   </para>
 
   <para>
-   Créer une publication qui publie tous les changement sur toutes les tables :
+   Create a publication that publishes all changes from active departments:
+<programlisting>
+CREATE PUBLICATION active_departments FOR TABLE departments WHERE (active IS TRUE);
+</programlisting>
+  </para>
+
+  <para>
+   Créer une publication qui publie tous les changements sur toutes les tables :
    <programlisting>
 CREATE PUBLICATION alltables FOR ALL TABLES;
    </programlisting>
@@ -246,6 +344,33 @@ CREATE PUBLICATION alltables FOR ALL TABLES;
    <programlisting>
 CREATE PUBLICATION insert_only FOR TABLE mydata
     WITH (publish = 'insert');
+</programlisting>
+  </para>
+
+  <para>
+   Create a publication that publishes all changes for tables
+   <structname>users</structname>, <structname>departments</structname> and
+   all changes for all the tables present in the schema
+   <structname>production</structname>:
+<programlisting>
+CREATE PUBLICATION production_publication FOR TABLE users, departments, ALL TABLES IN SCHEMA production;
+</programlisting>
+  </para>
+
+  <para>
+   Create a publication that publishes all changes for all the tables present in
+   the schemas <structname>marketing</structname> and
+   <structname>sales</structname>:
+<programlisting>
+CREATE PUBLICATION sales_publication FOR ALL TABLES IN SCHEMA marketing, sales;
+</programlisting></para>
+
+  <para>
+   Create a publication that publishes all changes for table <structname>users</structname>,
+   but replicates only columns <structname>user_id</structname> and
+   <structname>firstname</structname>:
+<programlisting>
+CREATE PUBLICATION users_filtered FOR TABLE users (user_id, firstname);
    </programlisting>
   </para>
  </refsect1>

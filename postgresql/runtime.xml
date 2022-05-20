@@ -77,13 +77,15 @@
    défaut utilisée par les outils, les utilisateurs et les applications
    tiers. Le serveur de la base de données lui-même ne requiert pas la présence
    de la base de données <literal>postgres</literal> mais beaucoup d'outils
-   supposent son existence. Une autre base de données est créée à l'intérieur
-   de chaque groupe lors de l'initialisation. Elle est appelée
-   <literal>template1</literal>. Comme le nom le suggère, elle sera utilisée
-   comme modèle pour les bases de données créées après&nbsp;; elle ne devrait
-   pas être utilisée pour un vrai travail (voir le <xref
+   supposent son existence.
+   There are two more databases created within
+   each cluster during initialization, named <literal>template1</literal>
+   and <literal>template0</literal>.
+   Comme leur nom le suggère, elles seront utilisées
+   comme modèle pour les bases de données créées après&nbsp;; elles ne devraient
+   pas être utilisées pour un vrai travail (voir le <xref
    linkend="managing-databases"/> pour des informations sur la création de
-   nouvelles bases de données dans le groupe).
+   nouvelles bases de données dans l'instance).
   </para>
 
   <para>
@@ -1466,32 +1468,29 @@ export PG_OOM_ADJUST_VALUE=0
     compilé avec <varname>CONFIG_HUGETLBFS=y</varname> et
     <varname>CONFIG_HUGETLB_PAGE=y</varname>. Vous aurez aussi besoin de
     configurer le système d'exploitation pour qu'il fournisse suffisament de
-    Huge Pages de la taille désirée. Pour estimer le nombre de Huges Pages
-    nécessaires, démarrez <productname>PostgreSQL</productname> sans activer
-    les Huge Pages et vérifiez la taille du segment de mémoire partagée
-    anonyme du processus postmaster, ainsi que les tailles par défaut et
-    supportée par le systèmes des Huge Pages, en utilisant les systèmes de
-    fichiers <filename>/proc</filename> et <filename>/sys</filename>. Cela
-    pourrait ressemble à cela&nbsp;:
-
+    Huge Pages de la taille désirée. Pour déterminer le nombre de Huges Pages
+    nécessaires, utilisez la commande <command>postgres</command>
+    to see the value of <xref linkend="guc-shared-memory-size-in-huge-pages"/>.
+    Note that the server must be shut down to view this runtime-computed
+    parameter. Cela pourrait ressemble à cela&nbsp;:
 <programlisting>
-$ <userinput>head -1 $PGDATA/postmaster.pid</userinput>
-4170
-$ <userinput>pmap 4170 | awk '/rw-s/ &amp;&amp; /zero/ {print $2}'</userinput>
-6490428K
+$ <userinput>postgres -D $PGDATA -C shared_memory_size_in_huge_pages</userinput>
+$ <userinput>grep ^Hugepagesize /proc/meminfo</userinput>
+Hugepagesize:       2048 kB
 $ <userinput>ls /sys/kernel/mm/hugepages</userinput>
 hugepages-1048576kB  hugepages-2048kB
 </programlisting>
 
     Dans cet exemple, la valeur par défaut est de 2 Mo, vous pouvez aussi
     demander explicitement soit 2 Mo soit 1 Go avec <xref
-    linkend="guc-huge-page-size"/>. En supposant <literal>2MB</literal> pour
-    les Huge Pages, <literal>6490428</literal> / <literal>2048</literal>
-    donne approximativement <literal>3169.154</literal>. Donc, dans cet
-    exemple, nous avons besoin d'au moins <literal>3170</literal>
-    <foreignphrase>huge pages</foreignphrase>. Une configuration plus
-    importante serait appropriée si d'autres programmes du serveur ont aussi
-    besoin des Huge Pages. Nous pouvons les configurer avec&nbsp;:
+    linkend="guc-huge-page-size"/>.
+    either 2MB or 1GB with <xref linkend="guc-huge-page-size"/> to adapt
+    the number of pages calculated by
+    <varname>shared_memory_size_in_huge_pages</varname>.
+    While we need at least <literal>3170</literal> huge pages in this example,
+    a larger setting would be appropriate if other programs on the machine
+    also need huge pages.
+    Nous pouvons les configurer avec&nbsp;:
 
 <programlisting>
 # <userinput>sysctl -w vm.nr_hugepages=3170</userinput>
@@ -1594,21 +1593,16 @@ en envoyant différents signaux au processus
 
 <variablelist>
 <varlistentry>
- <term><systemitem>sigterm</systemitem><indexterm><primary>sigterm</primary></indexterm></term>
+ <term><systemitem>SIGTERM</systemitem><indexterm><primary>SIGTERM</primary></indexterm></term>
  <listitem>
   <para>
    C'est le mode d'<firstterm>arrêt intelligent</firstterm>.
-   Après réception de <systemitem>sigterm</systemitem>, le serveur
+   Après réception de <systemitem>SIGTERM</systemitem>, le serveur
    désactive les nouvelles connexions mais permet aux sessions en cours de
    terminer leur travail normalement. Il s'arrête seulement après que toutes
    les sessions se sont terminées normalement. C'est l'arrêt intelligent
    (<firstterm>smart shutdown</firstterm>).
-   Si le serveur est en mode de sauvegarde en ligne, il attends en plus la
-   désactivation du mot de sauvegarde en ligne. Lorsque le mode de sauvegarde
-   est actif, les nouvelles connexions sont toujours autorisées, mais
-   seulement pour les super-utilisateurs (cette exception permet à un
-   super-utilisateur de se connecter pour terminer le mode de sauvegarde en
-   ligne). Si le serveur est en restauration quand une demande d'arrêt
+   Si le serveur est en restauration quand une demande d'arrêt
    intelligent est envoyée, la restauration et la réplication en flux
    seront stoppées seulement une fois que toutes les autres sessions ont
    terminé.
@@ -1625,8 +1619,6 @@ en envoyant différents signaux au processus
    les processus serveur le signal <systemitem>sigterm</systemitem>, qui les
    fera annuler leurs transactions courantes pour quitter rapidement. Il
    attend ensuite la fin de tous les processus serveur et s'arrête finalement.
-   Si le serveur est en mode de sauvegarde en ligne, le mode est annulé,
-   rendant la sauvegarde inutilisable.
   </para>
  </listitem>
 </varlistentry>
@@ -2270,7 +2262,8 @@ d'être utilisés.
 <title>Connexions TCP/IP sécurisées avec SSL</title>
 
 <indexterm zone="ssl-tcp">
-<primary>ssl</primary>
+ <primary>SSL</primary>
+ <secondary>TLS</secondary>
 </indexterm>
 
 <para>
@@ -2284,13 +2277,25 @@ construction de <productname>PostgreSQL</productname> (voir le <xref
 linkend="installation"/>).
 </para>
 
+  <para>
+   The terms <acronym>SSL</acronym> and <acronym>TLS</acronym> are often used
+   interchangeably to mean a secure encrypted connection using a
+   <acronym>TLS</acronym> protocol. <acronym>SSL</acronym> protocols are the
+   precursors to <acronym>TLS</acronym> protocols, and the term
+   <acronym>SSL</acronym> is still used for encrypted connections even though
+   <acronym>SSL</acronym> protocols are no longer supported.
+   <acronym>SSL</acronym> is used interchangeably with <acronym>TLS</acronym>
+   in <productname>PostgreSQL</productname>.
+  </para>
+
 <sect2 id="ssl-setup">
 <title>Configuration basique</title>
 
 <para>
 Avec <acronym>SSL</acronym> intégré à la compilation, le serveur
 <productname>PostgreSQL</productname> peut être démarré avec
-<acronym>SSL</acronym> activé en positionnant le paramètre
+le support des connexions chiffrées utilisant les protocoles
+<acronym>TLS</acronym> activé en positionnant le paramètre
 <xref linkend="guc-ssl"/> à <literal>on</literal> dans
 <filename>postgresql.conf</filename>. Le serveur écoutera les deux types
 de connexion, normal et  <acronym>SSL</acronym>, sur le même port TCP,

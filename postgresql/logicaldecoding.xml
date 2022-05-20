@@ -147,7 +147,7 @@ postgres=# SELECT pg_drop_replication_slot('regression_slot');
 (1 row)</programlisting>
 
   <para>
-   L'exemple suivant montre comment le décodage logique est contrôlé avec le
+   Les exemples suivant montrent comment le décodage logique est contrôlé avec le
    protocole de réplication en flux, en utilisant l'outil <xref
    linkend="app-pgrecvlogical"/> fourni avec la distribution PostgreSQL. Il
    requiert que l'authentification du client soit configuré pour autoriser
@@ -155,9 +155,13 @@ postgres=# SELECT pg_drop_replication_slot('regression_slot');
    linkend="streaming-replication-authentication"/>) et que le paramètre
    <varname>max_wal_senders</varname> soit configuré suffisamment haut pour
    qu'une nouvelle connexion soit acceptée.
+   The second example shows how to stream two-phase
+   transactions.  Before you use two-phase commands, you must set
+   <xref linkend="guc-max-prepared-transactions"/> to at least 1.
   </para>
 
-  <programlisting>$ pg_recvlogical -d postgres --slot=test --create-slot
+  <programlisting>Exemple 1 :
+$ pg_recvlogical -d postgres --slot=test --create-slot
 $ pg_recvlogical -d postgres --slot=test --start -f -
 <keycombo action="simul"><keycap>Control</keycap><keycap>Z</keycap></keycombo>
 $ psql -d postgres -c "INSERT INTO data(data) VALUES('4');"
@@ -165,6 +169,22 @@ $ fg
  BEGIN 693
  table public.data: INSERT: id[integer]:4 data[text]:'4'
  COMMIT 693
+<keycombo action="simul"><keycap>Control</keycap><keycap>C</keycap></keycombo>
+$ pg_recvlogical -d postgres --slot=test --drop-slot
+
+Exemple 2 :
+$ pg_recvlogical -d postgres --slot=test --create-slot --two-phase
+$ pg_recvlogical -d postgres --slot=test --start -f -
+<keycombo action="simul"><keycap>Control</keycap><keycap>Z</keycap></keycombo>
+$ psql -d postgres -c "BEGIN;INSERT INTO data(data) VALUES('5');PREPARE TRANSACTION 'test';"
+$ fg
+BEGIN 694
+table public.data: INSERT: id[integer]:5 data[text]:'5'
+PREPARE TRANSACTION 'test', txid 694
+<keycombo action="simul"><keycap>Control</keycap><keycap>Z</keycap></keycombo>
+$ psql -d postgres -c "COMMIT PREPARED 'test';"
+$ fg
+COMMIT PREPARED 'test', txid 694
 <keycombo action="simul"><keycap>Control</keycap><keycap>C</keycap></keycombo>
 $ pg_recvlogical -d postgres --slot=test --drop-slot</programlisting>
 
@@ -342,7 +362,7 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
    <para>
     Quand un nouveau slot de réplication est créé avec l'interface de la
     réplication en flux (voir <xref
-    linkend="protocol-replication-create-slot"/>), un instantané est exporté
+    linkend="protocol-replication-create-replication-slot"/>), un instantané est exporté
     (voir <xref linkend="functions-snapshot-synchronization"/>), qui montrera
     exactement l'état de la base de données après lequel tous les changements
     seront inclus dans le flux de changement.  Cela peut être utilisé pour
@@ -510,6 +530,9 @@ typedef void (*LogicalOutputPluginInit) (struct OutputPluginCallbacks *cb);</pro
     <function>stream_prepare_cb</function> sont obligatoires, alors que
     <function>stream_message_cb</function> et
     <function>stream_truncate_cb</function> sont facultatifs.
+    Also, if streaming of two-phase commands is to be supported, then additional
+    callbacks must be provided. (See <xref linkend="logicaldecoding-two-phase-commits"/>
+    for details).
    </para>
 
    <para>
@@ -1293,7 +1316,13 @@ stream_start_cb(...);   &lt;-- début du deuxième bloc de changements
   stream_change_cb(...);
 stream_stop_cb(...);    &lt;-- fin du deuxième bloc de changements
 
-stream_commit_cb(...);  &lt;-- validation de la transaction en flux</programlisting>
+
+[a. when using normal commit]
+stream_commit_cb(...);  &lt;-- validation de la transaction en flux
+
+[b. when using two-phase commit]
+stream_prepare_cb(...);   &lt;-- prepare the streamed transaction
+commit_prepared_cb(...);  &lt;-- commit of the prepared transaction</programlisting>
   </para>
 
   <para>

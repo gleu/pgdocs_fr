@@ -25,6 +25,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> REFRESH PUBL
 ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> ENABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> DISABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> SET ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">valeur</replaceable>] [, ... ] )
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SKIP ( <replaceable class="parameter">skip_option</replaceable> = <replaceable class="parameter">value</replaceable> )
 ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> OWNER TO { <replaceable>nouveau_proprietaire</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <replaceable>nouveau_nom</replaceable>
   </synopsis>
@@ -57,7 +58,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
    l'hôte distant soient rendues. Si à cause d'erreurs réseau ou autres,
    <productname>PostgreSQL</productname> est incapable de supprimer les
    slots, un message d'erreur sera renvoyé. Pour continuer, l'utilisateur
-   doit soit tenter une nouvelle fois l'opération, soit déassocier le slot de
+   doit soit tenter une nouvelle fois l'opération, soit dissocier le slot de
    la souscription et supprimer la souscription comme expliquée dans <xref
    linkend="sql-dropsubscription"/>.
   </para>
@@ -67,6 +68,13 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
    et <command>ALTER SUBSCRIPTION ...{SET|ADD|DROP} PUBLICATION ...</command>
    avec l'option <literal>refresh</literal> activée ne peuvent pas être
    exécutées dans un bloc de transaction.
+
+   These commands also cannot be executed when the subscription has
+   <literal>two_phase</literal> commit enabled,
+   unless <literal>copy_data</literal> is <literal>false</literal>.
+   See column <structfield>subtwophasestate</structfield> of
+   <link linkend="catalog-pg-subscription"><structname>pg_subscription</structname></link>
+   to know the actual two-phase state.
   </para>
  </refsect1>
 
@@ -87,7 +95,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
     <term><literal>CONNECTION '<replaceable class="parameter">conninfo</replaceable>'</literal></term>
     <listitem>
      <para>
-      Cette clause modifie la propriété de connexion positionnée à l'origine par
+      Cette clause remplace la propriété de connexion positionnée à l'origine par
       <xref linkend="sql-createsubscription"/>.  S'y référer pour plus
       d'informations.
      </para>
@@ -100,11 +108,15 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
     <term><literal>DROP PUBLICATION <replaceable class="parameter">nom_publication</replaceable></literal></term>
     <listitem>
      <para>
-      Change la liste des publications souscrites. <literal>SET</literal>
+      Ces syntaxes changent la liste des publications souscrites. <literal>SET</literal>
       remplace la liste entière des publications avec une nouvelle liste,
       <literal>ADD</literal> ajoute des publications supplémentaires à la
       liste de publications, et <literal>DROP</literal> supprime des
-      publications de la liste des publications. Voir <xref
+      publications de la liste des publications.
+      We allow non-existent publications to be
+      specified in <literal>ADD</literal> and <literal>SET</literal> variants
+      so that users can add those later.
+      Voir <xref
       linkend="sql-createsubscription"/> pour plus d'informations. Par
       défaut, cette commande agira aussi comme <literal>REFRESH
       PUBLICATION</literal>.
@@ -142,9 +154,9 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
      <para>
       Récupère les informations de table manquante depuis la publication.  Cela
       commencera la réplication des tables qui avaient été ajoutées en tant que
-      souscription aux publications depuis la dernière exécution de
-      <command>REFRESH PUBLICATION</command> ou depuis <command>CREATE
-       SUBSCRIPTION</command>.
+      souscription aux publications depuis <command>CREATE
+      SUBSCRIPTION</command> ou depuis la dernière exécution de <command>REFRESH
+      PUBLICATION</command>.
      </para>
 
      <para>
@@ -157,11 +169,13 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
         <term><literal>copy_data</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
-          Spécifie si les données existantes dans les publications qui sont
-          en train d'être souscrites devraient être copiées une fois que la
-          réplication démarrera.
-          La valeur par défaut est <literal>true</literal>. (Les tables
-          précédemment souscrites ne sont pas copiées.)
+          Specifies whether to copy pre-existing data in the publications
+          that are being subscribed to when the replication starts.
+          The default is <literal>true</literal>.
+         </para>
+         <para>
+          Previously subscribed tables are not copied, even if a table's row
+          filter <literal>WHERE</literal> clause has since been modified.
          </para>
         </listitem>
        </varlistentry>
@@ -174,7 +188,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
     <term><literal>ENABLE</literal></term>
     <listitem>
      <para>
-      Active la souscription précédemment désactivée, démarrant le worker de
+      Active une souscription précédemment désactivée, démarrant le worker de
       réplication logique à la fin de la transaction.
      </para>
     </listitem>
@@ -184,7 +198,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
     <term><literal>DISABLE</literal></term>
     <listitem>
      <para>
-      Désactive la souscription en cours d'exécution,  arrêtant le worker de
+      Désactive une souscription en cours d'exécution, arrêtant le worker de
       réplication logique à la fin de la transaction.
      </para>
     </listitem>
@@ -199,9 +213,50 @@ ALTER SUBSCRIPTION <replaceable class="parameter">nom</replaceable> RENAME TO <r
       d'informations. Les paramètres modifiables sont
       are <literal>slot_name</literal>,
       <literal>synchronous_commit</literal>,
-      <literal>binary</literal> et
-      <literal>streaming</literal>.
+      <literal>binary</literal>,
+      <literal>streaming</literal> et
+      <literal>disable_on_error</literal>.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SKIP ( <replaceable class="parameter">skip_option</replaceable> = <replaceable class="parameter">value</replaceable> )</literal></term>
+    <listitem>
+     <para>
+      Skips applying all changes of the remote transaction.  If incoming data
+      violates any constraints, logical replication will stop until it is
+      resolved.  By using the <command>ALTER SUBSCRIPTION ... SKIP</command> command,
+      the logical replication worker skips all data modification changes within
+      the transaction.  This option has no effect on the transactions that are
+      already prepared by enabling <literal>two_phase</literal> on
+      subscriber.
+      After the logical replication worker successfully skips the transaction or
+      finishes a transaction, the LSN (stored in
+      <structname>pg_subscription</structname>.<structfield>subskiplsn</structfield>)
+      is cleared.  See <xref linkend="logical-replication-conflicts"/> for
+      the details of logical replication conflicts.  Using this command requires
+      superuser privilege.
+     </para>
+
+     <para>
+      <replaceable>skip_option</replaceable> specifies options for this operation.
+      The supported option is:
+
+      <variablelist>
+       <varlistentry>
+        <term><literal>lsn</literal> (<type>pg_lsn</type>)</term>
+        <listitem>
+         <para>
+          Specifies the finish LSN of the remote transaction whose changes
+          are to be skipped by the logical replication worker.  The finish LSN
+          is the LSN at which the transaction is either committed or prepared.
+          Skipping individual subtransactions is not supported.  Setting
+          <literal>NONE</literal> resets the LSN.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist></para>
     </listitem>
    </varlistentry>
 

@@ -20,7 +20,7 @@ html:
 NO_GENERATED_HEADERS=yes
 NO_TEMP_INSTALL=yes
 
-VERSION = 14
+VERSION = 15
 
 all: html man
 
@@ -186,7 +186,7 @@ MAKEINFO = makeinfo
 	$(DB2X_XSLTPROC) -s texi -g output-file=$(basename $@) $< -o $@
 
 %.texi: %.texixml
-	$(DB2X_TEXIXML) --encoding=iso-8859-1//TRANSLIT $< --to-stdout > $@
+	$(DB2X_TEXIXML) --encoding=utf-8 $< --to-stdout > $@
 
 %.info: %.texi
 	$(MAKEINFO) --enable-encoding --no-split --no-validate $< -o $@

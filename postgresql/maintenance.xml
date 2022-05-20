@@ -534,10 +534,11 @@
     ces blocs pourraient toujours avoir des versions de lignes avec des
     identifiants très anciens de transactions. De ce fait, les
     <command>VACUUM</command> normaux ne vont pas toujours geler chaque
-    ancienne version de ligne dans la table. De temps en temps,
-    <command>VACUUM</command> réalise un <firstterm>vacuum
-    agressif</firstterm>, ignorant seulement les blocs contenant aucune ligne
-    morte et aucune valeur XID ou MXID non gelé. <xref
+    ancienne version de ligne dans la table.
+    When that happens, <command>VACUUM</command> will eventually need to perform an
+    <firstterm>aggressive vacuum</firstterm>, which will freeze all eligible unfrozen
+    XID and MXID values, including those from all-visible but not all-frozen pages.
+    In practice most tables require periodic aggressive vacuuming. <xref
     linkend="guc-vacuum-freeze-table-age"/> contrôle quand
     <command>VACUUM</command> se comporte ainsi&nbsp;: les blocs ne contenant
     que des lignes vivantes mais non gelées sont parcourus si le nombre de
@@ -545,8 +546,7 @@
     grand que <varname>vacuum_freeze_table_age</varname> moins
     <varname>vacuum_freeze_min_age</varname>. Configurer
     <varname>vacuum_freeze_table_age</varname> à 0 force
-    <command>VACUUM</command> à utiliser cette stratégie plus agressive pour
-    tous les parcours.
+    <command>VACUUM</command> à toujours utiliser cette stratégie plus agressive.
    </para>
 
    <para>
@@ -646,7 +646,14 @@
     pour cette table. Il est garanti que tous les XID plus anciens que ce XID
     ont été remplacés par <literal>FrozenXID</literal> pour cette table.
     Toutes les lignes insérées par des transactions dont le XID est plus
-    ancien que ce XID sont garanties d'avoir été gelées. De façon similaire,
+    ancien que ce XID sont garanties d'avoir été gelées.
+    In particular,
+    the <structfield>relfrozenxid</structfield> column of a table's
+    <structname>pg_class</structname> row contains the oldest remaining unfrozen
+    XID at the end of the most recent <command>VACUUM</command> that successfully
+    advanced <structfield>relfrozenxid</structfield> (typically the most recent
+    aggressive VACUUM).
+    De façon similaire,
     la colonne <structfield>datfrozenxid</structfield> de la ligne
     <structname>pg_database</structname> de la base est une limite inférieure
     des XID non gelés apparaissant dans cette base &mdash; c'est tout
@@ -666,6 +673,19 @@ SELECT datname, age(datfrozenxid) FROM pg_database;</programlisting>
     partir du XID final vers le XID de transaction en cours.
    </para>
 
+   <tip>
+    <para>
+     When the <command>VACUUM</command> command's <literal>VERBOSE</literal>
+     parameter is specified, <command>VACUUM</command> prints various
+     statistics about the table.  This includes information about how
+     <structfield>relfrozenxid</structfield> and
+     <structfield>relminmxid</structfield> advanced.  The same details appear
+     in the server log when autovacuum logging (controlled by <xref
+      linkend="guc-log-autovacuum-min-duration"/>) reports on a
+     <command>VACUUM</command> operation executed by autovacuum.
+    </para>
+   </tip>
+
    <para>
     Habituellement, <command>VACUUM</command> parcourt seulement les blocs qui
     ont été modifiés depuis le dernier nettoyage mais
@@ -681,7 +701,12 @@ SELECT datname, age(datfrozenxid) FROM pg_database;</programlisting>
     (relfrozenxid)</literal> à une valeur un peu au-dessus de la
     configuration utilisée pour <varname>vacuum_freeze_min_age</varname>
     (plus par le nombre de transactions démarrées depuis le lancement de
-    <command>VACUUM</command>). Si aucun <command>VACUUM</command> avec
+    <command>VACUUM</command>).
+    <command>VACUUM</command>
+    will set <structfield>relfrozenxid</structfield> to the oldest XID
+    that remains in the table, so it's possible that the final value
+    will be much more recent than strictly required.
+    Si aucun <command>VACUUM</command> avec
     avancement de <structfield>relfrozenxid</structfield> n'est lancé sur la
     table, une fois arrivé à <varname>autovacuum_freeze_max_age</varname>, un
     autovacuum est forcé sur la table.
@@ -778,8 +803,10 @@ HINT:  Stop the postmaster and vacuum that database in single-user mode.
     </para>
 
     <para>
-     Les <command>VACUUM</command> agressifs, quelqu'en soit la cause,
-     permettent d'avancer la valeur pour cette table. Comme toutes les tables
+     Aggressive <command>VACUUM</command>s, regardless of what causes
+     them, are <emphasis>guaranteed</emphasis> to be able to advance
+     the table's <structfield>relminmxid</structfield>.
+     Comme toutes les tables
      de toutes les bases sont parcourues et que leurs plus anciennes valeurs
      multixact sont avancées, le stockage sur disque pour les anciens
      multixacts peut être supprimé.
@@ -896,8 +923,8 @@ limite insertion vacuum = limite insertion base vacuum + facteur échelle insert
     être bénéfique de diminuer la valeur du paramètre <xref
     linkend="reloption-autovacuum-freeze-min-age"/> pour la table car cela
     permet le gel des lignes par des VACUUM rapides. Le nombre de lignes
-    obsolètes et le nombre de lignes insérées sont obtenus via le collecteur
-    de statistiques&nbsp;; ce décompte moyennement précis est mis à jour par
+    obsolètes et le nombre de lignes insérées sont obtenus via le système
+    de statistiques cumulatives&nbsp;; ce décompte moyennement précis est mis à jour par
     chaque opération <command>UPDATE</command>, <command>DELETE</command> et
     <command>INSERT</command>. (C'est seulement moyennement précis car
     certaines informations pourraient être perdues en cas de fortes charges.)

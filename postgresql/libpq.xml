@@ -2650,6 +2650,16 @@ const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
         </varlistentry>
        </variablelist>
       </para>
+
+      <para>
+       As a special case, the <literal>library</literal> attribute may be
+       queried without an existing connection by passing NULL as the
+       <literal>conn</literal> argument. The historical behavior was to return
+       NULL for any attribute when a NULL <literal>conn</literal> was provided;
+       client programs needing to differentiate between the newer and older
+       implementations may check the
+       <literal>LIBPQ_HAS_SSL_LIBRARY_DETECTION</literal> feature macro.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -4135,19 +4145,22 @@ char *PQresultVerboseErrorMessage(const PGresult *res,
       </para>
 
       <para>
-       Cette fonction renvoie une chaîne contenant le nombre de lignes affectées par
-       l'instruction <acronym>SQL</acronym> qui a généré <structname>PGresult</structname>. Cette
-       fonction ne peut être utilisée qu'après l'exécution d'une instruction
-       <command>SELECT</command>, <command>CREATE TABLE AS</command>, <command>INSERT</command>,
-       <command>UPDATE</command>, <command>DELETE</command>, <command>MOVE</command>,
-       <command>FETCH</command> ou <command>COPY</command>,
-       ou un <command>EXECUTE</command> d'une instruction préparée
-       contenant une instruction <command>INSERT</command>, <command>UPDATE</command> ou
-       <command>DELETE</command>. Si la commande qui a généré <structname>PGresult</structname> était
-       autre chose, <xref linkend="libpq-PQcmdTuples"/> renverrait directement une chaîne vide.
-       L'appelant ne devrait pas libérer la valeur de retour directement. Elle sera
-       libérée quand le pointeur <structname>PGresult</structname> associée sera passé à
-       <xref linkend="libpq-PQclear"/>.
+       Cette fonction renvoie une chaîne contenant le nombre de lignes affectées
+       par l'instruction <acronym>SQL</acronym> qui a généré
+       <structname>PGresult</structname>. Cette fonction ne peut être utilisée
+       qu'après l'exécution d'une instruction <command>SELECT</command>,
+       <command>CREATE TABLE AS</command>, <command>INSERT</command>,
+       <command>UPDATE</command>, <command>DELETE</command>,
+       <command>MERGE</command>, <command>MOVE</command>,
+       <command>FETCH</command> ou <command>COPY</command>, ou un
+       <command>EXECUTE</command> d'une instruction préparée contenant une
+       instruction <command>INSERT</command>, <command>UPDATE</command>,
+       <command>DELETE</command> ou <command>MERGE</command>. Si la commande qui
+       a généré <structname>PGresult</structname> était autre chose, <xref
+       linkend="libpq-PQcmdTuples"/> renverrait directement une chaîne vide.
+       L'appelant ne devrait pas libérer la valeur de retour directement. Elle
+       sera libérée quand le pointeur <structname>PGresult</structname> associée
+       sera passé à <xref linkend="libpq-PQclear"/>.
       </para>
      </listitem>
     </varlistentry>
@@ -5727,7 +5740,7 @@ UPDATE mytable SET x = x + 1 WHERE id = 42;
        <structname>PGconn</structname> et, en cas d'échec, stocke le message d'erreur
        dans l'objet <structname>PGconn</structname> (d'où il peut être récupéré avec
        <xref linkend="libpq-PQerrorMessage"/>). Bien qu'il s'agisse de la même
-       fonctionnalité, cette approche est hasardeuse dans les programmes
+       fonctionnalité, cette approche n'est pas sûre dans les programmes
        multi-threads et les gestionnaires de
        signaux car il est possible que la surcharge du message d'erreur de
        <structname>PGconn</structname> gênera l'opération en cours sur la connexion.
@@ -6856,6 +6869,7 @@ char *PQencryptPassword(const char *passwd, const char *user);
       <literal>PG_COPYRES_EVENTS</literal> indique la copie des événements du
       résultat source. (Mais toute instance de données associée avec la source
       n'est pas copiée.)
+      The event procedures receive <literal>PGEVT_RESULTCOPY</literal> events.
      </para>
     </listitem>
    </varlistentry>
@@ -7153,7 +7167,7 @@ size_t PQresultMemorySize(const PGresult *res);
    <xref linkend="libpq-PQinstanceData"/>,
    <xref linkend="libpq-PQsetInstanceData"/>,
    <xref linkend="libpq-PQresultInstanceData"/> et
-   <function>PQsetResultInstanceData</function>. Notez que, contrairement au
+   <function>PQresultSetInstanceData</function>. Notez que, contrairement au
    pointeur passthrough, les <structname>PGresult</structname> n'héritent pas
    automatiquement des données instanciées d'un
    <structname>PGconn</structname>. <application>libpq</application> ne sait
@@ -7183,8 +7197,8 @@ size_t PQresultMemorySize(const PGresult *res);
        est appelé. C'est le moment idéal pour initialiser toute structure
        <literal>instanceData</literal> qu'une procédure d'événement pourrait avoir
        besoin. Seul un événement d'enregistrement sera déclenché par gestionnaire
-       d'événement sur une connexion. Si la procédure échoue, l'enregistrement
-       est annulé.
+       d'événement sur une connexion. Si la procédure échoue (renvoie zéro),
+       l'enregistrement est annulé.
 
        <synopsis>
         typedef struct
@@ -7213,11 +7227,11 @@ size_t PQresultMemorySize(const PGresult *res);
        L'événement de réinitialisation de connexion est déclenché après un
        <xref linkend="libpq-PQreset"/> ou un <function>PQresetPoll</function>. Dans
        les deux cas, l'événement est seulement déclenché si la ré-initialisation
-       est réussie. Si la procédure échoue, la réinitialisation de connexion
-       échouera&nbsp;; la structure <structname>PGconn</structname> est placée
-       dans le statut <literal>CONNECTION_BAD</literal> et
-       <function>PQresetPoll</function> renverra
-       <literal>PGRES_POLLING_FAILED</literal>.
+       est réussie.
+       The return value of the event procedure is ignored
+       in <productname>PostgreSQL</productname> v15 and later.
+       With earlier versions, however, it's important to return success
+       (nonzero) or the connection will be aborted.
 
        <synopsis>
         typedef struct
@@ -7291,12 +7305,11 @@ size_t PQresultMemorySize(const PGresult *res);
        <parameter>conn</parameter> est la connexion utilisée pour générer le
        résultat. C'est le moment idéal pour initialiser tout
        <literal>instanceData</literal> qui doit être associé avec le résultat.
-       Si la procédure échoue, le résultat sera effacé et l'échec sera propagé.
-       La procédure d'événement ne doit pas tenter elle-même un
-       <xref linkend="libpq-PQclear"/> sur l'objet résultat.
-       Lors du renvoi d'un code d'échec, tout le
-       nettoyage doit être fait car aucun événement
-       <literal>PGEVT_RESULTDESTROY</literal> ne sera envoyé.
+       If an event procedure fails (returns zero), that event
+       procedure will be ignored for the remaining lifetime of the result;
+       that is, it will not receive <literal>PGEVT_RESULTCOPY</literal>
+       or <literal>PGEVT_RESULTDESTROY</literal> events for this result or
+       results copied from it.
       </para>
      </listitem>
     </varlistentry>
@@ -7327,12 +7340,13 @@ size_t PQresultMemorySize(const PGresult *res);
        alors que le résultat <parameter>dest</parameter> correspond à la
        destination. Cet événement peut être utilisé pour fournir une copie
        complète de <literal>instanceData</literal>, ce que
-       <literal>PQcopyResult</literal> ne peut pas faire. Si la procédure
-       échoue, l'opération complète de copie échouera et le résultat
-       <parameter>dest</parameter> sera effacé. Au renvoi d'un code d'échec,
-       tout le nettoyage doit être réalisé car aucun événement
-       <literal>PGEVT_RESULTDESTROY</literal> ne sera envoyé pour le résultat
-       de destination.
+       <literal>PQcopyResult</literal> ne peut pas faire.
+       If an event
+       procedure fails (returns zero), that event procedure will be
+       ignored for the remaining lifetime of the new result; that is, it
+       will not receive <literal>PGEVT_RESULTCOPY</literal>
+       or <literal>PGEVT_RESULTDESTROY</literal> events for that result or
+       results copied from it.
       </para>
      </listitem>
     </varlistentry>
@@ -7659,7 +7673,7 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
             mydata *res_data = dup_mydata(conn_data);
 
             /* associe des données spécifiques à l'application avec les résultats (copié de la connexion) */
-            PQsetResultInstanceData(e->result, myEventProc, res_data);
+            PQresultSetInstanceData(e->result, myEventProc, res_data);
             break;
         }
 
@@ -7670,7 +7684,7 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
             mydata *dest_data = dup_mydata(src_data);
 
             /* associe des données spécifiques à l'application avec les résultats (copié d'un résultat) */
-            PQsetResultInstanceData(e->dest, myEventProc, dest_data);
+            PQresultSetInstanceData(e->dest, myEventProc, dest_data);
             break;
         }
 
@@ -8313,11 +8327,13 @@ ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
 
   <indexterm zone="libpq-ssl">
    <primary>SSL</primary>
+   <secondary>TLS</secondary>
   </indexterm>
 
   <para>
    <productname>PostgreSQL</productname> dispose d'un support natif des connexions
-   <acronym>SSL</acronym> pour chiffrer les connexions client/serveur et améliorer
+   <acronym>SSL</acronym> pour chiffrer les connexions client/serveur en utilisant
+   <acronym>TLS</acronym> pour améliorer
    ainsi la sécurité. Voir la <xref linkend="ssl-tcp"/> pour des détails sur la
    fonctionnalité <acronym>SSL</acronym> côté serveur.
   </para>
@@ -8382,9 +8398,8 @@ ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
    <para>
     En mode <literal>verify-full</literal>, le nom de l'hôte est mis
     en correspondance avec le ou les attributs <literal>Subject Alternative
-     Name</literal> du certificat, ou avec l'attribut
-    <literal>Common Name</literal> si aucun
-    <literal>Subject Alternative Name</literal> de type
+     Name</literal> (SAN) du certificat, ou avec l'attribut
+    <literal>Common Name</literal> si aucun SAN de type
     <literal>dNSName</literal> n'est présent. Si le nom du
     certificat débute avec le caractère étoile (<literal>*</literal>),
     l'étoile sera traitée comme un métacaractère qui
@@ -8392,8 +8407,23 @@ ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
     </emphasis> du point. Cela signifie que le certificat ne pourra pas
     correspondre à des sous-domaines. Si la connexion se
     fait en utilisant une adresse IP au lieu d'un nom d'hôte, l'adresse
-    IP sera vérifiée (sans faire de résolution DNS).
+    IP sera vérifiée (sans faire de résolution DNS) against SANs of
+    type <literal>iPAddress</literal> or <literal>dNSName</literal>.  If no
+    <literal>iPAddress</literal> SAN is present and no
+    matching <literal>dNSName</literal> SAN is present, the host IP address is
+    matched against the Common Name attribute.
    </para>
+
+   <note>
+    <para>
+     For backward compatibility with earlier versions of PostgreSQL, the host
+     IP address is verified in a manner different
+     from <ulink url="https://tools.ietf.org/html/rfc6125">RFC 6125</ulink>.
+     The host IP address is always matched against <literal>dNSName</literal>
+     SANs as well as <literal>iPAddress</literal> SANs, and can be matched
+     against the Common Name attribute if no relevant SANs exist.
+    </para>
+   </note>
 
    <para>
     Pour permettre la vérification du certificat du serveur, un ou plusieurs
@@ -8407,7 +8437,6 @@ ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
    </para>
 
    <para>
-
     Les entrées de la liste de révocation des certificats (CRL) sont aussi
     vérifiées si le fichier <filename>~/.postgresql/root.crl</filename> existe
     (<filename>%APPDATA%\postgresql\root.crl</filename> sur Microsoft
