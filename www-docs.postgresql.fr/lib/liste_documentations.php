@@ -1,7 +1,7 @@
 <?php
   if ($pgconn)
   {
-    $query = "SELECT version FROM versions WHERE obsolete=";
+    $query = "SELECT version||CASE WHEN beta THEN ' BETA!' ELSE '' END AS version FROM versions WHERE obsolete=";
     $query .= $obsoletes ? "true" : "false";
     $query .= " ORDER BY ordre";
     $result = pg_query($pgconn, $query);
@@ -14,11 +14,11 @@
   }
   elseif ($obsoletes)
   {
-    $versions = array('9.4', '9.3', '9.2', '9.1', '9.0', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4');
+    $versions = array('9.6', '9.5', '9.4', '9.3', '9.2', '9.1', '9.0', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4');
   }
   else
   {
-    $versions = array('13', '12', '11', '10', '9.6', '9.5');
+    $versions = array('15', '14', '13', '12', '11', '10', '9.6', '9.5');
   }
 
   foreach ($versions as &$version)
