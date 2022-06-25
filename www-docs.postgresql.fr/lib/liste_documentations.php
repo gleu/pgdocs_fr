@@ -1,7 +1,7 @@
 <?php
   if ($pgconn)
   {
-    $query = "SELECT version||CASE WHEN beta THEN ' BETA!' ELSE '' END AS version FROM versions WHERE obsolete=";
+    $query = "SELECT version, beta FROM versions WHERE obsolete=";
     $query .= $obsoletes ? "true" : "false";
     $query .= " ORDER BY ordre";
     $result = pg_query($pgconn, $query);
@@ -10,6 +10,10 @@
     while ($ligne = pg_fetch_array($result))
     {
       array_push($versions, $ligne['version']);
+      if($ligne['beta'] == 't')
+      {
+        $beta = $ligne['version'];
+      }
     }
   }
   elseif ($obsoletes)
@@ -25,7 +29,7 @@
   {
     echo "
         <div id=\"pg${version}\">
-          <h2>Version ${version}</h2>
+          <h2>Version ${version}".($beta == $version ? " BETA!" : "")."</h2>
           <div class=\"listes\">
             <ul>
               <li>Manuel au format HTML&nbsp;:
