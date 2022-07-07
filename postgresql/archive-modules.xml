@@ -1,56 +1,57 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- doc/src/sgml/archive-modules.sgml -->
-
 <chapter id="archive-modules">
- <title>Archive Modules</title>
+ <title>Modules d'archivage</title>
  <indexterm zone="archive-modules">
-  <primary>Archive Modules</primary>
+  <primary>Modules d'archivage</primary>
  </indexterm>
 
  <para>
-  PostgreSQL provides infrastructure to create custom modules for continuous
-  archiving (see <xref linkend="continuous-archiving"/>).  While archiving via
-  a shell command (i.e., <xref linkend="guc-archive-command"/>) is much
-  simpler, a custom archive module will often be considerably more robust and
-  performant.
+  PostgreSQL fournit l'infrastructure nécessaire à la création de modules
+  personnalisés pour l'archivage continu (voir
+  <xref linkend="continuous-archiving"/>). Alors que l'archivage via une
+  commande shell (par exemple, <xref linkend="guc-archive-command"/>) est bien
+  plus simple, un module d'archivage personnalisé sera souvent considéré plus
+  robuste et plus performant.
  </para>
 
  <para>
-  When a custom <xref linkend="guc-archive-library"/> is configured, PostgreSQL
-  will submit completed WAL files to the module, and the server will avoid
-  recycling or removing these WAL files until the module indicates that the files
-  were successfully archived.  It is ultimately up to the module to decide what
-  to do with each WAL file, but many recommendations are listed at
+  Quand un <xref linkend="guc-archive-library"/> personnalisé est configuré,
+  PostgreSQL soumettra les fichiers segment WAL complets au module, et le
+  serveur évitera de recycler ou supprimer ces fichiers segment WAL jusqu'à ce
+  que le module indique qu'ils ont été archivés avec succès. C'est au final au
+  module de décider quoi faire avec chaque fichier segment WAL, mais de
+  nombreuses recommandations sont listées sur
   <xref linkend="backup-archiving-wal"/>.
  </para>
 
  <para>
-  Archiving modules must at least consist of an initialization function (see
-  <xref linkend="archive-module-init"/>) and the required callbacks (see
-  <xref linkend="archive-module-callbacks"/>).  However, archive modules are
-  also permitted to do much more (e.g., declare GUCs and register background
-  workers).
+  Les modules d'archivage doivent au moins comporter une fonction
+  d'initialisation (voir <xref linkend="archive-module-init"/>) ainsi que les
+  fonctions de support requis (voir <xref linkend="archive-module-callbacks"/>). Cependant,
+  les modules d'archivage peuvent également faire bien plus (par exemple,
+  déclarer des paramètres de configuration et démarrer des processus d'arrière plan).
  </para>
 
  <para>
-  The <filename>contrib/basic_archive</filename> module contains a working
-  example, which demonstrates some useful techniques.
+  Le module <filename>contrib/basic_archive</filename> contient un exemple
+  fonctionnel, qui démontre quelques techniques utiles.
  </para>
 
  <sect1 id="archive-module-init">
-  <title>Initialization Functions</title>
+  <title>Fonctions d'initialisation</title>
   <indexterm zone="archive-module-init">
    <primary>_PG_archive_module_init</primary>
   </indexterm>
   <para>
-   An archive library is loaded by dynamically loading a shared library with the
-   <xref linkend="guc-archive-library"/>'s name as the library base name.  The
-   normal library search path is used to locate the library.  To provide the
-   required archive module callbacks and to indicate that the library is
-   actually an archive module, it needs to provide a function named
-   <function>_PG_archive_module_init</function>.  This function is passed a
-   struct that needs to be filled with the callback function pointers for
-   individual actions.
+   Une bibliothèque d'archivage est chargée en appelant dynamiquement une bibliothèque
+   partagée dont le nom de base est fourni par le paramètre
+   <xref linkend="guc-archive-library"/>. Le chemin habituel de recherche des bibliothèques
+   est utilisé pour localiser cette bibliothèque. Pour fournir les
+   fonctions de support nécessaires au module d'archivage et pour indiquer que la bibliothèque
+   est en fait un module d'archivage, une fonction
+   <function>_PG_archive_module_init</function> doit y être fournie. Cette
+   fonction reçoit une structure définie par les pointeurs des fonctions de
+   support pour chaque action individuelle.
 
 <programlisting>
 typedef struct ArchiveModuleCallbacks
@@ -62,71 +63,73 @@ typedef struct ArchiveModuleCallbacks
 typedef void (*ArchiveModuleInit) (struct ArchiveModuleCallbacks *cb);
 </programlisting>
 
-   Only the <function>archive_file_cb</function> callback is required.  The
-   others are optional.
+   Seule la fonction de support <function>archive_file_cb</function> est requise. Les
+   autres sont optionnelles.
   </para>
  </sect1>
 
  <sect1 id="archive-module-callbacks">
-  <title>Archive Module Callbacks</title>
+  <title>Fonctions de support d'un module d'archivage</title>
   <para>
-   The archive callbacks define the actual archiving behavior of the module.
-   The server will call them as required to process each individual WAL file.
+   Les fonctions de support d'archivage définissent le comportement d'archivage proprement
+   dit du module. Le serveur les appellera suivant les besoins pour traiter chaque
+   fichier segment WAL individuellement.
   </para>
 
   <sect2 id="archive-module-check">
-   <title>Check Callback</title>
+   <title>Fonction de vérification</title>
    <para>
-    The <function>check_configured_cb</function> callback is called to determine
-    whether the module is fully configured and ready to accept WAL files (e.g.,
-    its configuration parameters are set to valid values).  If no
-    <function>check_configured_cb</function> is defined, the server always
-    assumes the module is configured.
+    La fonction de support <function>check_configured_cb</function> est appelée pour
+    déterminer si le module est pleinement configuré et prêt à traiter des
+    fichiers segment WAL (par exemple, si ses paramètres de configuration sont
+    définis avec des valeurs valides). Si la fonction
+    <function>check_configured_cb</function> n'est pas définie, le serveur
+    présumera que le module est configuré.
 
 <programlisting>
 typedef bool (*ArchiveCheckConfiguredCB) (void);
 </programlisting>
 
-    If <literal>true</literal> is returned, the server will proceed with
-    archiving the file by calling the <function>archive_file_cb</function>
-    callback.  If <literal>false</literal> is returned, archiving will not
-    proceed, and the archiver will emit the following message to the server log:
-<screen>
-WARNING:  archive_mode enabled, yet archiving is not configured
-</screen>
-    In the latter case, the server will periodically call this function, and
-    archiving will proceed only when it returns <literal>true</literal>.
+    Si <literal>true</literal> est renvoyé, le serveur procédera à l'archivage
+    en appelant la fonction <function>archive_file_cb</function>. Si
+    <literal>false</literal> est renvoyé, l'archivage ne sera pas effectué, et
+    l'archiver émettra le message suivant dans les traces du serveur&nbsp;:
+<screen>WARNING:  archive_mode enabled, yet archiving is not configured</screen>
+    Dans ce dernier cas, le serveur appellera périodiquement cette fonction, et
+    l'archivage ne sera effectué que lorsque le booléen <literal>true</literal> sera
+    renvoyé.
    </para>
   </sect2>
 
   <sect2 id="archive-module-archive">
-   <title>Archive Callback</title>
+   <title>Fonction d'archivage</title>
    <para>
-    The <function>archive_file_cb</function> callback is called to archive a
-    single WAL file.
+    La fonction <function>archive_file_cb</function> est appelée pour archiver un
+    fichier segment WAL individuel.
 
 <programlisting>
 typedef bool (*ArchiveFileCB) (const char *file, const char *path);
 </programlisting>
 
-    If <literal>true</literal> is returned, the server proceeds as if the file
-    was successfully archived, which may include recycling or removing the
-    original WAL file.  If <literal>false</literal> is returned, the server will
-    keep the original WAL file and retry archiving later.
-    <literal>file</literal> will contain just the file name of the WAL file to
-    archive, while <literal>path</literal> contains the full path of the WAL
-    file (including the file name).
+    Si la valeur <literal>true</literal> est renvoyée, le serveur procédera comme si le
+    fichier était archivé avec succès, ce qui peut inclure de recycler ou supprimer
+    le fichier segment WAL original. Si la valeur <literal>false</literal> est renvoyée, le
+    serveur conservera le fichier segment WAL original et réessayera de
+    l'archiver plus tard.
+    <literal>file</literal> contiendra juste le nom du fichier du segment WAL à
+    archiver, alors que <literal>path</literal> contiendra le chemin complet du
+    fichier segment WAL (nom du fichier inclus).
    </para>
   </sect2>
 
   <sect2 id="archive-module-shutdown">
-   <title>Shutdown Callback</title>
+   <title>Fonction d'arrêt</title>
    <para>
-    The <function>shutdown_cb</function> callback is called when the archiver
-    process exits (e.g., after an error) or the value of
-    <xref linkend="guc-archive-library"/> changes.  If no
-    <function>shutdown_cb</function> is defined, no special action is taken in
-    these situations.
+    La fonction <function>shutdown_cb</function> est appelée quand le processus
+    archiver s'arrête (par exemple, après une erreur) ou si la valeur de
+    <xref linkend="guc-archive-library"/> change. Si la fonction
+    <function>shutdown_cb</function> n'est pas définie, aucune action spécifique
+    ne sera entreprise lors de ces situations.
 
 <programlisting>
 typedef void (*ArchiveShutdownCB) (void);
