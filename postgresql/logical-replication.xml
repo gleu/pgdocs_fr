@@ -1154,6 +1154,198 @@ test_sub=# SELECT * FROM child ORDER BY a;
   </sect2>
  </sect1>
 
+ <sect1 id="logical-replication-col-lists">
+  <title>Listes de colonnes</title>
+
+  <para>
+   Chaque publication peut indiquer en option aux abonnés les colonnes à
+   répliquer pour chaque table. La table du côté abonné doit avoir au moins
+   toutes les colonnes publiées. Si aucune liste de colonnes n'est indiquée,
+   alors toutes les colonnes du côté du publieur sont répliquées. Voir <xref
+   linkend="sql-createpublication"/> pour les détails sur la syntaxe.
+  </para>
+
+  <para>
+   Le choix des colonnes peut être basé sur des raisons de comportement ou de
+   performance. Néanmoins, ne vous basez pas sur cette fonctionnalité pour de la
+   sécurité&nbsp;: un abonné mal intentionné est capable d'obtenir des données
+   des colonnes qui ne sont pas spécifiquement publiées. D'un point de vue
+   sécurité, des protections peuvent être mises en place du côté du publieur.
+  </para>
+
+  <para>
+   Si aucune liste de colonne n'est indiquée, toutes les colonnes ajoutées
+   ultérieurement sont automatiquement répliquées. Cela signifie qu'avoir une
+   liste de colonnes qui nomme toutes les colonnes n'aboutit pas au même
+   comportement que ne pas avoir de liste de colonnes.
+  </para>
+
+  <para>
+   Une liste de colonnes peut contenir seulement des références de colonnes.
+   L'ordre des colonnes dans la liste n'est pas préservé.
+  </para>
+
+  <para>
+   Préciser une liste de colonnes n'est pas possible quand la publication publie
+   aussi toutes les tables d'un schéma (clause <literal>FOR TABLES IN
+   SCHEMA</literal>).
+  </para>
+
+  <para>
+   Pour les tables partitionnées, le paramètre de publication
+   <literal>publish_via_partition_root</literal> détermine quel liste de
+   colonnes utiliser. Si <literal>publish_via_partition_root</literal> vaut
+   <literal>true</literal>, la liste de colonnes utilisée est celle de la table
+   partitionnée. Sinon, si <literal>publish_via_partition_root</literal> vaut
+   <literal>false</literal> (valeur par défaut), la liste de colonnes utilisée
+   est celle de la partition concernée.
+  </para>
+
+  <para>
+   Si une publication publie des opérations <command>UPDATE</command> ou
+   <command>DELETE</command>, toute liste de colonnes doit inclure les colonnes
+   d'identité de réplicat de la table (voir <xref
+   linkend="sql-altertable-replica-identity"/>). Si une publication publie
+   seulement des opérations <command>INSERT</command>, alors la liste de
+   colonnes peut omettre les colonnes d'identité de réplicat.
+  </para>
+
+  <para>
+   Les listes de colonnes n'ont pas d'effet sur la commande
+   <literal>TRUNCATE</literal>.
+  </para>
+
+  <para>
+   Lors de la synchronisation initiale des données, seules les colonnes publiées
+   sont copiées. Néanmoins, si l'abonné est d'une version antérieure à la 15,
+   alors toutes les colonnes dans la table sont copiées lors de la
+   synchronisation initiale des données, ignorant en cela les liste de colonnes.
+  </para>
+
+  <sect2 id="logical-replication-col-list-combining">
+   <title>Combiner plusieurs listes de colonnes</title>
+
+   <warning>
+    <para>
+     Avoir une souscription comprenant plusieurs publications où la même table a
+     été publiée avec différentes listes de colonnes n'est pas supporté. Ceci
+     signifie que changer les listes de colonnes des tables en cours
+     d'abonnement peut causer une incohérence des listes de colonnes parmi les
+     publications, auquel cas <xref linkend="sql-alterpublication"/> réussira
+     mais, plus tard, le walsender sur le publieur ou l'abonné pourrait renvoyer
+     une erreur. Dans ce scénario, l'utilisateur a besoin de re-créer
+     l'abonnement après l'ajustement de la liste de colonnes ou la suppression
+     de la publication problématique en utilisant <literal>ALTER SUBSCRIPTION
+     ... DROP PUBLICATION</literal>, puis l'ajouter après avoir ajuster la liste
+     de colonnes.
+    </para>
+   </warning>
+
+  </sect2>
+
+  <sect2 id="logical-replication-col-list-examples">
+   <title>Exemples</title>
+
+   <para>
+    Créer une table <literal>t1</literal> à utiliser dans l'exemple suivant.
+<programlisting>
+test_pub=# CREATE TABLE t1(id int, a text, b text, c text, d text, e text, PRIMARY KEY(id));
+CREATE TABLE
+</programlisting></para>
+
+   <para>
+    Créer une publication <literal>p1</literal>. Une liste de colonnes est
+    définie pour la table <literal>t1</literal> pour réduire le nombre de
+    colonnes qui seront répliquées. Notez que l'ordre des noms de colonnes dans
+    la liste de colonnes n'a pas d'importance.
+<programlisting>
+test_pub=# CREATE PUBLICATION p1 FOR TABLE t1 (id, b, a, d);
+CREATE PUBLICATION
+</programlisting></para>
+
+    <para>
+     <literal>psql</literal> peut être utilisé pour afficher les listes de
+     colonnes (si définies) pour chaque publication.
+<programlisting>
+test_pub=# \dRp+
+                               Publication p1
+  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root
+----------+------------+---------+---------+---------+-----------+----------
+ postgres | f          | t       | t       | t       | t         | f
+Tables:
+    "public.t1" (id, a, b, d)
+</programlisting></para>
+
+    <para>
+     <literal>psql</literal> peut être utilisé pour afficher les listes de
+     colonnes (si définies) pour chaque table.
+<programlisting>
+test_pub=# \d t1
+                 Table "public.t1"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ id     | integer |           | not null |
+ a      | text    |           |          |
+ b      | text    |           |          |
+ c      | text    |           |          |
+ d      | text    |           |          |
+ e      | text    |           |          |
+Indexes:
+    "t1_pkey" PRIMARY KEY, btree (id)
+Publications:
+    "p1" (id, a, b, d)
+</programlisting></para>
+
+    <para>
+     Sur le nœud abonné, créer une table <literal>t1</literal> qui maintenant a
+     seulement besoin d'un sous-ensemble des colonnes qui sont sur la table côté
+     publieur <literal>t1</literal>, et crée aussi l'abonnement
+     <literal>s1</literal> qui cible la publication <literal>p1</literal>.
+<programlisting>
+test_sub=# CREATE TABLE t1(id int, b text, a text, d text, PRIMARY KEY(id));
+CREATE TABLE
+test_sub=# CREATE SUBSCRIPTION s1
+test_sub-# CONNECTION 'host=localhost dbname=test_pub application_name=s1'
+test_sub-# PUBLICATION p1;
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+    <para>
+     Sur le nœud publieur, insérer quelques lignes dans la table
+     <literal>t1</literal>.
+<programlisting>
+test_pub=# INSERT INTO t1 VALUES(1, 'a-1', 'b-1', 'c-1', 'd-1', 'e-1');
+INSERT 0 1
+test_pub=# INSERT INTO t1 VALUES(2, 'a-2', 'b-2', 'c-2', 'd-2', 'e-2');
+INSERT 0 1
+test_pub=# INSERT INTO t1 VALUES(3, 'a-3', 'b-3', 'c-3', 'd-3', 'e-3');
+INSERT 0 1
+test_pub=# SELECT * FROM t1 ORDER BY id;
+ id |  a  |  b  |  c  |  d  |  e
+----+-----+-----+-----+-----+-----
+  1 | a-1 | b-1 | c-1 | d-1 | e-1
+  2 | a-2 | b-2 | c-2 | d-2 | e-2
+  3 | a-3 | b-3 | c-3 | d-3 | e-3
+(3 rows)
+</programlisting></para>
+
+    <para>
+     Seules les données de la liste de colonnes de la publication
+     <literal>p1</literal> sont répliquées.
+<programlisting>
+test_sub=# SELECT * FROM t1 ORDER BY id;
+ id |  b  |  a  |  d
+----+-----+-----+-----
+  1 | b-1 | a-1 | d-1
+  2 | b-2 | a-2 | d-2
+  3 | b-3 | a-3 | d-3
+(3 rows)
+</programlisting></para>
+
+  </sect2>
+
+ </sect1>
+
  <sect1 id="logical-replication-conflicts">
   <title>Conflits</title>
 
@@ -1434,7 +1626,7 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    si des utilisateurs sans confiance peuvent créer des tables, utilisez
    seulement des publications qui listent explicitement les tables. Autrement
    dit, créez une souscription <literal>FOR ALL TABLES</literal> ou <literal>FOR
-   ALL TABLES IN SCHEMA</literal> uniquement quand les superutilisateurs ont
+   TABLES IN SCHEMA</literal> uniquement quand les superutilisateurs ont
    confiance en tous les utilisateurs autorisés à créer une table non temporaire
    sur le publieur ou sur l'abonné.
   </para>
