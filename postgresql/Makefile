@@ -12,6 +12,7 @@
 # don't exist, unless explicitly built, so we skip the installation in
 # that case.
 
+
 # Make "html" the default target, since that is what most people tend
 # to want to use.
 html:
@@ -20,14 +21,17 @@ html:
 NO_GENERATED_HEADERS=yes
 NO_TEMP_INSTALL=yes
 
-VERSION = 15
+VERSION = 16
+
+#subdir = doc/src/sgml
+#top_builddir = ../../..
+#include $(top_builddir)/src/Makefile.global
+top_srcdir = .
+srcdir = .
 
 all: html man
 
 distprep: html distprep-man
-
-top_srcdir = .
-srcdir = .
 
 ifndef DBTOEPUB
 DBTOEPUB = $(missing) dbtoepub
@@ -37,14 +41,14 @@ ifndef FOP
 FOP = $(missing) fop
 endif
 
-XMLINCLUDE = --path .
+XMLINCLUDE = --path . --path $(srcdir)
 
 ifdef XMLLINT
 XMLLINT := $(XMLLINT) --nonet
 else
 XMLLINT = $(missing) xmllint
 endif
- 
+
 ifdef XSLTPROC
 XSLTPROC := $(XSLTPROC) --nonet
 else
@@ -53,23 +57,20 @@ endif
 
 override XSLTPROCFLAGS += --stringparam pg.version '$(VERSION)'
 
+
 ALLXML := $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml)
 
 ALL_IMAGES := $(wildcard $(srcdir)/images/*.svg)
 ALL_WEBSITE_IMAGES := $(wildcard $(srcdir)/images/*.png)
 
-##
-## pgfr release
-##
 
-pgfr: man html-website html INSTALL INSTALL.html postgres-A4.pdf
-	mv html-website $(VERSION)
-	tar cfz $(VERSION)/pg$(VERSION).tar.gz html
-	zip -qr $(VERSION)/pg$(VERSION).zip html
-	tar cfz $(VERSION)/pg$(VERSION).man.tar.gz man[0-9]
-	mv INSTALL $(VERSION)/INSTALL.txt
-	mv INSTALL.html $(VERSION)/
-	mv postgres-A4.pdf $(VERSION)/pg$(VERSION).pdf
+# Run validation only once, common to all subsequent targets.  While
+# we're at it, also resolve all entities (that is, copy all included
+# files into one big file).  This helps tools that don't understand
+# vpath builds (such as dbtoepub).
+postgres-full.xml: postgres.xml $(ALLXML)
+	$(XMLLINT) $(XMLINCLUDE) --output $@ --noent --valid $<
+
 
 ##
 ## Man pages
@@ -77,10 +78,38 @@ pgfr: man html-website html INSTALL INSTALL.html postgres-A4.pdf
 
 man distprep-man: man-stamp
 
-man-stamp: stylesheet-man.xsl postgres.xml $(ALLXML)
-	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
-	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_MAN_FLAGS) $(wordlist 1,2,$^)
+man-stamp: stylesheet-man.xsl postgres-full.xml
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_MAN_FLAGS) $^
 	touch $@
+
+
+##
+## common files
+##
+
+# Technically, this should depend on Makefile.global, but then
+# version.xml would need to be rebuilt after every configure run,
+# even in distribution tarballs.  So this is cheating a bit, but it
+# will achieve the goal of updating the version number when it
+# changes.
+#version.xml: $(top_srcdir)/configure
+#	{ \
+#	  echo "<!ENTITY version \"$(VERSION)\">"; \
+#	  echo "<!ENTITY majorversion \"$(MAJORVERSION)\">"; \
+#	} > $@
+#
+#features-supported.xml: $(top_srcdir)/src/backend/catalog/sql_feature_packages.txt $(top_srcdir)/src/backend/catalog/sql_features.txt
+#	$(PERL) $(srcdir)/mk_feature_tables.pl YES $^ > $@
+#
+#features-unsupported.xml: $(top_srcdir)/src/backend/catalog/sql_feature_packages.txt $(top_srcdir)/src/backend/catalog/sql_features.txt
+#	$(PERL) $(srcdir)/mk_feature_tables.pl NO $^ > $@
+#
+#errcodes-table.xml: $(top_srcdir)/src/backend/utils/errcodes.txt generate-errcodes-table.pl
+#	$(PERL) $(srcdir)/generate-errcodes-table.pl $< > $@
+#
+#keywords-table.xml: $(top_srcdir)/src/include/parser/kwlist.h $(wildcard $(srcdir)/keywords/sql*.txt) generate-keywords-table.pl
+#	$(PERL) $(srcdir)/generate-keywords-table.pl $(srcdir) > $@
+
 
 ##
 ## Generation of some text files.
@@ -98,7 +127,7 @@ INSTALL.html: %.html : stylesheet-text.xsl %.xml
 	$(XMLLINT) --noout --valid $*.xml
 	$(XSLTPROC) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $^ >$@
 
-INSTALL.xml: standalone-profile.xsl standalone-install.xml postgres.xml $(ALLXML)
+INSTALL.xml: standalone-profile.xsl standalone-install.xml postgres-full.xml
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --xinclude $(wordlist 1,2,$^) >$@
 
 
@@ -112,33 +141,12 @@ endif
 
 html: html-stamp
 
-html-stamp: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
-	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+html-stamp: stylesheet.xsl postgres-full.xml $(ALL_IMAGES)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $(wordlist 1,2,$^)
-	cp $(ALL_IMAGES) html/
-	cp $(srcdir)/css/*.css html/
-	touch $@
-
-html-website: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES) $(ALL_WEBSITE_IMAGES)
-	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
-	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --param website.stylesheet 1 $(wordlist 1,2,$^)
-	mv html $@
-	cp $(ALL_IMAGES) $@/
-	cp $(ALL_WEBSITE_IMAGES) $@/
-	cp $(srcdir)/css/*.css $@/
-
-htmlhelp: htmlhelp-stamp
-
-htmlhelp-stamp: stylesheet-hh.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
-	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
-	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(wordlist 1,2,$^)
-	cp $(ALL_IMAGES) htmlhelp/
-	cp $(srcdir)/css/stylesheet.css htmlhelp/
 	touch $@
 
 # single-page HTML
-postgres.html: stylesheet-html-nochunk.xsl postgres.xml $(ALLXML) $(ALL_IMAGES)
-	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+postgres.html: stylesheet-html-nochunk.xsl postgres-full.xml $(ALL_IMAGES)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) -o $@ $(wordlist 1,2,$^)
 
 # single-page text
@@ -155,16 +163,14 @@ postgres.pdf:
 
 XSLTPROC_FO_FLAGS += --stringparam img.src.path '$(srcdir)/'
 
-%-A4.fo: stylesheet-fo.xsl %.xml $(ALLXML)
-	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
-	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type A4 -o $@ $(wordlist 1,2,$^)
+%-A4.fo: stylesheet-fo.xsl %-full.xml
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type A4 -o $@ $^
 
-%-US.fo: stylesheet-fo.xsl %.xml $(ALLXML)
-	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
-	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type USletter -o $@ $(wordlist 1,2,$^)
+%-US.fo: stylesheet-fo.xsl %-full.xml
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type USletter -o $@ $^
 
 %.pdf: %.fo $(ALL_IMAGES)
-	$(FOP) -q -fo $< -pdf $@
+	$(FOP) -fo $< -pdf $@
 
 
 ##
@@ -172,8 +178,11 @@ XSLTPROC_FO_FLAGS += --stringparam img.src.path '$(srcdir)/'
 ##
 
 epub: postgres.epub
-postgres.epub: postgres.xml $(ALLXML) $(ALL_IMAGES)
-	$(XMLLINT) --noout --valid $<
+postgres.epub: postgres-full.xml $(ALL_IMAGES)
+ifeq ($(vpath_build),yes)
+	$(MKDIR_P) images
+	cp $(ALL_IMAGES) images/
+endif
 	$(DBTOEPUB) -o $@ $<
 
 
@@ -185,8 +194,7 @@ DB2X_TEXIXML = db2x_texixml
 DB2X_XSLTPROC = db2x_xsltproc
 MAKEINFO = makeinfo
 
-%.texixml: %.xml $(ALLXML)
-	$(XMLLINT) --noout --valid $<
+%.texixml: %-full.xml
 	$(DB2X_XSLTPROC) -s texi -g output-file=$(basename $@) $< -o $@
 
 %.texi: %.texixml
@@ -201,7 +209,7 @@ MAKEINFO = makeinfo
 ##
 
 # Quick syntax check without style processing
-check: postgres.xml $(ALLXML)
+check: postgres.xml $(ALLXML) check-tabs
 	$(XMLLINT) $(XMLINCLUDE) --noout --valid $<
 
 
@@ -272,6 +280,7 @@ check-tabs:
 
 # This allows removing some files from the distribution tarballs while
 # keeping the dependencies satisfied.
+.SECONDARY: postgres-full.xml
 .SECONDARY: INSTALL.html INSTALL.xml
 .SECONDARY: postgres-A4.fo postgres-US.fo
 
@@ -283,8 +292,8 @@ clean:
 	rm -f postgres.html postgres.txt
 # print
 	rm -f *.fo *.pdf
-# HTML Help
-	rm -rf htmlhelp/ htmlhelp-stamp
+# generated XML files
+	rm -f postgres-full.xml
 # EPUB
 	rm -f postgres.epub
 # Texinfo
@@ -297,3 +306,27 @@ maintainer-clean: distclean
 	rm -fr html/ html-stamp
 # man
 	rm -rf man1/ man3/ man7/ man-stamp
+
+##
+## website pgfr release
+##
+
+html-website: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES) $(ALL_WEBSITE_IMAGES)
+	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
+	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --param website.stylesheet 1 $(wordlist 1,2,$^)
+	mv html $@
+	cp $(ALL_IMAGES) $@/
+	cp $(ALL_WEBSITE_IMAGES) $@/
+	cp $(srcdir)/css/*.css $@/
+
+##
+## pgfr release
+##
+pgfr: man html-website html INSTALL INSTALL.html postgres-A4.pdf                                                                                            
+	mv html-website $(VERSION)                                                                                                                            
+	tar cfz $(VERSION)/pg$(VERSION).tar.gz html                                                                                                           
+	zip -qr $(VERSION)/pg$(VERSION).zip html                                                                                                              
+	tar cfz $(VERSION)/pg$(VERSION).man.tar.gz man[0-9]                                                                                                   
+	mv INSTALL $(VERSION)/INSTALL.txt                                                                                                                     
+	mv INSTALL.html $(VERSION)/                                                                                                                           
+	mv postgres-A4.pdf $(VERSION)/pg$(VERSION).pdf            

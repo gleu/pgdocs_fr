@@ -242,7 +242,7 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
  <sect1 id="logicaldecoding-explanation">
   <title>Concepts de décodage logique</title>
 
-  <sect2>
+  <sect2 id="logicaldecoding-explanation-log-dec">
    <title>Décodage logique</title>
 
    <indexterm>
@@ -329,6 +329,35 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
     consommer les changements d'un slot à un instant donné.
    </para>
 
+   <para>
+    A logical replication slot can also be created on a hot standby. To prevent
+    <command>VACUUM</command> from removing required rows from the system
+    catalogs, <varname>hot_standby_feedback</varname> should be set on the
+    standby. In spite of that, if any required rows get removed, the slot gets
+    invalidated. It's highly recommended to use a physical slot between the
+    primary and the standby. Otherwise, <varname>hot_standby_feedback</varname>
+    will work but only while the connection is alive (for example a node
+    restart would break it). Then, the primary may delete system catalog rows
+    that could be needed by the logical decoding on the standby (as it does
+    not know about the catalog_xmin on the standby). Existing logical slots
+    on standby also get invalidated if <varname>wal_level</varname> on the
+    primary is reduced to less than <literal>logical</literal>.
+    This is done as soon as the standby detects such a change in the WAL stream.
+    It means that, for walsenders which are lagging (if any), some WAL records up
+    to the <varname>wal_level</varname> parameter change on the primary won't be
+    decoded.
+   </para>
+
+   <para>
+    Creation of a logical slot requires information about all the currently
+    running transactions. On the primary, this information is available
+    directly, but on a standby, this information has to be obtained from
+    primary. Thus, slot creation may need to wait for some activity to happen
+    on the primary. If the primary is idle, creating a logical slot on
+    standby may take noticeable time. This can be sped up by calling the
+    <function>pg_log_standby_snapshot</function> function on the primary.
+   </para>
+
    <caution>
     <para>
      Les slots de réplications persistent après un arrêt brutal et ne
@@ -346,7 +375,7 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
    </caution>
   </sect2>
 
-  <sect2>
+  <sect2 id="logicaldecoding-explanation-output-plugins">
    <title>Plugins de sortie</title>
 
    <para>
@@ -356,7 +385,7 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
    </para>
   </sect2>
 
-  <sect2>
+  <sect2 id="logicaldecoding-explanation-exported-snapshots">
    <title>Instantanés exportés</title>
 
    <para>
@@ -510,30 +539,26 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
 
 typedef void (*LogicalOutputPluginInit) (struct OutputPluginCallbacks *cb);</programlisting>
 
-    Les callbacks <function>begin_cb</function>,
+    Les fonctions callback <function>begin_cb</function>,
     <function>change_cb</function> et <function>commit_cb</function> sont
     obligatoires, alors que <function>startup_cb</function>,
-    <function>filter_by_origin_cb</function>,
-    <function>truncate_cb</function> et <function>shutdown_cb</function> sont
-    facultatifs. Si <function>truncate_cb</function> n'est pas configuré mais
-    que <command>TRUNCATE</command> doit être décodé, l'action sera ignorée.
+    <function>truncate_cb</function>, <function>message_cb</function>,
+    <function>filter_by_origin_cb</function> et <function>shutdown_cb</function>
+    sont optionnelles. Si <function>truncate_cb</function> n'est pas configuré
+    mais que <command>TRUNCATE</command> doit être décodé, l'action sera
+    ignorée.
    </para>
 
    <para>
     Un plugin de sortie peut aussi définir les fonctions pour accepter le flux
     de grosses transactions en cours. Les callbacks
     <function>stream_start_cb</function>,
-    <function>stream_stop_cb</function>,
-    <function>stream_abort_cb</function>,
-    <function>stream_commit_cb</function>,
-    <function>stream_change_cb</function> et
-    <function>stream_prepare_cb</function> sont obligatoires, alors que
-    <function>stream_message_cb</function> et
-    <function>stream_truncate_cb</function> sont facultatifs.
-    De plus, si l'envoi en flux des commandes à deux phases doit être
-    supporté, alors des fonctions de support supplémentaires doivent être
-    fournies. (Voir <xref linkend="logicaldecoding-two-phase-commits"/>
-    pour les détails).
+    <function>stream_stop_cb</function>, <function>stream_abort_cb</function>,
+    <function>stream_commit_cb</function>, and <function>stream_change_cb</function>
+    are required, while <function>stream_message_cb</function> and
+    <function>stream_truncate_cb</function> are optional. The
+    <function>stream_prepare_cb</function> is also required if the output
+    plugin also support two-phase commits.
    </para>
 
    <para>
@@ -541,10 +566,11 @@ typedef void (*LogicalOutputPluginInit) (struct OutputPluginCallbacks *cb);</pro
     validations en deux phases, ce qui permet de décoder un <command>PREPARE
     TRANSACTION</command>. Les callbacks
     <function>begin_prepare_cb</function>, <function>prepare_cb</function>,
-    <function>stream_prepare_cb</function>,
     <function>commit_prepared_cb</function> et
     <function>rollback_prepared_cb</function> sont obligatoires, alors que
     <function>filter_prepare_cb</function> est facultatif.
+    The <function>stream_prepare_cb</function> is also required if the output plugin
+    also supports the streaming of large in-progress transactions.
    </para>
   </sect2>
 
@@ -772,8 +798,8 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
 
     <para>
 
-     La fonction callback <function>truncate_cb</function> est appelée pour la
-     commande <command>TRUNCATE</command>.
+     La fonction callback <function>truncate_cb</function> optionnelle est
+     appelée pour la commande <command>TRUNCATE</command>.
 
      <programlisting>typedef void (*LogicalDecodeTruncateCB) (struct LogicalDecodingContext *ctx,
                                          ReorderBufferTXN *txn,
@@ -983,9 +1009,9 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
     <title>Fonction de début de flux</title>
 
     <para>
-     La fonction callback <function>stream_start_cb</function> est appelée à
-     l'ouverture d'un bloc de changements en flux à partir d'une transaction
-     en cours.
+     La fonction callback <function>stream_start_cb</function> obligatoire est
+     appelée à l'ouverture d'un bloc de changements en flux à partir d'une
+     transaction en cours.
 
      <programlisting>typedef void (*LogicalDecodeStreamStartCB) (struct LogicalDecodingContext *ctx,
                                             ReorderBufferTXN *txn);</programlisting>
@@ -996,7 +1022,7 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
     <title>Fonction d'arrêt de flux</title>
 
     <para>
-     La fonction callback <function>stream_stop_cb</function> est appelée lors
+     La fonction callback <function>stream_stop_cb</function> obligatoire est appelée lors
      de la fermeture d'un bloc de changements en flux provenant d'une
      transaction en cours.
 
@@ -1009,8 +1035,8 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
     <title>Fonction d'annulation du flux</title>
 
     <para>
-     La fonction callback <function>stream_abort_cb</function> est appelée lors
-     de l'annulation d'une transaction en flux précédente.
+     La fonction callback <function>stream_abort_cb</function> obligatoire est
+     appelée lors de l'annulation d'une transaction en flux précédente.
 
      <programlisting>typedef void (*LogicalDecodeStreamAbortCB) (struct LogicalDecodingContext *ctx,
                                             ReorderBufferTXN *txn,
@@ -1024,7 +1050,9 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
     <para>
      La fonction callback <function>stream_prepare_cb</function> est appelée
      pour préparer une transaction en flux précédente pour faire partie d'une
-     validation en deux phases.
+     validation en deux phases. This
+     callback is required when the output plugin supports both the streaming
+     of large in-progress transactions and two-phase commits.
 
      <programlisting>typedef void (*LogicalDecodeStreamPrepareCB) (struct LogicalDecodingContext *ctx,
                                               ReorderBufferTXN *txn,
@@ -1036,7 +1064,7 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
     <title>Fonction de validation d'un flux</title>
 
     <para>
-     La fonction callback <function>stream_commit_cb</function> est appelée
+     La fonction callback <function>stream_commit_cb</function> obligatoire est appelée
      pour valider une transaction en flux précédente.
 
      <programlisting>typedef void (*LogicalDecodeStreamCommitCB) (struct LogicalDecodingContext *ctx,
@@ -1049,7 +1077,7 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
     <title>Fonction de changement du flux</title>
 
     <para>
-     La fonction callback <function>stream_change_cb</function> est appelée
+     La fonction callback <function>stream_change_cb</function> obligatoire est appelée
      pour un changement dans un bloc de changements de flux (démarqué par des
      appels à <function>stream_start_cb</function> et
      <function>stream_stop_cb</function>). Les modifications réelles ne sont
@@ -1067,7 +1095,8 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
     <title>Fonction de message du flux</title>
 
     <para>
-     La fonction callback <function>stream_message_cb</function> est appelée
+     La fonction callback <function>stream_message_cb</function> optionnalle
+     est appelée
      lors de l'envoi d'un message générique dans un bloc de changements en
      flux (démarqué par des appels à <function>stream_start_cb</function> et
      <function>stream_stop_cb</function>). Le contenu du message pour des
@@ -1089,8 +1118,8 @@ CREATE TABLE autre_table_catalogue(data text) WITH (user_catalog_table = true);<
     <title>Fonction troncage du flux</title>
 
     <para>
-     La fonction callback <function>stream_truncate_cb</function> est appelée pour une
-     commande
+     La fonction callback <function>stream_truncate_cb</function> optionnelle
+     est appelée pour une commande
      <command>TRUNCATE</command> dans un bloc de changements en flux
      (démarqué par des appels à <function>stream_start_cb</function> et
      <function>stream_stop_cb</function>).
@@ -1155,8 +1184,8 @@ OutputPluginWrite(ctx, true);</programlisting>
  <sect1 id="logicaldecoding-synchronous">
   <title>Support de la réplication synchrone pour le décodage logique</title>
 
-  <sect2>
-   <title>Overview</title>
+  <sect2 id="logicaldecoding-synchronous-overview">
+   <title>Aperçu</title>
 
    <para>
     Le décodage logique peut être utilisé pour construire des solutions de

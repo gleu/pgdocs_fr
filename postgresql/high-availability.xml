@@ -709,9 +709,8 @@ ce que les nœuds s'accordent dans un système transactionnel sérialisable.
 
    <para>
     Le mode standby est quitté et le serveur bascule en mode de
-    fonctionnement normal quand <command>pg_ctl promote</command> est exécuté,
-    que <command>pg_promote()</command> est appelé ou qu'un fichier de trigger
-    est trouvé (<varname>promote_trigger_file</varname>). Avant de basculer,
+    fonctionnement normal quand <command>pg_ctl promote</command> est exécuté ou
+    que <command>pg_promote()</command> est appelé. Avant de basculer,
     tout WAL immédiatement disponible dans l'archive ou le
     <filename>pg_wal</filename> sera restauré, mais aucune tentative ne sera
     faite pour se connecter au primaire.
@@ -1016,13 +1015,11 @@ primary_conninfo = 'host=192.168.1.50 port=5432 user=foo password=foopass'
     transactions à retenir par les slots de réplication.
    </para>
    <para>
-    De la même manière, <xref linkend="guc-hot-standby-feedback"/>
-    et <xref linkend="guc-vacuum-defer-cleanup-age"/> fournissent des
-    protections contre la suppression de lignes utiles par vacuum, mais le
-    premier paramètre n'offre aucune protection durant la période pendant
-    laquelle le serveur secondaire n'est pas connecté, et le second nécessite
-    souvent d'être positionné à une grande valeur pour fournir une protection
-    adéquate. Les slots de réplication surmontent ces désavantages.
+    Similarly, <xref linkend="guc-hot-standby-feedback"/> on its own, without
+    also using a replication slot, provides protection against relevant rows
+    being removed by vacuum, but provides no protection during any time period
+    when the standby is not connected.  Replication slots overcome these
+    disadvantages.
    </para>
    <sect3 id="streaming-replication-slots-manipulation">
     <title>Requêter et manipuler des slots de réplication</title>
@@ -1587,18 +1584,11 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
   </para>
 
   <para>
-   Pour déclencher le failover d'un serveur secondaire en log shipping,
-   exécutez la commande <command>pg_ctl promote</command>, lancez la fonction
-   <function>pg_promote()</function> ou créez un fichier trigger
-   avec le nom de fichier et le chemin spécifiés par le paramètre
-   <varname>promote_trigger_file</varname>. Si vous comptez utiliser la commande
-   <command>pg_ctl promote</command> ou la fonction
-   <function>pg_promote()</function> pour effectuer la bascule, la variable
-   <varname>promote_trigger_file</varname> n'est pas nécessaire. S'il s'agit
-   d'ajouter des serveurs qui ne seront utilisés que pour alléger le serveur
-   primaire des requêtes en lecture seule, et non pas pour des considérations
-   de haute disponibilité, il n'est pas nécessaire de les réveiller
-   (<foreignphrase>promote</foreignphrase>).
+   To trigger failover of a log-shipping standby server, run
+   <command>pg_ctl promote</command> or call <function>pg_promote()</function>.
+   If you're setting up reporting servers that are only used to offload
+   read-only queries from the primary, not for high availability purposes,
+   you don't need to promote.
   </para>
  </sect1>
 
@@ -2026,12 +2016,16 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
    </para>
 
    <para>
-    Les utilisateurs expérimentés peuvent noter que le nettoyage des versions
-    de ligne ainsi que le gel des versions de ligne peuvent potentiellement
-    avoir un conflit avec les requêtes exécutées sur le serveur en attente.
-    L'exécution d'un <command>VACUUM FREEZE</command> manuel a de grandes
-    chances de causer des conflits, y compris sur les tables sans lignes mises
-    à jour ou supprimées.
+    Row version cleanup isn't the only potential cause of conflicts with
+    standby queries.  All index-only scans (including those that run on
+    standbys) must use an <acronym>MVCC</acronym> snapshot that
+    <quote>agrees</quote> with the visibility map.  Conflicts are therefore
+    required whenever <command>VACUUM</command> <link
+     linkend="vacuum-for-visibility-map">sets a page as all-visible in the
+     visibility map</link> containing one or more rows
+    <emphasis>not</emphasis> visible to all standby queries.  So even running
+    <command>VACUUM</command> against a table with no updated or deleted rows
+    requiring cleanup might lead to conflicts.
    </para>
 
    <para>
@@ -2064,18 +2058,6 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
     considérer l'augmentation de <varname>max_standby_streaming_delay</varname>
     pour éviter des annulations rapides par les nouvelles données de flux de
     transaction après la reconnexion.
-   </para>
-
-   <para>
-    Une autre option revient à augmenter <xref
-    linkend="guc-vacuum-defer-cleanup-age"/> sur le serveur primaire, pour que
-    les lignes mortes ne soient pas nettoyées aussi rapidement que d'habitude.
-    Cela donnera plus de temps aux requêtes pour s'exécuter avant d'être
-    annulées sur le serveur en attente, sans voir à configurer une valeur
-    importante de <varname>max_standby_streaming_delay</varname>. Néanmoins,
-    il est difficile de garantir une fenêtre spécifique de temps d'exécution
-    avec cette approche car <varname>vacuum_defer_cleanup_age</varname> est
-    mesuré en nombre de transactions sur le serveur primaire.
    </para>
 
    <para>
@@ -2430,8 +2412,7 @@ HINT:  You can then restart the server after making the necessary configuration 
    </para>
 
    <para>
-    Sur le primaire, les paramètres <xref linkend="guc-wal-level"/> et
-    <xref linkend="guc-vacuum-defer-cleanup-age"/> peuvent être utilisés.
+    Sur le primaire, le paramètre <xref linkend="guc-wal-level"/> peut être utilisé.
     <xref linkend="guc-max-standby-archive-delay"/> et <xref
     linkend="guc-max-standby-streaming-delay"/> n'ont aucun effet sur le primaire.
    </para>
@@ -2440,9 +2421,6 @@ HINT:  You can then restart the server after making the necessary configuration 
     Sur le serveur en attente, les paramètres <xref linkend="guc-hot-standby"/>,
     <xref linkend="guc-max-standby-archive-delay"/> et
     <xref linkend="guc-max-standby-streaming-delay"/> peuvent être utilisés.
-    <xref linkend="guc-vacuum-defer-cleanup-age"/> n'a pas d'effet tant que
-    le serveur reste dans le mode standby, mais deviendra important quand le
-    serveur en attente deviendra un serveur primaire.
    </para>
   </sect2>
 
