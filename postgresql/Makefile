@@ -322,11 +322,12 @@ html-website: stylesheet.xsl postgres.xml $(ALLXML) $(ALL_IMAGES) $(ALL_WEBSITE_
 ##
 ## pgfr release
 ##
-pgfr: man html-website html INSTALL INSTALL.html postgres-A4.pdf                                                                                            
+#pgfr: man html-website html INSTALL INSTALL.html postgres-A4.pdf                                                                                            
+pgfr: man html-website html postgres-A4.pdf                                                                                            
 	mv html-website $(VERSION)                                                                                                                            
 	tar cfz $(VERSION)/pg$(VERSION).tar.gz html                                                                                                           
 	zip -qr $(VERSION)/pg$(VERSION).zip html                                                                                                              
 	tar cfz $(VERSION)/pg$(VERSION).man.tar.gz man[0-9]                                                                                                   
-	mv INSTALL $(VERSION)/INSTALL.txt                                                                                                                     
-	mv INSTALL.html $(VERSION)/                                                                                                                           
+	#mv INSTALL $(VERSION)/INSTALL.txt                                                                                                                     
+	#mv INSTALL.html $(VERSION)/                                                                                                                           
 	mv postgres-A4.pdf $(VERSION)/pg$(VERSION).pdf            
