@@ -21,6 +21,7 @@
 <xsl:param name="website.stylesheet" select="0"/>
 <xsl:param name="custom.css.source">
   <xsl:if test="$website.stylesheet = 0">stylesheet.css.xml</xsl:if>
+  <xsl:if test="not($website.stylesheet = 0)">pgfr.css.xml</xsl:if>
 </xsl:param>
 <xsl:param name="html.stylesheet">
   <xsl:if test="not($website.stylesheet = 0)">https://www.postgresql.org/media/css/docs-complete.css</xsl:if>
