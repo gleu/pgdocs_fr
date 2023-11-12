@@ -702,29 +702,96 @@ HINT:  To avoid a database shutdown, execute a database-wide VACUUM in that data
     (Une commande <command>VACUUM</command> manuelle devrait résoudre le
     problème, comme suggéré par le message HINT&nbsp;; mais notez que la
     commande <command>VACUUM</command> doit être exécutée par un
-    super-utilisateur, sinon elle échouera à mettre à jour les catalogues
-    systèmes et ne pourra donc pas faire avancer le
-    <structfield>datfrozenxid</structfield> de la base.) Si ces
-    avertissements sont ignorés, le système s'arrêtera et refusera de
-    commencer toute nouvelle transaction dès qu'il n'en restera que trois
-    millions avant la réinitialisation&nbsp;:
+    super-utilisateur, sinon elle échouera à mettre à jour les catalogues,
+    ce qui l'empêchera d'avancer le champ
+    <structfield>datfrozenxid</structfield> de la base.) Si ces avertissements
+    sont ignorés, le système refusera d'assigner de nouveaux identifiants de
+    transactions dès qu'il n'en restera que trois millions avant la
+    réinitialisation&nbsp;:
 
     <programlisting>
 ERROR:  database is not accepting commands to avoid wraparound data loss in database "mydb"
 HINT:  Stop the postmaster and vacuum that database in single-user mode.
     </programlisting>
 
-    La marge de sécurité de trois millions de transactions existe pour
-    permettre à l'administrateur de récupérer ces données sans perte en
-    exécutant manuellement les commandes <command>VACUUM</command> requises.
-    Néanmoins, comme le système n'exécute pas de commandes tant qu'il n'est
-    pas sorti du mode d'arrêt par sécurité, la seule façon de le faire est de
-    stopper le serveur et de démarrer le serveur en mode simple utilisateur
-    pour exécuter un <command>VACUUM</command>. Le mode d'arrêt n'est pas
-    pris en compte par le moteur en mode simple utilisateur. Voir la page de
-    référence de <xref linkend="app-postgres"/> pour des détails sur
-    l'utilisation du moteur en mode simple utilisateur.
+    Dans ce cas, toute transaction en cours peut continuer, mais seules des
+    transactions en lecture seule peuvent démarrées. Les opérations qui modifient
+    les enregistrements de la base de données ou qui tronquent des relations
+    échoueront. La commande <command>VACUUM</command> peut toujous être
+    exécutée normalement. Contrairement ce qu'indique le message, il n'est ni
+    nécessaire ni dsouhaité d'arrêter le processus postmaster ou d'entrer en
+    mode utilisateur-seul pour restaurer le fonctionnement normal. À la place,
+    suivez ces étapes&nbsp;:
+
+    <orderedlist>
+     <listitem>
+      <simpara>Terminez les anciennes transactions préparées. Vous pouvez les
+       trouver en récupérant les lignes de la vue <link
+       linkend="view-pg-prepared-xacts">pg_prepared_xacts</link> dont
+       <literal>age(transactionid)</literal> est grand. De telles transactions
+       doivent être validées ou annulées.</simpara>
+     </listitem>
+     <listitem>
+      <simpara>Terminez les transactions ouvertes s'exécutant depuis longtemps.
+       Vous pouvez les trouver en récupérant les lignes de la vue
+       <link linkend="monitoring-pg-stat-activity-view">pg_stat_activity</link>
+       où <literal>age(backend_xid)</literal> ou
+       <literal>age(backend_xmin)</literal> est grand. De telles transactions
+       doivent être validées ou annulées. Si ce n'est pas possible, les sessions
+       associées doivent être fermées en utilisant la fonction
+       <literal>pg_terminate_backend</literal>.</simpara>
+     </listitem>
+     <listitem>
+      <simpara>Supprimez les anciens slots de réplication. Utilisez <link
+       linkend="monitoring-pg-stat-replication-view">pg_stat_replication</link>
+       pour trouver les slots dont <literal>age(xmin)</literal> ou
+       <literal>age(catalog_xmin)</literal> est grand. Dans de nombreux cas, ces
+       slots ont été créées pour de la réplication vers un serveur qui n'existe
+       plus ou qui est arrêté depuis longtemps. Si vous supprimez un slot pour
+       un serveur qui existe toujours ou pourrait de nouveau se connecter à ce
+       slot, cette réplication pourrait nécessiter d'être reconstruite.</simpara>
+     </listitem>
+     <listitem>
+      <simpara>Exécutez <command>VACUUM</command> dans la base cible. Un
+       <literal>VACUUM</literal> sur la base complète est le plus simple&nbsp;;
+       pour réduire le temps nécessaire pour l'opération, il est aussi possible
+       d'exécuter des commandes <command>VACUUM</command> manuelles sur les
+       tables ayant le champ <structfield>relminxid</structfield> le plus
+       ancien. N'utilisez pas <literal>VACUUM FULL</literal> dans ce cas car
+       il nécessite un identifiant de transaction, ce qui fera échouer
+       l'opération, sauf dans le mode super-utilisateur où il consommera un
+       identifiant de transaction et augmentera de ce fait le risque d'une
+       réutilisation des identifiants de transaction. N'utilisez pas non plus
+       <literal>VACUUM FREEZE</literal> parce qu'il fera plus que la quantité
+       minimal de travail requis pour restaurer le fonctionnement normal.
+       </simpara>
+     </listitem>
+     <listitem>
+      <simpara>Une fois que le fonctionnement est de nouveau normal, assurez-vous
+       que l'autovacuum est correctement configuré dans la base de données cible
+       pour éviter des problèmes futures.</simpara>
+     </listitem>
+    </orderedlist>
    </para>
+ 
+   <note>
+    <para>
+     Dans les version sprécédentes, il était parfois nécessaire d'arrêter le
+     processus postlaster et de lancer la commande <command>VACUUM</command> en
+     mode utilisateur-simple. Dans les scénarios habituels, ceci n'est plus
+     nécessaire et doit être éviter autant que possible car cela implique
+     d'arrêter le système. C'est aussi plus risqué car cela désactive les
+     protections sur la réutilisation des identifiants de transaction, prévues
+     pour éviter les pertes de données. La seule raison pour utiliser le mode
+     utilisateur-simple est si vous souhaitez utiliser
+     <command>TRUNCATE</command> ou <command>DROP</command> sur des tables
+     inutiles pour éviter de lancer <command>VACUUM</command> sur celles-ci. La
+     marge de sécurité de trois millions de transactions existe pour permettre à
+     l'administrateur de le faire. Voir la page de référence <xref
+     linkend="app-postgres"/> pour des détails sur l'utilisation du mode
+     utilisateur-simple.
+    </para>
+   </note>
 
    <sect3 id="vacuum-for-multixact-wraparound">
     <title>Multixacts et cycle</title>
@@ -794,6 +861,45 @@ HINT:  Stop the postmaster and vacuum that database in single-user mode.
      commençant par celles qui ont le plus ancien multixact-age. Ces deux
      types de parcours agressifs de tables surviendront seulement si
      l'autovacuum est désactivé spécifiquement.
+    </para>
+
+    <para>
+     Similaire au cas de l'identifiant de transaction, si l'autovacuum échoue
+     à effacer les anciens identifiants MultiXact d'une table, le système
+     commencera à emetre des messages d'avertissement quand les plus anciens
+     identifiants MultiXact de la base attendront les 40 millions de transactions
+     du point de réutilisation. Et, tout comme dans le cas des identifiants de
+     transactions, si ces messages sont ignorés, le système refusera de générer
+     de nouveaux identifiants MultiXact une fois qu'il en restera moins de
+     trois millions.
+    </para>
+
+    <para>
+     Quand les identifiants MultiXact sont épuisés, le retour à une situation
+     normale s'obtient de la même façon que quand des identifiants de
+     transactions sont épuisés. Suivez les mêmes étapes que dans la section
+     précédente mais avec les différences suivantes&nbsp;:
+
+     <orderedlist>
+      <listitem>
+       <simpara>Les transactions standards et préparées peuvent être ignorées
+        s'il n'y a pas de risques qu'elles apparaissent dans une MultiXact.
+        </simpara>
+      </listitem>
+      <listitem>
+       <simpara>L'information MXID n'est pas directement visible dans les vues
+        systèmes telles que <literal>pg_stat_activity</literal>&nbsp;; néanmoins,
+        rechercher les anciens identifiants de transactions est toujours une
+        bonne facçon de déterminer les transactions pouvant poser des soucis de
+        réutilisation des identifiants de MultiXact.
+       </simpara>
+      </listitem>
+      <listitem>
+       <simpara>L'épuisement d'identifiants de transactions bloquera toutes les
+        transactions en écriture, tout spécifiquement celles qui imliquent des
+        verrous de ligne nécessitant un identifiant MultiXact.</simpara>
+      </listitem>
+     </orderedlist>
     </para>
    </sect3>
   </sect2>
@@ -918,10 +1024,16 @@ limite insertion vacuum = limite insertion base vacuum + facteur échelle insert
    </para>
 
    <para>
-    Les tables partitionnées ne sont pas traitées par autovacuum. Les
-    statistiques sont récupérées en exécutant un <command>ANALYZE</command>
-    manuel lors de son chargement initial, et de nouveau quand la distribution
-    de données dans ses partitions changent de manière significative.
+    Les tables partitionnées ne contiennent pas de lignes et ne sont donc
+    pas traitées par l'autovacuum. (L'autovacuum traite les partitions
+    comme n'importe quel autre table.)) Malheureusement, ceci signifie
+    que l'autovacuum n'exécute pas d'<command>ANALYZE</command> sur les tables
+    partitionnées, et ceci peut occasionner des plans non optimaux pour les
+    requêtes qui référencent les statistiques de la table partitionnée. Vous
+    pouvez contourner ce problème en exécutant manuellement
+    <command>ANALYZE</command> sur les tables partitionnées quand elles sont
+    peuplées la première fois, et à chaque fois que la distribution des données
+    changent dans les partitions.
    </para>
 
    <para>
