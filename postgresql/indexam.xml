@@ -127,6 +127,8 @@ typedef struct IndexAmRoutine
     bool        ampredlocks;
     /* la méthode gère-t-elle les parcours parallélisés ? */
     bool        amcanparallel;
+    /* does AM support parallel build? */
+    bool        amcanbuildparallel;
     /* la méthode gère-t-elle les colonnes incluses avec la clause INCLUDE ? */
     bool        amcaninclude;
     /* does AM use maintenance_work_mem? */
@@ -143,6 +145,7 @@ typedef struct IndexAmRoutine
     ambuild_function ambuild;
     ambuildempty_function ambuildempty;
     aminsert_function aminsert;
+    aminsertcleanup_function aminsertcleanup;
     ambulkdelete_function ambulkdelete;
     amvacuumcleanup_function amvacuumcleanup;
     amcanreturn_function amcanreturn;   /* peut être NULL */
@@ -218,7 +221,7 @@ typedef struct IndexAmRoutine
    néanmoins, elles peuvent imposer une restriction sur la
    première colonne de l'index, ce qui est signalé par
    <structfield>amoptionalkey</structfield> à false .
-   Une raison pour une méthode d'accès d'index d'initialiser
+   Une raison pour une méthode d'accès (<acronym>AM</acronym>) d'index d'initialiser
    <structfield>amoptionalkey</structfield> à false est de ne pas indexer
    les valeurs NULL. Comme la plupart des opérateurs indexables
    sont stricts et ne peuvent donc pas renvoyer true pour des entrées NULL,
@@ -292,6 +295,11 @@ ambuild (Relation heapRelation,
    à la recherche des lignes existantes et calculer les clés à insérer
    dans l'index. La fonction doit renvoyer une structure allouée par palloc
    contenant les statistiques du nouvel index.
+   The <structfield>amcanbuildparallel</structfield> flag indicates whether
+   the access method supports parallel index builds. When set to <literal>true</literal>,
+   the system will attempt to allocate parallel workers for the build.
+   Access methods supporting only non-parallel index builds should leave
+   this flag set to <literal>false</literal>.
   </para>
 
   <para>
@@ -371,6 +379,21 @@ aminsert (Relation indexRelation,
    allouer de l'espace dans <literal>indexInfo-&gt;ii_Context</literal> et
    stocker un pointeur vers les données dans
    <literal>indexInfo-&gt;ii_AmCache</literal> (qui sera initialement NULL).
+   If resources other than memory have to be released after
+   index insertions, <function>aminsertcleanup</function> may be provided,
+   which will be called before the memory is released.
+  </para>
+
+  <para>
+<programlisting>
+void
+aminsertcleanup (Relation indexRelation,
+                 IndexInfo *indexInfo);
+</programlisting>
+   Clean up state that was maintained across successive inserts in
+   <literal>indexInfo-&gt;ii_AmCache</literal>. This is useful if the data
+   requires additional cleanup steps (e.g., releasing pinned buffers), and
+   simply releasing the memory is not sufficient.
   </para>
 
   <para>
@@ -777,13 +800,21 @@ amgetbitmap (IndexScanDesc scan,
   <para>
    <programlisting>
 Size
-amestimateparallelscan (void);
+amestimateparallelscan (int nkeys,
+                        int norderbys);
    </programlisting>
    Estime et retourne le nombre d'octets de mémoire partagée dynamique dont la
    méthode d'accès aura besoin pour effectuer le parcours d'index.  (Ce chiffre
    est en plus, et non à la place, de la quantité d'espace nécessaire pour les
    données indépendantes de l'AM dans
    <structname>ParallelIndexScanDescData</structname>.)
+  </para>
+
+  <para>
+   The <literal>nkeys</literal> and <literal>norderbys</literal>
+   parameters indicate the number of quals and ordering operators that will be
+   used in the scan; the same values will be passed to <function>amrescan</function>.
+   Note that the actual values of the scan keys aren't provided yet.
   </para>
 
   <para>

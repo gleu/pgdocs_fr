@@ -147,7 +147,7 @@
    ce qui signifie que la ligne entière devient la clé.
    Lorsque l'identité de réplicat est spécifiée à <literal>FULL</literal>,
    des index peuvent être utilisés du côté de l'abonné pour rechercher des lignes.
-   Ces index candidats doivent être de type btree, non-partiels, et le champ d'index le plus à gauche
+   Ces index candidats doivent être de type btree ou hash, non-partiels, et le champ d'index le plus à gauche
    doit être une colonne (pas une expression) qui référencie la colonne de la table publiée. Ces
    restrictions sur les propriétés non-unique de l'index correspondent à certaines des restrictions
    renforcées par des clés primaires. S'il n'y a pas d'index approprié, la recherche côté abonné
@@ -278,7 +278,7 @@
    colonne sera rempli avec la valeur par défaut fournie dans la définition de
    la table cible. Cependant, la réplication logique en format binaire est plus
    restrictive. Voir l'option
-   <link linkend="sql-createsubscription-with-binary"><literal>binary</literal></link>
+   <link linkend="sql-createsubscription-params-with-binary"><literal>binary</literal></link>
    de <command>CREATE SUBSCRIPTION</command> pour les détails.
   </para>
 
@@ -303,9 +303,11 @@
 
    <para>
     Normalement, le slot de réplication distant est créé automatiquement en
-    utilisant la commande <command>CREATE SUBSCRIPTION</command> et il est
-    supprimé automatiquement en utilisant la commande <command>DROP
-    SUBSCRIPTION</command>. Dans certaines situations, il peut être utile ou
+    utilisant la commande <link linkend="sql-createsubscription">
+    <command>CREATE SUBSCRIPTION</command></link> et il est
+    supprimé automatiquement en utilisant la commande <link
+    linkend="sql-dropsubscription"><command>DROP SUBSCRIPTION</command></link>.
+    Dans certaines situations, il peut être utile ou
     nécessaire de manipuler les abonnements ainsi que les slots de réplication
     sous-jacents de façon séparées. Voici quelques exemples&nbsp;:
 
@@ -337,8 +339,9 @@
        conservé, par exemple lorsqu'une base abonnée est déplacée vers un
        serveur différent et sera activée depuis cette nouvelle localisation.
        Dans ce cas, il faut dissocier le slot de réplication de l'abonnement
-       correspondant en utilisant la commande <command>ALTER
-       SUBSCRIPTION</command> avant de supprimer l'abonnement&nbsp;;
+       correspondant en utilisant la commande <link
+       linkend="sql-altersubscription"><command>ALTER SUBSCRIPTION</command></link>
+       avant de supprimer l'abonnement&nbsp;;
       </para>
      </listitem>
 
@@ -401,7 +404,7 @@ INSERT 0 3
      Créer les publications pour les tables. Les publications
      <literal>pub2</literal> et <literal>pub3a</literal> interdisent certaines
      opérations <link
-     linkend="sql-createpublication-with-publish"><literal>publish</literal></link>.
+     linkend="sql-createpublication-params-with-publish"><literal>publish</literal></link>.
      La publication <literal>pub3b</literal> a un filtre de lignes (voir <xref
      linkend="logical-replication-row-filter"/>).
 <programlisting>
@@ -627,7 +630,7 @@ ALTER SUBSCRIPTION
    <para>
     Exemple 2&nbsp;: Quand l'abonnement indique <literal>connect = false</literal>,
     mais spécifie aussi l'option
-    <link linkend="sql-createsubscription-with-slot-name"><literal>slot_name</literal></link>.
+    <link linkend="sql-createsubscription-params-with-slot-name"><literal>slot_name</literal></link>.
     <itemizedlist>
      <listitem>
       <para>
@@ -719,6 +722,100 @@ ALTER SUBSCRIPTION
 
  </sect1>
 
+ <sect1 id="logical-replication-failover">
+  <title>Logical Replication Failover</title>
+
+  <para>
+   To allow subscriber nodes to continue replicating data from the publisher
+   node even when the publisher node goes down, there must be a physical standby
+   corresponding to the publisher node. The logical slots on the primary server
+   corresponding to the subscriptions can be synchronized to the standby server by
+   specifying <literal>failover = true</literal> when creating subscriptions. See
+   <xref linkend="logicaldecoding-replication-slots-synchronization"/> for details.
+   Enabling the
+   <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>
+   parameter ensures a seamless transition of those subscriptions after the
+   standby is promoted. They can continue subscribing to publications on the
+   new primary server without losing data. Note that in the case of
+   asynchronous replication, there remains a risk of data loss for transactions
+   committed on the former primary server but have yet to be replicated to the new
+   primary server.
+  </para>
+
+  <para>
+   Because the slot synchronization logic copies asynchronously, it is
+   necessary to confirm that replication slots have been synced to the standby
+   server before the failover happens. To ensure a successful failover, the
+   standby server must be ahead of the subscriber. This can be achieved by
+   configuring
+   <link linkend="guc-standby-slot-names"><varname>standby_slot_names</varname></link>.
+  </para>
+
+  <para>
+   To confirm that the standby server is indeed ready for failover, follow these
+   steps to verify that all necessary logical replication slots have been
+   synchronized to the standby server:
+  </para>
+
+  <procedure>
+   <step performance="required">
+    <para>
+     On the subscriber node, use the following SQL to identify which slots
+     should be synced to the standby that we plan to promote. This query will
+     return the relevant replication slots, including the main slots and table
+     synchronization slots associated with the failover-enabled subscriptions.
+     Note that the table sync slot should be synced to the standby server only
+     if the table copy is finished (See <xref linkend="catalog-pg-subscription-rel"/>).
+     We don't need to ensure that the table sync slots are synced in other scenarios
+     as they will either be dropped or re-created on the new primary server in those
+     cases.
+<programlisting>
+test_sub=# SELECT
+               array_agg(slot_name) AS slots
+           FROM
+           ((
+               SELECT r.srsubid AS subid, CONCAT('pg_', srsubid, '_sync_', srrelid, '_', ctl.system_identifier) AS slot_name
+               FROM pg_control_system() ctl, pg_subscription_rel r, pg_subscription s
+               WHERE r.srsubstate = 'f' AND s.oid = r.srsubid AND s.subfailover
+           ) UNION (
+               SELECT s.oid AS subid, s.subslotname as slot_name
+               FROM pg_subscription s
+               WHERE s.subfailover
+           ))
+           WHERE slot_name IS NOT NULL;
+ slots
+-------
+ {sub1,sub2,sub3}
+(1 row)
+</programlisting></para>
+   </step>
+   <step performance="required">
+    <para>
+     Check that the logical replication slots identified above exist on
+     the standby server and are ready for failover.
+<programlisting>
+test_standby=# SELECT slot_name, (synced AND NOT temporary AND NOT conflicting) AS failover_ready
+               FROM pg_replication_slots
+               WHERE slot_name IN ('sub1','sub2','sub3');
+  slot_name  | failover_ready
+-------------+----------------
+  sub1       | t
+  sub2       | t
+  sub3       | t
+(3 rows)
+</programlisting></para>
+    </step>
+  </procedure>
+
+  <para>
+   If all the slots are present on the standby server and the result
+   (<literal>failover_ready</literal>) of the above SQL query is true, then
+   existing subscriptions can continue subscribing to publications now on the
+   new primary server without losing data.
+  </para>
+
+ </sect1>
+
  <sect1 id="logical-replication-row-filter">
   <title>Filtres de lignes</title>
 
@@ -746,7 +843,7 @@ ALTER SUBSCRIPTION
     ou <literal>NULL</literal>, alors la ligne n'est pas répliquée. L'expression
     de la clause <literal>WHERE</literal> est évaluée avec le même rôle utilisé
     pour la connexion de réplication (soit le rôle indiqué dans la clause
-    <link linkend="sql-createsubscription-connection"><literal>CONNECTION</literal></link>
+    <link linkend="sql-createsubscription-params-connection"><literal>CONNECTION</literal></link>
     de l'instruction <xref
     linkend="sql-createsubscription"/>). Les filtres de ligne n'ont pas deffet
     sur la commande <command>TRUNCATE</command>.
@@ -855,7 +952,7 @@ ALTER SUBSCRIPTION
    <para>
     Si la publication contient une table partitionnée, le paramètre de
     publication <link
-    linkend="sql-createpublication-with-publish-via-partition-root"><literal>publish_via_partition_root</literal></link>
+    linkend="sql-createpublication-params-with-publish-via-partition-root"><literal>publish_via_partition_root</literal></link>
     détermine le filtre de lignes à utiliser. Si
     <literal>publish_via_partition_root</literal> vaut <literal>true</literal>,
     le filtre de ligne de la <emphasis>table partitionnée racine</emphasis> est
@@ -887,7 +984,7 @@ ALTER SUBSCRIPTION
     <para>
      Comme la synchronisation initiale des données ne prend pas en compte le
      paramètre <link
-     linkend="sql-createpublication-with-publish"><literal>publish</literal></link>
+     linkend="sql-createpublication-params-with-publish"><literal>publish</literal></link>
      lors de la copie des données
      pré-existantes de la table, certaines lignes pourraient être copiées alors
      qu'elles n'auraient pas été répliquées avec des instructions DML.
@@ -914,7 +1011,7 @@ ALTER SUBSCRIPTION
    <para>
     Si la souscription a plusieurs publications pour lesquelles la même table a
     été publiée avec des filtres de lignes différents (pour la même opération
-    <link linkend="sql-createpublication-with-publish"><literal>publish</literal></link>,
+    <link linkend="sql-createpublication-params-with-publish"><literal>publish</literal></link>,
     ces expressions sont assemblées avec un OU
     logique, pour que les lignes satisfaisant au moins <emphasis>une</emphasis>
     expression seront répliquées. Cela signifie que les autres filtres de lignes
@@ -928,7 +1025,7 @@ ALTER SUBSCRIPTION
      <listitem>
       <para>
        Une des publications a été créée en utilisant <link
-       linkend="sql-createpublication-for-all-tables"><literal>FOR ALL
+       linkend="sql-createpublication-params-for-all-tables"><literal>FOR ALL
        TABLES</literal></link>. Cette clause n'autorise pas les filtres de
        lignes&nbsp;;
       </para>
@@ -936,7 +1033,7 @@ ALTER SUBSCRIPTION
      <listitem>
       <para>
        Une des publications a été créée en utilisant <link
-       linkend="sql-createpublication-for-tables-in-schema"><literal>FOR TABLES
+       linkend="sql-createpublication-params-for-tables-in-schema"><literal>FOR TABLES
        IN SCHEMA</literal></link> et la table appartient au schéma référencé.
        Cette clause n'autorise pas les filtres de lignes.
       </para>
@@ -1208,7 +1305,7 @@ test_sub=# SELECT * FROM t1;
 
    <para>
     Les exemples suivants montrent comment le paramètre de publication <link
-    linkend="sql-createpublication-with-publish-via-partition-root"><literal>publish_via_partition_root</literal></link>
+    linkend="sql-createpublication-params-with-publish-via-partition-root"><literal>publish_via_partition_root</literal></link>
     détermine si le filtre de
     ligne de la table parent ou enfant sera utilisé dans le cas de tables
     partitionnées.
@@ -1353,7 +1450,8 @@ test_sub=# SELECT * FROM child ORDER BY a;
 
   <para>
    Si aucune liste de colonne n'est indiquée, toutes les colonnes ajoutées
-   ultérieurement sont automatiquement répliquées. Cela signifie qu'avoir une
+   ultérieurement à la table sont automatiquement répliquées. Cela signifie
+   qu'avoir une
    liste de colonnes qui nomme toutes les colonnes n'aboutit pas au même
    comportement que ne pas avoir de liste de colonnes.
   </para>
@@ -1366,13 +1464,13 @@ test_sub=# SELECT * FROM child ORDER BY a;
   <para>
    Préciser une liste de colonnes n'est pas possible quand la publication publie
    aussi toutes les tables d'un schéma (clause <link
-   linkend="sql-createpublication-for-tables-in-schema"><literal>FOR TABLES IN
+   linkend="sql-createpublication-params-for-tables-in-schema"><literal>FOR TABLES IN
    SCHEMA</literal></link>).
   </para>
 
   <para>
    Pour les tables partitionnées, le paramètre de publication <link
-   linkend="sql-createpublication-with-publish-via-partition-root"><literal>publish_via_partition_root</literal></link>
+   linkend="sql-createpublication-params-with-publish-via-partition-root"><literal>publish_via_partition_root</literal></link>
    détermine quel liste de
    colonnes utiliser. Si <literal>publish_via_partition_root</literal> vaut
    <literal>true</literal>, la liste de colonnes utilisée est celle de la table
@@ -1420,9 +1518,10 @@ test_sub=# SELECT * FROM child ORDER BY a;
     Si ce problème affecte une souscription, la seule façon de reprendre la
     réplication est d'ajuster une des listes de colonnes côté publication pour
     que les listes correspondent&nbsp;; puis soit de créer de nouveau la
-    souscription, soit utiliser <literal>ALTER SUBSCRIPTION ... DROP
-    PUBLICATION</literal> pour supprimer une des publications problématiques et
-    l'ajouter de nouveau après.
+    souscription, soit utiliser <link
+    linkend="sql-altersubscription-params-setadddrop-publication">
+    <literal>ALTER SUBSCRIPTION ... DROP PUBLICATION</literal></link> pour supprimer
+    une des publications problématiques et l'ajouter de nouveau après.
    </para>
   </warning>
 
@@ -1581,15 +1680,17 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    applicatif du serveur (LSN 0/14C0378 et origine de réplication
    <literal>pg_16395</literal> dans le cas ci-dessus). La transaction qui a
    produit le conflit peut être ignorée en utilisant l'instruction
-   <command>ALTER SUBSCRIPTION ... SKIP</command> avec le LSN final (LSN
+   <link linkend="sql-altersubscription-params-skip"><command>ALTER SUBSCRIPTION
+    ... SKIP</command></link> avec le LSN final (LSN
    0/14C0378). Le LSN final pourrait être un LSN sur lequel la transaction est
    validée ou préparée sur le publieur. La transaction peut aussi être ignorée
    en appelant la fonction <link
    linkend="pg-replication-origin-advance"><function>pg_replication_origin_advance()</function></link>.
    Avant d'utiliser cette fonction, la souscription doit être désactivée
-   temporairement soit par <command>ALTER SUBSCRIPTION ... DISABLE</command>
+   temporairement soit par <link linkend="sql-altersubscription-params-disable">
+   <command>ALTER SUBSCRIPTION ... DISABLE</command></link>
    soit en utilisant l'option <link
-   linkend="sql-createsubscription-with-disable-on-error"><literal>disable_on_error</literal></link>
+   linkend="sql-createsubscription-params-with-disable-on-error"><literal>disable_on_error</literal></link>
    de la souscription. Ensuite, vous pouvez utiliser la fonction
    <function>pg_replication_origin_advance()</function> avec
    <parameter>node_name</parameter> (<literal>pg_16395</literal>) et le LSN
@@ -1602,7 +1703,7 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   </para>
 
   <para>
-   Quand le mode <link linkend="sql-createsubscription-with-streaming"><literal>streaming</literal></link>
+   Quand le mode <link linkend="sql-createsubscription-params-with-streaming"><literal>streaming</literal></link>
    vaut <literal>parallel</literal>, le LSN final des transactions en échec peut ne pas être
    journalisé. Dans ce cas, il peut être nécessaire de changer le mode
    de flux (streaming) à <literal>on</literal> ou <literal>off</literal> et provoquer
@@ -1702,8 +1803,21 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
      répliquer en utilisant l'identité et le schéma de la table racine
      partitionnée au lieu de chaque partition individuelle à l'origine des
      changements (voir le paramètre
-     <link linkend="sql-createpublication-with-publish-via-partition-root"><literal>publish_via_partition_root</literal></link>
+     <link linkend="sql-createpublication-params-with-publish-via-partition-root"><literal>publish_via_partition_root</literal></link>
      de <command>CREATE PUBLICATION</command>).
+    </para>
+   </listitem>
+
+   <listitem>
+    <para>
+     When using
+     <link linkend="sql-altertable-replica-identity-full"><literal>REPLICA IDENTITY FULL</literal></link>
+     on published tables, it is important to note that the <literal>UPDATE</literal>
+     and <literal>DELETE</literal> operations cannot be applied to subscribers
+     if the tables include attributes with datatypes (such as point or box)
+     that do not have a default operator class for B-tree or Hash. However,
+     this limitation can be overcome by ensuring that the table has a primary
+     key or replica identity defined for it.
     </para>
    </listitem>
   </itemizedlist>
@@ -1777,7 +1891,7 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    <note>
     <para>
      Le paramètre de publication  <link
-     linkend="sql-createpublication-with-publish"><literal>publish</literal></link>
+     linkend="sql-createpublication-params-with-publish"><literal>publish</literal></link>
      affecte uniquement
      les opérations DML qui seront répliquées. La synchronisation initiale des
      données ne prend pas ce paramètre en compte lors de la copie des données
@@ -1811,7 +1925,7 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    cette vue. Si la synchronisation initiale d'une table est en cours, il y
    aura des processus supplémentaires pour les tables en cours de
    synchronisation. En outre, si la transaction
-   <link linkend="sql-createsubscription-with-streaming"><literal>streaming</literal></link>
+   <link linkend="sql-createsubscription-params-with-streaming"><literal>streaming</literal></link>
    est appliquée en parallèle, il y aura des processus apply parallèles supplémentaires.
   </para>
  </sect1>

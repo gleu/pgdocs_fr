@@ -42,7 +42,7 @@
   <para>
    Les exemples dans cette section sont tirés de la base de données pour les
    tests de régression après avoir effectué un <command>VACUUM
-   ANALYZE</command>, avec les sources de la version de développement 9.3.
+   ANALYZE</command>, avec les sources de la version de développement v17.
    Vous devriez obtenir des résultats similaires si vous essayez les exemples
    vous-même, mais vos estimations de coût et de nombre de lignes pourraient
    légèrement varier parce que les statistiques d'<command>ANALYZE</command>
@@ -96,7 +96,7 @@
 
                          QUERY PLAN
 -------------------------------------------------------------
- Seq Scan on tenk1  (cost=0.00..458.00 rows=10000 width=244)</screen>
+ Seq Scan on tenk1  (cost=0.00..445.00 rows=10000 width=244)</screen>
    </para>
 
    <para>
@@ -155,11 +155,11 @@
     Il est important de comprendre que le coût d'un nœud de haut niveau inclut
     le coût de tous les nœuds fils. Il est aussi important de réaliser que le
     coût reflète seulement les éléments d'importance pour le planificateur.
-    En particulier, le coût ne considère pas le temps dépensé dans la
-    transmission des lignes de résultat au client, ce qui pourrait être un
-    facteur important dans le temps réel passé&nbsp;; mais le planificateur
-    l'ignore parce qu'il ne peut pas le changer en modifiant le plan
-    (chaque plan correct sortira le même ensemble de lignes).
+    In particular, the cost does not consider the time spent to convert
+    output values to text form or to transmit them to the client, which
+    could be important factors in the real elapsed time; but the planner
+    ignores those costs because it cannot change them by altering the
+    plan.  (Every correct plan will output the same row set, we trust.)
    </para>
 
    <para>
@@ -175,32 +175,29 @@
 
    <para>
     Quand un <command>UPDATE</command>, un <command>DELETE</command> ou un
-    <command>MERGE</command> affecte
+    <command>MERGE</command> affecte une table partitionnée ou
     une hiérarchie d'héritage, la sortie pourrait ressembler à ceci&nbsp;:
 
-    <screen>EXPLAIN UPDATE parent SET f2 = f2 + 1 WHERE f1 = 101;
+    <screen>+EXPLAIN UPDATE gtest_parent SET f1 = CURRENT_DATE WHERE f2 = 101;
 
-                                              QUERY PLAN
--------------------------------------------------------------------&zwsp;-----------------------------------
- Update on parent  (cost=0.00..24.59 rows=0 width=0)
-   Update on parent parent_1
-   Update on child1 parent_2
-   Update on child2 parent_3
-   Update on child3 parent_4
-   -&gt;  Result  (cost=0.00..24.59 rows=4 width=14)
-         -&gt;  Append  (cost=0.00..24.54 rows=4 width=14)
-               -&gt;  Seq Scan on parent parent_1  (cost=0.00..0.00 rows=1 width=14)
-                     Filter: (f1 = 101)
-               -&gt;  Index Scan using child1_pkey on child1 parent_2  (cost=0.15..8.17 rows=1 width=14)
-                     Index Cond: (f1 = 101)
-               -&gt;  Index Scan using child2_pkey on child2 parent_3  (cost=0.15..8.17 rows=1 width=14)
-                     Index Cond: (f1 = 101)
-               -&gt;  Index Scan using child3_pkey on child3 parent_4  (cost=0.15..8.17 rows=1 width=14)
-                     Index Cond: (f1 = 101)</screen>
+                                       QUERY PLAN
+-------------------------------------------------------------------&zwsp;---------------------
+ Update on gtest_parent  (cost=0.00..3.06 rows=0 width=0)
+   Update on gtest_child gtest_parent_1
+   Update on gtest_child2 gtest_parent_2
+   Update on gtest_child3 gtest_parent_3
+   -&gt;  Append  (cost=0.00..3.06 rows=3 width=14)
+         -&gt;  Seq Scan on gtest_child gtest_parent_1  (cost=0.00..1.01 rows=1 width=14)
+               Filter: (f2 = 101)
+         -&gt;  Seq Scan on gtest_child2 gtest_parent_2  (cost=0.00..1.01 rows=1 width=14)
+               Filter: (f2 = 101)
+         -&gt;  Seq Scan on gtest_child3 gtest_parent_3  (cost=0.00..1.01 rows=1 width=14)
+               Filter: (f2 = 101)</screen>
 
     Dans cet exemple, le nœud Update doit prendre en compte les trois tables
-    filles ainsi que la table parente mentionnée dans la requête. Donc il y a
-    quatre sous-plans de parcours en entrée, un par table. Pour plus de
+    filles but not the originally-mentioned partitioned table (since that never
+    stores any data). Donc il y a
+    trois sous-plans de parcours en entrée, un par table. Pour plus de
     clarté, le nœud Update est annoté pour afficher les tables cibles
     spécifiques à mettre à jour, dans le même ordre que les sous-plans
     correspondants.
@@ -220,7 +217,7 @@
 
                          QUERY PLAN
 -------------------------------------------------------------
- Seq Scan on tenk1  (cost=0.00..458.00 rows=10000 width=244)</screen>
+ Seq Scan on tenk1  (cost=0.00..445.00 rows=10000 width=244)</screen>
    </para>
 
    <para>
@@ -228,13 +225,13 @@
 
     <screen>SELECT relpages, reltuples FROM pg_class WHERE relname = 'tenk1';</screen>
 
-    vous trouverez que <classname>tenk1</classname> a 358 blocs disque et
+    vous trouverez que <classname>tenk1</classname> a 345 blocs disque et
     10000 lignes. Le coût estimé est calculé avec (nombre de blocs lus *
     <xref linkend="guc-seq-page-cost"/>) + (lignes parcourues * <xref
     linkend="guc-cpu-tuple-cost"/>). Par défaut,
     <varname>seq_page_cost</varname> vaut 1,0 et
     <varname>cpu_tuple_cost</varname> vaut 0,01. Donc le coût estimé est de
-    (358 * 1,0) + (10000 * 0,01), soit 458.
+    (345 * 1,0) + (10000 * 0,01), soit 445.
    </para>
 
    <para>
@@ -245,7 +242,7 @@
 
                          QUERY PLAN
 ------------------------------------------------------------
- Seq Scan on tenk1  (cost=0.00..483.00 rows=7001 width=244)
+ Seq Scan on tenk1  (cost=0.00..470.00 rows=7000 width=244)
    Filter: (unique1 &lt; 7000)</screen>
 
     Notez que l'affichage d'<command>EXPLAIN</command> montre la clause
@@ -278,9 +275,9 @@
 
                                   QUERY PLAN
 ------------------------------------------------------------------------------
- Bitmap Heap Scan on tenk1  (cost=5.07..229.20 rows=101 width=244)
+ Bitmap Heap Scan on tenk1  (cost=5.06..224.98 rows=100 width=244)
    Recheck Cond: (unique1 &lt; 100)
-   ->  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=101 width=0)
+   ->  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=100 width=0)
          Index Cond: (unique1 &lt; 100)</screen>
 
     Ici, le planificateur a décidé d'utiliser un plan en deux étapes&nbsp;: le
@@ -305,19 +302,19 @@
 
                                   QUERY PLAN
 ------------------------------------------------------------------------------
- Bitmap Heap Scan on tenk1  (cost=5.04..229.43 rows=1 width=244)
+ Bitmap Heap Scan on tenk1  (cost=5.04..225.20 rows=1 width=244)
    Recheck Cond: (unique1 &lt; 100)
    Filter: (stringu1 = 'xxx'::name)
-   -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=101 width=0)
+   -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=100 width=0)
          Index Cond: (unique1 &lt; 100)</screen>
 
     L'ajout de la condition <literal>stringu1 = 'xxx'</literal> réduit
     l'estimation du nombre de lignes renvoyées, mais pas son coût, car il
-    faut toujours parcourir le même ensemble de lignes. Notez que la clause
+    faut toujours parcourir le même ensemble de lignes. C'est dû fait que la clause
     <literal>stringu1</literal> ne peut être appliquée comme une condition
     d'index car l'index ne porte que sur la colonne
     <literal>unique1</literal>. À la place, un filtre a été appliqué sur les
-    lignes récupérées par l'index. C'est pourquoi le coût a légèrement
+    lignes récupérées en utilisant l'index. C'est pourquoi le coût a légèrement
     augmenté pour refléter la vérification supplémentaire.
    </para>
 
@@ -349,7 +346,7 @@
     L'optimiseur peut exécuter une clause <literal>ORDER BY</literal> de
     plusieurs façons. L'exemple ci-dessus montre qu'une clause de tri peut
     être effectué implicitement. L'optimiseur peut aussi ajouter une étape de
-    tri (<literal>sort</literal>) explicite&nbsp;:
+    tri (<literal>Sort</literal>) explicite&nbsp;:
 
     <screen>EXPLAIN SELECT * FROM tenk1 ORDER BY unique1;
                             QUERY PLAN
@@ -360,16 +357,16 @@
 
     Si une partie du plan garantit un ordre sur un préfixe des clés de tri
     requises, alors l'optimiseur peut décider à la place d'utiliser une étape
-    de tri incrémental (<literal>incremental sort</literal>)&nbsp;:
+    de tri incrémental (<literal>Incremental Sort</literal>)&nbsp;:
 
-    <screen>EXPLAIN SELECT * FROM tenk1 ORDER BY four, ten LIMIT 100;
+    <screen>EXPLAIN SELECT * FROM tenk1 ORDER BY hundred, ten LIMIT 100;
                                               QUERY PLAN
--------------------------------------------------------------------&zwsp;-----------------------------------
- Limit  (cost=521.06..538.05 rows=100 width=244)
-   ->  Incremental Sort  (cost=521.06..2220.95 rows=10000 width=244)
-         Sort Key: four, ten
-         Presorted Key: four
-         ->  Index Scan using index_tenk1_on_four on tenk1  (cost=0.29..1510.08 rows=10000 width=244)</screen>
+-------------------------------------------------------------------&zwsp;-----------------------------
+ Limit  (cost=19.35..39.49 rows=100 width=244)
+   -&gt;  Incremental Sort  (cost=19.35..2033.39 rows=10000 width=244)
+         Sort Key: hundred, ten
+         Presorted Key: hundred
+         -&gt;  Index Scan using tenk1_hundred on tenk1  (cost=0.29..1574.20 rows=10000 width=244)</screen>
 
     Comparé aux tris habituels, le tri incrémental permet de renvoyer les
     lignes avant que l'ensemble du résultat ne soit trié, ce qui permet en
@@ -389,10 +386,10 @@
 
                                       QUERY PLAN
  -------------------------------------------------------------------------------------
- Bitmap Heap Scan on tenk1  (cost=25.08..60.21 rows=10 width=244)
+ Bitmap Heap Scan on tenk1  (cost=25.07..60.11 rows=10 width=244)
     Recheck Cond: ((unique1 &lt; 100) AND (unique2 &gt; 9000))
-   -&gt;  BitmapAnd  (cost=25.08..25.08 rows=10 width=0)
-         -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=101 width=0)
+   -&gt;  BitmapAnd  (cost=25.07..25.07 rows=10 width=0)
+         -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=100 width=0)
                 Index Cond: (unique1 &lt; 100)
          -&gt;  Bitmap Index Scan on tenk1_unique2  (cost=0.00..19.78 rows=999 width=0)
                 Index Cond: (unique2 &gt; 9000)</screen>
@@ -411,8 +408,8 @@
 
                                      QUERY PLAN
 -------------------------------------------------------------------------------------
- Limit  (cost=0.29..14.48 rows=2 width=244)
-   -&gt;  Index Scan using tenk1_unique2 on tenk1  (cost=0.29..71.27 rows=10 width=244)
+ Limit  (cost=0.29..14.28 rows=2 width=244)
+   -&gt;  Index Scan using tenk1_unique2 on tenk1  (cost=0.29..70.27 rows=10 width=244)
          Index Cond: (unique2 &gt; 9000)
          Filter: (unique1 &lt; 100)</screen>
    </para>
@@ -442,12 +439,12 @@ WHERE t1.unique1 &lt; 10 AND t1.unique2 = t2.unique2;
 
                                        QUERY PLAN
  --------------------------------------------------------------------------------------
- Nested Loop  (cost=4.65..118.62 rows=10 width=488)
-   -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=4.36..39.47 rows=10 width=244)
+ Nested Loop  (cost=4.65..118.50 rows=10 width=488)
+   -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=4.36..39.38 rows=10 width=244)
          Recheck Cond: (unique1 &lt; 10)
          -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..4.36 rows=10 width=0)
                Index Cond: (unique1 &lt; 10)
-   -&gt;  Index Scan using tenk2_unique2 on tenk2 t2  (cost=0.29..7.91 rows=1 width=244)
+   -&gt;  Index Scan using tenk2_unique2 on tenk2 t2  (cost=0.29..7.90 rows=1 width=244)
           Index Cond: (unique2 = t1.unique2)</screen>
    </para>
 
@@ -474,7 +471,7 @@ WHERE t1.unique1 &lt; 10 AND t1.unique2 = t2.unique2;
     cache des données durant les parcours d'index répétés sur
     <literal>t2</literal>.) Les coûts du nœud correspondant à la boucle sont
     ensuite initialisés sur la base du coût du parcours externe, avec une
-    répétition du parcours interne pour chaque ligne externe (ici 10 * 7,91),
+    répétition du parcours interne pour chaque ligne externe (ici 10 * 7,90),
     plus un petit temps CPU pour traiter la jointure.
    </para>
 
@@ -492,9 +489,9 @@ WHERE t1.unique1 &lt; 10 AND t2.unique2 &lt; 10 AND t1.hundred &lt; t2.hundred;
 
                                       QUERY PLAN
 --------------------------------------------------------------------------------------
- Nested Loop  (cost=4.65..49.46 rows=33 width=488)
+ Nested Loop  (cost=4.65..49.36 rows=33 width=488)
    Join Filter: (t1.hundred &lt; t2.hundred)
-   -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=4.36..39.47 rows=10 width=244)
+   -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=4.36..39.38 rows=10 width=244)
          Recheck Cond: (unique1 &lt; 10)
          -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..4.36 rows=10 width=0)
                Index Cond: (unique1 &lt; 10)
@@ -542,13 +539,13 @@ WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
 
                                         QUERY PLAN
 ------------------------------------------------------------------------------------------
- Hash Join  (cost=230.47..713.98 rows=101 width=488)
+ Hash Join  (cost=226.23..709.73 rows=100 width=488)
     Hash Cond: (t2.unique2 = t1.unique2)
     -&gt;  Seq Scan on tenk2 t2  (cost=0.00..445.00 rows=10000 width=244)
-    -&gt;  Hash  (cost=229.20..229.20 rows=101 width=244)
-           -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=5.07..229.20 rows=101 width=244)
+    -&gt;  Hash  (cost=224.98..224.98 rows=100 width=244)
+          -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=5.06..224.98 rows=100 width=244)
                 Recheck Cond: (unique1 &lt; 100)
-                -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=101 width=0)
+               -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=100 width=0)
                      Index Cond: (unique1 &lt; 100)</screen>
    </para>
 
@@ -574,22 +571,19 @@ WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
 
                                         QUERY PLAN
 ------------------------------------------------------------------------------------------
- Merge Join  (cost=198.11..268.19 rows=10 width=488)
+ Merge Join  (cost=0.56..233.49 rows=10 width=488)
    Merge Cond: (t1.unique2 = t2.unique2)
-   -&gt;  Index Scan using tenk1_unique2 on tenk1 t1  (cost=0.29..656.28 rows=101 width=244)
+   -&gt;  Index Scan using tenk1_unique2 on tenk1 t1  (cost=0.29..643.28 rows=100 width=244)
          Filter: (unique1 &lt; 100)
-   -&gt;  Sort  (cost=197.83..200.33 rows=1000 width=244)
-         Sort Key: t2.unique2
-         -&gt;  Seq Scan on onek t2  (cost=0.00..148.00 rows=1000 width=244)</screen>
+   -&gt;  Index Scan using onek_unique2 on onek t2  (cost=0.28..166.28 rows=1000 width=244)
+</screen>
    </para>
 
    <para>
     La jointure d'assemblage nécessite que les données en entrée soient triées
-    sur la clé de jointure. Dans ce plan, les données de
-    <literal>tenk1</literal> sont triées grâce à l'utilisation d'un parcours
-    d'index pour visiter les lignes dans le bon ordre, mais un parcours
-    séquentiel suivi d'un tri sont préférables pour <literal>onek</literal>,
-    car il y a beaucoup plus de lignes à visiter dans cette table.
+    sur la clé de jointure. Dans cet
+    example each input is sorted by using an index scan to visit the rows
+    in the correct order; but a sequential scan and sort could also be used.
     (Un parcours séquentiel suivi d'un tri bat fréquemment un parcours
     d'index pour trier de nombreuses lignes, du fait des accès disques non
     séquentiels requis par le parcours d'index.)
@@ -602,29 +596,128 @@ WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
     (disable) décrites dans la <xref linkend="runtime-config-query-enable"/>
     (c'est un outil complexe, mais utile&nbsp;; voir aussi la <xref
     linkend="explicit-joins"/>). Par exemple, si nous n'étions pas convaincus
-    qu'un parcours séquentiel suivi d'un tri soit la meilleure façon de
-    parcourir la table <literal>onek</literal> dans l'exemple précédent, nous
-    pourrions essayer
+    que la jointure d'assemblage soit le meilleur type de jointure
+    dans l'exemple précédent, nous pourrions essayer
 
-    <screen>SET enable_sort = off;
+    <screen>SET enable_mergejoin = off;
 EXPLAIN SELECT *
 FROM tenk1 t1, onek t2
  WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
 
                                          QUERY PLAN
  ------------------------------------------------------------------------------------------
- Merge Join  (cost=0.56..292.65 rows=10 width=488)
-   Merge Cond: (t1.unique2 = t2.unique2)
-   -&gt;  Index Scan using tenk1_unique2 on tenk1 t1  (cost=0.29..656.28 rows=101 width=244)
-         Filter: (unique1 &lt; 100)
-   -&gt;  Index Scan using onek_unique2 on onek t2  (cost=0.28..224.79 rows=1000 width=244)</screen>
+ Hash Join  (cost=226.23..344.08 rows=10 width=488)
+   Hash Cond: (t2.unique2 = t1.unique2)
+   -&gt;  Seq Scan on onek t2  (cost=0.00..114.00 rows=1000 width=244)
+   -&gt;  Hash  (cost=224.98..224.98 rows=100 width=244)
+         -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=5.06..224.98 rows=100 width=244)
+               Recheck Cond: (unique1 &lt; 100)
+               -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=100 width=0)
+                     Index Cond: (unique1 &lt; 100)</screen>
 
-    ce qui montre que le planificateur pense que le tri de
-    <literal>onek</literal> par un parcours d'index est plus coûteux
-    d'environ 12% par rapport à un parcours séquentiel suivi d'un tri. Bien
+    ce qui montre que le planificateur pense que le hash join would be nearly 50%
+    more expensive than merge join for this case. Bien
     sûr, la question suivante est de savoir s'il a raison sur ce point. Nous
     pourrions vérifier cela en utilisant <command>EXPLAIN ANALYZE</command>,
-    comme expliqué ci-dessous.
+    comme expliqué <link linkend="using-explain-analyze">ci-dessous</link>.
+   </para>
+
+   <para>
+    <indexterm>
+     <primary>subplan</primary>
+    </indexterm>
+    Some query plans involve <firstterm>subplans</firstterm>, which arise
+    from sub-<literal>SELECT</literal>s in the original query.  Such
+    queries can sometimes be transformed into ordinary join plans, but
+    when they cannot be, we get plans like:
+
+<screen>
+EXPLAIN VERBOSE SELECT unique1
+FROM tenk1 t
+WHERE t.ten &lt; ALL (SELECT o.ten FROM onek o WHERE o.four = t.four);
+
+                               QUERY PLAN
+-------------------------------------------------------------------&zwsp;------
+ Seq Scan on public.tenk1 t  (cost=0.00..586095.00 rows=5000 width=4)
+   Output: t.unique1
+   Filter: (ALL (t.ten &lt; (SubPlan 1).col1))
+   SubPlan 1
+     -&gt;  Seq Scan on public.onek o  (cost=0.00..116.50 rows=250 width=4)
+           Output: o.ten
+           Filter: (o.four = t.four)
+</screen>
+
+    This rather artificial example serves to illustrate a couple of
+    points: values from the outer plan level can be passed down into a
+    subplan (here, <literal>t.four</literal> is passed down) and the
+    results of the sub-select are available to the outer plan.  Those
+    result values are shown by <command>EXPLAIN</command> with notations
+    like
+    <literal>(<replaceable>subplan_name</replaceable>).col<replaceable>N</replaceable></literal>,
+    which refers to the <replaceable>N</replaceable>'th output column of
+    the sub-<literal>SELECT</literal>.
+   </para>
+
+   <para>
+    <indexterm>
+     <primary>subplan</primary>
+     <secondary>hashed</secondary>
+    </indexterm>
+    In the example above, the <literal>ALL</literal> operator runs the
+    subplan again for each row of the outer query (which accounts for the
+    high estimated cost).  Some queries can use a <firstterm>hashed
+    subplan</firstterm> to avoid that:
+
+<screen>
+EXPLAIN SELECT *
+FROM tenk1 t
+WHERE t.unique1 NOT IN (SELECT o.unique1 FROM onek o);
+
+                                         QUERY PLAN
+-------------------------------------------------------------------&zwsp;-------------------------
+ Seq Scan on tenk1 t  (cost=61.77..531.77 rows=5000 width=244)
+   Filter: (NOT (ANY (unique1 = (hashed SubPlan 1).col1)))
+   SubPlan 1
+     -&gt;  Index Only Scan using onek_unique1 on onek o  (cost=0.28..59.27 rows=1000 width=4)
+(4 rows)
+</screen>
+
+    Here, the subplan is run a single time and its output is loaded into
+    an in-memory hash table, which is then probed by the
+    outer <literal>ANY</literal> operator.  This requires that the
+    sub-<literal>SELECT</literal> not reference any variables of the outer
+    query, and that the <literal>ANY</literal>'s comparison operator be
+    amenable to hashing.
+   </para>
+
+   <para>
+    <indexterm>
+     <primary>initplan</primary>
+    </indexterm>
+    If, in addition to not referencing any variables of the outer query,
+    the sub-<literal>SELECT</literal> cannot return more than one row,
+    it may instead be implemented as an <firstterm>initplan</firstterm>:
+
+<screen>
+EXPLAIN VERBOSE SELECT unique1
+FROM tenk1 t1 WHERE t1.ten = (SELECT (random() * 10)::integer);
+
+                             QUERY PLAN
+------------------------------------------------------------&zwsp;--------
+ Seq Scan on public.tenk1 t1  (cost=0.02..470.02 rows=1000 width=4)
+   Output: t1.unique1
+   Filter: (t1.ten = (InitPlan 1).col1)
+   InitPlan 1
+     -&gt;  Result  (cost=0.00..0.02 rows=1 width=4)
+           Output: ((random() * '10'::double precision))::integer
+</screen>
+
+    An initplan is run only once per execution of the outer plan, and its
+    results are saved for re-use in later rows of the outer plan.  So in
+    this example <literal>random()</literal> is evaluated only once and
+    all the values of <literal>t1.ten</literal> are compared to the same
+    randomly-chosen integer.  That's quite different from what would
+    happen without the sub-<literal>SELECT</literal> construct.
    </para>
   </sect2>
 
@@ -646,15 +739,16 @@ WHERE t1.unique1 &lt; 10 AND t1.unique2 = t2.unique2;
 
                                                            QUERY PLAN
 ---------------------------------------------------------------------------------------------------------------------------------
- Nested Loop  (cost=4.65..118.62 rows=10 width=488) (actual time=0.128..0.377 rows=10 loops=1)
-   -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=4.36..39.47 rows=10 width=244) (actual time=0.057..0.121 rows=10 loops=1)
+ Nested Loop  (cost=4.65..118.50 rows=10 width=488) (actual time=0.017..0.051 rows=10 loops=1)
+   -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=4.36..39.38 rows=10 width=244) (actual time=0.009..0.017 rows=10 loops=1)
           Recheck Cond: (unique1 &lt; 10)
-          -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..4.36 rows=10 width=0) (actual time=0.024..0.024 rows=10 loops=1)
+          Heap Blocks: exact=10
+          -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..4.36 rows=10 width=0) (actual time=0.004..0.004 rows=10 loops=1)
                 Index Cond: (unique1 &lt; 10)
-   -&gt;  Index Scan using tenk2_unique2 on tenk2 t2  (cost=0.29..7.91 rows=1 width=244) (actual time=0.021..0.022 rows=1 loops=10)
+   -&gt;  Index Scan using tenk2_unique2 on tenk2 t2  (cost=0.29..7.90 rows=1 width=244) (actual time=0.003..0.003 rows=1 loops=10)
           Index Cond: (unique2 = t1.unique2)
- Planning time: 0.181 ms
- Execution time: 0.501 ms</screen>
+ Planning Time: 0.485 ms
+ Execution Time: 0.073 ms</screen>
 
     Notez que les valeurs <quote>temps réel</quote> sont en millisecondes
     alors que les estimations de <quote>coût</quote> sont exprimées dans des
@@ -676,7 +770,7 @@ WHERE t1.unique1 &lt; 10 AND t1.unique2 = t2.unique2;
     coûts sont affichées. Multipliez par la valeur de
     <literal>loops</literal> pour obtenir le temps total réellement passé
     dans le nœud. Dans l'exemple précédent, le parcours d'index sur
-    <literal>tenk2</literal> a pris un total de 0,220 milliseconde.
+    <literal>tenk2</literal> a pris un total de 0,030 milliseconde.
    </para>
 
    <para>
@@ -691,20 +785,21 @@ WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2 ORDER BY t1.fivethous;
 
                                                                  QUERY PLAN
 --------------------------------------------------------------------------------------------------------------------------------------------
- Sort  (cost=717.34..717.59 rows=101 width=488) (actual time=7.761..7.774 rows=100 loops=1)
+ Sort  (cost=713.05..713.30 rows=100 width=488) (actual time=2.995..3.002 rows=100 loops=1)
     Sort Key: t1.fivethous
-    Sort Method: quicksort  Memory: 77kB
-    -&gt;  Hash Join  (cost=230.47..713.98 rows=101 width=488) (actual time=0.711..7.427 rows=100 loops=1)
+   Sort Method: quicksort  Memory: 74kB
+   -&gt;  Hash Join  (cost=226.23..709.73 rows=100 width=488) (actual time=0.515..2.920 rows=100 loops=1)
           Hash Cond: (t2.unique2 = t1.unique2)
-          -&gt;  Seq Scan on tenk2 t2  (cost=0.00..445.00 rows=10000 width=244) (actual time=0.007..2.583 rows=10000 loops=1)
-          -&gt;  Hash  (cost=229.20..229.20 rows=101 width=244) (actual time=0.659..0.659 rows=100 loops=1)
-               Buckets: 1024  Batches: 1  Memory Usage: 28kB
-               -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=5.07..229.20 rows=101 width=244) (actual time=0.080..0.526 rows=100 loops=1)
+         -&gt;  Seq Scan on tenk2 t2  (cost=0.00..445.00 rows=10000 width=244) (actual time=0.026..1.790 rows=10000 loops=1)
+         -&gt;  Hash  (cost=224.98..224.98 rows=100 width=244) (actual time=0.476..0.477 rows=100 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 35kB
+               -&gt;  Bitmap Heap Scan on tenk1 t1  (cost=5.06..224.98 rows=100 width=244) (actual time=0.030..0.450 rows=100 loops=1)
                       Recheck Cond: (unique1 &lt; 100)
-                      -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=101 width=0) (actual time=0.049..0.049 rows=100 loops=1)
+                     Heap Blocks: exact=90
+                     -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=100 width=0) (actual time=0.013..0.013 rows=100 loops=1)
                             Index Cond: (unique1 &lt; 100)
- Planning time: 0.194 ms
- Execution time: 8.008 ms</screen>
+ Planning Time: 0.187 ms
+ Execution Time: 3.036 ms</screen>
 
     Le nœud de tri donne la méthode de tri utilisée (en particulier, si le tri
     s'est effectué en mémoire ou sur disque) ainsi que la quantité de mémoire
@@ -723,11 +818,11 @@ WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2 ORDER BY t1.fivethous;
 
                                                 QUERY PLAN
 ----------------------------------------------------------------------------------------------------------
- Seq Scan on tenk1  (cost=0.00..483.00 rows=7000 width=244) (actual time=0.016..5.107 rows=7000 loops=1)
+ Seq Scan on tenk1  (cost=0.00..470.00 rows=7000 width=244) (actual time=0.030..1.995 rows=7000 loops=1)
    Filter: (ten &lt; 7)
    Rows Removed by Filter: 3000
- Planning time: 0.083 ms
- Execution time: 5.905 ms</screen>
+ Planning Time: 0.102 ms
+ Execution Time: 2.145 ms</screen>
 
     Ces nombres peuvent être particulièrement précieux pour les conditions de
     filtres appliquées aux nœuds de jointure. La ligne <quote>Rows
@@ -745,11 +840,11 @@ WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2 ORDER BY t1.fivethous;
 
                                               QUERY PLAN
 ------------------------------------------------------------------------------------------------------
- Seq Scan on polygon_tbl  (cost=0.00..1.05 rows=1 width=32) (actual time=0.044..0.044 rows=0 loops=1)
+ Seq Scan on polygon_tbl  (cost=0.00..1.09 rows=1 width=85) (actual time=0.023..0.023 rows=0 loops=1)
    Filter: (f1 @&gt; '((0.5,2))'::polygon)
-   Rows Removed by Filter: 4
- Planning time: 0.040 ms
- Execution time: 0.083 ms</screen>
+   Rows Removed by Filter: 7
+ Planning Time: 0.039 ms
+ Execution Time: 0.033 ms</screen>
 
     Le planificateur pense (plutôt correctement) que cette table d'échantillon
     est trop petite pour s'embêter avec un parcours d'index, et utilise donc
@@ -763,11 +858,11 @@ EXPLAIN ANALYZE SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
 
                                                         QUERY PLAN
 --------------------------------------------------------------------------------------------------------------------------
- Index Scan using gpolygonind on polygon_tbl  (cost=0.13..8.15 rows=1 width=32) (actual time=0.062..0.062 rows=0 loops=1)
+ Index Scan using gpolygonind on polygon_tbl  (cost=0.13..8.15 rows=1 width=85) (actual time=0.074..0.074 rows=0 loops=1)
    Index Cond: (f1 @&gt; '((0.5,2))'::polygon)
    Rows Removed by Index Recheck: 1
- Planning time: 0.034 ms
- Execution time: 0.144 ms</screen>
+ Planning Time: 0.039 ms
+ Execution Time: 0.098 ms</screen>
 
     L'index retourne une ligne candidate, qui est ensuite rejetée par une
     deuxième vérification de la condition de l'index. Cela arrive car un
@@ -786,19 +881,22 @@ EXPLAIN ANALYZE SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
 
                                                            QUERY PLAN
 ---------------------------------------------------------------------------------------------------------------------------------
- Bitmap Heap Scan on tenk1  (cost=25.08..60.21 rows=10 width=244) (actual time=0.323..0.342 rows=10 loops=1)
+ Bitmap Heap Scan on tenk1  (cost=25.07..60.11 rows=10 width=244) (actual time=0.105..0.114 rows=10 loops=1)
     Recheck Cond: ((unique1 &lt; 100) AND (unique2 &gt; 9000))
-    Buffers: shared hit=15
-   -&gt;  BitmapAnd  (cost=25.08..25.08 rows=10 width=0) (actual time=0.309..0.309 rows=0 loops=1)
-          Buffers: shared hit=7
-          -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=101 width=0) (actual time=0.043..0.043 rows=100 loops=1)
+   Heap Blocks: exact=10
+   Buffers: shared hit=14 read=3
+   -&gt;  BitmapAnd  (cost=25.07..25.07 rows=10 width=0) (actual time=0.100..0.101 rows=0 loops=1)
+         Buffers: shared hit=4 read=3
+         -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=100 width=0) (actual time=0.027..0.027 rows=100 loops=1)
                 Index Cond: (unique1 &lt; 100)
                 Buffers: shared hit=2
-          -&gt;  Bitmap Index Scan on tenk1_unique2  (cost=0.00..19.78 rows=999 width=0) (actual time=0.227..0.227 rows=999 loops=1)
+         -&gt;  Bitmap Index Scan on tenk1_unique2  (cost=0.00..19.78 rows=999 width=0) (actual time=0.070..0.070 rows=999 loops=1)
                 Index Cond: (unique2 &gt; 9000)
-                Buffers: shared hit=5
- Planning time: 0.088 ms
- Execution time: 0.423 ms</screen>
+               Buffers: shared hit=2 read=3
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.162 ms
+ Execution Time: 0.143 ms</screen>
 
     Les nombres fournis par <literal>BUFFERS</literal> aident à identifier les
     parties de la requête les plus intensives en termes d'entrées sorties.
@@ -818,14 +916,15 @@ EXPLAIN ANALYZE UPDATE tenk1 SET hundred = hundred + 1 WHERE unique1 &lt; 100;
 
                                                            QUERY PLAN
 --------------------------------------------------------------------------------------------------------------------------------
-Update on tenk1  (cost=5.08..230.08 rows=0 width=0) (actual time=3.791..3.792 rows=0 loops=1)
-  -&gt;  Bitmap Heap Scan on tenk1  (cost=5.08..230.08 rows=102 width=10) (actual time=0.069..0.513 rows=100 loops=1)
+ Update on tenk1  (cost=5.06..225.23 rows=0 width=0) (actual time=1.634..1.635 rows=0 loops=1)
+   -&gt;  Bitmap Heap Scan on tenk1  (cost=5.06..225.23 rows=100 width=10) (actual time=0.065..0.141 rows=100 loops=1)
         Recheck Cond: (unique1 &lt; 100)
         Heap Blocks: exact=90
-        -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.05 rows=102 width=0) (actual time=0.036..0.037 rows=300 loops=1)
+         -&gt;  Bitmap Index Scan on tenk1_unique1  (cost=0.00..5.04 rows=100 width=0) (actual time=0.031..0.031 rows=100 loops=1)
                Index Cond: (unique1 &lt; 100)
-Planning Time: 0.113 ms
-Execution Time: 3.850 ms
+ Planning Time: 0.151 ms
+ Execution Time: 1.856 ms
+
 
 ROLLBACK;</screen>
    </para>
@@ -871,6 +970,17 @@ ROLLBACK;</screen>
     exécutés avant la fin de la transaction et par conséquent ne seront pas
     affichés du tout par <command>EXPLAIN ANALYZE</command>.
    </para>
+
+   <para>
+    The time shown for the top-level node does not include any time needed
+    to convert the query's output data into displayable form or to send it
+    to the client.  While <command>EXPLAIN ANALYZE</command> will never
+    send the data to the client, it can be told to convert the query's
+    output data to displayable form and measure the time needed for that,
+    by specifying the <literal>SERIALIZE</literal> option.  That time will
+    be shown separately, and it's also included in the
+    total <literal>Execution time</literal>.
+   </para>
   </sect2>
 
   <sect2 id="using-explain-caveats">
@@ -880,8 +990,9 @@ ROLLBACK;</screen>
     Il existe deux raisons importantes pour lesquelles les temps d'exécution
     mesurés par <command>EXPLAIN ANALYZE</command> peuvent dévier de
     l'exécution normale de la même requête. Tout d'abord, comme aucune ligne
-    n'est réellement envoyée au client, les coûts de conversion réseau et les
-    coûts de formatage des entrées/sorties ne sont pas inclus. Ensuite, le
+    n'est réellement envoyée au client, les coûts de conversion réseau
+    ne sont pas inclus. I/O conversion costs are
+    not included either unless <literal>SERIALIZE</literal> is specified. Ensuite, le
     surcoût de mesure induit par <command>EXPLAIN ANALYZE</command> peut être
     significatif, plus particulièrement sur les machines avec un appel
     système <function>gettimeofday()</function> lent. Vous pouvez utiliser
@@ -917,13 +1028,13 @@ ROLLBACK;</screen>
 
                                                           QUERY PLAN
 -------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=0.29..14.71 rows=2 width=244) (actual time=0.177..0.249 rows=2 loops=1)
-   -&gt;  Index Scan using tenk1_unique2 on tenk1  (cost=0.29..72.42 rows=10 width=244) (actual time=0.174..0.244 rows=2 loops=1)
+ Limit  (cost=0.29..14.33 rows=2 width=244) (actual time=0.051..0.071 rows=2 loops=1)
+   -&gt;  Index Scan using tenk1_unique2 on tenk1  (cost=0.29..70.50 rows=10 width=244) (actual time=0.051..0.070 rows=2 loops=1)
          Index Cond: (unique2 &gt; 9000)
          Filter: (unique1 &lt; 100)
          Rows Removed by Filter: 287
- Planning time: 0.096 ms
- Execution time: 0.336 ms</screen>
+ Planning Time: 0.077 ms
+ Execution Time: 0.086 ms</screen>
 
     les estimations de coût et de nombre de lignes pour le nœud de parcours
     d'index sont affichées comme s'ils devaient s'exécuter jusqu'à la fin.
@@ -1008,8 +1119,8 @@ WHERE relname LIKE 'tenk1%';
 
        relname        | relkind | reltuples | relpages
 ----------------------+---------+-----------+----------
- tenk1                | r       |     10000 |      358
- tenk1_hundred        | i       |     10000 |       30
+ tenk1                | r       |     10000 |      345
+ tenk1_hundred        | i       |     10000 |       11
  tenk1_thous_tenthous | i       |     10000 |       30
  tenk1_unique1        | i       |     10000 |       30
  tenk1_unique2        | i       |     10000 |       30
@@ -1084,17 +1195,31 @@ WHERE tablename = 'road';
 
  attname | inherited | n_distinct |          most_common_vals
 ---------+-----------+------------+------------------------------------
- name    | f         |  -0.363388 | I- 580                        Ramp+
+ name    | f         | -0.5681108 | I- 580                        Ramp+
          |           |            | I- 880                        Ramp+
          |           |            | Sp Railroad                       +
          |           |            | I- 580                            +
-         |           |            | I- 680                        Ramp
- name    | t         |  -0.284859 | I- 880                        Ramp+
-         |           |            | I- 580                        Ramp+
          |           |            | I- 680                        Ramp+
+         |           |            | I- 80                         Ramp+
+         |           |            | 14th                          St  +
+         |           |            | I- 880                            +
+         |           |            | Mac Arthur                    Blvd+
+         |           |            | Mission                       Blvd+
+...
+ name    | t         |    -0.5125 | I- 580                        Ramp+
+         |           |            | I- 880                        Ramp+
          |           |            | I- 580                            +
-         |           |            | State Hwy 13                  Ramp
-(2 rows)</screen>
+         |           |            | I- 680                        Ramp+
+         |           |            | I- 80                         Ramp+
+         |           |            | Sp Railroad                       +
+         |           |            | I- 880                            +
+         |           |            | State Hwy 13                  Ramp+
+         |           |            | I- 80                             +
+         |           |            | State Hwy 24                  Ramp+
+...
+ thepath | f         |          0 |
+ thepath | t         |          0 |
+(4 rows)</screen>
 
     Notez que deux lignes sont affichées pour la même colonne, une
     correspondant à la hiérarchie d'héritage complète commençant à la table
@@ -1102,6 +1227,8 @@ WHERE tablename = 'road';
     (<literal>inherited</literal>=<literal>t</literal>), et une autre
     incluant seulement la table <literal>road</literal> elle-même
     (<literal>inherited</literal>=<literal>f</literal>).
+    (For brevity, we have only shown the first ten most-common values for
+    the <literal>name</literal> column.)
    </para>
 
    <para>

@@ -1363,13 +1363,7 @@ SELCT 1/0;<!-- this typo is intentional -->
      <member><varname>standard_conforming_strings</varname></member>
      <member><varname>TimeZone</varname></member>
     </simplelist>
-    (<varname>server_encoding</varname>, <varname>TimeZone</varname> et
-    <varname>integer_datetimes</varname> ne sont pas rapportés avant la version
-    8.0&nbsp;; <varname>standard_conforming_strings</varname> n'est pas rapporté
-    avant la version 8.1&nbsp;; <varname>IntervalStyle</varname> n'est pas
-    rapporté avant la version 8.4&nbsp;; <varname>application_name</varname>
-    n'est pas rapporté avant la version 9.0&nbsp;;
-    <varname>default_transaction_read_only</varname> et
+    (<varname>default_transaction_read_only</varname> et
     <varname>in_hot_standby</varname> ne sont pas rapportés avant la version
     14&nbsp;; <varname>scram_iterations</varname> n'est par rapporté avant la
     version 16.)
@@ -1562,8 +1556,44 @@ SELCT 1/0;<!-- this typo is intentional -->
    </para>
 
    <para>
+     Likewise the server expects the client to not begin
+     the <acronym>SSL</acronym> negotiation until it receives the server's
+     single byte response to the <acronym>SSL</acronym> request.  If the
+     client begins the <acronym>SSL</acronym> negotiation immediately without
+     waiting for the server response to be received it can reduce connection
+     latency by one round-trip.  However this comes at the cost of not being
+     able to handle the case where the server sends a negative response to the
+     <acronym>SSL</acronym> request.  In that case instead of continuing with either GSSAPI or an
+     unencrypted connection or a protocol error the server will simply
+     disconnect.
+   </para>
+
+   <para>
     Un message initial SSLRequest peut aussi être utilisé dans une connexion
     en cours d'ouverture pour envoyer un message CancelRequest.
+   </para>
+
+   <para>
+     A second alternate way to initiate <acronym>SSL</acronym> encryption is
+     available.  The server will recognize connections which immediately
+     begin <acronym>SSL</acronym> negotiation without any previous SSLRequest
+     packets.  Once the <acronym>SSL</acronym> connection is established the
+     server will expect a normal startup-request packet and continue
+     negotiation over the encrypted channel.  In this case any other requests
+     for encryption will be refused.  This method is not preferred for general
+     purpose tools as it cannot negotiate the best connection encryption
+     available or handle unencrypted connections.  However it is useful for
+     environments where both the server and client are controlled together.
+     In that case it avoids one round trip of latency and allows the use of
+     network tools that depend on standard <acronym>SSL</acronym> connections.
+     When using <acronym>SSL</acronym> connections in this style the client is
+     required to use the ALPN extension defined
+     by <ulink url="https://tools.ietf.org/html/rfc7301">RFC 7301</ulink> to
+     protect against protocol confusion attacks.
+     The <productname>PostgreSQL</productname> protocol is "postgresql" as
+     registered
+     at <ulink url="https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml#alpn-protocol-ids">IANA
+     TLS ALPN Protocol IDs</ulink> registry.
    </para>
 
    <para>
@@ -2104,6 +2134,17 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry>
+        <term><literal>FAILOVER [ <replaceable class="parameter">boolean</replaceable> ]</literal></term>
+        <listitem>
+         <para>
+          If true, the slot is enabled to be synced to the standbys
+          so that logical replication can be resumed after failover.
+          The default is false.
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist>
 
       <para>
@@ -2166,6 +2207,47 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        alternative pour <literal>CREATE_REPLICATION_SLOT</literal> est toujours
        acceptée.
       </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="protocol-replication-alter-replication-slot" xreflabel="ALTER_REPLICATION_SLOT">
+     <term><literal>ALTER_REPLICATION_SLOT</literal> <replaceable class="parameter">slot_name</replaceable> ( <replaceable class="parameter">option</replaceable> [, ...] )
+      <indexterm><primary>ALTER_REPLICATION_SLOT</primary></indexterm>
+     </term>
+     <listitem>
+      <para>
+       Change the definition of a replication slot.
+       See <xref linkend="streaming-replication-slots"/> for more about
+       replication slots. This command is currently only supported for logical
+       replication slots.
+      </para>
+
+      <variablelist>
+       <varlistentry>
+        <term><replaceable class="parameter">slot_name</replaceable></term>
+        <listitem>
+         <para>
+          The name of the slot to alter. Must be a valid replication slot
+          name (see <xref linkend="streaming-replication-slots-manipulation"/>).
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+
+      <para>The following option is supported:</para>
+
+      <variablelist>
+       <varlistentry>
+        <term><literal>FAILOVER [ <replaceable class="parameter">boolean</replaceable> ]</literal></term>
+        <listitem>
+         <para>
+          If true, the slot is enabled to be synced to the standbys
+          so that logical replication can be resumed after failover.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+
      </listitem>
     </varlistentry>
 
@@ -2271,7 +2353,10 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
 
       <para>
        Les données WAL sont envoyées sous la forme d'une série de messages
-       CopyData. (Ceci permet le mélange d'autres informations&nbsp;; en
+       CopyData;
+       see <xref linkend="protocol-message-types"/> and <xref
+       linkend="protocol-message-formats"/> for details.
+       (Ceci permet le mélange d'autres informations&nbsp;; en
        particulier, le serveur peut envoyer un message ErrorResponse s'il
        rencontre un échec après le début du flux.) La charge de chaque message
        CopyData du serveur vers le client contient un message sur un des formats
@@ -2491,10 +2576,11 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
            <term>Int32</term>
            <listitem>
             <para>
-             Le xmin global actuel du secondaire, excluant le catalog_xmin de
-             tout slot de réplication. Si cette valeur et le catalog_xmin
-             suivant sont à 0, ceci est traité comme une notification que le
-             retour du secondaire ne sera plus envoyé sur cette connexion. Des
+             Le <literal>xmin</literal> global actuel du secondaire, excluant
+             le <literal>catalog_xmin</literal> de tout slot de réplication.
+             Si cette valeur et le <literal>catalog_xmin</literal> suivant
+             sont à 0, ceci est traité comme une notification que le retour
+             du secondaire ne sera plus envoyé sur cette connexion. Des
              messages ultérieurs différents de zéro pourraient ré-initier le
              mécanisme de retour.
             </para>
@@ -2505,7 +2591,8 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
            <term>Int32</term>
            <listitem>
             <para>
-             Le nombre epoch du xmin xid global sur le serveur secondaire.
+             Le nombre epoch du <literal>xmin</literal> global sur le
+             serveur secondaire.
             </para>
            </listitem>
           </varlistentry>
@@ -2514,10 +2601,11 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
            <term>Int32</term>
            <listitem>
             <para>
-             Le catalog_xmin le plus bas de tout slot de réplication sur le
-             secondaire. Configuré à 0 si aucun catalog_xmin n'existe sur le
-             secondaire ou si le retour d'informations du secondaire est en
-             cours de désactivation.
+             Le <literal>catalog_xmin</literal> le plus bas de tout slot de
+             réplication sur le secondaire. Configuré à 0 si aucun
+             <literal>catalog_xmin</literal> n'existe sur le secondaire ou si
+             le retour d'informations du secondaire est en cours de
+             désactivation.
             </para>
            </listitem>
           </varlistentry>
@@ -2526,7 +2614,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
            <term>Int32</term>
            <listitem>
             <para>
-             Le nombre epoch du XID catalog_xmin sur le secondaire.
+             Le nombre epoch du <literal>catalog_xmin</literal> sur le secondaire.
             </para>
            </listitem>
           </varlistentry>
@@ -2652,6 +2740,19 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
         </listitem>
        </varlistentry>
       </variablelist>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="protocol-replication-upload-manifest">
+     <term>
+      <literal>UPLOAD_MANIFEST</literal>
+      <indexterm><primary>UPLOAD_MANIFEST</primary></indexterm>
+     </term>
+     <listitem>
+      <para>
+       Uploads a backup manifest in preparation for taking an incremental
+       backup.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -2908,6 +3009,17 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
           </para>
          </listitem>
         </varlistentry>
+
+        <varlistentry>
+         <term><literal>INCREMENTAL</literal></term>
+         <listitem>
+          <para>
+           Requests an incremental backup. The
+           <literal>UPLOAD_MANIFEST</literal> command must be executed
+           before running a base backup with this option.
+          </para>
+         </listitem>
+        </varlistentry>
        </variablelist>
       </para>
 
@@ -3140,6 +3252,13 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
      </listitem>
     </varlistentry>
    </variablelist>
+  </para>
+
+  <para>
+   In all the above commands,
+   when specifying a parameter of type <type>boolean</type> the
+   <replaceable class="parameter">value</replaceable> part can be omitted,
+   which is equivalent to specifying <literal>TRUE</literal>.
   </para>
  </sect1>
 
