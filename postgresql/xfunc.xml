@@ -3449,37 +3449,38 @@ make_array(PG_FUNCTION_ARGS)
      <title>Mémoire partagée</title>
 
     <sect3 id="xfunc-shared-addin-at-startup">
-     <title>Requesting Shared Memory at Startup</title>
+     <title>Réclamer de la mémoire partagée au démarrage</title>
 
      <para>
-      Add-ins can reserve shared memory on server startup.  To do so, the
-      add-in's shared library must be preloaded by specifying it in
-      <xref linkend="guc-shared-preload-libraries"/><indexterm><primary>shared_preload_libraries</primary></indexterm>.
-      The shared library should also register a
-      <literal>shmem_request_hook</literal> in its
-      <function>_PG_init</function> function.  This
-      <literal>shmem_request_hook</literal> can reserve shared memory by
-      calling:
+      Les modules peuvent réserver de la mémoire au démarrage du serveur. Pour
+      cela, la bibliothèque partagée du module doit être préchargée en
+      l'ajoutant dans xref
+      linkend="guc-shared-preload-libraries"/><indexterm><primary>shared_preload_libraries</primary></indexterm>.
+      La bibliothèque partagée doit aussi enregistrer une fonction hook
+      <literal>shmem_request_hook</literal> dans sa fonction
+      <function>_PG_init</function>. Cette fonction
+      <literal>shmem_request_hook</literal> peut réserver de la mémoire
+      partagée en appelant&nbsp;:
 <programlisting>
 void RequestAddinShmemSpace(Size size)
 </programlisting>
-      Each backend should obtain a pointer to the reserved shared memory by
-      calling:
+      Chaque processus doit obtenir un pointeur vers la mémoire partagée
+      réservée en appelant&nbsp;:
 <programlisting>
 void *ShmemInitStruct(const char *name, Size size, bool *foundPtr)
 </programlisting>
-      If this function sets <literal>foundPtr</literal> to
-      <literal>false</literal>, the caller should proceed to initialize the
-      contents of the reserved shared memory.  If <literal>foundPtr</literal>
-      is set to <literal>true</literal>, the shared memory was already
-      initialized by another backend, and the caller need not initialize
-      further.
+      Si cette fonction configure <literal>foundPtr</literal> à
+      <literal>false</literal>, l'appelant doit réaliser l'initialisation du
+      contenu de la mémoire partagée réservée. Si <literal>foundPtr</literal>
+      vaut <literal>true</literal>, la mémoire partagée était déjà initialisée
+      par un autre processus et l'appelant n'a plus besoin de rien faire
+      concernant l'initialisation.
      </para>
 
      <para>
-      To avoid race conditions, each backend should use the LWLock
-      <function>AddinShmemInitLock</function> when initializing its allocation
-      of shared memory, as shown here:
+      Pour éviter tout cas problématique, tout processus doit utiliser le verrou
+      LWLock <function>AddinShmemInitLock</function> lors de l'initialisation de
+      l'allocation de mémoire partagée, comme montré ici&nbsp;:
 <programlisting>
 static mystruct *ptr = NULL;
 bool        found;
@@ -3493,59 +3494,59 @@ if (!found)
 }
 LWLockRelease(AddinShmemInitLock);
 </programlisting>
-      <literal>shmem_startup_hook</literal> provides a convenient place for the
-      initialization code, but it is not strictly required that all such code
-      be placed in this hook.  Each backend will execute the registered
-      <literal>shmem_startup_hook</literal> shortly after it attaches to shared
-      memory.  Note that add-ins should still acquire
-      <function>AddinShmemInitLock</function> within this hook, as shown in the
-      example above.
+      <literal>shmem_startup_hook</literal> fournit un emplacement correct pour
+      le code d'initialisation mais il n'est pas strictement requis qu'un tel
+      code soit placé dans cette fonction hook. Chaque processus executera
+      le <literal>shmem_startup_hook</literal> enregistré un peu après s'être
+      attaché à la mémoire partagée. Notez que les modules doivent toujours
+      acquérir <function>AddinShmemInitLock</function> dans ce hook, comme
+      indiqué dans l'exemple ci-dessus.
      </para>
 
      <para>
-      An example of a <literal>shmem_request_hook</literal> and
-      <literal>shmem_startup_hook</literal> can be found in
-      <filename>contrib/pg_stat_statements/pg_stat_statements.c</filename> in
-      the <productname>PostgreSQL</productname> source tree.
+      Un exemple d'un <literal>shmem_request_hook</literal> et d'un
+      <literal>shmem_startup_hook</literal> peut se trouver dans
+      <filename>contrib/pg_stat_statements/pg_stat_statements.c</filename> à
+      partir du répertoire des sources de <productname>PostgreSQL</productname>.
      </para>
     </sect3>
 
     <sect3 id="xfunc-shared-addin-after-startup">
-     <title>Requesting Shared Memory After Startup</title>
+     <title>Réclamer de la mémoire partagée après le démarrage</title>
 
      <para>
-      There is another, more flexible method of reserving shared memory that
-      can be done after server startup and outside a
-      <literal>shmem_request_hook</literal>.  To do so, each backend that will
-      use the shared memory should obtain a pointer to it by calling:
+      Il existe une autre méthode, plus flexible, pour réserver de la mémoire
+      partagée. Elle se fait après le démarrage du serveur et en dehors d'un
+      <literal>shmem_request_hook</literal>. Pour cela, chaque processus qui
+      doit utiliser la mémoire partager doit obtenir un pointeur en
+      appelant&nbsp;:
 <programlisting>
 void *GetNamedDSMSegment(const char *name, size_t size,
                          void (*init_callback) (void *ptr),
                          bool *found)
 </programlisting>
-      If a dynamic shared memory segment with the given name does not yet
-      exist, this function will allocate it and initialize it with the provided
-      <function>init_callback</function> callback function.  If the segment has
-      already been allocated and initialized by another backend, this function
-      simply attaches the existing dynamic shared memory segment to the current
-      backend.
+      Si un segment de mémoire partagée dynamique de ce nom n'existe pas encore,
+      cette fonction l'allouera et l'initialisera avec la fonction callback
+      fournie <function>init_callback</function>. Si le segment a été alloué et
+      initialisé par un autre processus, cette fonction attache simplement le
+      segment de mémoire partagée dynamique au processus courant..
      </para>
 
      <para>
-      Unlike shared memory reserved at server startup, there is no need to
-      acquire <function>AddinShmemInitLock</function> or otherwise take action
-      to avoid race conditions when reserving shared memory with
-      <function>GetNamedDSMSegment</function>.  This function ensures that only
-      one backend allocates and initializes the segment and that all other
-      backends receive a pointer to the fully allocated and initialized
-      segment.
+      Contrairement à la mémoire partagée réservée au démarrage du serveur, il
+      n'est plus nécessaire d'acquérir <function>AddinShmemInitLock</function>
+      ou de réaliser des actions pour éviter les cas spéciaux lors de la
+      réservation de mémoire partagée avec
+      <function>GetNamedDSMSegment</function>. Cette fonction assure que seul
+      un processus alloue et initialise le segment et que tous les autres
+      processus reçoivent un pointeur vers le segment alloué et initialisé.
      </para>
 
      <para>
-      A complete usage example of <function>GetNamedDSMSegment</function> can
-      be found in
+      Une utilisation complète de <function>GetNamedDSMSegment</function> est
+      disponible dans
       <filename>src/test/modules/test_dsm_registry/test_dsm_registry.c</filename>
-      in the <productname>PostgreSQL</productname> source tree.
+      à partir du répertoire des sources de <productname>PostgreSQL</productname>.
      </para>
     </sect3>
    </sect2>
@@ -3554,23 +3555,24 @@ void *GetNamedDSMSegment(const char *name, size_t size,
     <title>LWLocks</title>
 
     <sect3 id="xfunc-addin-lwlocks-at-startup">
-     <title>Requesting LWLocks at Startup</title>
+     <title>Demander des LWLocks au démarrage</title>
 
      <para>
-      Add-ins can reserve LWLocks on server startup.  As with shared memory
-      reserved at server startup, the add-in's shared library must be preloaded
-      by specifying it in
+      Les modules peuvent réserver des LWLocks au démarrage du serveur. Comme
+      avec la mémoire partagée réservée au démarrage, la bibliothèque partagée
+      du module doit être préchargée en l'ajoutant dans
       <xref linkend="guc-shared-preload-libraries"/><indexterm><primary>shared_preload_libraries</primary></indexterm>,
-      and the shared library should register a
-      <literal>shmem_request_hook</literal> in its
-      <function>_PG_init</function> function.  This
-      <literal>shmem_request_hook</literal> can reserve LWLocks by calling:
+      et la bibliothèque partagée doit enregistrer une fonction
+      <literal>shmem_request_hook</literal> dans sa fonction
+      <function>_PG_init</function>. Cette fonction
+      <literal>shmem_request_hook</literal> peut réserver des LWLocks en
+      appelant&nbsp;:
 <programlisting>
 void RequestNamedLWLockTranche(const char *tranche_name, int num_lwlocks)
 </programlisting>
-      This ensures that an array of <literal>num_lwlocks</literal> LWLocks is
-      available under the name <literal>tranche_name</literal>.  A pointer to
-      this array can be obtained by calling:
+      Ceci assure qu'un tableau de <literal>num_lwlocks</literal> LWLocks est
+      disponible sous le nom <literal>tranche_name</literal>. Un pointeur vers
+      ce tableau peut être obtenu en appelant&nbsp;:
 <programlisting>
 LWLockPadded *GetNamedLWLockTranche(const char *tranche_name)
 </programlisting>
@@ -3578,64 +3580,65 @@ LWLockPadded *GetNamedLWLockTranche(const char *tranche_name)
     </sect3>
 
     <sect3 id="xfunc-addin-lwlocks-after-startup">
-     <title>Requesting LWLocks After Startup</title>
+     <title>Demander des LWLocks après le démarrage</title>
 
      <para>
-      There is another, more flexible method of obtaining LWLocks that can be
-      done after server startup and outside a
-      <literal>shmem_request_hook</literal>.  To do so, first allocate a
-      <literal>tranche_id</literal> by calling:
+      Il existe une autre méthode, plus flexible, d'obtenir des LWLocks qui peut
+      se faire après le démarrage du serveur et en dehors d'une fonction
+      <literal>shmem_request_hook</literal>. Pour cela, allouez tout d'abord un
+      <literal>tranche_id</literal> en appelant&nbsp;:
 <programlisting>
 int LWLockNewTrancheId(void)
 </programlisting>
-      Next, initialize each LWLock, passing the new
-      <literal>tranche_id</literal> as an argument:
+      Puis initialisez chaque LWLock, en lui passant le nouveau
+      <literal>tranche_id</literal> comme argument&nbsp;:
 <programlisting>
 void LWLockInitialize(LWLock *lock, int tranche_id)
 </programlisting>
-      Similar to shared memory, each backend should ensure that only one
-      process allocates a new <literal>tranche_id</literal> and initializes
-      each new LWLock.  One way to do this is to only call these functions in
-      your shared memory initialization code with the
-      <function>AddinShmemInitLock</function> held exclusively.  If using
-      <function>GetNamedDSMSegment</function>, calling these functions in the
-      <function>init_callback</function> callback function is sufficient to
-      avoid race conditions.
+      De façon similaire à la mémoire partagée, chaque processus doit s'assurer
+      qu'un seul processus alloue un nouveau <literal>tranche_id</literal> et
+      initialise chaque nouveau LWLock. Une façon de le faire est de seulement
+      appeler ces fonctions dans le code d'initialisation de la mémoire partagée
+      avec <function>AddinShmemInitLock</function> détenu en exclusivité. Si
+      vous utilisez <function>GetNamedDSMSegment</function>, appeler ces
+      fonctions dans la fonction callback <function>init_callback</function>
+      est suffisant pour éviter les cas problématiques rares.
      </para>
 
      <para>
-      Finally, each backend using the <literal>tranche_id</literal> should
-      associate it with a <literal>tranche_name</literal> by calling:
+      Enfin, chaque processus utilisant <literal>tranche_id</literal> doit
+      l'associer avec un <literal>tranche_name</literal> en appelant&nbsp;:
 <programlisting>
 void LWLockRegisterTranche(int tranche_id, const char *tranche_name)
 </programlisting>
      </para>
 
      <para>
-      A complete usage example of <function>LWLockNewTrancheId</function>,
-      <function>LWLockInitialize</function>, and
-      <function>LWLockRegisterTranche</function> can be found in
-      <filename>contrib/pg_prewarm/autoprewarm.c</filename> in the
-      <productname>PostgreSQL</productname> source tree.
+      Un exemple complet d'utilisation de <function>LWLockNewTrancheId</function>,
+      <function>LWLockInitialize</function> et
+      <function>LWLockRegisterTranche</function> peut être trouvé dans
+      <filename>contrib/pg_prewarm/autoprewarm.c</filename> à partir du
+      répertoire des sources de <productname>PostgreSQL</productname>.
      </para>
     </sect3>
    </sect2>
 
    <sect2 id="xfunc-addin-wait-events">
-    <title>Custom Wait Events</title>
+    <title>Événements d'attente personnalisés</title>
      <para>
-     Add-ins can define custom wait events under the wait event type
-     <literal>Extension</literal> by calling:
+      Les modules peuvent définir des événements d'attente sous le type
+      d'événement <literal>Extension</literal> en appelant&nbsp;:
 <programlisting>
 uint32 WaitEventExtensionNew(const char *wait_event_name)
 </programlisting>
-     The wait event is associated to a user-facing custom string.
-     An example can be found in <filename>src/test/modules/worker_spi</filename>
-     in the PostgreSQL source tree.
+     L'événement d'attente est associé à une chaîne personnalisée visible par
+     l'utilisateur. Un exemple est disponible dans
+     <filename>src/test/modules/worker_spi</filename> à partir du répertoire
+     des sources de PostgreSQL.
     </para>
     <para>
-     Custom wait events can be viewed in
-     <link linkend="monitoring-pg-stat-activity-view"><structname>pg_stat_activity</structname></link>:
+     Les événements d'attente personnalisés sont visibles dans
+     <link linkend="monitoring-pg-stat-activity-view"><structname>pg_stat_activity</structname></link>&nbsp;:
 <screen>
 =# SELECT wait_event_type, wait_event FROM pg_stat_activity
      WHERE backend_type ~ 'worker_spi';
@@ -3648,25 +3651,26 @@ uint32 WaitEventExtensionNew(const char *wait_event_name)
    </sect2>
 
    <sect2 id="xfunc-addin-injection-points">
-    <title>Injection Points</title>
+    <title>Points d'injection</title>
 
     <para>
-     An injection point with a given <literal>name</literal> is declared using
-     macro:
+     Un point d'injection avec un <literal>name</literal> donné est déclaré
+     en utilisant la macro&nbsp;:
 <programlisting>
 INJECTION_POINT(name);
 </programlisting>
 
-     There are a few injection points already declared at strategic points
-     within the server code. After adding a new injection point the code needs
-     to be compiled in order for that injection point to be available in the
-     binary. Add-ins written in C-language can declare injection points in
-     their own code using the same macro.
+     Il existe quelques points d'injection déjà déclarés à des endroits
+     stratégiques du code du serveur. Après l'ajout d'un nouveau point
+     d'injection, le code a besoin d'être compilé pour que le point d'injection
+     soit disponible dans le binaire. Les modules écrits en langage C peuvent
+     déclarer des points d'injection dans leur propre code en utilisant la même
+     macro.
     </para>
 
     <para>
-     Add-ins can attach callbacks to an already-declared injection point by
-     calling:
+     Les modules peuvent attacher des callbacks à un point d'injection déjà
+     déclaré en appelant&nbsp;:
 <programlisting>
 extern void InjectionPointAttach(const char *name,
                                  const char *library,
@@ -3675,16 +3679,17 @@ extern void InjectionPointAttach(const char *name,
                                  int private_data_size);
 </programlisting>
 
-     <literal>name</literal> is the name of the injection point, which when
-     reached during execution will execute the <literal>function</literal>
-     loaded from <literal>library</literal>. <literal>private_data</literal>
-     is a private area of data of size <literal>private_data_size</literal>
-     given as argument to the callback when executed.
+     <literal>name</literal> est le nom du point d'injection qui, lorsqu'il est
+     atteint à l'exécutionn exécutera la fonction <literal>function</literal>
+     chargé à partir de la bibliothèque <literal>library</literal>.
+     <literal>private_data</literal> est une aire privée de données de taille
+     <literal>private_data_size</literal> donné en argument à la callback lors
+     de son exécution.
 </para>
 
  <para>
-     Here is an example of callback for
-     <literal>InjectionPointCallback</literal>:
+     Voici un exemple de fonction callback pour
+     <literal>InjectionPointCallback</literal>&nbsp;:
 <programlisting>
 static void
 custom_injection_callback(const char *name, const void *private_data)
@@ -3692,39 +3697,40 @@ custom_injection_callback(const char *name, const void *private_data)
     elog(NOTICE, "%s: executed custom callback", name);
 }
 </programlisting>
-     This callback prints a message to server error log with severity
-     <literal>NOTICE</literal>, but callbacks may implement more complex
-     logic.
+     Cette fonction callback affiche un message dans les traces du serveur de
+     niveau <literal>NOTICE</literal>, mais les fonctions callbacks peuvent
+     implémenter une logique bien plus complexe.
     </para>
 
     <para>
-     Optionally, it is possible to detach an injection point by calling:
+     En option, il est possible de détacher un point d'injection en
+     appelant&nbsp;:
 <programlisting>
 extern bool InjectionPointDetach(const char *name);
 </programlisting>
-     On success, <literal>true</literal> is returned, <literal>false</literal>
-     otherwise.
+     En cas de succès, <literal>true</literal> est renvoyé,
+     <literal>false</literal> sinon.
     </para>
 
     <para>
-     A callback attached to an injection point is available across all the
-     backends including the backends started after
-     <literal>InjectionPointAttach</literal> is called. It remains attached
-     while the server is running or until the injection point is detached
-     using <literal>InjectionPointDetach</literal>.
+     Une fonction callback attachée à un point d'injection est disponible pour
+     tous les processus serveur, y compris ceux démarrés après l'appel à
+     <literal>InjectionPointAttach</literal>. Elle reste attachée pendant toute
+     l'exécution du serveur, à moins qu'elle ne soit détachée en utilisant
+     <literal>InjectionPointDetach</literal>.
     </para>
 
     <para>
-     An example can be found in
-     <filename>src/test/modules/injection_points</filename> in the PostgreSQL
-     source tree.
+     Un exemple est disponible dans
+     <filename>src/test/modules/injection_points</filename> du répertoire des
+     sources de PostgreSQL.
     </para>
 
     <para>
-     Enabling injections points requires
-     <option>--enable-injection-points</option> with
-     <command>configure</command> or <option>-Dinjection_points=true</option>
-     with <application>Meson</application>.
+     Activer les points d'injection requiert l'utilisation de l'option
+     <option>--enable-injection-points</option> avec
+     <command>configure</command> ou <option>-Dinjection_points=true</option>
+     avec <application>Meson</application>.
      </para>
     </sect2>
 
