@@ -748,7 +748,7 @@ ALTER SUBSCRIPTION
    il est nécessaire de confirmer que les slots de réplication doivent être
    synchronisés vers le serveur secondaire avant l'exécution du failover.
    Pour s'assurer d'un failover réussi, le serveur secondaire doit être en avance sur l'abonné. Ceci peut se faire en configurant
-   <link linkend="guc-standby-slot-names"><varname>standby_slot_names</varname></link>.
+   <link linkend="guc-synchronized-standby-slots"><varname>synchronized_standby_slots</varname></link>.
   </para>
 
   <para>
@@ -760,34 +760,47 @@ ALTER SUBSCRIPTION
   <procedure>
    <step performance="required">
     <para>
-     Sur le nœud abonné, utilisez la requête SQL suivante pour
-     identifier les slots devant être synchronisés sur le secondaire que
+     Sur le nœud abonné, utilisez la requête SQL suivante pour identifier
+     les slots de réplication devant être synchronisés sur le secondaire que
      nous souhaitons promouvoir. Cette requête renverra les slots de
-     réplication adéquats, en incluant les slots principaux et les slots de
-     synchronisation de table associés abec les souscriptions dont l'option
-     failover est activée. Notez que le slot de synchronisation de table doit
-     être synchronisé sur le serveur standard uniquement si la copie de table
-     est terminée (Voir <xref linkend="catalog-pg-subscription-rel"/>).
+     réplication adéquats avec les souscriptions dont l'option failover est
+     activée.
+     <programlisting>
+test_sub=# SELECT
+               array_agg(quote_literal(s.subslotname)) AS slots
+           FROM  pg_subscription s
+           WHERE s.subfailover AND
+                 s.subslotname IS NOT NULL;
+ slots
+-------
+ {'sub1','sub2','sub3'}
+(1 row)
+</programlisting></para>
+   </step>
+   <step performance="required">
+    <para>
+     Sur le nœud abonné, utilisez la requête SQL suivante pour identifier
+     les slots de synchronisation qui doivent être synchronisés sur le secondaire
+     que nous planifions de promouvoir. Cette requête a besoin d'être exécutée
+     sur chaque base qui inclut les souscriptions dont l'option failover a été
+     activée. Notez que le slot de synchronisation de table doit être synchronisé
+     vers le serveur secondaire seulement si la copie de table est terminée
+     (Voir <xref linkend="catalog-pg-subscription-rel"/>).
      Nous n'avons pas besoin de nous assurer que les slots de synchronisation
      de table sont synchronisés dans les autres scénarios car ceux-là seront
      soit supprimés soit re-créés sur le nouveau serveur primaire.
 <programlisting>
 test_sub=# SELECT
-               array_agg(slot_name) AS slots
+               array_agg(quote_literal(slot_name) AS slots
            FROM
-           ((
-               SELECT r.srsubid AS subid, CONCAT('pg_', srsubid, '_sync_', srrelid, '_', ctl.system_identifier) AS slot_name
+           (
+               SELECT CONCAT('pg_', srsubid, '_sync_', srrelid, '_', ctl.system_identifier) AS slot_name
                FROM pg_control_system() ctl, pg_subscription_rel r, pg_subscription s
                WHERE r.srsubstate = 'f' AND s.oid = r.srsubid AND s.subfailover
-           ) UNION (
-               SELECT s.oid AS subid, s.subslotname as slot_name
-               FROM pg_subscription s
-               WHERE s.subfailover
-           ))
-           WHERE slot_name IS NOT NULL;
+           );
  slots
 -------
- {sub1,sub2,sub3}
+ {'pg_16394_sync_16385_7394666715149055164'}
 (1 row)
 </programlisting></para>
    </step>
@@ -798,13 +811,15 @@ test_sub=# SELECT
 <programlisting>
 test_standby=# SELECT slot_name, (synced AND NOT temporary AND NOT conflicting) AS failover_ready
                FROM pg_replication_slots
-               WHERE slot_name IN ('sub1','sub2','sub3');
-  slot_name  | failover_ready
--------------+----------------
-  sub1       | t
-  sub2       | t
-  sub3       | t
-(3 rows)
+               WHERE slot_name IN
+                   ('sub1','sub2','sub3', 'pg_16394_sync_16385_7394666715149055164');
+  slot_name                                 | failover_ready
+--------------------------------------------+----------------
+  sub1                                      | t
+  sub2                                      | t
+  sub3                                      | t
+  pg_16394_sync_16385_7394666715149055164   | t
+(4 rows)
 </programlisting></para>
     </step>
   </procedure>
