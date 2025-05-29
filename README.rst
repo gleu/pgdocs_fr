@@ -11,7 +11,7 @@ Ce répertoire contient la documentation de PostgreSQL au format XML.
 
 Ce répertoire était auparavant nommé manuel car seule la documentation de
 PostgreSQL était traduite à ce moment. Il a été renommé quand la documentation
-du manuel de Slony a été ajouté.
+du manuel de Slony a été ajoutée.
 
 Les fichiers de la documentation sont au format XML, ce qui permet ensuite de
 produire, grâce au fichier Makefile, en différents formats : HTML, PDF, texte.
@@ -24,7 +24,7 @@ Répertoire slony
 Ce répertoire contient la documentation de Slony au format XML. Il contient
 aussi la traduction du site web, dans le sous-répertoire website.
 
-Là-aussi, l'utilisation du XML permet la production de différents formats.
+Là aussi, l'utilisation du XML permet la production de différents formats.
 
 Répertoire divers
 *****************
@@ -54,7 +54,7 @@ Lelarge (guillaume at lelarge.info).
 En rapportant les erreurs trouvées
 **********************************
 
-Nous sommes intéressés de connaître les erreurs que vous avez trouvé. Quelque
+Nous sommes intéressés de connaître les erreurs que vous avez trouvées. Quelque
 soit l'erreur : une erreur de sens, une faute d'orthographe, de français, etc.
 N'hésitez donc pas à nous informer. Là-aussi, le plus simple est d'envoyer un
 mail à Guillaume Lelarge.
