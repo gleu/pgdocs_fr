@@ -624,8 +624,9 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
 </screen>
      Ceci est l'échec générique <quote>je n'ai pas trouvé de serveur à qui
      parler</quote>. Cela ressemble au message ci-dessus lorsqu'une connexion
-     TCP/IP est tentée. Une erreur commune est d'oublier de configurer le
-     serveur pour qu'il autorise les connexions TCP/IP.
+     TCP/IP est tentée. Une erreur commune est d'oublier de configurer
+     <xref linkend="guc-listen-addresses"/> so that the server
+     accepts remote TCP connections.
     </para>
 
     <para>
@@ -775,20 +776,19 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
         <entry><varname>SEMMNI</varname></entry>
         <entry>Nombre maximum d'identifiants de sémaphores (c'est-à-dire
          d'ensembles)</entry>
-        <entry>au moins <literal>ceil((max_connections + autovacuum_max_workers + max_wal_senders + max_worker_processes + 7) / 19)</literal> plus de la marge pour les autres applications</entry>
+        <entry>at least <literal>ceil(num_os_semaphores / 16)</literal> plus room for other applications</entry>
        </row>
 
        <row>
         <entry><varname>SEMMNS</varname></entry>
         <entry>nombre maximum de sémaphores répartis dans le système</entry>
-        <entry><literal>ceil((max_connections + autovacuum_max_workers + max_wal_senders + max_worker_processes + 7) / 19) * 20</literal> plus la place
-         pour les autres applications</entry>
+        <entry><literal>ceil(num_os_semaphores / 16) * 17</literal> plus room for other applications</entry>
        </row>
 
        <row>
         <entry><varname>SEMMSL</varname></entry>
         <entry>Nombre maximum de sémaphores par ensemble</entry>
-        <entry>au moins 20</entry>
+        <entry>au moins 17</entry>
        </row>
 
        <row>
@@ -838,26 +838,33 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
     Lors de l'utilisation de sémaphores System&nbsp;V,
     <productname>PostgreSQL</productname> utilise un sémaphore par connexion
     autorisée (<xref linkend="guc-max-connections"/>), par processus
-    autovacuum autorisé (<xref linkend="guc-autovacuum-max-workers"/>), par
-    processus <quote>WAL sender</quote>
-    (<xref linkend="guc-max-wal-senders"/>) et par
-    processus en tâche de fond autorisé réclamant un accès à la mémoire
-    partagée, le tout par ensemble de 19. Chacun de ces ensembles contiendra
-    aussi un 20è sémaphore qui contient un <quote>nombre magique</quote> pour
+    autovacuum autorisé
+    (<xref linkend="guc-autovacuum-worker-slots"/>), allowed WAL sender process
+    (<xref linkend="guc-max-wal-senders"/>), allowed background
+    process (<xref linkend="guc-max-worker-processes"/>), etc., in sets of 16.
+    The runtime-computed parameter <xref linkend="guc-num-os-semaphores"/>
+    reports the number of semaphores required.  This parameter can be viewed
+    before starting the server with a <command>postgres</command> command like:
+<programlisting>
+$ <userinput>postgres -D $PGDATA -C num_os_semaphores</userinput>
+</programlisting>
+   </para>
+
+   <para>
+    Each set of 16 semaphores will
+    also contain a 17th semaphore
+    qui contient un <quote>nombre magique</quote> pour
     détecter la collision avec des ensembles de sémaphore utilisés par les
     autres applications. Le nombre maximum de sémaphores dans le système est
     initialisé par <varname>SEMMNS</varname>, qui en conséquence doit être au
-    moins aussi haut que <varname>max_connections</varname> plus
-    <varname>autovacuum_max_workers</varname> plus
-    <varname>max_wal_senders</varname> plus
-    <varname>max_worker_processes</varname>,
-    plus 1 encore pour chacune des 19 connexions autorisées,
-    plus les workers (voir la formule dans le <xref
+    moins aussi haut que <literal>num_os_semaphores</literal> plus one extra for
+    each set of 16 required semaphores
+    (voir la formule dans le <xref
     linkend="sysvipc-parameters"/>). Le paramètre <varname>SEMMNI</varname>
     détermine la limite du nombre d'ensembles de sémaphores qui peuvent
     exister sur le système à un instant précis. Ce paramètre doit donc être
     au moins égal à
-    <literal>ceil((max_connections + autovacuum_max_workers + max_wal_senders + max_worker_processes + 7) / 19)</literal>.
+    <literal>ceil(num_os_semaphores / 16)</literal>.
     Baisser le
     nombre de connexions autorisées est un contournement temporaire pour les
     échecs qui sont habituellement indiqués par le message <quote>no space
@@ -890,9 +897,10 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
     Lors de l'utilisation de sémaphores POSIX, le nombre de sémaphores
     nécessaires est le même que pour System&nbsp;V, c'est-à-dire un sémaphore par
     connexion autorisée (<xref linkend="guc-max-connections"/>), par
-    processus autovacuum autorisé (<xref linkend="guc-autovacuum-max-workers"/>), par processus <quote>WAL sender</quote> autorisé
-    (<xref linkend="guc-max-wal-senders"/>)
-    et par processus en t&acirc;che de fond (<xref linkend="guc-max-worker-processes"/>).
+    processus autovacuum autorisé
+    (<xref linkend="guc-autovacuum-worker-slots"/>), allowed WAL sender process
+    (<xref linkend="guc-max-wal-senders"/>), allowed background
+    process (<xref linkend="guc-max-worker-processes"/>), etc.
     Sur les plateformes o&ugrave; cette option est préférée, le noyau ne
     spécifie pas de limite au nombre de sémaphores POSIX.
    </para>
@@ -947,7 +955,7 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
   <para>
    La configuration par défaut de la mémoire partagée est en général
    suffisante, sauf si vous avez affecté <literal>shared_memory_type</literal>
-   à <literal>sysv</literal>. Dans ce cas, vous voudrez habituellement
+   à <literal>sysv</literal>. Néanmoins, vous voudrez habituellement
    augmenter <literal>kern.ipc.semmni</literal> et
    <literal>kern.ipc.semmns</literal> car les valeurs par défaut de ces
    paramètres sur <systemitem class="osname">NetBSD</systemitem> sont bien
@@ -982,9 +990,9 @@ DETAIL:  Failed system call was semget(5440126, 17, 03600).</screen>
   <para>
    La configuration par défaut de la mémoire partagée est en général
    suffisante, sauf si vous avez configuré
-   <literal>shared_memory_type</literal> à <literal>sysv</literal>. Vous
-   voudrez habituellement augmenter <literal>kern.seminfo.semmni</literal> et
-   <literal>kern.seminfo.semmns</literal> car les valeurs par défaut de ces
+   <literal>shared_memory_type</literal> à <literal>sysv</literal>. Néanmoins,
+   vous voudrez habituellement augmenter <literal>kern.seminfo.semmni</literal>
+   et <literal>kern.seminfo.semmns</literal> car les valeurs par défaut de ces
    paramètres sur <systemitem class="osname">OpenBSD</systemitem> sont bien
    trop bas.
   </para>
@@ -2135,6 +2143,16 @@ SCRAM est à préférer parce qu'il s'agit d'un standard Internet et qu'il
 est bien plus sécurisé que le protocole d'authentification MD5 spécifique à
 PostgreSQL.
 </para>
+
+    <warning>
+     <para>
+      Support for MD5-encrypted passwords is deprecated and will be removed in
+      a future release of <productname>PostgreSQL</productname>.  Refer to
+      <xref linkend="auth-password"/> for details about migrating to another
+      password type.
+     </para>
+    </warning>
+
 </listitem>
 </varlistentry>
 

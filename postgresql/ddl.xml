@@ -379,8 +379,6 @@ INSERT INTO people (id, name, address) VALUES (<emphasis>DEFAULT</emphasis>, 'C'
    d'espace et est calculée à la lecture. Une colonne générée virtuelle est
    donc équivalente à une vue, et une colonne générée stockée est équivalente
    à une vue matérialisée (sauf qu'elle sera toujours mise à jour automatiquement).
-   <productname>PostgreSQL</productname> n'implémente actuellement que les
-   colonnes générées stockées.
   </para>
 
   <para>
@@ -392,12 +390,12 @@ INSERT INTO people (id, name, address) VALUES (<emphasis>DEFAULT</emphasis>, 'C'
 CREATE TABLE people (
     ...,
     height_cm numeric,
-    height_in numeric <emphasis>GENERATED ALWAYS AS (height_cm / 2.54) STORED</emphasis>
+    height_in numeric <emphasis>GENERATED ALWAYS AS (height_cm / 2.54)</emphasis>
 );</programlisting>
 
-   Le mot-clé <literal>STORED</literal> doit être spécifié pour choisir le
-   type de colonne générée. Voir <xref linkend="sql-createtable"/> pour plus
-   de détails.
+   A generated column is by default of the virtual kind.  Use the keywords
+   <literal>VIRTUAL</literal> or <literal>STORED</literal> to make the choice
+   explicit.  See <xref linkend="sql-createtable"/> for more details.
   </para>
 
   <para>
@@ -467,14 +465,20 @@ CREATE TABLE people (
       <listitem>
        <para>
         Si une colonne parent est une colonne générée, la colonne enfant doit
-        aussi être une colonne générée&nbsp;; néanmoins, la colonne enfant peut
-        avoir une expression de génération différente. L'expression de
+        aussi être une colonne générée de même type (enregistrée ou virtuelle).
+        Néanmoins, la colonne enfant peut
+        avoir une expression de génération différente.
+       </para>
+       <para>
+        Pour les colonnes générées enregistrées, l'expression de
         génération qui est réellement appliquée lors de l'insertion ou de la
         mise à jour d'une ligne est celle qui est associée avec la table qui
         contiendra physiquement la ligne. (Ceci est contraire au comportement
         pour la valeur par défaut d'une colonne&nbsp;: pour ces dernières,
         la valeur par défaut appliquée est celle associée avec la table nommée
-        dans la requête.)
+        dans la requête.) For virtual
+        generated columns, the generation expression of the table named in the
+        query applies when a table is read.
        </para>
       </listitem>
       <listitem>
@@ -533,6 +537,27 @@ CREATE TABLE people (
       qu'un rôle défini puisse lire une colonne générée mais pas la colonne
       de base sous-jacente.
      </para>
+
+     <para>
+      For virtual generated columns, this is only fully secure if the
+      generation expression uses only leakproof functions (see <xref
+      linkend="sql-createfunction"/>), but this is not enforced by the system.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Privileges of functions used in generation expressions are checked when
+      the expression is actually executed, on write or read respectively, as
+      if the generation expression had been called directly from the query
+      using the generated column.  The user of a generated column must have
+      permissions to call all functions used by the generation expression.
+      Functions in the generation expression are executed with the privileges
+      of the user executing the query or the function owner, depending on
+      whether the functions are defined as <literal>SECURITY INVOKER</literal>
+      or <literal>SECURITY DEFINER</literal>.
+      <!-- matches create_view.sgml -->
+     </para>
     </listitem>
 
     <listitem>
@@ -548,9 +573,13 @@ CREATE TABLE people (
 
     <listitem>
      <para>
-      Les colonnes générées sont ignorées pour la réplication logique et ne
-      peuvent pas être indiquées dans une liste de colonnes d'une commande
-      <command>CREATE PUBLICATION</command>.
+      Generated columns are allowed to be replicated during logical replication
+      according to the <command>CREATE PUBLICATION</command> parameter
+      <link linkend="sql-createpublication-params-with-publish-generated-columns">
+      <literal>publish_generated_columns</literal></link> or by including them
+      in the column list of the <command>CREATE PUBLICATION</command> command.
+      This is currently only supported for stored generated columns.
+      See <xref linkend="logical-replication-gencols"/> for details.
      </para>
     </listitem>
    </itemizedlist>
@@ -810,18 +839,40 @@ CREATE TABLE people (
     no_produit integer <emphasis>NOT NULL</emphasis>,
     nom text <emphasis>NOT NULL</emphasis>,
     prix numeric
+    );
+</programlisting>
+
+    An explicit constraint name can also be specified, for example:
+
+<programlisting>CREATE TABLE products (
+    product_no integer NOT NULL,
+    name text <emphasis>CONSTRAINT products_name_not_null</emphasis> NOT NULL,
+    price numeric
 );</programlisting>
    </para>
 
    <para>
-    Une contrainte NOT NULL est toujours écrite comme une contrainte de
-    colonne. Elle est fonctionnellement équivalente à la création d'une
+    A not-null constraint is usually written as a column constraint.  The
+    syntax for writing it as a table constraint is
+<programlisting>
+CREATE TABLE products (
+    product_no integer,
+    name text,
+    price numeric,
+    <emphasis>NOT NULL product_no</emphasis>,
+    <emphasis>NOT NULL name</emphasis>
+);
+</programlisting>
+    But this syntax is not standard and mainly intended for use by
+    <application>pg_dump</application>.
+   </para>
+
+   <para>
+    Elle est fonctionnellement équivalente à la création d'une
     contrainte de vérification <literal>CHECK
     (<replaceable>nom_colonne</replaceable> IS NOT NULL)</literal>.
     Toutefois, dans <productname>PostgreSQL</productname>, il est plus
-    efficace de créer explicitement une contrainte NOT NULL. L'inconvénient
-    est que les contraintes de non-nullité ainsi créées ne peuvent pas être
-    explicitement nommées.
+    efficace de créer explicitement une contrainte NOT NULL.
    </para>
 
    <para>
@@ -836,6 +887,10 @@ CREATE TABLE people (
 
     L'ordre n'a aucune importance. Il ne détermine pas l'ordre de vérification
     des contraintes.
+   </para>
+
+   <para>
+    However, a column can have at most one explicit not-null constraint.
    </para>
 
    <para>
@@ -1033,8 +1088,9 @@ CREATE TABLE products (
    </para>
 
    <para>
-	Une table a, au plus, une clé primaire. (Le nombre de contraintes UNIQUE NOT
-    NULL, qui assurent pratiquement la même fonction, n'est pas limité, mais
+    Une table a, au plus, une clé primaire. (Le nombre de contraintes d'unicité
+    qui, combinées à une contraintes NOT NULL, sont fonctionnellement la même
+    chose, n'est pas limité, mais
     une seule peut être identifiée comme clé primaire.) La théorie des bases
     de données relationnelles impose que chaque table ait une clé primaire.
     Cette règle n'est pas forcée par <productname>PostgreSQL</productname>,
@@ -1261,18 +1317,34 @@ CREATE TABLE commande_produits (
    </para>
 
    <para>
-    Restreindre les suppressions et les réaliser en cascade sont les deux
-    options les plus communes. <literal>RESTRICT</literal> empêche la
-    suppression d'une ligne référencée. <literal>NO ACTION</literal> impose
-    la levée d'une erreur si des lignes référençant existent lors de la
-    vérification de la contrainte. Il s'agit du comportement par défaut en
-    l'absence de précision. La différence entre <literal>RESTRICT</literal>
-    et <literal>NO ACTION</literal> est l'autorisation par <literal>NO
-    ACTION</literal> du report de la vérification à la fin de la transaction,
-    ce que <literal>RESTRICT</literal> ne permet pas.
+    The default <literal>ON DELETE</literal> action is <literal>ON DELETE NO
+    ACTION</literal>; this does not need to be specified.  This means that the
+    deletion in the referenced table is allowed to proceed.  But the
+    foreign-key constraint is still required to be satisfied, so this
+    operation will usually result in an error.  But checking of foreign-key
+    constraints can also be deferred to later in the transaction (not covered
+    in this chapter).  In that case, the <literal>NO ACTION</literal> setting
+    would allow other commands to <quote>fix</quote> the situation before the
+    constraint is checked, for example by inserting another suitable row into
+    the referenced table or by deleting the now-dangling rows from the
+    referencing table.
+   </para>
+
+   <para>
+    <literal>RESTRICT</literal> is a stricter setting than <literal>NO
+    ACTION</literal>.  It prevents deletion of a referenced row.
+    <literal>RESTRICT</literal> does not allow the check to be deferred until
+    later in the transaction.
+   </para>
+
+   <para>
     <literal>CASCADE</literal> indique que, lors de la suppression d'une
     ligne référencée, les lignes la référençant doivent être automatiquement
-    supprimées. Il existe deux autres options&nbsp;: <literal>SET
+    supprimées.
+   </para>
+
+   <para>
+    Il existe deux autres options&nbsp;: <literal>SET
     NULL</literal> et <literal>SET DEFAULT</literal>. Celles-ci imposent que
     les colonnes qui référencent dans les lignes référencées soient
     réinitialisées à NULL ou à leur valeur par défaut, respectivement, lors
@@ -1345,6 +1417,15 @@ CREATE TABLE posts (
     <literal>SET DEFAULT</literal>. Dans ce cas, <literal>CASCADE</literal>
     signifie que les valeurs mises à jour dans la colonne référencée doivent
     être copiées dans les lignes de référence.
+    There is also a noticeable difference between <literal>ON UPDATE NO
+    ACTION</literal> (the default) and <literal>ON UPDATE RESTRICT</literal>.
+    The former will allow the update to proceed and the foreign-key constraint
+    will be checked against the state after the update.  The latter will
+    prevent the update to run even if the state after the update would still
+    satisfy the constraint.  This prevents updating a referenced row to a
+    value that is distinct but compares as equal (for example, a character
+    string with a different case variant, if a character string type with a
+    case-insensitive collation is used).
    </para>
 
    <para>
@@ -1644,17 +1725,16 @@ CREATE TABLE posts (
 
    <tip>
     <para>
-     À partir de <productname>PostgreSQL</productname> 11, ajouter une colonne
-     avec une valeur par défaut constante ne signifie plus que chaque ligne
-     de la table doit être mise à jour quand l'instruction <command>ALTER
-     TABLE</command> doit être exécutée. À la place, la valeur par défaut
+     Adding a column with a constant default value does not require each row of
+     the table to be updated when the <command>ALTER TABLE</command> statement
+     doit être exécutée. À la place, la valeur par défaut
      sera renvoyée à chaque accès à la ligne et appliquée quand la table est
      réécrite, rendant ainsi la commande <command>ALTER TABLE</command> bien
      plus rapide, même sur des tables volumineuses.
     </para>
 
     <para>
-     Néanmoins, si la valeur par défaut est volatile (par exemple
+     Si la valeur par défaut est volatile (par exemple
      <function>clock_timestamp()</function>), chaque ligne devra être mise à
      jour avec la valeur calculée à l'exécution du <command>ALTER
      TABLE</command>. Pour éviter une opération de mise à jour
@@ -1783,10 +1863,15 @@ CREATE TABLE posts (
 ALTER TABLE produits ADD CONSTRAINT autre_nom UNIQUE (no_produit);
 ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_produits;</programlisting>
 
-    Pour ajouter une contrainte NOT NULL, qui ne peut pas être écrite sous
-    forme d'une contrainte de table, la syntaxe suivante est utilisée&nbsp;:
+   </para>
+
+   <para>
+    To add a not-null constraint, which is normally not written as a table
+    constraint, this special syntax is available:
 
     <programlisting>ALTER TABLE produits ALTER COLUMN no_produit SET NOT NULL;</programlisting>
+    This command silently does nothing if the column already has a
+    not-null constraint.
    </para>
 
    <para>
@@ -1823,32 +1908,15 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
    </para>
 
    <para>
-    Cela fonctionne de la même manière pour tous les types de contraintes, à
-    l'exception des contraintes NOT NULL. Pour supprimer une contrainte NOT
-    NULL, on écrit&nbsp;:
+    Simplified syntax is available to drop a not-null constraint:
 
     <programlisting>ALTER TABLE produits ALTER COLUMN no_produit DROP NOT NULL;</programlisting>
 
-    (Les contraintes NOT NULL n'ont pas de noms.)
-   </para>
-  </sect2>
-
-  <sect2 id="ddl-alter-column-default">
-   <title>Modifier la valeur par défaut d'une colonne</title>
-
-   <indexterm>
-    <primary>valeur par défaut</primary>
-    <secondary>modifier</secondary>
-   </indexterm>
-
-   <para>
-    La commande de définition d'une nouvelle valeur par défaut de colonne
-    ressemble à celle-ci&nbsp;:
-
-    <programlisting>ALTER TABLE produits ALTER COLUMN prix SET DEFAULT 7.77;</programlisting>
-
-    Cela n'affecte pas les lignes existantes de la table, mais uniquement la
-    valeur par défaut pour les futures commandes <command>INSERT</command>.
+    This mirrors the <literal>SET NOT NULL</literal> syntax for adding a
+    not-null constraint.  This command will silently do nothing if the column
+    does not have a not-null constraint.  (Recall that a column can have at
+    most one not-null constraint, so it is never ambiguous which constraint
+    this command acts on.)
    </para>
 
    <para>
@@ -1949,7 +2017,7 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
   </indexterm>
 
   <indexterm zone="ddl-priv">
-   <primary>ACL</primary>
+  <primary><acronym>ACL</acronym></primary>
   </indexterm>
 
   <indexterm zone="ddl-priv-default">
@@ -2322,13 +2390,13 @@ ALTER TABLE produits ADD FOREIGN KEY (id_groupe_produit) REFERENCES groupes_prod
   <para>
    <xref linkend="privilege-abbrevs-table"/> liste les abréviations à une
    lettre utilisées pour les types de droits dans les valeurs des
-   <firstterm>ACL</firstterm> (listes de contrôle d'accès). Vous verrez ces
+   <firstterm><acronym>ACL</acronym></firstterm> (listes de contrôle d'accès). Vous verrez ces
    lettres dans la sortie des commandes <xref linkend="app-psql"/> plus bas,
-   ou en consultant les colonnes ACL des catalogues système.
+   ou en consultant les colonnes <acronym>ACL</acronym> des catalogues système.
   </para>
 
   <table id="privilege-abbrevs-table">
-   <title>Abréviations des droits dans les ACL</title>
+  <title>Abréviations des droits dans les <acronym>ACL</acronym></title>
    <tgroup cols="3">
     <colspec colname="col1" colwidth="1*"/>
     <colspec colname="col2" colwidth="1*"/>
@@ -2740,9 +2808,10 @@ GRANT SELECT (col1), UPDATE (col1) ON mytable TO miriam_rw;</programlisting>
    Lorsque plusieurs politiques sont applicables pour une même requête, elles
    sont combinées en utilisant <literal>OR</literal> (pour les politiques
    permissives, ce qui est le comportement par défaut) ou en utilisant
-   <literal>AND</literal> (pour les politiques restrictives).  C'est
-   similaire à la règle qu'un rôle donné a les droits de tous les rôles dont
-   il est membre.  Les politiques permissives et restrictives sont discutées
+   <literal>AND</literal> (pour les politiques restrictives).
+   The <literal>OR</literal> behavior is similar to the rule that a given
+   role has the privileges of all roles that they are a member of.
+   Les politiques permissives et restrictives sont discutées
    plus en détail ci-dessous.
   </para>
 
@@ -3949,12 +4018,14 @@ VALUES ('Albany', NULL, NULL, 'NY');</programlisting>
     variantes de <literal>ALTER TABLE</literal>, mais pas
     <literal>INSERT</literal> ou <literal>ALTER TABLE ... RENAME</literal>)
     incluent par défaut les tables filles et supportent la notation
-    <literal>ONLY</literal> pour les exclure. Les commandes qui font de la
-    maintenance de bases de données et de la configuration (par exemple
-    <literal>REINDEX</literal>, <literal>VACUUM</literal>) fonctionnent
-    typiquement uniquement sur les tables physiques, individuelles et ne
-    supportent pas la récursion sur les tables de l'héritage. Le comportement
-    respectif de chaque commande individuelle est documenté dans la référence
+    <literal>ONLY</literal> pour les exclure.
+    The majority of commands that do database maintenance and tuning
+    (e.g., <literal>REINDEX</literal>) only work on individual, physical
+    tables and do not support recursing over inheritance hierarchies.
+    However, both <literal>VACUUM</literal> and <literal>ANALYZE</literal>
+    commands default to including child tables and the <literal>ONLY</literal>
+    notation is supported to allow them to be excluded.  The respective
+    behavior of each individual command is documented in its reference page
     (<xref linkend="sql-commands"/>).
    </para>
 
@@ -4644,12 +4715,10 @@ ALTER INDEX measurement_city_id_logdate_key
        <para>
         Les contraintes <literal>CHECK</literal> et <literal>NOT
         NULL</literal> d'une table partitionnée sont toujours héritées par
-        toutes ses partitions. La création des contraintes
-        <literal>CHECK</literal> marquées <literal>NO INHERIT</literal> n'est
-        pas autorisée sur les tables partitionnées. Vous ne pouvez pas
-        supprimer une contrainte <literal>NOT NULL</literal> de la colonne
-        d'une partition si la même contrainte est présente dans la table
-        parent.
+        toutes ses partitions; it is not allowed to create <literal>NO
+        INHERIT</literal> constraints of those types.
+        You cannot drop a constraint of those types if the same constraint
+        is present in the parent table.
        </para>
       </listitem>
 
@@ -5049,11 +5118,12 @@ ALTER TABLE measurement_a2008m02 INHERIT measurement;</programlisting>
 
       <listitem>
        <para>
-        Si <command>VACUUM</command> ou <command>ANALYZE</command> sont lancés
-        manuellement, n'oubliez pas de les lancer sur chaque table fille. Une
-        commande comme&nbsp;:
+        Manual <command>VACUUM</command> and <command>ANALYZE</command>
+        commands will automatically process all inheritance child tables.  If
+        this is undesirable, you can use the <literal>ONLY</literal> keyword.
+        Une commande comme&nbsp;:
 
-        <programlisting>ANALYZE measurement;</programlisting>
+        <programlisting>ANALYZE ONLY measurement;</programlisting>
 
         ne traitera que la table mère.
        </para>
@@ -5186,8 +5256,13 @@ EXPLAIN SELECT count(*) FROM measurement WHERE date_trace &gt;= DATE '2008-01-01
        nombre de partitions supprimées pendant cette phase en observant la
        propriété <quote>Subplans Removed</quote>(sous-plans supprimés) dans
        la sortie d'<command>EXPLAIN</command>.
-       Il est important de noter que toute partition supprimée par l'élagage
-       fait à cette étape est toujours verrouillée au début de l'exécution.
+       The query planner obtains locks for
+       all partitions which are part of the plan.  However, when the executor
+       uses a cached plan, locks are only obtained on the partitions which
+       remain after partition pruning done during the initialization phase of
+       execution, i.e., the ones shown in the <command>EXPLAIN</command>
+       output and not the ones referred to by the
+       <quote>Subplans Removed</quote> property.
       </para>
      </listitem>
 

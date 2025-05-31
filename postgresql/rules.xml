@@ -1042,8 +1042,8 @@ SELECT count(*) FROM mots WHERE mot = 'caterpiler';
    Avec <command>EXPLAIN ANALYZE</command>, nous voyons&nbsp;:
 
    <programlisting>
- Aggregate  (cost=21763.99..21764.00 rows=1 width=0) (actual time=188.180..188.181 rows=1 loops=1)
-   -&gt;  Foreign Scan on words  (cost=0.00..21761.41 rows=1032 width=0) (actual time=188.177..188.177 rows=0 loops=1)
+ Aggregate  (cost=21763.99..21764.00 rows=1 width=0) (actual time=188.180..188.181 rows=1.00 loops=1)
+   -&gt;  Foreign Scan on words  (cost=0.00..21761.41 rows=1032 width=0) (actual time=188.177..188.177 rows=0.00 loops=1)
           Filter: (word = 'caterpiler'::text)
          Rows Removed by Filter: 479829
          Foreign File: /usr/share/dict/words
@@ -1056,10 +1056,11 @@ SELECT count(*) FROM mots WHERE mot = 'caterpiler';
    rapide&nbsp;:
 
    <programlisting>
- Aggregate  (cost=4.44..4.45 rows=1 width=0) (actual time=0.042..0.042 rows=1 loops=1)
-   -&gt;  Index Only Scan using wrd_word on wrd  (cost=0.42..4.44 rows=1 width=0) (actual time=0.039..0.039 rows=0 loops=1)
+ Aggregate  (cost=4.44..4.45 rows=1 width=0) (actual time=0.042..0.042 rows=1.00 loops=1)
+   -&gt;  Index Only Scan using wrd_word on wrd  (cost=0.42..4.44 rows=1 width=0) (actual time=0.039..0.039 rows=0.00 loops=1)
           Index Cond: (word = 'caterpiler'::text)
           Heap Fetches: 0
+          Index Searches: 1
  Planning time: 0.164 ms
  Execution time: 0.117 ms
    </programlisting>
@@ -1087,11 +1088,11 @@ SELECT mot FROM mots ORDER BY mot &lt;-&gt; 'caterpiler' LIMIT 10;
    </programlisting>
 
    <programlisting>
- Limit  (cost=11583.61..11583.64 rows=10 width=32) (actual time=1431.591..1431.594 rows=10 loops=1)
-   -&gt;  Sort  (cost=11583.61..11804.76 rows=88459 width=32) (actual time=1431.589..1431.591 rows=10 loops=1)
+ Limit  (cost=11583.61..11583.64 rows=10 width=32) (actual time=1431.591..1431.594 rows=10.00 loops=1)
+   -&gt;  Sort  (cost=11583.61..11804.76 rows=88459 width=32) (actual time=1431.589..1431.591 rows=10.00 loops=1)
          Sort Key: ((word &lt;-&gt; 'caterpiler'::text))
           Sort Method: top-N heapsort  Memory: 25kB
-         -&gt;  Foreign Scan on words  (cost=0.00..9672.05 rows=88459 width=32) (actual time=0.057..1286.455 rows=479829 loops=1)
+         -&gt;  Foreign Scan on words  (cost=0.00..9672.05 rows=88459 width=32) (actual time=0.057..1286.455 rows=479829.00 loops=1)
                Foreign File: /usr/share/dict/words
                Foreign File Size: 4953699
  Planning time: 0.128 ms
@@ -1101,8 +1102,8 @@ SELECT mot FROM mots ORDER BY mot &lt;-&gt; 'caterpiler' LIMIT 10;
    Et en utilisant la vue matérialisée&nbsp;:
 
    <programlisting>
- Limit  (cost=0.29..1.06 rows=10 width=10) (actual time=187.222..188.257 rows=10 loops=1)
-   -&gt;  Index Scan using wrd_trgm on wrd  (cost=0.29..37020.87 rows=479829 width=10) (actual time=187.219..188.252 rows=10 loops=1)
+ Limit  (cost=0.29..1.06 rows=10 width=10) (actual time=187.222..188.257 rows=10.00 loops=1)
+   -&gt;  Index Scan using wrd_trgm on wrd  (cost=0.29..37020.87 rows=479829 width=10) (actual time=187.219..188.252 rows=10.00 loops=1)
          Order By: (word &lt;-&gt; 'caterpiler'::text)
  Planning time: 0.196 ms
  Execution time: 198.640 ms
@@ -1654,6 +1655,23 @@ CREATE RULE lacet_del AS ON DELETE TO lacet
    </para>
 
    <para>
+    Note that in the <literal>RETURNING</literal> clause of a rule,
+    <literal>OLD</literal> and <literal>NEW</literal> refer to the
+    pseudorelations added as extra range table entries to the rewritten
+    query, rather than old/new rows in the result relation.  Thus, for
+    example, in a rule supporting <command>UPDATE</command> queries on this
+    view, if the <literal>RETURNING</literal> clause contained
+    <literal>old.sl_name</literal>, the old name would always be returned,
+    regardless of whether the <literal>RETURNING</literal> clause in the
+    query on the view specified <literal>OLD</literal> or <literal>NEW</literal>,
+    which might be confusing.  To avoid this confusion, and support returning
+    old and new values in queries on the view, the <literal>RETURNING</literal>
+    clause in the rule definition should refer to entries from the result
+    relation such as <literal>shoelace_data.sl_name</literal>, without
+    specifying <literal>OLD</literal> or <literal>NEW</literal>.
+   </para>
+
+   <para>
     Maintenant, supposons que, quelque fois, un paquet de lacets arrive au
     magasin avec une grosse liste. Mais vous ne voulez pas mettre à jour
     manuellement la vue <literal>lacet</literal> à chaque fois. à la place,
@@ -2163,6 +2181,17 @@ CREATE VIEW phone_number WITH (security_barrier) AS
    <literal>LEAKPROOF</literal>, et risquent de fournir des informations sur
    les lignes invisibles si elles sont exécutées avant que la vue ne les
    filtre.
+  </para>
+
+  <para>
+   For example, an index scan cannot be selected for queries on security
+   barrier views (or tables with row-level security policies) if an
+   operator used in the <literal>WHERE</literal> clause is associated with the
+   operator family of the index, but its underlying function is not marked
+   <literal>LEAKPROOF</literal>. The <xref linkend="app-psql"/> program's
+   <command><link linkend="app-psql-meta-command-dao">\dAo+</link></command>
+   meta-command is useful to list operator families and determine which of
+   their operators are marked as leakproof.
   </para>
 
   <para>

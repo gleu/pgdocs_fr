@@ -277,7 +277,7 @@ CREATE INDEX ON ma_table USING GIST (ma_colonne_inet inet_ops);
 
   <para>
    Une classe d'opérateurs d'index <acronym>GiST</acronym> doit fournir cinq
-   méthodes, et six supplémentaires optionnelles. La précision de l'index
+   méthodes, et sept supplémentaires optionnelles. La précision de l'index
    est assurée par l'implantation des méthodes <function>same</function>,
    <function>consistent</function> et <function>union</function> alors que
    l'efficacité (taille et rapidité) de l'index dépendra des méthodes
@@ -305,6 +305,11 @@ CREATE INDEX ON ma_table USING GIST (ma_colonne_inet inet_ops);
    La onzième méthode, <function>sortsupport</function>, est aussi optionnelle
    et est utilisée pour accélérer la construction d'un index
    <acronym>GiST</acronym>.
+   The optional twelfth method <function>stratnum</function> is used to
+   translate compare types (from
+   <filename>src/include/nodes/primnodes.h</filename>) into strategy numbers
+   used by the operator class.  This lets the core code look up operators for
+   temporal constraint indexes.
   </para>
 
   <variablelist>
@@ -1076,7 +1081,7 @@ fill_my_string_relopt(const char *value, void *ptr)
     int     len = strlen(tmp);
 
     if (ptr)
-        strcpy((char *) ptr, tmp);
+        strcpy(ptr, tmp);
 
     pfree(tmp);
     return len + 1;
@@ -1217,6 +1222,79 @@ my_sortsupport(PG_FUNCTION_ARGS)
   PG_RETURN_VOID();
 }
 </programlisting>
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><function>stratnum</function></term>
+     <listitem>
+      <para>
+       Given a <literal>CompareType</literal> value from
+       <filename>src/include/nodes/primnodes.h</filename>, returns a strategy
+       number used by this operator class for matching functionality.  The
+       function should return <literal>InvalidStrategy</literal> if the
+       operator class has no matching strategy.
+      </para>
+
+      <para>
+       This is used for temporal index constraints (i.e., <literal>PRIMARY
+       KEY</literal> and <literal>UNIQUE</literal>).  If the operator class
+       provides this function and it returns results for
+       <literal>COMPARE_EQ</literal>, it can be used in the
+       non-<literal>WITHOUT OVERLAPS</literal> part(s) of an index constraint.
+      </para>
+
+      <para>
+       The <acronym>SQL</acronym> declaration of the function must look like
+       this:
+
+<programlisting>
+CREATE OR REPLACE FUNCTION my_stratnum(integer)
+RETURNS smallint
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+</programlisting>
+
+       And the operator family registration must look like this:
+<programlisting>
+ALTER OPERATOR FAMILY my_opfamily USING gist ADD
+    FUNCTION 12 ("any", "any") my_stratnum(int);
+</programlisting>
+      </para>
+
+       <para>
+        The matching code in the C module could then follow this skeleton:
+
+<programlisting>
+PG_FUNCTION_INFO_V1(my_stratnum);
+
+Datum
+my_stratnum(PG_FUNCTION_ARGS)
+{
+    CompareType cmptype = PG_GETARG_INT32(0);
+    StrategyNumber ret = InvalidStrategy;
+
+    switch (cmptype)
+    {
+        case COMPARE_EQ:
+            ret = BTEqualStrategyNumber;
+    }
+
+    PG_RETURN_UINT16(ret);
+}
+</programlisting>
+      </para>
+
+      <para>
+       One translation function is provided by
+       <productname>PostgreSQL</productname>:
+       <literal>gist_stratnum_common</literal> is for operator classes that
+       use the <literal>RT*StrategyNumber</literal> constants.
+       The <literal>btree_gist</literal>
+       extension defines a second translation function,
+       <literal>gist_stratnum_btree</literal>, for operator classes that use
+       the <literal>BT*StrategyNumber</literal> constants.
       </para>
      </listitem>
     </varlistentry>

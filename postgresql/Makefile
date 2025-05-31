@@ -22,7 +22,7 @@ all: html man
 NO_GENERATED_HEADERS=yes
 NO_TEMP_INSTALL=yes
 
-VERSION = 17
+VERSION = 18
 
 #subdir = doc/src/sgml
 #top_builddir = ../../..
@@ -57,7 +57,7 @@ endif
 override XSLTPROCFLAGS += --stringparam pg.version '$(VERSION)'
 
 
-ALLXML := $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml)
+ALL_XML := $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml) $(GENERATED_XML)
 
 ALL_IMAGES := $(wildcard $(srcdir)/images/*.svg)
 ALL_WEBSITE_IMAGES := $(wildcard $(srcdir)/images/*.png)
@@ -67,7 +67,7 @@ ALL_WEBSITE_IMAGES := $(wildcard $(srcdir)/images/*.png)
 # we're at it, also resolve all entities (that is, copy all included
 # files into one big file).  This helps tools that don't understand
 # vpath builds (such as dbtoepub).
-postgres-full.xml: postgres.xml $(ALLXML)
+postgres-full.xml: postgres.xml $(ALL_XML)
 	$(XMLLINT) $(XMLINCLUDE) --output $@ --noent --valid $<
 
 
@@ -142,19 +142,26 @@ postgres.txt: postgres.html
 ## Print
 ##
 
-postgres.pdf:
+postgres.pdf pdf:
 	$(error Invalid target;  use postgres-A4.pdf or postgres-US.pdf as targets)
 
 XSLTPROC_FO_FLAGS += --stringparam img.src.path '$(srcdir)/'
 
+# XSL Formatting Objects (FO), https://en.wikipedia.org/wiki/XSL_Formatting_Objects
 %-A4.fo: stylesheet-fo.xsl %-full.xml
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type A4 -o $@ $^
 
 %-US.fo: stylesheet-fo.xsl %-full.xml
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_FO_FLAGS) --stringparam paper.type USletter -o $@ $^
 
+# There is no easy way to pipe output and capture its return code,
+# so add a final line to report the return code.
 %.pdf: %.fo $(ALL_IMAGES)
 	$(FOP) -fo $< -pdf $@
+	@ { LANG=C $(FOP) -fo $< -pdf $@ 2>&1; echo "FOP_RETURN $$?"; } | \
+	$(AWK) 'BEGIN { warn = 0 }  $$1 != "FOP_RETURN" { print }  /not available in font/ { warn = 1 }  \
+	END { if (warn != 0) print("\nWarning: found characters that cannot be output in the PDF document;  see README.non-ASCII"); \
+	if ($$2 != 0) { exit $$2} }' 1>&2
 
 
 ##
@@ -193,7 +200,7 @@ MAKEINFO = makeinfo
 ##
 
 # Quick syntax check without style processing
-check: postgres.xml $(ALLXML) # check-tabs
+check: postgres.xml $(ALL_XML) check-tabs check-nbsp
 	$(XMLLINT) $(XMLINCLUDE) --noout --valid $<
 
 
@@ -256,7 +263,15 @@ endif # sqlmansectnum != 7
 
 # tabs are harmless, but it is best to avoid them in SGML files
 check-tabs:
-	@( ! grep '	' $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml $(srcdir)/*.xsl) ) || (echo "Tabs appear in SGML/XML files" 1>&2;  exit 1)
+	@( ! grep '	' $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml $(srcdir)/*.xsl) ) || \
+	(echo "Tabs appear in xml/XML files" 1>&2;  exit 1)
+
+# Non-breaking spaces are harmless, but it is best to avoid them in xml files.
+# Use perl command because non-GNU grep or sed could not have hex escape sequence.
+check-nbsp:
+	@ ( $(PERL) -ne '/\xC2\xA0/ and print("$$ARGV:$$_"),$$n++; END {exit($$n>0)}' \
+	  $(wildcard $(srcdir)/*.xml $(srcdir)/ref/*.xml $(srcdir)/*.xsl $(srcdir)/images/*.xsl) ) || \
+	(echo "Non-breaking spaces appear in xml/XML files" 1>&2;  exit 1)
 
 ##
 ## Clean
