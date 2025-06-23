@@ -11,7 +11,7 @@
 	      <input id="q" name="q" type="text" size="16" maxlength="255"
                      title='Vous pouvez utiliser les opérateurs suivants : "and", "&","not","!","or","|","<->" ("suivi de" pour recherche de phrase)'
 		     onfocus="if( this.value=='Rechercher' ) this.value='';"
-		     value="<?= strlen($_REQUEST['q'])>0 ? $_REQUEST['q'] : 'Rechercher' ?>"
+		     value="<?= strlen($_REQUEST['q'])>0 ? htmlspecialchars($_REQUEST['q']) : 'Rechercher' ?>"
                      accesskey="s" />
               <select id="v" name="v">
 <?php
