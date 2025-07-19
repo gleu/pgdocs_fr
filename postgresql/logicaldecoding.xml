@@ -174,7 +174,7 @@ $ fg
 $ pg_recvlogical -d postgres --slot=test --drop-slot
 
 Exemple 2 :
-$ pg_recvlogical -d postgres --slot=test --create-slot --two-phase
+$ pg_recvlogical -d postgres --slot=test --create-slot --enable-two-phase
 $ pg_recvlogical -d postgres --slot=test --start -f -
 <keycombo action="simul"><keycap>Control</keycap><keycap>Z</keycap></keycombo>
 $ psql -d postgres -c "BEGIN;INSERT INTO data(data) VALUES('5');PREPARE TRANSACTION 'test';"
@@ -393,10 +393,10 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
      utilisant l'option <link
      linkend="sql-createsubscription-params-with-failover">
      <literal>failover</literal></link> de <command>CREATE
-     SUBSCRIPTION</command> lors de la création du slot, puis en appelant
-     <link linkend="pg-sync-replication-slots">
-     <function>pg_sync_replication_slots</function></link> sur le secondaire.
-     En configurant <link linkend="guc-sync-replication-slots">
+     SUBSCRIPTION</command> lors de la création du slot.
+     De plus, activer <link linkend="guc-sync-replication-slots">
+     <varname>sync_replication_slots</varname></link> sur le secondaire est
+     requis. En activant <link linkend="guc-sync-replication-slots">
      <varname>sync_replication_slots</varname></link> sur le secondaire, les
      slots en failover peuvent être synchronisés périodiquement dans le
      worker slotsync. Pour que la synchronisation fonctionne, il est
@@ -422,6 +422,58 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
      dans <varname>synchronized_standby_slots</varname>, aient confirmé la réception
      des journaux de transaction jusqu'à la dernière position vidée sur le
      serveur primaire.
+    </para>
+
+    <note>
+     <para>
+      Bien qu'activer <link linkend="guc-sync-replication-slots">
+      <varname>sync_replication_slots</varname></link> permet une
+      synchronisation périodique automatique des slots de bascule, ils peuvent
+      aussi être synchronisés manuellement en utilisant la fonction
+      <link linkend="pg-sync-replication-slots">
+      <function>pg_sync_replication_slots</function></link> sur le secondaire.
+      Néanmoins, cette fonction a principalement été conçue pour des besoins
+      de tests et de débuggage. Une grande attention doit être portée lors de
+      son utilisation. Contrairement à la synchronisation automatique, elle
+      n'inclut pas les tentatives automatiques cycliques, la rendant encore
+      plus sensible aux échecs de synchronisation, tout particulièrement lors
+      des scénarios de synchronisation initiale où les fichiers WAL requis ou
+      les lignes du catalogue pour le slot pourraient avoir été déjà supprimés
+      ou pourraient l'être sur le secondaire. La synchronisation automatique
+      via <varname>sync_replication_slots</varname> réalise des mises à jour
+      continues du slot, permettant une bascule sans risque et supportant la
+      haute disponibilité. De ce fait, c'est la méthode recommandée pour
+      synchroniser des slots.
+     </para>
+    </note>
+
+    <para>
+     Quand le synchronisation de slot est configuré de la façon recommandée,
+     et que la synchronisation initiale est réalisée soit automatiquement
+     soit manuellement via pg_sync_replication_slot, le secondaire peut
+     conserver le slot synchronisé seulement si la condition suivante est
+     remplie&nbsp;: le slot de réplication logique sur le primaire doit
+     conserver les WAL et les lignes des catalogues systèmes qui sont toujours
+     disponibles sur le secondaire. Ceci assure de l'intégrité des données et
+     permet à la réplication logique de continuer tranquillement après une
+     promotion. Si les WAL requis ou les lignes des catalogues ont déjà été
+     supprimés du secondaire, le slot ne sera pas conservé pour éviter des
+     pertes de données. Dans de tels cas, le message suivant apparaîtra dans
+     les fichiers de trace&nbsp;:
+<programlisting>
+     LOG:  could not synchronize replication slot "failover_slot"
+     DETAIL:  Synchronization could lead to data loss as the remote slot needs WAL at LSN 0/3003F28 and catalog xmin 754, but the standby has LSN 0/3003F28 and catalog xmin 756
+</programlisting>
+     Si le slot de réplication logique est utilisé activement par un
+     consommateur, aucune intervention manuelle n'est nécessaire&nbsp;; le slot
+     avancera automatiquement et la synchronisation continuera au prochain
+     cycle. Néanmoins, si aucun consommateur n'est configuré, il est conseillé
+     d'avancer manuellement le slot sur le primaire en utilisant
+     <link linkend="pg-logical-slot-get-changes">
+     <function>pg_logical_slot_get_changes</function></link> ou
+     <link linkend="pg-logical-slot-get-binary-changes">
+     <function>pg_logical_slot_get_binary_changes</function></link>, pour
+     permettre à la synchronisation de continuer.
     </para>
 
     <para>
@@ -493,11 +545,8 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
    </para>
 
    <para>
-    La création d'un instantané n'est pas toujours possible. En particulier,
-    cela échouera quand cela est fait à partir d'un serveur secondaire en
-    lecture seule. Les applications qui ne nécessitent pas d'instantané
-    exporté peuvent les supprimer avec l'option
-    <literal>NOEXPORT_SNAPSHOT</literal>.
+    Les applications qui ne nécessitent pas d'instantané exporté peuvent les
+    supprimer avec l'option <literal>SNAPSHOT 'nothing'</literal>.
    </para>
   </sect2>
  </sect1>
