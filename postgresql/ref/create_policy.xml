@@ -55,6 +55,9 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
    pour une ligne donnée, alors cette ligne est visible pour l'utilisateur.
    Dans le cas contraire, cette ligne reste invisible.
 
+   Généralement, aucune erreur ne survient quand une ligne est invisible, mais
+   voir <xref linkend="sql-createpolicy-summary"/> pour les exceptions.
+
    Lorsqu'une expression définie dans <literal>WITH CHECK</literal> renvoie
    true pour une ligne, alors cette ligne est insérée. Par contre, si elle
    renvoie false ou NULL, cela génère une erreur.
@@ -217,9 +220,10 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
       Toute ligne pour laquelle l'expression renvoie false
       ou NULL sera invisible pour l'utilisateur (avec <command>SELECT</command>)
       et ne sera pas modifiable (avec <command>UPDATE</command> ou
-      <command>DELETE</command>).
-      Ces lignes seront supprimées sans qu'aucune erreur ou notification
-      ne soit rapportée.
+      <command>DELETE</command>). Généralement,
+      ces lignes seront supprimées silencieusement&nbsp;; aucune erreur ne
+      survient (mais voir
+      <xref linkend="sql-createpolicy-summary"/> pour les exceptions).
      </para>
     </listitem>
    </varlistentry>
@@ -281,11 +285,12 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
        sinon en appliquant l'expression définie dans <literal>USING
        </literal>).
 
-       Si une <command>INSERT</command> ou <command>UPDATE</command>
+       Si une commande <command>INSERT</command> ou <command>UPDATE</command>
        essaie d'ajouter des lignes à une table et est bloquée par
        l'expression définie dans <literal>WITH CHECK</literal> de la
-       politique <literal>ALL</literal>, l'ensemble de la commande est
-       annulé.
+       politique <literal>ALL</literal> (ou son expression
+       <literal>USING</literal> si elle n'a pas d'expression <literal>WITH
+       CHECK</literal>), l'ensemble de la commande est annulé.
       </para>
      </listitem>
     </varlistentry>
@@ -305,9 +310,47 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
        <literal>SELECT</literal>
 
        Pour les requêtes qui demandent des droits, telles que les
-       commandes d'<literal>UPDATE</literal>, elles verront uniquement
+       commandes d'<literal>UPDATE</literal>, <literal>DELETE</literal> et
+       <literal>MERGE</literal>, elles verront uniquement
        dans le résultat les lignes qui auront été autorisés par la politique
-       <literal>SELECT</literal>
+       <literal>SELECT</literal>, sauf comme décrit ci-dessous.
+     </para>
+     <para>
+       Si une requête de modification de données a une clause
+       <literal>RETURNING</literal>, les droits <literal>SELECT</literal> sont
+       requis sur la relation, et toute nouvelle ligne insérée ou supprimée pour
+       cette relation doit satisfaire les politiques <literal>SELECT</literal>
+       de la relation pour être disponible dans la clause
+       <literal>RETURNING</literal>. Si une ligne nouvellement insérée ou
+       modifiée ne satisfait pas les politiques <literal>SELECT</literal> de la
+       relation, une erreur sera renvoyée (les lignes insérées ou modifiées
+       à renvoyer ne sont <emphasis>jamais</emphasis> ignorées silencieusement).
+     </para>
+     <para>
+       Si un <literal>INSERT</literal> a une clause <literal>ON CONFLICT DO
+       NOTHING/UPDATE</literal>, les droits <literal>SELECT</literal> sont
+       requis sur la relation et les lignes proposées en insertion sont
+       vérifiées en utilisant les politiques <literal>SELECT</literal> de la
+       relation. Si une ligne proposée en insertion ne satisfait pas les
+       politiques <literal>SELECT</literal> de la relation, une erreur est
+       renvoyée (le <literal>INSERT</literal> n'est <emphasis>jamais</emphasis>
+       silencieusement évité). De plus, si le chemin <literal>UPDATE</literal>
+       est pris, la ligne à mettre à jour et la nouvelle ligne mise à jour sont
+       vérifiées avec les politiques <literal>SELECT</literal> de la relation,
+       et une erreur est renvoyée si elles ne sont pas satisfaites (un
+       <literal>UPDATE</literal> auxiliaire n'est <emphasis>jamais</emphasis>
+       évité silencieusement.
+     </para>
+     <para>
+       Une commande <literal>MERGE</literal> requiert les droits
+       <literal>SELECT</literal> sur les relations source et cible, et donc
+       chaque politique <literal>SELECT</literal> de la relation est appliqué
+       avant de les joindre, et les actions du <literal>MERGE</literal> verront
+       uniquement les lignes qui sont autorisées par ces politiques. De plus,
+       si un <literal>UPDATE</literal> est exécuté, les politiques
+       <literal>SELECT</literal> de la relation cible sont appliquées à la ligne
+       mise à jour, comme pour un <literal>UPDATE</literal> autonome, sauf
+       qu'une erreur est renvoyée si elles ne sont pas satisfaite.
 
        Une politique <literal>SELECT</literal> ne peut pas avoir une
        expression définie dans <literal>WITH CHECK</literal> qui ne
@@ -334,11 +377,11 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
 
       </para>
       <para>
-       Notez que la commande <literal>INSERT</literal> avec
-       <literal>ON CONFLICT DO UPDATE</literal> vérifie la politique
-       <literal>INSERT</literal> avec l'expression définie dans
-       <literal>WITH CHECK</literal> uniquement pour les lignes ajoutées
-       à la table par la commande <literal>INSERT</literal> .
+       Notez qu'une commande <literal>INSERT</literal> avec
+       <literal>ON CONFLICT DO UPDATE</literal> vérifie les politiques
+       <literal>INSERT</literal> avec les expressions définies dans
+       <literal>WITH CHECK</literal> pour toutes les lignes proposées en
+       insertion, qu'elles soient ou non insérées au final.
       </para>
      </listitem>
     </varlistentry>
@@ -352,7 +395,8 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
        <literal>UPDATE</literal>, <literal>SELECT FOR UPDATE</literal>
        et <literal>SELECT FOR SHARE</literal>, ainsi qu'aux clauses
        <literal>ON CONFLICT DO UPDATE</literal> de la commande
-       <literal>INSERT</literal>.
+       <literal>INSERT</literal> et de la commande <literal>MERGE</literal>
+       si elle contient une action <literal>UPDATE</literal>.
 
        Puisque la commande <literal>UPDATE</literal> implique de
        récupérer un enregistrement existant et le replacer avec un
@@ -406,7 +450,8 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
        <literal>UPDATE</literal> autonome, si la ligne existante ne passe pas
        les expressions <literal>USING</literal>, une erreur sera levée (le
        chemin <literal>UPDATE</literal> ne sera <emphasis>jamais</emphasis>
-       évité silencieusement).
+       évité silencieusement). Cela s'applique aussi à une action
+       <literal>UPDATE</literal> d'une commande <command>MERGE</command>.
       </para>
      </listitem>
     </varlistentry>
@@ -417,14 +462,21 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
       <para>
        Utiliser <literal>DELETE</literal> dans une politique signifie
        que cette politique s'appliquera à toutes les requêtes
-       <literal>DELETE</literal>.
-       Seules les lignes autorisées par cette politique seront
-       visibles à une commande <literal>DELETE</literal>
+       <literal>DELETE</literal> et aux requêtes <literal>MERGE</literal>
+       contenant des commandes <literal>DELETE</literal>.
+       Pour une commande <literal>DELETE</literal>, seules les lignes autorisées
+       par cette politique seront visibles à une commande
+       <literal>DELETE</literal>
        Il peut y avoir des lignes visibles retournées par la commande
        <literal>SELECT</literal> qui ne sont pas candidates à la
        suppression si elles ne sont pas validées par l'expression
        définie dans la clause <literal>USING</literal> de la politique
-       <literal>DELETE</literal>
+       <literal>DELETE</literal> Cependant, notez qu'une action
+       <literal>DELETE</literal> dans une commande <literal>MERGE</literal>
+       verra des lignes qui sont visibles au travers des politiques
+       <literal>SELECT</literal> et, si la politique
+       <literal>DELETE</literal> ne passe pas pour une telle ligne, une erreur
+       sera renvoyée.
       </para>
 
       <para>
@@ -454,6 +506,15 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
 
    </variablelist>
 
+   <para>
+    <xref linkend="sql-createpolicy-summary"/> résume comment les différents
+    types de politique s'appliquent aux commandes spécifiques. Dans le tableau,
+    <quote>vérifie</quote> signifie que l'expression de la politique est
+    vérifiée et une erreur est renvoyée si la vérification renvoie false ou
+    null, alors que <quote>filtre</quote> signifie que la ligne est ignorée
+    silencieusement si l'expression de la politique renvoie false ou null.
+   </para>
+
    <table id="sql-createpolicy-summary">
     <title>Politiques appliquées par type de commande</title>
     <tgroup cols="6">
@@ -478,8 +539,8 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
      </thead>
      <tbody>
       <row>
-       <entry><command>SELECT</command></entry>
-       <entry>Ligne existante</entry>
+       <entry><command>SELECT</command> / <command>COPY ... TO</command></entry>
+       <entry>Filtre la ligne existante</entry>
        <entry>&mdash;</entry>
        <entry>&mdash;</entry>
        <entry>&mdash;</entry>
@@ -487,64 +548,120 @@ CREATE POLICY <replaceable class="parameter">nom</replaceable> ON <replaceable c
       </row>
       <row>
        <entry><command>SELECT FOR UPDATE/SHARE</command></entry>
-       <entry>Ligne existante</entry>
+       <entry>Filtre la ligne existante</entry>
        <entry>&mdash;</entry>
-       <entry>Ligne existante</entry>
-       <entry>&mdash;</entry>
-       <entry>&mdash;</entry>
-      </row>
-      <row>
-       <entry><command>INSERT</command> / <command>MERGE ... THEN INSERT</command></entry>
-       <entry>&mdash;</entry>
-       <entry>Nouvelle ligne</entry>
-       <entry>&mdash;</entry>
+       <entry>Filtre la ligne existante</entry>
        <entry>&mdash;</entry>
        <entry>&mdash;</entry>
       </row>
       <row>
-       <entry><command>INSERT ... RETURNING</command></entry>
+       <entry><command>INSERT</command></entry>
        <entry>
-        Nouvelle ligne <footnote id="rls-select-priv">
+        Vérifie la nouvelle ligne&nbsp;<footnote id="rls-select-priv">
          <para>
-          Si l'accès en lecture est requis pour une ligne nouvelle ou
-          existante (par exemple, une clause <literal>WHERE</literal> ou
-          <literal>RETURNING</literal> qui fait référence aux colonnes de la
+          Si l'accès en lecture est requis pour la ligne existante ou la nouvelle
+          ligne, une clause <literal>WHERE</literal> ou
+          <literal>RETURNING</literal> faisant référence aux colonnes de la
           relation).
          </para>
         </footnote>
        </entry>
-       <entry>Nouvelle ligne</entry>
+       <entry>Vérifie la nouvelle ligne</entry>
        <entry>&mdash;</entry>
        <entry>&mdash;</entry>
        <entry>&mdash;</entry>
       </row>
       <row>
-       <entry><command>UPDATE</command> / <command>MERGE ... THEN UPDATE</command></entry>
+       <entry><command>UPDATE</command></entry>
        <entry>
-        Lignes nouvelles et existantes <footnoteref linkend="rls-select-priv"/>
+        Filtre la ligne existante&nbsp;<footnoteref linkend="rls-select-priv"/> &amp;
+        vérifie la nouvelle ligne&nbsp;<footnoteref linkend="rls-select-priv"/>
        </entry>
        <entry>&mdash;</entry>
-       <entry>Ligne existante</entry>
-       <entry>Nouvelle ligne</entry>
+       <entry>Filtre la ligne existante</entry>
+       <entry>Vérifie la nouvelle ligne</entry>
        <entry>&mdash;</entry>
       </row>
       <row>
        <entry><command>DELETE</command></entry>
        <entry>
-        Ligne existante <footnoteref linkend="rls-select-priv"/>
+        Filtre la ligne existante&nbsp;<footnoteref linkend="rls-select-priv"/>
        </entry>
        <entry>&mdash;</entry>
        <entry>&mdash;</entry>
        <entry>&mdash;</entry>
-       <entry>Ligne existante</entry>
+       <entry>Filtre la ligne existante</entry>
+      </row>
+      <row>
+       <entry><command>INSERT ... ON CONFLICT</command></entry>
+       <entry>
+        Vérifie la nouvelle ligne&nbsp;<footnote>
+         <para>
+          Si un index ou une contrainte arbitre est indiqué.
+         </para>
+        </footnote><footnote id="rls-on-conflict-priv">
+         <para>
+          La ligne proposée en insertion est vérifiée qu'un conflit survienne
+          ou pas.
+         </para>
+        </footnote>
+       </entry>
+       <entry>
+        Vérifie la nouvelle ligne&nbsp;<footnoteref linkend="rls-on-conflict-priv"/>
+       </entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
       </row>
       <row>
        <entry><command>ON CONFLICT DO UPDATE</command></entry>
-       <entry>Lignes nouvelles et existantes</entry>
+       <entry>
+        Vérifie les lignes existantes &amp; nouvelles&nbsp;<footnote id="rls-on-conflict-update-priv">
+         <para>
+          La nouvelle ligne d'un <command>UPDATE</command> auxiliaire, qui
+          pourrait être différente de la nouvelle ligne d'une commande
+          <command>INSERT</command> originale.
+         </para>
+        </footnote>
+       </entry>
        <entry>&mdash;</entry>
-       <entry>Ligne existante</entry>
-       <entry>Nouvelle ligne</entry>
+       <entry>Vérifie la ligne existante</entry>
+       <entry>
+        Vérifie la nouvelle ligne&nbsp;<footnoteref linkend="rls-on-conflict-update-priv"/>
+       </entry>
        <entry>&mdash;</entry>
+      </row>
+      <row>
+       <entry><command>MERGE</command></entry>
+       <entry>Filtre les lignes source &amp; cible</entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+      </row>
+      <row>
+       <entry><command>MERGE ... THEN INSERT</command></entry>
+       <entry>&mdash;</entry>
+       <entry>Vérifie la nouvelle ligne</entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+      </row>
+      <row>
+       <entry><command>MERGE ... THEN UPDATE</command></entry>
+       <entry>Vérifie la nouvelle ligne</entry>
+       <entry>&mdash;</entry>
+       <entry>Vérifie la ligne existante</entry>
+       <entry>Vérifie la nouvelle ligne</entry>
+       <entry>&mdash;</entry>
+      </row>
+      <row>
+       <entry><command>MERGE ... THEN DELETE</command></entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+       <entry>&mdash;</entry>
+       <entry>Vérifie la ligne existante</entry>
       </row>
      </tbody>
     </tgroup>
